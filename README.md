@@ -46,8 +46,7 @@ In practice, this means search configurations are managed through the Azure port
 
 ```bash
 # Install (pick one)
-brew install mklab-se/tap/hoist   # Homebrew
-cargo binstall hoist-az           # cargo-binstall (pre-built binary)
+brew install mklab-se/tap/hoist   # Homebrew (macOS / Linux)
 cargo install hoist-az            # cargo install (compile from source)
 ```
 

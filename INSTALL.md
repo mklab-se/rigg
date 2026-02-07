@@ -25,14 +25,6 @@ tar xzf hoist-v*-*.tar.gz
 sudo mv hoist /usr/local/bin/
 ```
 
-## cargo binstall
-
-[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads a pre-built binary instead of compiling from source:
-
-```bash
-cargo binstall hoist-az
-```
-
 ## cargo install
 
 Compile from source via crates.io (requires Rust 1.82+):
@@ -50,6 +42,22 @@ cargo build --release
 ```
 
 The binary is at `target/release/hoist`. Requires Rust 1.82 or later.
+
+## cargo binstall
+
+If you already have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, it can download a pre-built binary from GitHub Releases instead of compiling from source — combining the convenience of `cargo install` with the speed of a binary download:
+
+```bash
+cargo binstall hoist-az
+```
+
+If you don't have cargo-binstall, install it first:
+
+```bash
+cargo install cargo-binstall
+```
+
+For most users, Homebrew or a direct binary download from [GitHub Releases](https://github.com/mklab-se/hoist/releases/latest) is simpler.
 
 ## Shell Completions
 
