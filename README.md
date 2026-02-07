@@ -45,9 +45,14 @@ In practice, this means search configurations are managed through the Azure port
 ## Quick Start
 
 ```bash
-# Install (pick one)
-brew install mklab-se/tap/hoist   # Homebrew (macOS / Linux)
-cargo install hoist-az            # cargo install (compile from source)
+# Install
+cargo install hoist-az
+```
+
+On macOS, you can also install via Homebrew:
+
+```bash
+brew install mklab-se/tap/hoist
 ```
 
 See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, and shell completions.
