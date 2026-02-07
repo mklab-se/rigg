@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hoist-cli",
+    "crates/hoist-core",
+    "crates/hoist-client",
+    "crates/hoist-diff",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["hoist contributors"]
+license = "MIT"
+repository = "https://github.com/mklab-se/hoist"
+rust-version = "1.82"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Configuration
+toml = "0.8"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Templating
+handlebars = "6.0"
+
+# Diff
+similar = "2.6"
+
+# Terminal colors
+colored = "2.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File utilities
+dirs = "5.0"
+walkdir = "2.5"
+glob = "0.3"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Testing
+tempfile = "3.10"
+
+# Internal crates
+hoist-core = { path = "crates/hoist-core" }
+hoist-client = { path = "crates/hoist-client" }
+hoist-diff = { path = "crates/hoist-diff" }

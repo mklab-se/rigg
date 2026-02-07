@@ -1,0 +1,22 @@
+name: Release
+
+# TODO: Configure release workflow
+# Trigger on version tags, build release binaries for multiple platforms,
+# and publish to GitHub Releases and/or crates.io.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: echo "Release workflow not yet configured"

@@ -1,0 +1,22 @@
+[package]
+name = "hoist-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+handlebars.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
