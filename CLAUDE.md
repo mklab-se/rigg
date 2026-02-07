@@ -15,7 +15,7 @@ cargo test -p hoist-core          # Test a specific crate
 cargo test test_name                 # Run a single test by name
 cargo clippy                         # Lint
 cargo run --bin hoist -- pull     # Run CLI directly
-cargo install --path crates/hoist-cli  # Install binary
+cargo install --path crates/hoist-az   # Install binary
 ```
 
 ## Pre-Push Verification (REQUIRED)
@@ -35,19 +35,19 @@ All three must exit cleanly. Do not push if any of them fail — fix the issues 
 Four crates with a clear dependency hierarchy:
 
 ```
-hoist-cli  →  hoist-core
+hoist-az  →  hoist-core
      ↓              ↑
-hoist-client ────┘
+hoist-azent ────┘
 hoist-diff  (standalone)
 ```
 
 **hoist-core** — Resource type system, config (`hoist.toml`), state tracking (`.hoist/`), JSON normalization, constraints (immutability/dependency validation).
 
-**hoist-client** — Azure Search REST API client (`client.rs`), Azure Resource Manager discovery (`arm.rs`), authentication via Azure CLI or service principal (`auth.rs`).
+**hoist-azent** — Azure Search REST API client (`client.rs`), Azure Resource Manager discovery (`arm.rs`), authentication via Azure CLI or service principal (`auth.rs`).
 
 **hoist-diff** — Semantic JSON diffing with identity-key-based array matching. Standalone, no Azure dependencies.
 
-**hoist-cli** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → create client → perform operation → update state.
+**hoist-az** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → create client → perform operation → update state.
 
 ## Resource Type System
 

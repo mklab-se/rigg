@@ -5,7 +5,7 @@ Thank you for considering contributing to hoist! This guide will help you get st
 ## Getting Started
 
 1. Fork the repository and clone your fork
-2. Install Rust 1.75+ via [rustup](https://rustup.rs/)
+2. Install Rust 1.82+ via [rustup](https://rustup.rs/)
 3. Build the project: `cargo build`
 4. Run tests: `cargo test`
 
@@ -15,9 +15,9 @@ Thank you for considering contributing to hoist! This guide will help you get st
 
 ```
 crates/
-  hoist-cli/       # CLI binary and command implementations
+  hoist-az/       # CLI binary and command implementations
   hoist-core/      # Resource types, config, normalization, copy logic
-  hoist-client/    # Azure REST API client and authentication
+  hoist-azent/    # Azure REST API client and authentication
   hoist-diff/      # Standalone semantic JSON diff engine
 ```
 

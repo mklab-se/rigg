@@ -39,7 +39,7 @@ In practice, this means search configurations are managed through the Azure port
 
 ```bash
 # Install
-cargo install hoist
+cargo install hoist-az
 
 # Initialize a project (discovers your service via Azure CLI)
 hoist init . --path search
@@ -208,18 +208,18 @@ hoist config set sync.include_preview false
 Four crates with a clear dependency hierarchy:
 
 ```
-hoist-cli  →  hoist-core
+hoist-az  →  hoist-core
      ↓              ↑
-hoist-client ────┘
+hoist-azent ────┘
 hoist-diff  (standalone)
 ```
 
 | Crate | Purpose |
 |---|---|
 | `hoist-core` | Resource types, config, state tracking, JSON normalization, copy/rename logic |
-| `hoist-client` | Azure Search REST API client, ARM discovery, authentication |
+| `hoist-azent` | Azure Search REST API client, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
-| `hoist-cli` | Clap-based CLI, command implementations |
+| `hoist-az` | Clap-based CLI, command implementations |
 
 ## Building from Source
 

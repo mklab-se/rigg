@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hoist-cli",
+    "crates/hoist-az",
     "crates/hoist-core",
     "crates/hoist-client",
     "crates/hoist-diff",

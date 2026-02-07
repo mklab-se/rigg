@@ -1,5 +1,5 @@
 [package]
-name = "hoist-cli"
+name = "hoist-az"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
