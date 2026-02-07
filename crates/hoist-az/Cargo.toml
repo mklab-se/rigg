@@ -33,3 +33,11 @@ colored.workspace = true
 hoist-core.workspace = true
 hoist-client.workspace = true
 hoist-diff.workspace = true
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/hoist-v{ version }-{ target }.{ archive-format }"
+bin-dir = "hoist{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"

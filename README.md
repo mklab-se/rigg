@@ -45,9 +45,15 @@ In practice, this means search configurations are managed through the Azure port
 ## Quick Start
 
 ```bash
-# Install
-cargo install hoist-az
+# Install (pick one)
+brew install mklab-se/tap/hoist   # Homebrew
+cargo binstall hoist-az           # cargo-binstall (pre-built binary)
+cargo install hoist-az            # cargo install (compile from source)
+```
 
+See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, and shell completions.
+
+```bash
 # Initialize a project (discovers your service via Azure CLI)
 hoist init . --path search
 
@@ -227,24 +233,6 @@ hoist-diff  (standalone)
 | `hoist-azent` | Azure Search REST API client, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
 | `hoist-az` | Clap-based CLI, command implementations |
-
-## Building from Source
-
-```bash
-git clone https://github.com/mklab-se/hoist.git
-cd hoist
-cargo build --release
-```
-
-Requires Rust 1.82 or later.
-
-### Running Tests
-
-```bash
-cargo test              # All 226 tests
-cargo test -p hoist-core   # Core crate only
-cargo clippy            # Lint
-```
 
 ## License
 
