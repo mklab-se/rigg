@@ -83,3 +83,14 @@ search/
 - **JSON normalization**: Strips volatile fields (`@odata.etag`, `@odata.context`, credentials), preserves Azure's property ordering (via `serde_json` `preserve_order` feature), sorts arrays by identity key, redacts secrets. Property order is enforced naturally: next `pull` restores Azure's canonical ordering if a user reorders keys locally.
 - **Auth chain**: Environment variables (service principal) take priority, then Azure CLI. ARM discovery for `init` uses a separate token scoped to `management.azure.com`.
 - **Fallback behavior**: `init` tries ARM discovery first; falls back to manual service name entry if not logged in. `pull` without flags pulls all resource types respecting the `include_preview` config.
+
+## Releasing
+
+Releases are automated via `.github/workflows/release.yml`. To publish a new version:
+
+1. Bump `version` in the workspace `Cargo.toml` (all crates share it via `version.workspace = true`)
+2. Update the internal crate dependency versions (`hoist-core`, `hoist-client`, `hoist-diff`) to match
+3. Commit and push to `main`
+4. Tag and push: `git tag v0.X.Y && git push origin v0.X.Y`
+
+The workflow runs CI, builds release binaries for Linux/macOS/Windows, creates a GitHub Release, and publishes all four crates to crates.io in dependency order. Do NOT run `cargo publish` manually.
