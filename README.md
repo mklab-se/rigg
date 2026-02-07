@@ -10,6 +10,13 @@
   version them in Git, and push changes back.
 </p>
 
+<p align="center">
+  <a href="https://github.com/mklab-se/hoist/actions/workflows/ci.yml"><img src="https://github.com/mklab-se/hoist/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/hoist-az"><img src="https://img.shields.io/crates/v/hoist-az.svg" alt="crates.io"></a>
+  <a href="https://github.com/mklab-se/hoist/releases/latest"><img src="https://img.shields.io/github/v/release/mklab-se/hoist" alt="GitHub Release"></a>
+  <a href="https://github.com/mklab-se/hoist/blob/main/LICENSE.md"><img src="https://img.shields.io/crates/l/hoist-az.svg" alt="License"></a>
+</p>
+
 ## The Problem
 
 Infrastructure-as-Code tools like ARM, Bicep, and Terraform are great at provisioning an Azure AI Search *service* — but they stop at the front door. The configuration *inside* the service — index schemas, skillsets, indexer schedules, knowledge base definitions — is what actually determines how your application behaves, and none of these tools manage it.
