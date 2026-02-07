@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/hoist-horizontal.png" alt="hoist" width="600">
+  <img src="https://raw.githubusercontent.com/mklab-se/hoist/main/media/hoist-horizontal.png" alt="hoist" width="600">
 </p>
 
 <h1 align="center">hoist</h1>
