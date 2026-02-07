@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Semantic JSON diffing with identity-key-based array matching"
 
 [dependencies]
 serde.workspace = true

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Configuration-as-code CLI for Azure AI Search"
+keywords = ["azure", "search", "ai", "configuration", "devops"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "hoist"

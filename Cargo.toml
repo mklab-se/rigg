@@ -61,6 +61,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.10"
 
 # Internal crates
-hoist-core = { path = "crates/hoist-core" }
-hoist-client = { path = "crates/hoist-client" }
-hoist-diff = { path = "crates/hoist-diff" }
+hoist-core = { version = "0.1.0", path = "crates/hoist-core" }
+hoist-client = { version = "0.1.0", path = "crates/hoist-client" }
+hoist-diff = { version = "0.1.0", path = "crates/hoist-diff" }
