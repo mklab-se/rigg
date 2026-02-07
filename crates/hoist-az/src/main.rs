@@ -6,6 +6,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod cli;
 mod commands;
+mod update;
 
 use cli::Cli;
 
@@ -36,6 +37,23 @@ async fn main() -> Result<()> {
         colored::control::set_override(false);
     }
 
+    // Spawn background update check (skipped in quiet mode or when opted out)
+    let check_update = if cli.quiet || std::env::var_os("HOIST_NO_UPDATE_CHECK").is_some() {
+        None
+    } else {
+        Some(tokio::spawn(update::check_for_update()))
+    };
+
     // Run the command
-    cli.run().await
+    let result = cli.run().await;
+
+    // Print update notification (if any) after the command completes
+    if let Some(handle) = check_update {
+        if let Ok(Some(message)) = handle.await {
+            eprintln!();
+            eprintln!("{message}");
+        }
+    }
+
+    result
 }
