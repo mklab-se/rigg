@@ -1,9 +1,12 @@
 //! Pull resources from Azure
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
+use tokio::sync::Semaphore;
 use tracing::info;
 
 use colored::Colorize;
@@ -31,6 +34,7 @@ pub async fn run(
     datasources: bool,
     skillsets: bool,
     synonymmaps: bool,
+    aliases: bool,
     knowledgebases: bool,
     knowledgesources: bool,
     singular: &SingularFlags,
@@ -49,6 +53,7 @@ pub async fn run(
         datasources,
         skillsets,
         synonymmaps,
+        aliases,
         knowledgebases,
         knowledgesources,
         singular,
@@ -94,27 +99,44 @@ async fn expand_pull_selection(
         AzureSearchClient::new(config)?
     };
 
-    // Fetch all resources from all selected kinds
+    // Fetch all resources from all selected kinds concurrently (max 5 in-flight)
     let mut fetched: Vec<(ResourceKind, String, Value)> = Vec::new();
     let mut all_server: Vec<(ResourceKind, String, Value)> = Vec::new();
 
-    for kind in selection.kinds() {
-        let resources = client.list(kind).await?;
-        for r in &resources {
+    let selected_kinds = selection.kinds();
+    let semaphore = Arc::new(Semaphore::new(5));
+    let selected_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> =
+        stream::iter(selected_kinds.iter())
+            .map(|kind| {
+                let client = &client;
+                let sem = Arc::clone(&semaphore);
+                async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+                    let result = client.list(*kind).await;
+                    (*kind, result)
+                }
+            })
+            .buffer_unordered(5)
+            .collect()
+            .await;
+
+    for (kind, result) in &selected_results {
+        let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+        for r in resources {
             let name = r
                 .get("name")
                 .and_then(|n| n.as_str())
                 .unwrap_or("")
                 .to_string();
-            all_server.push((kind, name.clone(), r.clone()));
+            all_server.push((*kind, name.clone(), r.clone()));
 
             // Check if this resource matches the selection
-            if let Some(exact) = selection.name_filter(kind) {
+            if let Some(exact) = selection.name_filter(*kind) {
                 if name == exact {
-                    fetched.push((kind, name, r.clone()));
+                    fetched.push((*kind, name, r.clone()));
                 }
             } else {
-                fetched.push((kind, name, r.clone()));
+                fetched.push((*kind, name, r.clone()));
             }
         }
     }
@@ -130,12 +152,29 @@ async fn expand_pull_selection(
         ResourceKind::stable().to_vec()
     };
 
-    for kind in &all_kinds {
-        if selection.kinds().contains(kind) {
-            continue; // Already fetched
-        }
-        if let Ok(resources) = client.list(*kind).await {
-            for r in &resources {
+    let remaining_kinds: Vec<ResourceKind> = all_kinds
+        .into_iter()
+        .filter(|k| !selected_kinds.contains(k))
+        .collect();
+
+    let remaining_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> =
+        stream::iter(remaining_kinds.iter())
+            .map(|kind| {
+                let client = &client;
+                let sem = Arc::clone(&semaphore);
+                async move {
+                    let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+                    let result = client.list(*kind).await;
+                    (*kind, result)
+                }
+            })
+            .buffer_unordered(5)
+            .collect()
+            .await;
+
+    for (kind, result) in &remaining_results {
+        if let Ok(resources) = result {
+            for r in resources {
                 let name = r
                     .get("name")
                     .and_then(|n| n.as_str())
@@ -200,9 +239,24 @@ pub async fn execute_pull(
     let mut deleted_resources: Vec<(ResourceKind, String, std::path::PathBuf)> = Vec::new();
     let mut total_unchanged: usize = 0;
 
-    for kind in &kinds {
-        // Fetch resources from Azure
-        let resources = client.list(*kind).await?;
+    // Fetch all resource kinds concurrently (max 5 in-flight requests)
+    let semaphore = Arc::new(Semaphore::new(5));
+    let fetched_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> = stream::iter(kinds.iter())
+        .map(|kind| {
+            let client = &client;
+            let sem = Arc::clone(&semaphore);
+            async move {
+                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+                let result = client.list(*kind).await;
+                (*kind, result)
+            }
+        })
+        .buffer_unordered(5)
+        .collect()
+        .await;
+
+    for (kind, result) in &fetched_results {
+        let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // Build set of remote resource names (before filtering, for deletion detection)
         let all_remote_names: std::collections::HashSet<String> = resources
@@ -212,8 +266,8 @@ pub async fn execute_pull(
 
         // Filter by singular flag (exact name match) and/or pattern (substring match)
         let exact_name = selection.name_filter(*kind);
-        let resources: Vec<_> = resources
-            .into_iter()
+        let resources: Vec<&Value> = resources
+            .iter()
             .filter(|r| {
                 let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 if let Some(exact) = exact_name {
@@ -275,7 +329,7 @@ pub async fn execute_pull(
                 name: name.to_string(),
                 json_content,
                 new_checksum,
-                raw_resource: resource.clone(),
+                raw_resource: (*resource).clone(),
                 changes,
             };
 

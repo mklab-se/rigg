@@ -103,6 +103,10 @@ pub enum Commands {
         #[arg(long, help_heading = "Resource Types")]
         synonymmaps: bool,
 
+        /// Include aliases
+        #[arg(long, help_heading = "Resource Types")]
+        aliases: bool,
+
         /// Include knowledge bases (preview API)
         #[arg(long, help_heading = "Resource Types")]
         knowledgebases: bool,
@@ -130,6 +134,10 @@ pub enum Commands {
         /// Pull a single synonym map by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
         synonymmap: Option<String>,
+
+        /// Pull a single alias by name
+        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
+        alias: Option<String>,
 
         /// Pull a single knowledge base by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
@@ -186,6 +194,10 @@ pub enum Commands {
         #[arg(long, help_heading = "Resource Types")]
         synonymmaps: bool,
 
+        /// Include aliases
+        #[arg(long, help_heading = "Resource Types")]
+        aliases: bool,
+
         /// Include knowledge bases (preview API)
         #[arg(long, help_heading = "Resource Types")]
         knowledgebases: bool,
@@ -213,6 +225,10 @@ pub enum Commands {
         /// Push a single synonym map by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
         synonymmap: Option<String>,
+
+        /// Push a single alias by name
+        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
+        alias: Option<String>,
 
         /// Push a single knowledge base by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
@@ -285,6 +301,10 @@ pub enum Commands {
         #[arg(long, help_heading = "Resource Types")]
         synonymmaps: bool,
 
+        /// Include aliases
+        #[arg(long, help_heading = "Resource Types")]
+        aliases: bool,
+
         /// Include knowledge bases (preview API)
         #[arg(long, help_heading = "Resource Types")]
         knowledgebases: bool,
@@ -312,6 +332,10 @@ pub enum Commands {
         /// Diff a single synonym map by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
         synonymmap: Option<String>,
+
+        /// Diff a single alias by name
+        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
+        alias: Option<String>,
 
         /// Diff a single knowledge base by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
@@ -367,6 +391,10 @@ pub enum Commands {
         #[arg(long, help_heading = "Resource Types")]
         synonymmaps: bool,
 
+        /// Include aliases
+        #[arg(long, help_heading = "Resource Types")]
+        aliases: bool,
+
         /// Include knowledge bases (preview API)
         #[arg(long, help_heading = "Resource Types")]
         knowledgebases: bool,
@@ -394,6 +422,10 @@ pub enum Commands {
         /// Watch a single synonym map by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
         synonymmap: Option<String>,
+
+        /// Watch a single alias by name
+        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
+        alias: Option<String>,
 
         /// Watch a single knowledge base by name
         #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
@@ -485,7 +517,7 @@ pub enum OutputFormat {
 pub enum InitTemplate {
     /// Indexes and data sources only
     Minimal,
-    /// All stable resource types (indexes, indexers, data sources, skillsets, synonym maps)
+    /// All stable resource types (indexes, indexers, data sources, skillsets, synonym maps, aliases)
     Full,
     /// All resource types including preview (knowledge bases, knowledge sources)
     Agentic,
@@ -522,6 +554,7 @@ impl Cli {
                 datasources,
                 skillsets,
                 synonymmaps,
+                aliases,
                 knowledgebases,
                 knowledgesources,
                 index,
@@ -529,6 +562,7 @@ impl Cli {
                 datasource,
                 skillset,
                 synonymmap,
+                alias,
                 knowledgebase,
                 knowledgesource,
                 recursive,
@@ -543,6 +577,7 @@ impl Cli {
                     datasource,
                     skillset,
                     synonymmap,
+                    alias,
                     knowledgebase,
                     knowledgesource,
                 };
@@ -553,6 +588,7 @@ impl Cli {
                     datasources,
                     skillsets,
                     synonymmaps,
+                    aliases,
                     knowledgebases,
                     knowledgesources,
                     &singular,
@@ -571,6 +607,7 @@ impl Cli {
                 datasources,
                 skillsets,
                 synonymmaps,
+                aliases,
                 knowledgebases,
                 knowledgesources,
                 index,
@@ -578,6 +615,7 @@ impl Cli {
                 datasource,
                 skillset,
                 synonymmap,
+                alias,
                 knowledgebase,
                 knowledgesource,
                 recursive,
@@ -596,6 +634,7 @@ impl Cli {
                     datasource,
                     skillset,
                     synonymmap,
+                    alias,
                     knowledgebase,
                     knowledgesource,
                 };
@@ -606,6 +645,7 @@ impl Cli {
                     datasources,
                     skillsets,
                     synonymmaps,
+                    aliases,
                     knowledgebases,
                     knowledgesources,
                     &singular,
@@ -627,6 +667,7 @@ impl Cli {
                 datasources,
                 skillsets,
                 synonymmaps,
+                aliases,
                 knowledgebases,
                 knowledgesources,
                 index,
@@ -634,6 +675,7 @@ impl Cli {
                 datasource,
                 skillset,
                 synonymmap,
+                alias,
                 knowledgebase,
                 knowledgesource,
                 format,
@@ -645,6 +687,7 @@ impl Cli {
                     datasource,
                     skillset,
                     synonymmap,
+                    alias,
                     knowledgebase,
                     knowledgesource,
                 };
@@ -655,6 +698,7 @@ impl Cli {
                     datasources,
                     skillsets,
                     synonymmaps,
+                    aliases,
                     knowledgebases,
                     knowledgesources,
                     &singular,
@@ -674,6 +718,7 @@ impl Cli {
                 datasources,
                 skillsets,
                 synonymmaps,
+                aliases,
                 knowledgebases,
                 knowledgesources,
                 index,
@@ -681,6 +726,7 @@ impl Cli {
                 datasource,
                 skillset,
                 synonymmap,
+                alias,
                 knowledgebase,
                 knowledgesource,
                 filter,
@@ -694,6 +740,7 @@ impl Cli {
                     datasource,
                     skillset,
                     synonymmap,
+                    alias,
                     knowledgebase,
                     knowledgesource,
                 };
@@ -704,6 +751,7 @@ impl Cli {
                     datasources,
                     skillsets,
                     synonymmaps,
+                    aliases,
                     knowledgebases,
                     knowledgesources,
                     &singular,

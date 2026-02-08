@@ -19,6 +19,7 @@ pub fn resolve_resource_kinds(
     datasources: bool,
     skillsets: bool,
     synonymmaps: bool,
+    aliases: bool,
     knowledgebases: bool,
     knowledgesources: bool,
     include_preview: bool,
@@ -48,6 +49,9 @@ pub fn resolve_resource_kinds(
     }
     if synonymmaps {
         kinds.push(ResourceKind::SynonymMap);
+    }
+    if aliases {
+        kinds.push(ResourceKind::Alias);
     }
     if knowledgebases && include_preview {
         kinds.push(ResourceKind::KnowledgeBase);
@@ -112,6 +116,7 @@ pub struct SingularFlags {
     pub datasource: Option<String>,
     pub skillset: Option<String>,
     pub synonymmap: Option<String>,
+    pub alias: Option<String>,
     pub knowledgebase: Option<String>,
     pub knowledgesource: Option<String>,
 }
@@ -131,6 +136,7 @@ pub fn resolve_resource_selection(
     datasources: bool,
     skillsets: bool,
     synonymmaps: bool,
+    aliases: bool,
     knowledgebases: bool,
     knowledgesources: bool,
     singular: &SingularFlags,
@@ -157,6 +163,7 @@ pub fn resolve_resource_selection(
         (singular.datasource.as_ref(), ResourceKind::DataSource, true),
         (singular.skillset.as_ref(), ResourceKind::Skillset, true),
         (singular.synonymmap.as_ref(), ResourceKind::SynonymMap, true),
+        (singular.alias.as_ref(), ResourceKind::Alias, true),
         (
             singular.knowledgebase.as_ref(),
             ResourceKind::KnowledgeBase,
@@ -184,6 +191,7 @@ pub fn resolve_resource_selection(
         (datasources, ResourceKind::DataSource, true),
         (skillsets, ResourceKind::Skillset, true),
         (synonymmaps, ResourceKind::SynonymMap, true),
+        (aliases, ResourceKind::Alias, true),
         (knowledgebases, ResourceKind::KnowledgeBase, include_preview),
         (
             knowledgesources,
@@ -225,6 +233,7 @@ pub fn get_volatile_fields(kind: ResourceKind) -> Vec<&'static str> {
         ResourceKind::DataSource => hoist_core::resources::DataSource::volatile_fields().to_vec(),
         ResourceKind::Skillset => hoist_core::resources::Skillset::volatile_fields().to_vec(),
         ResourceKind::SynonymMap => hoist_core::resources::SynonymMap::volatile_fields().to_vec(),
+        ResourceKind::Alias => hoist_core::resources::Alias::volatile_fields().to_vec(),
         ResourceKind::KnowledgeBase => {
             hoist_core::resources::KnowledgeBase::volatile_fields().to_vec()
         }
@@ -243,6 +252,7 @@ pub fn get_read_only_fields(kind: ResourceKind) -> Vec<&'static str> {
         ResourceKind::DataSource => hoist_core::resources::DataSource::read_only_fields().to_vec(),
         ResourceKind::Skillset => hoist_core::resources::Skillset::read_only_fields().to_vec(),
         ResourceKind::SynonymMap => hoist_core::resources::SynonymMap::read_only_fields().to_vec(),
+        ResourceKind::Alias => hoist_core::resources::Alias::read_only_fields().to_vec(),
         ResourceKind::KnowledgeBase => {
             hoist_core::resources::KnowledgeBase::read_only_fields().to_vec()
         }
@@ -260,6 +270,7 @@ pub fn order_by_dependencies(
         ResourceKind::SynonymMap,      // No dependencies
         ResourceKind::DataSource,      // No dependencies
         ResourceKind::Index,           // May depend on synonym maps
+        ResourceKind::Alias,           // Points to indexes
         ResourceKind::Skillset,        // No dependencies
         ResourceKind::KnowledgeBase,   // No dependencies
         ResourceKind::Indexer,         // Depends on data source, index, skillset
@@ -283,9 +294,9 @@ mod tests {
     #[test]
     fn test_all_with_preview() {
         let kinds = resolve_resource_kinds(
-            true, false, false, false, false, false, false, false, true, false,
+            true, false, false, false, false, false, false, false, false, true, false,
         );
-        assert_eq!(kinds.len(), 7);
+        assert_eq!(kinds.len(), 8);
         assert!(kinds.contains(&ResourceKind::KnowledgeBase));
         assert!(kinds.contains(&ResourceKind::KnowledgeSource));
     }
@@ -293,9 +304,9 @@ mod tests {
     #[test]
     fn test_all_without_preview() {
         let kinds = resolve_resource_kinds(
-            true, false, false, false, false, false, false, false, false, false,
+            true, false, false, false, false, false, false, false, false, false, false,
         );
-        assert_eq!(kinds.len(), 5);
+        assert_eq!(kinds.len(), 6);
         assert!(!kinds.contains(&ResourceKind::KnowledgeBase));
         assert!(!kinds.contains(&ResourceKind::KnowledgeSource));
     }
@@ -303,7 +314,7 @@ mod tests {
     #[test]
     fn test_specific_flags_override_default() {
         let kinds = resolve_resource_kinds(
-            false, true, false, false, false, false, false, false, true, true,
+            false, true, false, false, false, false, false, false, false, true, true,
         );
         assert_eq!(kinds, vec![ResourceKind::Index]);
     }
@@ -311,15 +322,15 @@ mod tests {
     #[test]
     fn test_no_flags_with_fallback_and_preview() {
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, false, false, true, true,
+            false, false, false, false, false, false, false, false, false, true, true,
         );
-        assert_eq!(kinds.len(), 7);
+        assert_eq!(kinds.len(), 8);
     }
 
     #[test]
     fn test_no_flags_with_fallback_without_preview() {
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, false, false, false, true,
+            false, false, false, false, false, false, false, false, false, false, true,
         );
         assert_eq!(kinds, ResourceKind::stable().to_vec());
     }
@@ -327,7 +338,7 @@ mod tests {
     #[test]
     fn test_no_flags_without_fallback_returns_empty() {
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, false, false, true, false,
+            false, false, false, false, false, false, false, false, false, true, false,
         );
         assert!(kinds.is_empty());
     }
@@ -335,7 +346,7 @@ mod tests {
     #[test]
     fn test_knowledge_flags_require_preview() {
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, true, true, false, false,
+            false, false, false, false, false, false, false, true, true, false, false,
         );
         // include_preview is false, so KB/KS flags are ignored
         assert!(kinds.is_empty());
@@ -344,7 +355,7 @@ mod tests {
     #[test]
     fn test_knowledge_flags_with_preview() {
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, true, true, true, false,
+            false, false, false, false, false, false, false, true, true, true, false,
         );
         assert_eq!(kinds.len(), 2);
         assert!(kinds.contains(&ResourceKind::KnowledgeBase));
@@ -355,7 +366,7 @@ mod tests {
     fn test_knowledge_flags_ignored_falls_back_to_default() {
         // KB/KS flags set but include_preview=false, no other flags → falls back
         let kinds = resolve_resource_kinds(
-            false, false, false, false, false, false, true, true, false, true,
+            false, false, false, false, false, false, false, true, true, false, true,
         );
         assert_eq!(kinds, ResourceKind::stable().to_vec());
     }
@@ -414,6 +425,7 @@ mod tests {
         assert!(get_read_only_fields(ResourceKind::DataSource).is_empty());
         assert!(get_read_only_fields(ResourceKind::Skillset).is_empty());
         assert!(get_read_only_fields(ResourceKind::SynonymMap).is_empty());
+        assert!(get_read_only_fields(ResourceKind::Alias).is_empty());
     }
 
     // === order_by_dependencies tests ===
@@ -472,6 +484,7 @@ mod tests {
             ),
             (ResourceKind::Indexer, "ixer".to_string(), json!({}), false),
             (ResourceKind::Index, "idx".to_string(), json!({}), false),
+            (ResourceKind::Alias, "al".to_string(), json!({}), false),
             (ResourceKind::DataSource, "ds".to_string(), json!({}), false),
             (
                 ResourceKind::KnowledgeBase,
@@ -490,6 +503,7 @@ mod tests {
                 ResourceKind::SynonymMap,
                 ResourceKind::DataSource,
                 ResourceKind::Index,
+                ResourceKind::Alias,
                 ResourceKind::Skillset,
                 ResourceKind::KnowledgeBase,
                 ResourceKind::Indexer,
@@ -529,7 +543,7 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, &singular, true, false,
         );
 
         assert_eq!(sel.kinds(), vec![ResourceKind::KnowledgeBase]);
@@ -541,6 +555,7 @@ mod tests {
         let sel = resolve_resource_selection(
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -562,7 +577,7 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, true, false, false, false, false, false, false, &singular, true, false,
+            false, true, false, false, false, false, false, false, false, &singular, true, false,
         );
 
         assert_eq!(sel.kinds().len(), 2);
@@ -576,10 +591,10 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            true, false, false, false, false, false, false, false, &singular, true, false,
+            true, false, false, false, false, false, false, false, false, &singular, true, false,
         );
 
-        assert_eq!(sel.kinds().len(), 7);
+        assert_eq!(sel.kinds().len(), 8);
         // --all clears all name filters
         assert_eq!(sel.name_filter(ResourceKind::KnowledgeBase), None);
     }
@@ -591,7 +606,7 @@ mod tests {
         singular.indexer = Some("my-ixer".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, &singular, true, false,
         );
 
         assert_eq!(sel.name_filter(ResourceKind::Index), Some("my-idx"));
@@ -606,7 +621,7 @@ mod tests {
 
         // Both --index specific-idx and --indexes are set
         let sel = resolve_resource_selection(
-            false, true, false, false, false, false, false, false, &singular, true, false,
+            false, true, false, false, false, false, false, false, false, &singular, true, false,
         );
 
         // Singular takes precedence — only one entry for Index
@@ -620,7 +635,7 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, false, false,
+            false, false, false, false, false, false, false, false, false, &singular, false, false,
         );
 
         assert!(sel.is_empty());
@@ -635,7 +650,7 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, false, false,
+            false, false, false, false, false, false, false, false, false, &singular, false, false,
         );
 
         assert_eq!(sel.kinds(), vec![ResourceKind::Index]);
@@ -646,6 +661,7 @@ mod tests {
     #[test]
     fn test_selection_no_flags_no_singular_no_fallback() {
         let sel = resolve_resource_selection(
+            false,
             false,
             false,
             false,
@@ -672,12 +688,13 @@ mod tests {
             false,
             false,
             false,
+            false,
             &no_singular(),
             true,
             true,
         );
         // Falls back to all kinds (with preview)
-        assert_eq!(sel.kinds().len(), 7);
+        assert_eq!(sel.kinds().len(), 8);
         // All entries have no name filter
         for kind in sel.kinds() {
             assert_eq!(sel.name_filter(kind), None);
@@ -689,6 +706,7 @@ mod tests {
         let sel = resolve_resource_selection(
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -710,7 +728,7 @@ mod tests {
         singular.indexer = Some("my-ixer".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, &singular, true, false,
         );
 
         assert_eq!(sel.kinds().len(), 3);
@@ -728,11 +746,11 @@ mod tests {
         singular.index = Some("my-idx".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, &singular, true,
+            false, false, false, false, false, false, false, false, false, &singular, true,
             true, // has_default_fallback=true
         );
 
-        // Only Index, not all 7
+        // Only Index, not all 8
         assert_eq!(sel.kinds(), vec![ResourceKind::Index]);
     }
 }

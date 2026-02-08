@@ -65,6 +65,8 @@ pub struct SearchConfigContext {
     pub skillset_count: usize,
     pub synonym_maps: Vec<SynonymMapSummary>,
     pub synonym_map_count: usize,
+    pub aliases: Vec<AliasSummary>,
+    pub alias_count: usize,
     pub knowledge_bases: Vec<KnowledgeBaseSummary>,
     pub knowledge_base_count: usize,
     pub knowledge_sources: Vec<KnowledgeSourceSummary>,
@@ -107,6 +109,12 @@ pub struct SkillsetSummary {
 pub struct SynonymMapSummary {
     pub name: String,
     pub format: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AliasSummary {
+    pub name: String,
+    pub indexes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,6 +199,9 @@ pub fn resource_kind_description(kind: ResourceKind) -> &'static str {
         }
         ResourceKind::SynonymMap => {
             "Synonym maps define equivalent terms to improve search relevance."
+        }
+        ResourceKind::Alias => {
+            "Aliases provide stable endpoint names that point to indexes for zero-downtime reindexing."
         }
         ResourceKind::KnowledgeBase => {
             "Knowledge bases (preview) provide structured knowledge for AI agent interactions."
@@ -323,6 +334,16 @@ This document provides a complete overview of all resource definitions managed b
 - **Format**: {{format}}
 
 {{/each}}
+{{#if alias_count}}
+## Aliases ({{alias_count}})
+
+{{#each aliases}}
+### {{name}}
+
+- **Indexes**: {{#each indexes}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}
+
+{{/each}}
+{{/if}}
 {{#if knowledge_base_count}}
 ## Knowledge Bases ({{knowledge_base_count}})
 
@@ -394,6 +415,11 @@ pub fn build_search_config_context(
         parse_synonym_map_summary,
     );
 
+    let aliases = read_summaries_from_dir(
+        &resource_dir.join(ResourceKind::Alias.directory_name()),
+        parse_alias_summary,
+    );
+
     let (knowledge_bases, knowledge_sources) = if include_preview {
         let kbs = read_summaries_from_dir(
             &resource_dir.join(ResourceKind::KnowledgeBase.directory_name()),
@@ -421,6 +447,8 @@ pub fn build_search_config_context(
         skillsets,
         synonym_map_count: synonym_maps.len(),
         synonym_maps,
+        alias_count: aliases.len(),
+        aliases,
         knowledge_base_count: knowledge_bases.len(),
         knowledge_bases,
         knowledge_source_count: knowledge_sources.len(),
@@ -561,6 +589,21 @@ fn parse_synonym_map_summary(value: &serde_json::Value) -> SynonymMapSummary {
     let format = get_str(value, "format");
 
     SynonymMapSummary { name, format }
+}
+
+fn parse_alias_summary(value: &serde_json::Value) -> AliasSummary {
+    let name = get_str(value, "name");
+    let indexes = value
+        .get("indexes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    AliasSummary { name, indexes }
 }
 
 fn parse_knowledge_base_summary(value: &serde_json::Value) -> KnowledgeBaseSummary {
@@ -747,6 +790,8 @@ mod tests {
                 name: "my-synonyms".to_string(),
                 format: "solr".to_string(),
             }],
+            alias_count: 0,
+            aliases: vec![],
             knowledge_base_count: 0,
             knowledge_bases: vec![],
             knowledge_source_count: 0,
@@ -793,6 +838,8 @@ mod tests {
             skillsets: vec![],
             synonym_map_count: 0,
             synonym_maps: vec![],
+            alias_count: 0,
+            aliases: vec![],
             knowledge_base_count: 0,
             knowledge_bases: vec![],
             knowledge_source_count: 0,
@@ -819,6 +866,8 @@ mod tests {
             skillsets: vec![],
             synonym_map_count: 0,
             synonym_maps: vec![],
+            alias_count: 0,
+            aliases: vec![],
             knowledge_base_count: 1,
             knowledge_bases: vec![KnowledgeBaseSummary {
                 name: "my-kb".to_string(),

@@ -1,5 +1,6 @@
 //! Azure AI Search resource definitions
 
+pub mod alias;
 pub mod datasource;
 pub mod index;
 pub mod indexer;
@@ -9,6 +10,7 @@ pub mod skillset;
 pub mod synonym_map;
 pub mod traits;
 
+pub use alias::Alias;
 pub use datasource::DataSource;
 pub use index::Index;
 pub use indexer::Indexer;

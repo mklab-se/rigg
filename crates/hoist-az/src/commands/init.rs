@@ -101,6 +101,7 @@ pub async fn run(
             ResourceKind::DataSource,
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
+            ResourceKind::Alias,
         ],
         InitTemplate::Agentic => ResourceKind::all().to_vec(),
     };
@@ -362,6 +363,7 @@ fn api_doc_url(kind: ResourceKind) -> &'static str {
         ResourceKind::DataSource => "https://learn.microsoft.com/en-us/rest/api/searchservice/data-sources/create-or-update",
         ResourceKind::Skillset => "https://learn.microsoft.com/en-us/rest/api/searchservice/skillsets/create-or-update",
         ResourceKind::SynonymMap => "https://learn.microsoft.com/en-us/rest/api/searchservice/synonym-maps/create-or-update",
+        ResourceKind::Alias => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update",
         ResourceKind::KnowledgeBase => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-bases/create-or-update?view=rest-searchservice-2025-05-01-preview",
         ResourceKind::KnowledgeSource => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview",
     }
@@ -611,6 +613,7 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
             ResourceKind::DataSource,
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
+            ResourceKind::Alias,
         ],
         InitTemplate::Agentic => ResourceKind::all().to_vec(),
     };
@@ -742,6 +745,7 @@ mod tests {
         assert!(resource_base
             .join("search-management/synonym-maps")
             .is_dir());
+        assert!(resource_base.join("search-management/aliases").is_dir());
         // Should NOT have preview dirs
         assert!(!resource_base
             .join("agentic-retrieval/knowledge-bases")

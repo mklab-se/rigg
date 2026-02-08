@@ -12,6 +12,7 @@ pub enum ResourceKind {
     DataSource,
     Skillset,
     SynonymMap,
+    Alias,
     KnowledgeBase,
     KnowledgeSource,
 }
@@ -25,6 +26,7 @@ impl ResourceKind {
             ResourceKind::DataSource => "datasources",
             ResourceKind::Skillset => "skillsets",
             ResourceKind::SynonymMap => "synonymmaps",
+            ResourceKind::Alias => "aliases",
             ResourceKind::KnowledgeBase => "knowledgebases",
             ResourceKind::KnowledgeSource => "knowledgesources",
         }
@@ -38,6 +40,7 @@ impl ResourceKind {
             ResourceKind::DataSource => "search-management/data-sources",
             ResourceKind::Skillset => "search-management/skillsets",
             ResourceKind::SynonymMap => "search-management/synonym-maps",
+            ResourceKind::Alias => "search-management/aliases",
             ResourceKind::KnowledgeBase => "agentic-retrieval/knowledge-bases",
             ResourceKind::KnowledgeSource => "agentic-retrieval/knowledge-sources",
         }
@@ -59,6 +62,7 @@ impl ResourceKind {
             ResourceKind::DataSource => "Data Source",
             ResourceKind::Skillset => "Skillset",
             ResourceKind::SynonymMap => "Synonym Map",
+            ResourceKind::Alias => "Alias",
             ResourceKind::KnowledgeBase => "Knowledge Base",
             ResourceKind::KnowledgeSource => "Knowledge Source",
         }
@@ -72,6 +76,7 @@ impl ResourceKind {
             ResourceKind::DataSource,
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
+            ResourceKind::Alias,
             ResourceKind::KnowledgeBase,
             ResourceKind::KnowledgeSource,
         ]
@@ -85,6 +90,7 @@ impl ResourceKind {
             ResourceKind::DataSource,
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
+            ResourceKind::Alias,
         ]
     }
 }
@@ -137,14 +143,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_returns_seven_kinds() {
-        assert_eq!(ResourceKind::all().len(), 7);
+    fn test_all_returns_eight_kinds() {
+        assert_eq!(ResourceKind::all().len(), 8);
     }
 
     #[test]
     fn test_stable_excludes_preview() {
         let stable = ResourceKind::stable();
-        assert_eq!(stable.len(), 5);
+        assert_eq!(stable.len(), 6);
         for kind in stable {
             assert!(!kind.is_preview());
         }
@@ -159,6 +165,7 @@ mod tests {
         assert!(!ResourceKind::DataSource.is_preview());
         assert!(!ResourceKind::Skillset.is_preview());
         assert!(!ResourceKind::SynonymMap.is_preview());
+        assert!(!ResourceKind::Alias.is_preview());
     }
 
     #[test]
@@ -168,6 +175,7 @@ mod tests {
         assert_eq!(ResourceKind::DataSource.api_path(), "datasources");
         assert_eq!(ResourceKind::Skillset.api_path(), "skillsets");
         assert_eq!(ResourceKind::SynonymMap.api_path(), "synonymmaps");
+        assert_eq!(ResourceKind::Alias.api_path(), "aliases");
         assert_eq!(ResourceKind::KnowledgeBase.api_path(), "knowledgebases");
         assert_eq!(ResourceKind::KnowledgeSource.api_path(), "knowledgesources");
     }
@@ -185,6 +193,10 @@ mod tests {
         assert_eq!(
             ResourceKind::SynonymMap.directory_name(),
             "search-management/synonym-maps"
+        );
+        assert_eq!(
+            ResourceKind::Alias.directory_name(),
+            "search-management/aliases"
         );
         assert_eq!(
             ResourceKind::KnowledgeBase.directory_name(),
@@ -225,12 +237,14 @@ mod tests {
         assert_eq!(ResourceKind::Index.display_name(), "Index");
         assert_eq!(ResourceKind::DataSource.display_name(), "Data Source");
         assert_eq!(ResourceKind::KnowledgeBase.display_name(), "Knowledge Base");
+        assert_eq!(ResourceKind::Alias.display_name(), "Alias");
     }
 
     #[test]
     fn test_display_trait() {
         assert_eq!(format!("{}", ResourceKind::Index), "Index");
         assert_eq!(format!("{}", ResourceKind::Skillset), "Skillset");
+        assert_eq!(format!("{}", ResourceKind::Alias), "Alias");
     }
 
     #[test]
@@ -238,6 +252,15 @@ mod tests {
         let kind = ResourceKind::DataSource;
         let json = serde_json::to_string(&kind).unwrap();
         assert_eq!(json, "\"data-source\"");
+        let back: ResourceKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_alias() {
+        let kind = ResourceKind::Alias;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"alias\"");
         let back: ResourceKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, kind);
     }

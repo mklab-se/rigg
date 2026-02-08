@@ -65,6 +65,13 @@ struct SynonymMapSummary {
     format: String,
 }
 
+/// Summary of an alias resource
+#[derive(Debug, Clone)]
+struct AliasSummary {
+    name: String,
+    indexes: Vec<String>,
+}
+
 /// Summary of a knowledge base resource
 #[derive(Debug, Clone)]
 struct KnowledgeBaseSummary {
@@ -96,6 +103,7 @@ struct ProjectSummary {
     indexers: Vec<IndexerSummary>,
     skillsets: Vec<SkillsetSummary>,
     synonym_maps: Vec<SynonymMapSummary>,
+    aliases: Vec<AliasSummary>,
     knowledge_bases: Vec<KnowledgeBaseSummary>,
     knowledge_sources: Vec<KnowledgeSourceSummary>,
     dependencies: Vec<Dependency>,
@@ -154,6 +162,11 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                     summary.synonym_maps.push(parse_synonym_map(v));
                 }
             }
+            ResourceKind::Alias => {
+                for v in &values {
+                    summary.aliases.push(parse_alias(v));
+                }
+            }
             ResourceKind::KnowledgeBase => {
                 for v in &values {
                     summary.knowledge_bases.push(parse_knowledge_base(v));
@@ -175,6 +188,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     summary.indexers.sort_by(|a, b| a.name.cmp(&b.name));
     summary.skillsets.sort_by(|a, b| a.name.cmp(&b.name));
     summary.synonym_maps.sort_by(|a, b| a.name.cmp(&b.name));
+    summary.aliases.sort_by(|a, b| a.name.cmp(&b.name));
     summary.knowledge_bases.sort_by(|a, b| a.name.cmp(&b.name));
     summary
         .knowledge_sources
@@ -382,6 +396,21 @@ fn parse_synonym_map(v: &Value) -> SynonymMapSummary {
     SynonymMapSummary { name, format }
 }
 
+fn parse_alias(v: &Value) -> AliasSummary {
+    let name = get_name(v);
+    let indexes = v
+        .get("indexes")
+        .and_then(|i| i.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    AliasSummary { name, indexes }
+}
+
 fn parse_knowledge_base(v: &Value) -> KnowledgeBaseSummary {
     let name = get_name(v);
     KnowledgeBaseSummary { name }
@@ -526,6 +555,15 @@ fn print_text(summary: &ProjectSummary) {
         println!("Synonym Maps ({}):", summary.synonym_maps.len());
         for sm in &summary.synonym_maps {
             println!("  {} ({} format)", sm.name, sm.format);
+        }
+        println!();
+    }
+
+    // Aliases
+    if !summary.aliases.is_empty() {
+        println!("Aliases ({}):", summary.aliases.len());
+        for alias in &summary.aliases {
+            println!("  {} -> {}", alias.name, alias.indexes.join(", "));
         }
         println!();
     }
@@ -675,6 +713,17 @@ fn print_json(summary: &ProjectSummary) {
         })
         .collect();
 
+    let aliases: Vec<Value> = summary
+        .aliases
+        .iter()
+        .map(|a| {
+            json!({
+                "name": a.name,
+                "indexes": a.indexes,
+            })
+        })
+        .collect();
+
     let knowledge_bases: Vec<Value> = summary
         .knowledge_bases
         .iter()
@@ -716,6 +765,7 @@ fn print_json(summary: &ProjectSummary) {
         "indexers": indexers,
         "skillsets": skillsets,
         "synonym_maps": synonym_maps,
+        "aliases": aliases,
         "knowledge_bases": knowledge_bases,
         "knowledge_sources": knowledge_sources,
         "dependencies": deps,
