@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-02-08
+
+### Fixed
+
+- Shell completion command no longer prints install instructions to stderr on every invocation, which cluttered terminal startup when sourced from `.zshrc`
+
 ## [0.1.5] - 2026-02-08
 
 ### Added
