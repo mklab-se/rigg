@@ -420,6 +420,9 @@ pub enum Commands {
         interval: u64,
     },
 
+    /// Show a unified summary of all local resource definitions
+    Describe,
+
     /// Show sync status and local resource summary
     Status,
 
@@ -711,6 +714,7 @@ impl Cli {
                 )
                 .await
             }
+            Commands::Describe => commands::describe_project::run(self.output).await,
             Commands::Status => commands::status::run(self.output).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {

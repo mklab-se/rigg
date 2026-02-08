@@ -12,6 +12,7 @@ use hoist_client::AzureSearchClient;
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::ResourceKind;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
+use hoist_core::templates::{build_search_config_context, ReadmeGenerator};
 use hoist_core::Config;
 use hoist_diff::Change;
 
@@ -442,6 +443,35 @@ pub async fn execute_pull(
             "Pulled {} resource(s). {} already up to date.",
             upsert_count, total_unchanged
         );
+    }
+
+    // Generate SEARCH_CONFIG.md if generate_docs is enabled
+    if config.sync.generate_docs {
+        let resource_dir = config.resource_dir(project_root);
+        match build_search_config_context(
+            &config.service.name,
+            &resource_dir,
+            config.sync.include_preview,
+        ) {
+            Ok(ctx) => match ReadmeGenerator::new() {
+                Ok(gen) => match gen.generate_search_config(&ctx) {
+                    Ok(content) => {
+                        let config_path = project_root.join("SEARCH_CONFIG.md");
+                        std::fs::write(&config_path, content)?;
+                        info!("Generated {}", config_path.display());
+                    }
+                    Err(e) => {
+                        info!("Could not generate SEARCH_CONFIG.md: {}", e);
+                    }
+                },
+                Err(e) => {
+                    info!("Could not create readme generator: {}", e);
+                }
+            },
+            Err(e) => {
+                info!("Could not build search config context: {}", e);
+            }
+        }
     }
 
     Ok(())

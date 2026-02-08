@@ -6,6 +6,7 @@ pub mod completion;
 pub mod config;
 pub mod confirm;
 pub mod describe;
+pub mod describe_project;
 pub mod diff;
 pub mod init;
 pub mod pull;
