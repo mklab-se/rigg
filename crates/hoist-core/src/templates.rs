@@ -177,3 +177,127 @@ const RESOURCE_TYPE_README_TEMPLATE: &str = r#"# {{kind_plural}}
 
 {{/each}}
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resources::ResourceKind;
+
+    #[test]
+    fn test_readme_generator_creation() {
+        let gen = ReadmeGenerator::new();
+        assert!(gen.is_ok());
+    }
+
+    #[test]
+    fn test_project_readme_with_description() {
+        let gen = ReadmeGenerator::new().unwrap();
+        let ctx = ProjectContext {
+            name: "my-search".to_string(),
+            description: Some("A search project for testing".to_string()),
+            service_name: "my-search-svc".to_string(),
+            resource_counts: vec![],
+            generated_at: "2025-01-01".to_string(),
+        };
+        let output = gen.generate_project_readme(&ctx).unwrap();
+        assert!(output.contains("my-search"));
+        assert!(output.contains("A search project for testing"));
+        assert!(output.contains("my-search-svc"));
+    }
+
+    #[test]
+    fn test_project_readme_without_description() {
+        let gen = ReadmeGenerator::new().unwrap();
+        let ctx = ProjectContext {
+            name: "my-search".to_string(),
+            description: None,
+            service_name: "my-search-svc".to_string(),
+            resource_counts: vec![],
+            generated_at: "2025-01-01".to_string(),
+        };
+        let output = gen.generate_project_readme(&ctx).unwrap();
+        assert!(output.contains("my-search"));
+        assert!(output.contains("my-search-svc"));
+    }
+
+    #[test]
+    fn test_project_readme_resource_counts() {
+        let gen = ReadmeGenerator::new().unwrap();
+        let ctx = ProjectContext {
+            name: "my-search".to_string(),
+            description: None,
+            service_name: "svc".to_string(),
+            resource_counts: vec![
+                ResourceCount {
+                    kind: "Index".to_string(),
+                    directory: "search-management/indexes".to_string(),
+                    count: 3,
+                },
+                ResourceCount {
+                    kind: "Skillset".to_string(),
+                    directory: "search-management/skillsets".to_string(),
+                    count: 1,
+                },
+            ],
+            generated_at: "2025-01-01".to_string(),
+        };
+        let output = gen.generate_project_readme(&ctx).unwrap();
+        assert!(output.contains("Index"));
+        assert!(output.contains("search-management/indexes"));
+        assert!(output.contains("3"));
+        assert!(output.contains("Skillset"));
+        assert!(output.contains("search-management/skillsets"));
+        assert!(output.contains("1"));
+    }
+
+    #[test]
+    fn test_resource_readme_with_dependencies() {
+        let gen = ReadmeGenerator::new().unwrap();
+        let ctx = ResourceTypeContext {
+            kind: "Indexer".to_string(),
+            kind_plural: "Indexers".to_string(),
+            resources: vec![ResourceSummary {
+                name: "my-indexer".to_string(),
+                description: Some("Indexes documents".to_string()),
+                dependencies: vec![
+                    "index/my-index".to_string(),
+                    "data-source/my-ds".to_string(),
+                ],
+            }],
+            description: "Indexers automate data ingestion.".to_string(),
+        };
+        let output = gen.generate_resource_readme(&ctx).unwrap();
+        assert!(output.contains("Indexers"));
+        assert!(output.contains("my-indexer"));
+        assert!(output.contains("Indexes documents"));
+        assert!(output.contains("index/my-index"));
+        assert!(output.contains("data-source/my-ds"));
+        assert!(output.contains("Dependencies"));
+    }
+
+    #[test]
+    fn test_resource_readme_empty_resources() {
+        let gen = ReadmeGenerator::new().unwrap();
+        let ctx = ResourceTypeContext {
+            kind: "Index".to_string(),
+            kind_plural: "Indexes".to_string(),
+            resources: vec![],
+            description: "Indexes define the schema.".to_string(),
+        };
+        let output = gen.generate_resource_readme(&ctx).unwrap();
+        assert!(output.contains("Indexes"));
+        assert!(output.contains("Indexes define the schema."));
+    }
+
+    #[test]
+    fn test_resource_kind_description_all_kinds() {
+        for kind in ResourceKind::all() {
+            let desc = resource_kind_description(*kind);
+            assert!(
+                !desc.is_empty(),
+                "Description for {:?} should not be empty",
+                kind
+            );
+        }
+    }
+}

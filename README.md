@@ -202,15 +202,16 @@ Project settings live in `hoist.toml`:
 ```toml
 [service]
 name = "my-search-service"
-subscription_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+subscription = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+api_version = "2024-07-01"                    # default
+preview_api_version = "2025-11-01-preview"    # default
+
+[project]
+path = "search"
 
 [sync]
-resource_dir = "search"
 include_preview = true
-
-[api]
-api_version = "2024-07-01"
-preview_api_version = "2025-11-01-preview"
+generate_docs = true
 ```
 
 View and modify settings with the `config` command:
@@ -227,14 +228,14 @@ Four crates with a clear dependency hierarchy:
 ```
 hoist-az  →  hoist-core
      ↓              ↑
-hoist-azent ────┘
+hoist-client ───┘
 hoist-diff  (standalone)
 ```
 
 | Crate | Purpose |
 |---|---|
 | `hoist-core` | Resource types, config, state tracking, JSON normalization, copy/rename logic |
-| `hoist-azent` | Azure Search REST API client, ARM discovery, authentication |
+| `hoist-client` | Azure Search REST API client, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
 | `hoist-az` | Clap-based CLI, command implementations |
 

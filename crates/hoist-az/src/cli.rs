@@ -663,7 +663,7 @@ impl Cli {
             Commands::Validate {
                 strict,
                 check_references,
-            } => commands::validate::run(strict, check_references).await,
+            } => commands::validate::run(strict, check_references, self.output).await,
             Commands::PullWatch {
                 all,
                 indexes,
@@ -711,7 +711,7 @@ impl Cli {
                 )
                 .await
             }
-            Commands::Status => commands::status::run().await,
+            Commands::Status => commands::status::run(self.output).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {
                 println!("hoist {}", env!("CARGO_PKG_VERSION"));

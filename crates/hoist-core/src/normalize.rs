@@ -161,4 +161,154 @@ mod tests {
 
         assert_eq!(input["credentials"]["connectionString"], "<REDACTED>");
     }
+
+    #[test]
+    fn test_deeply_nested_volatile_fields() {
+        let input = json!({
+            "name": "top",
+            "@odata.etag": "top-etag",
+            "nested": {
+                "@odata.etag": "nested-etag",
+                "value": 1,
+                "deeper": {
+                    "@odata.context": "ctx",
+                    "keep": true
+                }
+            }
+        });
+
+        let result = normalize(&input, &["@odata.etag", "@odata.context"], "name");
+
+        assert!(result.get("@odata.etag").is_none());
+        let nested = result.get("nested").unwrap();
+        assert!(nested.get("@odata.etag").is_none());
+        assert_eq!(nested.get("value"), Some(&json!(1)));
+        let deeper = nested.get("deeper").unwrap();
+        assert!(deeper.get("@odata.context").is_none());
+        assert_eq!(deeper.get("keep"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn test_arrays_without_identity_key_not_sorted() {
+        let input = json!({
+            "values": [3, 1, 2]
+        });
+
+        let result = normalize(&input, &[], "name");
+        let values = result.get("values").unwrap().as_array().unwrap();
+
+        assert_eq!(values[0], json!(3));
+        assert_eq!(values[1], json!(1));
+        assert_eq!(values[2], json!(2));
+    }
+
+    #[test]
+    fn test_empty_object_preserved() {
+        let input = json!({});
+        let result = normalize(&input, &[], "name");
+        assert_eq!(result, json!({}));
+    }
+
+    #[test]
+    fn test_empty_array_preserved() {
+        let input = json!({
+            "items": []
+        });
+
+        let result = normalize(&input, &[], "name");
+        let items = result.get("items").unwrap().as_array().unwrap();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_redact_nested_credentials() {
+        let mut input = json!({
+            "name": "test",
+            "outer": {
+                "credentials": {
+                    "connectionString": "nested-secret"
+                }
+            }
+        });
+
+        redact_credentials(&mut input);
+
+        assert_eq!(
+            input["outer"]["credentials"]["connectionString"],
+            "<REDACTED>"
+        );
+    }
+
+    #[test]
+    fn test_redact_storage_connection_string() {
+        let mut input = json!({
+            "name": "test",
+            "storageConnectionStringSecret": "my-storage-secret"
+        });
+
+        redact_credentials(&mut input);
+
+        assert_eq!(input["storageConnectionStringSecret"], "<REDACTED>");
+    }
+
+    #[test]
+    fn test_redact_multiple_targets() {
+        let mut input = json!({
+            "name": "test",
+            "credentials": {
+                "connectionString": "secret-conn"
+            },
+            "storageConnectionStringSecret": "secret-storage"
+        });
+
+        redact_credentials(&mut input);
+
+        assert_eq!(input["credentials"]["connectionString"], "<REDACTED>");
+        assert_eq!(input["storageConnectionStringSecret"], "<REDACTED>");
+    }
+
+    #[test]
+    fn test_redact_credentials_in_array() {
+        let mut input = json!({
+            "dataSources": [
+                {
+                    "name": "ds1",
+                    "credentials": {
+                        "connectionString": "secret1"
+                    }
+                },
+                {
+                    "name": "ds2",
+                    "credentials": {
+                        "connectionString": "secret2"
+                    }
+                }
+            ]
+        });
+
+        redact_credentials(&mut input);
+
+        assert_eq!(
+            input["dataSources"][0]["credentials"]["connectionString"],
+            "<REDACTED>"
+        );
+        assert_eq!(
+            input["dataSources"][1]["credentials"]["connectionString"],
+            "<REDACTED>"
+        );
+    }
+
+    #[test]
+    fn test_format_json_trailing_newline() {
+        let input = json!({"key": "value"});
+        let output = format_json(&input);
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_format_json_empty_object() {
+        let input = json!({});
+        let output = format_json(&input);
+        assert_eq!(output, "{}\n");
+    }
 }

@@ -75,3 +75,101 @@ impl Resource for Skillset {
         &["@odata.etag", "@odata.context", "cognitiveServices"]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_skillset_kind() {
+        assert_eq!(Skillset::kind(), ResourceKind::Skillset);
+    }
+
+    #[test]
+    fn test_skillset_volatile_fields() {
+        let fields = Skillset::volatile_fields();
+        assert!(fields.contains(&"cognitiveServices"));
+        assert!(fields.contains(&"@odata.etag"));
+        assert!(fields.contains(&"@odata.context"));
+    }
+
+    #[test]
+    fn test_skillset_identity_key() {
+        assert_eq!(Skillset::identity_key(), "name");
+    }
+
+    #[test]
+    fn test_skillset_no_dependencies() {
+        let json = r#"{
+            "name": "my-skillset",
+            "skills": []
+        }"#;
+        let skillset: Skillset = serde_json::from_str(json).unwrap();
+        assert!(skillset.dependencies().is_empty());
+    }
+
+    #[test]
+    fn test_skillset_deserialize() {
+        let val = json!({
+            "name": "my-skillset",
+            "description": "A test skillset",
+            "skills": [
+                {
+                    "@odata.type": "#Microsoft.Skills.Text.EntityRecognitionSkill",
+                    "name": "entity-recognition",
+                    "description": "Recognize entities",
+                    "context": "/document",
+                    "inputs": [
+                        { "name": "text", "source": "/document/content" }
+                    ],
+                    "outputs": [
+                        { "name": "persons", "targetName": "people" }
+                    ]
+                }
+            ]
+        });
+        let skillset: Skillset = serde_json::from_value(val).unwrap();
+        assert_eq!(skillset.name, "my-skillset");
+        assert_eq!(skillset.description.as_deref(), Some("A test skillset"));
+        assert_eq!(skillset.skills.len(), 1);
+        assert_eq!(skillset.skills[0].name, "entity-recognition");
+        assert_eq!(
+            skillset.skills[0].odata_type,
+            "#Microsoft.Skills.Text.EntityRecognitionSkill"
+        );
+        assert_eq!(skillset.skills[0].inputs.len(), 1);
+        assert_eq!(skillset.skills[0].inputs[0].name, "text");
+        assert_eq!(skillset.skills[0].outputs.len(), 1);
+        assert_eq!(
+            skillset.skills[0].outputs[0].target_name.as_deref(),
+            Some("people")
+        );
+    }
+
+    #[test]
+    fn test_skillset_roundtrip() {
+        let val = json!({
+            "name": "roundtrip-skillset",
+            "skills": [
+                {
+                    "@odata.type": "#Microsoft.Skills.Text.KeyPhraseExtractionSkill",
+                    "name": "keyphrases",
+                    "context": "/document",
+                    "inputs": [
+                        { "name": "text", "source": "/document/content" }
+                    ],
+                    "outputs": [
+                        { "name": "keyPhrases", "targetName": "keyphrases" }
+                    ]
+                }
+            ]
+        });
+        let skillset: Skillset = serde_json::from_value(val).unwrap();
+        let serialized = serde_json::to_string(&skillset).unwrap();
+        let deserialized: Skillset = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "roundtrip-skillset");
+        assert_eq!(deserialized.skills.len(), 1);
+        assert_eq!(deserialized.skills[0].name, "keyphrases");
+    }
+}
