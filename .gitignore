@@ -17,3 +17,6 @@ Thumbs.db
 # Test artifacts
 *.log
 coverage/
+
+# Manual test projects
+/test-projects/

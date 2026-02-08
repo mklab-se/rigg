@@ -50,7 +50,7 @@ impl ResourceKind {
     pub fn is_preview(&self) -> bool {
         matches!(
             self,
-            ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource
+            ResourceKind::Alias | ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource
         )
     }
 
@@ -90,7 +90,6 @@ impl ResourceKind {
             ResourceKind::DataSource,
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
-            ResourceKind::Alias,
         ]
     }
 }
@@ -150,7 +149,7 @@ mod tests {
     #[test]
     fn test_stable_excludes_preview() {
         let stable = ResourceKind::stable();
-        assert_eq!(stable.len(), 6);
+        assert_eq!(stable.len(), 5);
         for kind in stable {
             assert!(!kind.is_preview());
         }
@@ -165,7 +164,7 @@ mod tests {
         assert!(!ResourceKind::DataSource.is_preview());
         assert!(!ResourceKind::Skillset.is_preview());
         assert!(!ResourceKind::SynonymMap.is_preview());
-        assert!(!ResourceKind::Alias.is_preview());
+        assert!(ResourceKind::Alias.is_preview());
     }
 
     #[test]
@@ -220,12 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn test_preview_kinds_under_agentic_retrieval() {
+    fn test_agentic_retrieval_kinds_are_preview() {
         for kind in ResourceKind::all() {
-            if kind.is_preview() {
+            if kind.directory_name().starts_with("agentic-retrieval/") {
                 assert!(
-                    kind.directory_name().starts_with("agentic-retrieval/"),
-                    "{:?} should be under agentic-retrieval/",
+                    kind.is_preview(),
+                    "{:?} under agentic-retrieval/ should be preview",
                     kind
                 );
             }

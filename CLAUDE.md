@@ -84,6 +84,10 @@ search/
 - **Auth chain**: Environment variables (service principal) take priority, then Azure CLI. ARM discovery for `init` uses a separate token scoped to `management.azure.com`.
 - **Fallback behavior**: `init` tries ARM discovery first; falls back to manual service name entry if not logged in. `pull` without flags pulls all resource types respecting the `include_preview` config.
 
+## Test Projects
+
+The `test-projects/` directory (gitignored) is available for manual testing of the `hoist` CLI. Use it to run `hoist init`, `hoist pull`, etc. against real or mock service configurations without polluting the repo. Create subdirectories per test scenario as needed.
+
 ## Releasing
 
 Releases are automated via `.github/workflows/release.yml`. To publish a new version:

@@ -50,7 +50,7 @@ pub fn resolve_resource_kinds(
     if synonymmaps {
         kinds.push(ResourceKind::SynonymMap);
     }
-    if aliases {
+    if aliases && include_preview {
         kinds.push(ResourceKind::Alias);
     }
     if knowledgebases && include_preview {
@@ -163,7 +163,11 @@ pub fn resolve_resource_selection(
         (singular.datasource.as_ref(), ResourceKind::DataSource, true),
         (singular.skillset.as_ref(), ResourceKind::Skillset, true),
         (singular.synonymmap.as_ref(), ResourceKind::SynonymMap, true),
-        (singular.alias.as_ref(), ResourceKind::Alias, true),
+        (
+            singular.alias.as_ref(),
+            ResourceKind::Alias,
+            include_preview,
+        ),
         (
             singular.knowledgebase.as_ref(),
             ResourceKind::KnowledgeBase,
@@ -191,7 +195,7 @@ pub fn resolve_resource_selection(
         (datasources, ResourceKind::DataSource, true),
         (skillsets, ResourceKind::Skillset, true),
         (synonymmaps, ResourceKind::SynonymMap, true),
-        (aliases, ResourceKind::Alias, true),
+        (aliases, ResourceKind::Alias, include_preview),
         (knowledgebases, ResourceKind::KnowledgeBase, include_preview),
         (
             knowledgesources,
@@ -306,7 +310,8 @@ mod tests {
         let kinds = resolve_resource_kinds(
             true, false, false, false, false, false, false, false, false, false, false,
         );
-        assert_eq!(kinds.len(), 6);
+        assert_eq!(kinds.len(), 5);
+        assert!(!kinds.contains(&ResourceKind::Alias));
         assert!(!kinds.contains(&ResourceKind::KnowledgeBase));
         assert!(!kinds.contains(&ResourceKind::KnowledgeSource));
     }

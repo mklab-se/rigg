@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-02-08
+
+### Fixed
+
+- Alias resource now correctly uses the preview API version — the aliases endpoint only exists in preview, so requesting it with the stable `2024-07-01` version caused `hoist pull` to fail with "api-version does not exist"
+- `--aliases` flag now respects `include_preview` setting, consistent with other preview resource flags
+
+### Changed
+
+- Added `test-projects/` to `.gitignore` for local manual testing
+
 ## [0.1.6] - 2026-02-08
 
 ### Fixed
