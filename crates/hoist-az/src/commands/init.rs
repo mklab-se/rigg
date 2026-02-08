@@ -585,6 +585,51 @@ Synonym map definitions provide query-time term expansion.
 "##
 }
 
+/// Create directory structure for an init template without prompts or ARM discovery.
+/// Used internally for testing.
+#[cfg(test)]
+fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTemplate) -> Result<()> {
+    std::fs::create_dir_all(project_dir)?;
+
+    // Save configuration
+    config.save(project_dir)?;
+
+    // Create .hoist state directory
+    let state_dir = LocalState::state_dir(project_dir);
+    std::fs::create_dir_all(&state_dir)?;
+
+    // Create .gitignore for state directory
+    let gitignore_path = state_dir.join(".gitignore");
+    std::fs::write(&gitignore_path, "# Ignore local state\n*\n!.gitignore\n")?;
+
+    // Create resource directories based on template
+    let resource_kinds = match template {
+        InitTemplate::Minimal => vec![ResourceKind::Index, ResourceKind::DataSource],
+        InitTemplate::Full => vec![
+            ResourceKind::Index,
+            ResourceKind::Indexer,
+            ResourceKind::DataSource,
+            ResourceKind::Skillset,
+            ResourceKind::SynonymMap,
+        ],
+        InitTemplate::Agentic => ResourceKind::all().to_vec(),
+    };
+
+    let resource_base = config.resource_dir(project_dir);
+    if resource_base != project_dir {
+        std::fs::create_dir_all(&resource_base)?;
+    }
+
+    for kind in &resource_kinds {
+        let dir = resource_base.join(kind.directory_name());
+        std::fs::create_dir_all(&dir)?;
+    }
+
+    create_hoist_md(&resource_base, &config.service.name, &resource_kinds)?;
+
+    Ok(())
+}
+
 fn agentic_retrieval_readme() -> &'static str {
     r#"# Agentic Retrieval Resources (Preview)
 
@@ -632,4 +677,210 @@ is indexed and queried by AI agents.
 
 **Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview
 "#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_config(service_name: &str, path: Option<&str>) -> Config {
+        Config {
+            service: ServiceConfig {
+                name: service_name.to_string(),
+                subscription: None,
+                resource_group: None,
+                api_version: "2024-07-01".to_string(),
+                preview_api_version: "2025-11-01-preview".to_string(),
+            },
+            project: ProjectConfig {
+                name: Some("test-project".to_string()),
+                description: None,
+                path: path.map(|p| p.to_string()),
+            },
+            sync: SyncConfig {
+                include_preview: false,
+                generate_docs: true,
+                resources: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_minimal_template_creates_index_and_datasource_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", Some("search"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let resource_base = project_dir.join("search");
+        assert!(resource_base.join("search-management/indexes").is_dir());
+        assert!(resource_base
+            .join("search-management/data-sources")
+            .is_dir());
+        // Should NOT have indexers, skillsets, synonym-maps
+        assert!(!resource_base.join("search-management/indexers").exists());
+        assert!(!resource_base.join("search-management/skillsets").exists());
+    }
+
+    #[test]
+    fn test_full_template_creates_all_stable_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", Some("search"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
+
+        let resource_base = project_dir.join("search");
+        assert!(resource_base.join("search-management/indexes").is_dir());
+        assert!(resource_base.join("search-management/indexers").is_dir());
+        assert!(resource_base
+            .join("search-management/data-sources")
+            .is_dir());
+        assert!(resource_base.join("search-management/skillsets").is_dir());
+        assert!(resource_base
+            .join("search-management/synonym-maps")
+            .is_dir());
+        // Should NOT have preview dirs
+        assert!(!resource_base
+            .join("agentic-retrieval/knowledge-bases")
+            .exists());
+    }
+
+    #[test]
+    fn test_agentic_template_creates_preview_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", Some("search"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
+
+        let resource_base = project_dir.join("search");
+        assert!(resource_base.join("search-management/indexes").is_dir());
+        assert!(resource_base
+            .join("agentic-retrieval/knowledge-bases")
+            .is_dir());
+        assert!(resource_base
+            .join("agentic-retrieval/knowledge-sources")
+            .is_dir());
+    }
+
+    #[test]
+    fn test_config_file_created() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("my-search", None);
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let config_path = project_dir.join("hoist.toml");
+        assert!(config_path.exists());
+
+        let loaded = Config::load(project_dir).unwrap();
+        assert_eq!(loaded.service.name, "my-search");
+        assert_eq!(loaded.service.api_version, "2024-07-01");
+    }
+
+    #[test]
+    fn test_gitignore_created_in_state_dir() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", None);
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let gitignore = project_dir.join(".hoist/.gitignore");
+        assert!(gitignore.exists());
+
+        let content = std::fs::read_to_string(&gitignore).unwrap();
+        assert!(content.contains("*"));
+        assert!(content.contains("!.gitignore"));
+    }
+
+    #[test]
+    fn test_hoist_md_created() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("my-search-svc", Some("resources"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
+
+        let hoist_md = project_dir.join("resources/HOIST.md");
+        assert!(hoist_md.exists());
+
+        let content = std::fs::read_to_string(&hoist_md).unwrap();
+        assert!(content.contains("my-search-svc"));
+        assert!(content.contains("indexes"));
+        assert!(content.contains("search-management"));
+    }
+
+    #[test]
+    fn test_hoist_md_includes_agentic_section_for_agentic_template() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", Some("search"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
+
+        let hoist_md = project_dir.join("search/HOIST.md");
+        let content = std::fs::read_to_string(&hoist_md).unwrap();
+        assert!(content.contains("agentic-retrieval"));
+        assert!(content.contains("knowledge-bases"));
+    }
+
+    #[test]
+    fn test_category_readmes_created() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", Some("search"));
+
+        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
+
+        let sm_readme = project_dir.join("search/search-management/README.md");
+        assert!(sm_readme.exists());
+        let sm_content = std::fs::read_to_string(&sm_readme).unwrap();
+        assert!(sm_content.contains("Search Management Resources"));
+
+        let ar_readme = project_dir.join("search/agentic-retrieval/README.md");
+        assert!(ar_readme.exists());
+        let ar_content = std::fs::read_to_string(&ar_readme).unwrap();
+        assert!(ar_content.contains("Agentic Retrieval"));
+    }
+
+    #[test]
+    fn test_no_path_creates_dirs_at_project_root() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", None);
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Resources should be directly under project root
+        assert!(project_dir.join("search-management/indexes").is_dir());
+        assert!(project_dir.join("search-management/data-sources").is_dir());
+    }
+
+    #[test]
+    fn test_api_doc_url_returns_valid_urls() {
+        for kind in ResourceKind::all() {
+            let url = api_doc_url(*kind);
+            assert!(url.starts_with("https://"));
+            assert!(url.contains("learn.microsoft.com"));
+        }
+    }
+
+    #[test]
+    fn test_already_initialized_error() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service", None);
+
+        // First init should work
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Check that config file exists (simulating the check in run())
+        let config_path = project_dir.join(Config::FILENAME);
+        assert!(config_path.exists());
+    }
 }

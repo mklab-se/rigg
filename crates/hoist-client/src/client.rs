@@ -1,14 +1,33 @@
 //! Azure Search REST API client
 
+use std::time::Duration;
+
 use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use hoist_core::resources::ResourceKind;
 use hoist_core::Config;
 
 use crate::auth::{get_auth_provider, AuthProvider};
 use crate::error::ClientError;
+
+/// Maximum number of retry attempts for retryable errors
+const MAX_RETRIES: u32 = 3;
+
+/// Initial backoff delay in seconds
+const INITIAL_BACKOFF_SECS: u64 = 1;
+
+/// Calculate the backoff duration for a given retry attempt.
+///
+/// For `RateLimited` errors with a `retry_after` value, that value is used directly.
+/// For other retryable errors, exponential backoff is applied: 1s, 2s, 4s, etc.
+fn retry_delay(error: &ClientError, attempt: u32) -> Duration {
+    match error {
+        ClientError::RateLimited { retry_after } => Duration::from_secs(*retry_after),
+        _ => Duration::from_secs(INITIAL_BACKOFF_SECS * 2u64.pow(attempt)),
+    }
+}
 
 /// Azure Search API client
 pub struct AzureSearchClient {
@@ -158,11 +177,45 @@ impl AzureSearchClient {
         }
     }
 
+    /// Execute an HTTP request with retry logic for transient errors.
+    ///
+    /// Retries up to [`MAX_RETRIES`] times for retryable errors (429 and 503).
+    /// Uses exponential backoff (1s, 2s, 4s) for 503 errors and respects the
+    /// `retry_after` value for 429 rate-limiting errors.
+    async fn request_with_retry(
+        &self,
+        method: Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<Option<Value>, ClientError> {
+        let mut attempt = 0u32;
+        loop {
+            match self.request(method.clone(), url, body).await {
+                Ok(value) => return Ok(value),
+                Err(err) if err.is_retryable() && attempt < MAX_RETRIES => {
+                    let delay = retry_delay(&err, attempt);
+                    warn!(
+                        "Request {} {} failed (attempt {}/{}): {}. Retrying in {:?}",
+                        method,
+                        url,
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        err,
+                        delay,
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     /// List all resources of a given kind
     #[instrument(skip(self))]
     pub async fn list(&self, kind: ResourceKind) -> Result<Vec<Value>, ClientError> {
         let url = self.collection_url(kind);
-        let response = self.request(Method::GET, &url, None).await?;
+        let response = self.request_with_retry(Method::GET, &url, None).await?;
 
         match response {
             Some(value) => {
@@ -182,7 +235,7 @@ impl AzureSearchClient {
     #[instrument(skip(self))]
     pub async fn get(&self, kind: ResourceKind, name: &str) -> Result<Value, ClientError> {
         let url = self.resource_url(kind, name);
-        let response = self.request(Method::GET, &url, None).await?;
+        let response = self.request_with_retry(Method::GET, &url, None).await?;
 
         response.ok_or_else(|| ClientError::NotFound {
             kind: kind.display_name().to_string(),
@@ -203,14 +256,15 @@ impl AzureSearchClient {
         definition: &Value,
     ) -> Result<Option<Value>, ClientError> {
         let url = self.resource_url(kind, name);
-        self.request(Method::PUT, &url, Some(definition)).await
+        self.request_with_retry(Method::PUT, &url, Some(definition))
+            .await
     }
 
     /// Delete a resource
     #[instrument(skip(self))]
     pub async fn delete(&self, kind: ResourceKind, name: &str) -> Result<(), ClientError> {
         let url = self.resource_url(kind, name);
-        self.request(Method::DELETE, &url, None).await?;
+        self.request_with_retry(Method::DELETE, &url, None).await?;
         Ok(())
     }
 
@@ -350,5 +404,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_retry_delay_exponential_backoff_attempt_0() {
+        let err = ClientError::ServiceUnavailable("down".to_string());
+        let delay = retry_delay(&err, 0);
+        assert_eq!(delay, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_retry_delay_exponential_backoff_attempt_1() {
+        let err = ClientError::ServiceUnavailable("down".to_string());
+        let delay = retry_delay(&err, 1);
+        assert_eq!(delay, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn test_retry_delay_exponential_backoff_attempt_2() {
+        let err = ClientError::ServiceUnavailable("down".to_string());
+        let delay = retry_delay(&err, 2);
+        assert_eq!(delay, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn test_retry_delay_rate_limited_uses_retry_after() {
+        let err = ClientError::RateLimited { retry_after: 30 };
+        // retry_after should be used regardless of attempt number
+        assert_eq!(retry_delay(&err, 0), Duration::from_secs(30));
+        assert_eq!(retry_delay(&err, 1), Duration::from_secs(30));
+        assert_eq!(retry_delay(&err, 2), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_retry_delay_rate_limited_default_retry_after() {
+        let err = ClientError::RateLimited { retry_after: 60 };
+        let delay = retry_delay(&err, 0);
+        assert_eq!(delay, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_retry_constants() {
+        assert_eq!(MAX_RETRIES, 3);
+        assert_eq!(INITIAL_BACKOFF_SECS, 1);
+    }
+
+    #[test]
+    fn test_retry_delay_backoff_sequence() {
+        let err = ClientError::ServiceUnavailable("temporarily unavailable".to_string());
+        let delays: Vec<Duration> = (0..MAX_RETRIES).map(|i| retry_delay(&err, i)).collect();
+        assert_eq!(
+            delays,
+            vec![
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_non_retryable_error_still_computes_delay() {
+        // retry_delay computes a delay regardless; the caller decides whether to retry.
+        // This verifies the function doesn't panic on non-retryable errors.
+        let err = ClientError::Api {
+            status: 400,
+            message: "bad request".to_string(),
+        };
+        let delay = retry_delay(&err, 0);
+        assert_eq!(delay, Duration::from_secs(1));
     }
 }
