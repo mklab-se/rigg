@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::info;
 
-use hoist_client::arm::ArmClient;
+use hoist_client::arm::{AiServicesAccount, ArmClient, SearchService};
 use hoist_client::auth::AzCliAuth;
 use hoist_core::config::{
     Config, FoundryServiceConfig, ProjectConfig, SearchServiceConfig, ServicesConfig, SyncConfig,
@@ -30,16 +30,24 @@ pub async fn run(
     service_override: Option<String>,
 ) -> Result<()> {
     let project_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap());
-
-    // Check if already initialized
     let config_path = project_dir.join(Config::FILENAME);
-    if config_path.exists() {
-        anyhow::bail!(
-            "Project already initialized at {}. Use 'hoist config' to modify settings.",
-            project_dir.display()
-        );
-    }
 
+    if config_path.exists() {
+        // Additive update: discover and add new services to existing config
+        run_additive(&project_dir).await
+    } else {
+        // Fresh init: full setup from scratch
+        run_fresh(project_dir, path, template, service_override).await
+    }
+}
+
+/// Fresh initialization of a new hoist project
+async fn run_fresh(
+    project_dir: PathBuf,
+    path: Option<PathBuf>,
+    template: InitTemplate,
+    service_override: Option<String>,
+) -> Result<()> {
     println!("Initializing hoist project in {}", project_dir.display());
     println!();
 
@@ -61,18 +69,7 @@ pub async fn run(
     } else {
         match try_authenticate().await {
             Ok(ctx) => {
-                let search: Vec<SearchServiceConfig> = discover_search_service(&ctx)
-                    .await?
-                    .map(|(name, sub)| {
-                        vec![SearchServiceConfig {
-                            name,
-                            subscription: sub,
-                            resource_group: None,
-                            api_version: "2024-07-01".to_string(),
-                            preview_api_version: "2025-11-01-preview".to_string(),
-                        }]
-                    })
-                    .unwrap_or_default();
+                let search = discover_search_services_fresh(&ctx).await?;
                 let foundry: Vec<FoundryServiceConfig> =
                     discover_foundry_service(&ctx).await?.into_iter().collect();
                 (search, foundry)
@@ -232,6 +229,52 @@ pub async fn run(
     Ok(())
 }
 
+/// Additive update: discover and add new services to an existing project
+async fn run_additive(project_dir: &Path) -> Result<()> {
+    let mut config = Config::load(project_dir)?;
+    println!("Updating hoist project in {}", project_dir.display());
+    println!();
+
+    let ctx = try_authenticate().await?;
+
+    // Discover and add new search services
+    if crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
+        let new_search = discover_new_search_services(&ctx, &config.services.search).await?;
+        for svc in &new_search {
+            let search_base = config.search_service_dir(project_dir, &svc.name);
+            for kind in ResourceKind::search_kinds() {
+                let dir = search_base.join(kind.directory_name());
+                std::fs::create_dir_all(&dir)?;
+            }
+        }
+        config.services.search.extend(new_search);
+    }
+
+    // Discover and add new foundry services
+    if crate::commands::confirm::prompt_yes_default("Manage Microsoft Foundry agents?")? {
+        let accounts = ctx
+            .arm
+            .list_ai_services_accounts(&ctx.subscription_id)
+            .await?;
+        refresh_foundry_endpoints(&mut config.services.foundry, &accounts);
+
+        let new_foundry =
+            discover_new_foundry_services(&ctx, &config.services.foundry, &accounts).await?;
+        for svc in &new_foundry {
+            let foundry_base = config.foundry_service_dir(project_dir, &svc.name, &svc.project);
+            std::fs::create_dir_all(foundry_base.join("agents"))?;
+        }
+        config.services.foundry.extend(new_foundry);
+    }
+
+    // Save updated config
+    config.save(project_dir)?;
+    println!();
+    println!("Configuration updated.");
+
+    Ok(())
+}
+
 /// Try to authenticate and select a subscription for ARM discovery
 async fn try_authenticate() -> Result<DiscoveryContext> {
     let status = AzCliAuth::check_status().map_err(|e| {
@@ -268,29 +311,6 @@ async fn try_authenticate() -> Result<DiscoveryContext> {
         arm,
         subscription_id: selected_sub.subscription_id.clone(),
     })
-}
-
-/// Discover a search service via ARM APIs
-async fn discover_search_service(
-    ctx: &DiscoveryContext,
-) -> Result<Option<(String, Option<String>)>> {
-    if !crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
-        return Ok(None);
-    }
-
-    println!("Fetching Azure AI Search services...");
-    let services = ctx.arm.list_search_services(&ctx.subscription_id).await?;
-
-    if services.is_empty() {
-        println!("  No search services found in this subscription.");
-        return Ok(None);
-    }
-
-    let selected = auto_select_or_prompt("Select search service", &services, 0)?;
-    Ok(Some((
-        selected.name.clone(),
-        Some(ctx.subscription_id.clone()),
-    )))
 }
 
 /// Discover a Foundry service and project via ARM APIs
@@ -333,6 +353,183 @@ async fn discover_foundry_service(ctx: &DiscoveryContext) -> Result<Option<Found
         subscription: Some(ctx.subscription_id.clone()),
         resource_group: None,
     }))
+}
+
+/// Discover search services for fresh init (multi-select)
+async fn discover_search_services_fresh(
+    ctx: &DiscoveryContext,
+) -> Result<Vec<SearchServiceConfig>> {
+    if !crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
+        return Ok(vec![]);
+    }
+
+    println!("Fetching Azure AI Search services...");
+    let services = ctx.arm.list_search_services(&ctx.subscription_id).await?;
+
+    if services.is_empty() {
+        println!("  No search services found in this subscription.");
+        return Ok(vec![]);
+    }
+
+    let selected = prompt_multi_selection("Add services", &services)?;
+    Ok(selected
+        .into_iter()
+        .map(|s| SearchServiceConfig {
+            name: s.name.clone(),
+            subscription: Some(ctx.subscription_id.clone()),
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        })
+        .collect())
+}
+
+/// Discover search services not yet configured (additive mode)
+async fn discover_new_search_services(
+    ctx: &DiscoveryContext,
+    existing: &[SearchServiceConfig],
+) -> Result<Vec<SearchServiceConfig>> {
+    println!("Fetching Azure AI Search services...");
+    let all_services = ctx.arm.list_search_services(&ctx.subscription_id).await?;
+
+    // Show already configured
+    for svc in existing {
+        println!("  [x] {} (already configured)", svc.name);
+    }
+
+    // Filter to not-yet-configured
+    let existing_names: Vec<&str> = existing.iter().map(|s| s.name.as_str()).collect();
+    let new_services: Vec<&SearchService> = all_services
+        .iter()
+        .filter(|s| !existing_names.contains(&s.name.as_str()))
+        .collect();
+
+    if new_services.is_empty() {
+        if existing.is_empty() {
+            println!("  No search services found.");
+        } else {
+            println!("  No additional search services found.");
+        }
+        return Ok(vec![]);
+    }
+
+    let selected = prompt_multi_selection("Add services", &new_services)?;
+    Ok(selected
+        .into_iter()
+        .map(|s| SearchServiceConfig {
+            name: s.name.clone(),
+            subscription: Some(ctx.subscription_id.clone()),
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        })
+        .collect())
+}
+
+/// Discover foundry services/projects not yet configured (additive mode)
+async fn discover_new_foundry_services(
+    ctx: &DiscoveryContext,
+    existing: &[FoundryServiceConfig],
+    accounts: &[AiServicesAccount],
+) -> Result<Vec<FoundryServiceConfig>> {
+    // Show already configured
+    for svc in existing {
+        println!("  [x] {} / {} (already configured)", svc.name, svc.project);
+    }
+
+    if accounts.is_empty() {
+        println!("  No AI Services accounts found.");
+        return Ok(vec![]);
+    }
+
+    let selected_accounts = prompt_multi_selection("Add accounts", accounts)?;
+
+    let mut new_configs = Vec::new();
+    for account in selected_accounts {
+        println!("Fetching projects for {}...", account.name);
+        let projects = ctx
+            .arm
+            .list_foundry_projects(account, &ctx.subscription_id)
+            .await?;
+
+        // Filter out already-configured project/account pairs
+        let new_projects: Vec<_> = projects
+            .iter()
+            .filter(|p| {
+                !existing
+                    .iter()
+                    .any(|e| e.name == account.name && e.project == p.display_name())
+            })
+            .collect();
+
+        if new_projects.is_empty() {
+            println!("  No new projects found.");
+            continue;
+        }
+
+        let selected_projects = prompt_multi_selection("Add projects", &new_projects)?;
+        for project in selected_projects {
+            new_configs.push(FoundryServiceConfig {
+                name: account.name.clone(),
+                project: project.display_name().to_string(),
+                api_version: "2025-05-15-preview".to_string(),
+                endpoint: Some(account.agents_endpoint()),
+                subscription: Some(ctx.subscription_id.clone()),
+                resource_group: None,
+            });
+        }
+    }
+    Ok(new_configs)
+}
+
+/// Refresh endpoint URLs for existing Foundry configs using ARM data
+fn refresh_foundry_endpoints(
+    existing: &mut [FoundryServiceConfig],
+    accounts: &[AiServicesAccount],
+) {
+    for config in existing.iter_mut() {
+        if let Some(account) = accounts.iter().find(|a| a.name == config.name) {
+            config.endpoint = Some(account.agents_endpoint());
+        }
+    }
+}
+
+/// Prompt user to select one or more items from a list.
+/// Auto-selects if there is exactly one item.
+fn prompt_multi_selection<'a, T: std::fmt::Display>(
+    prompt: &str,
+    items: &'a [T],
+) -> Result<Vec<&'a T>> {
+    if items.is_empty() {
+        return Ok(vec![]);
+    }
+    if items.len() == 1 {
+        println!("  Found: {}", items[0]);
+        return Ok(vec![&items[0]]);
+    }
+    for (i, item) in items.iter().enumerate() {
+        println!("  [{}] {}", i + 1, item);
+    }
+    print!("{} (comma-separated, Enter to skip): ", prompt);
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input)?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut selected = Vec::new();
+    for part in input.split(',') {
+        let idx: usize = part
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid selection: {}", part.trim()))?;
+        if idx < 1 || idx > items.len() {
+            anyhow::bail!("Selection out of range: {}", idx);
+        }
+        selected.push(&items[idx - 1]);
+    }
+    Ok(selected)
 }
 
 /// Prompt for search service name manually (no ARM discovery)
@@ -1263,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn test_already_initialized_error() {
+    fn test_existing_config_detected() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
         let config = make_config("test-service", None);
@@ -1271,8 +1468,129 @@ mod tests {
         // First init should work
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        // Check that config file exists (simulating the check in run())
+        // Config file should exist (additive mode would be triggered)
         let config_path = project_dir.join(Config::FILENAME);
         assert!(config_path.exists());
+
+        // Verify config can be loaded for additive update
+        let loaded = Config::load(project_dir).unwrap();
+        assert_eq!(loaded.services.search[0].name, "test-service");
+    }
+
+    #[test]
+    fn test_prompt_multi_selection_empty_items() {
+        let items: Vec<String> = vec![];
+        let result = prompt_multi_selection("Select", &items).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_multi_select_single_item_auto_selects() {
+        let items = vec!["only-one".to_string()];
+        let result = prompt_multi_selection("Select", &items).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(*result[0], "only-one");
+    }
+
+    #[test]
+    fn test_additive_init_creates_new_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+
+        // Start with a single search service
+        let config = make_config("svc-1", None);
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Simulate additive: load config, add a new search service, create dirs
+        let mut loaded = Config::load(project_dir).unwrap();
+        let new_svc = SearchServiceConfig {
+            name: "svc-2".to_string(),
+            subscription: None,
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        };
+
+        // Create dirs for new service
+        let search_base = loaded.search_service_dir(project_dir, &new_svc.name);
+        for kind in ResourceKind::search_kinds() {
+            let dir = search_base.join(kind.directory_name());
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        loaded.services.search.push(new_svc);
+        loaded.save(project_dir).unwrap();
+
+        // Verify both service directories exist
+        assert!(project_dir
+            .join("search-resources/svc-1/search-management/indexes")
+            .is_dir());
+        assert!(project_dir
+            .join("search-resources/svc-2/search-management/indexes")
+            .is_dir());
+
+        // Verify config has both services
+        let reloaded = Config::load(project_dir).unwrap();
+        assert_eq!(reloaded.services.search.len(), 2);
+    }
+
+    #[test]
+    fn test_refresh_foundry_endpoints() {
+        use hoist_client::arm::{AiServicesAccount, AiServicesAccountProperties};
+
+        let mut configs = vec![FoundryServiceConfig {
+            name: "my-ai-svc".to_string(),
+            project: "proj-1".to_string(),
+            api_version: "2025-05-15-preview".to_string(),
+            endpoint: None,
+            subscription: None,
+            resource_group: None,
+        }];
+
+        let accounts = vec![AiServicesAccount {
+            name: "my-ai-svc".to_string(),
+            location: "eastus".to_string(),
+            kind: "AIServices".to_string(),
+            id: String::new(),
+            properties: AiServicesAccountProperties {
+                endpoint: Some("https://custom-sub.cognitiveservices.azure.com/".to_string()),
+            },
+        }];
+
+        refresh_foundry_endpoints(&mut configs, &accounts);
+
+        assert_eq!(
+            configs[0].endpoint.as_deref(),
+            Some("https://custom-sub.services.ai.azure.com")
+        );
+    }
+
+    #[test]
+    fn test_refresh_foundry_endpoints_no_match() {
+        use hoist_client::arm::{AiServicesAccount, AiServicesAccountProperties};
+
+        let mut configs = vec![FoundryServiceConfig {
+            name: "my-ai-svc".to_string(),
+            project: "proj-1".to_string(),
+            api_version: "2025-05-15-preview".to_string(),
+            endpoint: Some("https://old-endpoint.services.ai.azure.com".to_string()),
+            subscription: None,
+            resource_group: None,
+        }];
+
+        let accounts = vec![AiServicesAccount {
+            name: "different-svc".to_string(),
+            location: "eastus".to_string(),
+            kind: "AIServices".to_string(),
+            id: String::new(),
+            properties: AiServicesAccountProperties::default(),
+        }];
+
+        refresh_foundry_endpoints(&mut configs, &accounts);
+
+        // Should not change — no matching account
+        assert_eq!(
+            configs[0].endpoint.as_deref(),
+            Some("https://old-endpoint.services.ai.azure.com")
+        );
     }
 }

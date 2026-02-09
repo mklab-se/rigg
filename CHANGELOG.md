@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2026-02-09
+
+### Added
+
+- **Native TLS root certificates** — switched from bundled Mozilla CA roots to OS-native certificate stores (`rustls-tls-native-roots`). Fixes `UnknownIssuer` TLS errors on corporate networks using TLS inspection with custom CA certificates. Certificates are now read from macOS Keychain, Windows Certificate Store, or Linux system cert paths
+- **Re-runnable `hoist init`** — running `hoist init` in an existing project now discovers and adds new services instead of bailing with "already initialized". Shows already-configured services, lists newly-discovered ones, and lets you select which to add. Existing configuration is preserved
+- **Multi-select during init** — `hoist init` now supports selecting multiple search services and Foundry projects at once (comma-separated numbers)
+- **Foundry endpoint refresh** — re-running `hoist init` refreshes endpoint URLs for existing Foundry configs using current ARM data
+
+### Tests
+
+- 446 tests across workspace (up from 439)
+
+### Improved
+
+- **TLS error diagnostics** — certificate verification failures now show a specific message explaining the likely cause (corporate TLS inspection) with OS-specific fix instructions for macOS, Linux, and Windows
+
 ## [0.2.3] - 2026-02-09
 
 ### Fixed

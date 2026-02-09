@@ -69,7 +69,7 @@ pub struct ServiceConfig {
 }
 
 /// Search service configuration (v0.2.0+ format)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchServiceConfig {
     /// Search service name
     pub name: String,
@@ -88,7 +88,7 @@ pub struct SearchServiceConfig {
 }
 
 /// Foundry service configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoundryServiceConfig {
     /// AI services host name (e.g., "my-ai-service")
     pub name: String,
