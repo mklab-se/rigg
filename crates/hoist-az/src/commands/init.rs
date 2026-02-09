@@ -174,16 +174,6 @@ async fn run_fresh(
                 std::fs::create_dir_all(&dir)?;
             }
         }
-
-        // Create documentation files
-        let search_kinds: Vec<ResourceKind> = resource_kinds
-            .iter()
-            .filter(|k| k.domain() == ServiceDomain::Search)
-            .copied()
-            .collect();
-        if !search_kinds.is_empty() {
-            create_hoist_md(&search_base, svc_name, &search_kinds)?;
-        }
     }
 
     // Create foundry resource directories
@@ -195,7 +185,7 @@ async fn run_fresh(
     }
 
     // Create README.md if it doesn't already exist
-    create_readme_if_missing(&project_dir, &config)?;
+    create_readme_if_missing(&project_dir, &config, &resource_kinds)?;
 
     println!();
     println!("Project initialized successfully!");
@@ -666,104 +656,14 @@ fn build_pull_prompt(config: &Config) -> String {
     format!("Pull existing resources from {}?", parts.join(", "))
 }
 
-fn create_hoist_md(
-    resource_base: &Path,
-    service_name: &str,
+/// Create a README.md in the project root if one doesn't already exist.
+/// Includes project overview, CLI quick start, directory layout, JSON conventions,
+/// and resource type reference for all configured service domains.
+fn create_readme_if_missing(
+    project_dir: &Path,
+    config: &Config,
     resource_kinds: &[ResourceKind],
 ) -> Result<()> {
-    let has_search_management = resource_kinds
-        .iter()
-        .any(|k| k.directory_name().starts_with("search-management/"));
-    let has_agentic_retrieval = resource_kinds
-        .iter()
-        .any(|k| k.directory_name().starts_with("agentic-retrieval/"));
-
-    // Build the resource type reference section
-    let mut resource_sections = String::new();
-
-    if has_search_management {
-        resource_sections.push_str(SEARCH_MANAGEMENT_SECTION);
-    }
-    if has_agentic_retrieval {
-        resource_sections.push_str(AGENTIC_RETRIEVAL_SECTION);
-    }
-
-    let hoist_md = format!(
-        r#"# Azure AI Search - Resource Definitions
-
-This directory contains the configuration for Azure AI Search service `{service_name}`,
-managed as code. Each JSON file defines a single search service resource and maps directly
-to the [Azure AI Search REST API](https://learn.microsoft.com/en-us/rest/api/searchservice/).
-
-For CLI usage and available commands, run `hoist --help`.
-
-## Files and Directories
-
-| Path | Description |
-|------|-------------|
-| `hoist.toml` | Project configuration: service name, API versions, sync settings. |
-| `.hoist/` | Local state directory (auto-managed, gitignored). Tracks sync checksums. |
-{directory_rows}
-
-## JSON File Conventions
-
-Each `.json` file represents one Azure AI Search resource. The files follow these conventions:
-
-- **Filename = resource name.** A file named `my-index.json` defines the resource named `my-index`.
-- **Same schema as the REST API.** The JSON structure matches the request/response body of the
-  corresponding Azure AI Search REST API endpoint. See the resource type reference below for
-  field documentation and links to the official API specs.
-- **Property order is preserved.** Properties appear in the order returned by the Azure API.
-  If you reorder properties locally, the next `hoist pull` will restore the canonical order.
-- **Volatile fields are stripped.** `@odata.etag` (changes on every update) and `@odata.context`
-  (contains the service hostname) are removed to keep files environment-independent and
-  diff-friendly.
-- **Secrets are excluded.** Connection strings, credentials, and storage secrets are never
-  stored in these files. They are managed separately through the Azure portal or CLI.
-
-## Resource Type Reference
-
-{resource_sections}## API Documentation
-
-- [Azure AI Search overview](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search)
-- [REST API reference (stable)](https://learn.microsoft.com/en-us/rest/api/searchservice/)
-- [REST API reference (preview)](https://learn.microsoft.com/en-us/rest/api/searchservice/?view=rest-searchservice-2025-05-01-preview)
-- [Service limits and quotas](https://learn.microsoft.com/en-us/azure/search/search-limits-quotas-capacity)
-"#,
-        service_name = service_name,
-        directory_rows = resource_kinds
-            .iter()
-            .map(|k| format!(
-                "| `{}/` | {} resource definitions. [API reference]({}) |",
-                k.directory_name(),
-                k.display_name(),
-                api_doc_url(*k)
-            ))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        resource_sections = resource_sections,
-    );
-
-    std::fs::write(resource_base.join("HOIST.md"), hoist_md)?;
-
-    // Category READMEs with detailed field documentation
-    if has_search_management {
-        let sm_dir = resource_base.join("search-management");
-        std::fs::create_dir_all(&sm_dir)?;
-        std::fs::write(sm_dir.join("README.md"), search_management_readme())?;
-    }
-
-    if has_agentic_retrieval {
-        let ar_dir = resource_base.join("agentic-retrieval");
-        std::fs::create_dir_all(&ar_dir)?;
-        std::fs::write(ar_dir.join("README.md"), agentic_retrieval_readme())?;
-    }
-
-    Ok(())
-}
-
-/// Create a README.md in the project root if one doesn't already exist
-fn create_readme_if_missing(project_dir: &Path, config: &Config) -> Result<()> {
     let readme_path = project_dir.join("README.md");
     if readme_path.exists() {
         return Ok(());
@@ -780,6 +680,51 @@ fn create_readme_if_missing(project_dir: &Path, config: &Config) -> Result<()> {
             "- **Microsoft Foundry**: `{}` (project: `{}`)\n",
             svc.name, svc.project
         ));
+    }
+
+    // Build directory rows for the project structure table
+    let search_kinds: Vec<&ResourceKind> = resource_kinds
+        .iter()
+        .filter(|k| k.domain() == ServiceDomain::Search)
+        .collect();
+    let has_foundry = !config.services.foundry.is_empty();
+
+    let mut directory_rows = String::new();
+    directory_rows.push_str(
+        "| `hoist.toml` | Project configuration: service name, API versions, sync settings |\n",
+    );
+    directory_rows.push_str("| `.hoist/` | Local state directory (auto-managed, gitignored) |\n");
+    for kind in &search_kinds {
+        directory_rows.push_str(&format!(
+            "| `search-resources/<service>/{}/` | {} resource definitions. [API reference]({}) |\n",
+            kind.directory_name(),
+            kind.display_name(),
+            api_doc_url(**kind)
+        ));
+    }
+    if has_foundry {
+        directory_rows.push_str(
+            "| `foundry-resources/<service>/<project>/agents/` | Microsoft Foundry agent definitions |\n",
+        );
+    }
+
+    // Build resource type reference sections
+    let has_search_management = search_kinds
+        .iter()
+        .any(|k| k.directory_name().starts_with("search-management/"));
+    let has_agentic_retrieval = search_kinds
+        .iter()
+        .any(|k| k.directory_name().starts_with("agentic-retrieval/"));
+
+    let mut resource_reference = String::new();
+    if has_search_management {
+        resource_reference.push_str(SEARCH_MANAGEMENT_SECTION);
+    }
+    if has_agentic_retrieval {
+        resource_reference.push_str(AGENTIC_RETRIEVAL_SECTION);
+    }
+    if has_foundry {
+        resource_reference.push_str(FOUNDRY_AGENTS_SECTION);
     }
 
     let readme = format!(
@@ -827,18 +772,30 @@ hoist validate --all
 
 | Path | Description |
 |------|-------------|
-| `hoist.toml` | Project configuration (services, API versions, sync settings) |
-| `.hoist/` | Local state directory (gitignored) |
-| `search-resources/` | Azure AI Search resource definitions (JSON) |
-| `foundry-resources/` | Microsoft Foundry agent definitions |
+{directory_rows}
+## JSON File Conventions
 
-## Learn More
+Each `.json` file represents one resource. The files follow these conventions:
+
+- **Filename = resource name.** A file named `my-index.json` defines the resource named `my-index`.
+- **Same schema as the REST API.** The JSON structure matches the request/response body of the corresponding Azure REST API endpoint.
+- **Property order is preserved.** Properties appear in the order returned by the Azure API.
+- **Volatile fields are stripped.** `@odata.etag` and `@odata.context` are removed to keep files environment-independent and diff-friendly.
+- **Secrets are excluded.** Connection strings, credentials, and storage secrets are never stored in these files.
+
+## Resource Type Reference
+
+{resource_reference}## Learn More
 
 - Run `hoist --help` for all available commands
 - Run `hoist <command> --help` for command-specific options
+- [Azure AI Search REST API](https://learn.microsoft.com/en-us/rest/api/searchservice/)
+- [Azure AI Search overview](https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search)
 "#,
         project_name = project_name,
         services_section = services_section,
+        directory_rows = directory_rows,
+        resource_reference = resource_reference,
     );
 
     std::fs::write(&readme_path, readme)?;
@@ -965,119 +922,28 @@ Dependencies: belongs to a knowledge base, which is specified during creation.
 
 "#;
 
-fn search_management_readme() -> &'static str {
-    r##"# Search Management Resources
+const FOUNDRY_AGENTS_SECTION: &str = r#"### agents/
 
-This directory contains the core Azure AI Search resource definitions.
-Each subdirectory holds JSON files for a specific resource type.
+Microsoft Foundry agent definitions. Each agent is stored as a directory of decomposed files
+for easier editing and review.
 
-For a summary of all resource types and their fields, see [HOIST.md](../HOIST.md).
+#### Agent directory structure
 
-## Resource Types
+```
+agents/<agent-name>/
+  config.json        # Agent metadata: id, name, model, temperature
+  instructions.md    # Agent instructions as editable Markdown
+  tools.json         # Tools array (code_interpreter, azure_search, etc.)
+  knowledge.json     # Tool resources (knowledge base connections)
+```
 
-### indexes/
+Key fields (in `config.json`): `name`, `model`, `temperature`, `top_p`, `metadata`.
 
-Index definitions describe the schema for searchable content.
+The `instructions.md` file contains the agent's system prompt and can be edited directly.
 
-**Key fields:**
-- `name` (string, required) - Unique index identifier. Must match the filename.
-- `fields` (array, required) - Field definitions with properties:
-  - `name`, `type` (e.g., `Edm.String`, `Edm.Int32`, `Collection(Edm.Single)`)
-  - `key` (boolean) - Exactly one field must be the key.
-  - `searchable`, `filterable`, `sortable`, `facetable`, `retrievable` (booleans)
-  - `analyzer`, `searchAnalyzer`, `indexAnalyzer` (string) - Text analysis settings.
-  - `dimensions`, `vectorSearchProfile` - For vector fields (`Collection(Edm.Single)`).
-- `vectorSearch` (object, optional) - Vector search configuration with `algorithms`, `profiles`, `vectorizers`, and `compressions`.
-- `semantic` (object, optional) - Semantic ranker configuration with named configurations.
-- `scoringProfiles` (array, optional) - Custom relevance scoring rules.
-- `similarity` (object, optional) - Similarity algorithm (e.g., BM25).
+- [Microsoft Foundry Agents documentation](https://learn.microsoft.com/en-us/azure/ai-services/agents/)
 
-**Important:** The `fields` array is immutable after creation for certain field types. Adding new fields is allowed, but changing existing field types is not.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update
-
----
-
-### indexers/
-
-Indexer definitions control how data is pulled from a data source into an index.
-
-**Key fields:**
-- `name` (string, required) - Unique indexer identifier. Must match the filename.
-- `dataSourceName` (string, required) - References a data source in `data-sources/`.
-- `targetIndexName` (string, required) - References an index in `indexes/`.
-- `skillsetName` (string, optional) - References a skillset in `skillsets/` for AI enrichment.
-- `schedule` (object, optional) - Cron-like schedule with `interval` (ISO 8601 duration, e.g., `"PT5M"`) and `startTime`.
-- `parameters` (object, optional) - Runtime configuration:
-  - `batchSize` (integer) - Documents per batch.
-  - `maxFailedItems`, `maxFailedItemsPerBatch` (integer) - Failure thresholds.
-  - `configuration` (object) - Source-specific settings (e.g., `parsingMode`, `dataToExtract`).
-- `fieldMappings` (array, optional) - Maps source fields to index fields when names differ.
-- `outputFieldMappings` (array, optional) - Maps skillset outputs to index fields.
-- `disabled` (boolean, optional) - Set to `true` to pause the indexer.
-
-**Dependencies:** Requires a valid `dataSourceName` and `targetIndexName`. If `skillsetName` is set, that skillset must also exist.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/indexers/create-or-update
-
----
-
-### data-sources/
-
-Data source definitions specify where an indexer reads data from.
-
-**Key fields:**
-- `name` (string, required) - Unique data source identifier. Must match the filename.
-- `type` (string, required) - Source type: `"azureblob"`, `"azuresql"`, `"cosmosdb"`, `"azuretable"`, `"adlsgen2"`, etc.
-- `container` (object, required):
-  - `name` (string) - Container, table, or database name.
-  - `query` (string, optional) - Filter query for the data source.
-- `dataChangeDetectionPolicy` (object, optional) - Enables incremental indexing.
-- `dataDeletionDetectionPolicy` (object, optional) - Detects deleted documents.
-- `identity` (object, optional) - Managed identity for authentication.
-
-**Note:** The `credentials` field (connection strings) is stripped from local files for security. Azure manages credentials separately. Do not add connection strings to these files.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/data-sources/create-or-update
-
----
-
-### skillsets/
-
-Skillset definitions describe AI enrichment pipelines applied during indexing.
-
-**Key fields:**
-- `name` (string, required) - Unique skillset identifier. Must match the filename.
-- `skills` (array, required) - Ordered list of skills to execute:
-  - `@odata.type` (string, required) - Skill type (e.g., `"#Microsoft.Skills.Text.SplitSkill"`, `"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"`).
-  - `name` (string, required) - Unique name within the skillset.
-  - `context` (string, optional) - Execution scope (e.g., `"/document"`, `"/document/pages/*"`).
-  - `inputs` (array, required) - Input mappings with `name` and `source`.
-  - `outputs` (array, required) - Output mappings with `name` and `targetName`.
-  - Additional properties vary by skill type.
-- `indexProjections` (object, optional) - Projects enriched data into child indexes.
-- `knowledgeStore` (object, optional) - Saves enrichment output to Azure Storage.
-
-**Note:** The `cognitiveServices` field is stripped from local files. Configure AI services keys through Azure.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/skillsets/create-or-update
-
----
-
-### synonym-maps/
-
-Synonym map definitions provide query-time term expansion.
-
-**Key fields:**
-- `name` (string, required) - Unique synonym map identifier. Must match the filename.
-- `format` (string, required) - Always `"solr"`.
-- `synonyms` (string, required) - Synonym rules, one per line. Format:
-  - Equivalent synonyms: `"USA, United States, United States of America"`
-  - Explicit mapping: `"Washington, Wash. => WA"`
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/synonym-maps/create-or-update
-"##
-}
+"#;
 
 /// Create directory structure for an init template without prompts or ARM discovery.
 /// Used internally for testing.
@@ -1137,59 +1003,9 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         std::fs::create_dir_all(&agents_dir)?;
     }
 
-    create_hoist_md(&search_base, &svc_name, &resource_kinds)?;
-    create_readme_if_missing(project_dir, config)?;
+    create_readme_if_missing(project_dir, config, &resource_kinds)?;
 
     Ok(())
-}
-
-fn agentic_retrieval_readme() -> &'static str {
-    r#"# Agentic Retrieval Resources (Preview)
-
-This directory contains resource definitions for the Azure AI Search Agentic Retrieval feature.
-These resources use the **preview** API and may change before general availability.
-
-For a summary of all resource types, see [HOIST.md](../HOIST.md).
-
-## Resource Types
-
-### knowledge-bases/
-
-Knowledge base definitions represent a curated collection of knowledge sources that AI agents can query.
-
-**Key fields:**
-- `name` (string, required) - Unique knowledge base identifier. Must match the filename.
-- `description` (string, optional) - Human-readable description of what this knowledge base contains.
-- `retrievalInstructions` (string, optional) - Instructions for the retrieval model on how to search.
-- `answerInstructions` (string, optional) - Instructions for answer generation.
-- `outputMode` (string, optional) - Output format for query results (e.g., `"extractiveData"`).
-- `knowledgeSources` (array, optional) - References to knowledge sources in this knowledge base.
-- `models` (array, optional) - Model configurations used by this knowledge base.
-- `encryptionKey` (object, optional) - Customer-managed encryption key.
-
-**Note:** The `storageConnectionStringSecret` field is stripped from local files for security.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-bases/create-or-update?view=rest-searchservice-2025-05-01-preview
-
----
-
-### knowledge-sources/
-
-Knowledge source definitions connect a data source to a knowledge base, defining how content
-is indexed and queried by AI agents.
-
-**Key fields:**
-- `name` (string, required) - Unique knowledge source identifier. Must match the filename.
-- `kind` (string, required) - Source type: `"azureBlob"`, `"indexedSharePoint"`, `"web"`, etc.
-- `description` (string, optional) - Describes what information this source provides to agents.
-- `azureBlobParameters` (object, optional) - Configuration for Azure Blob sources, including container, connection, and chunking settings.
-- `searchIndexParameters` (object, optional) - Configuration for search index-based sources.
-- `encryptionKey` (object, optional) - Customer-managed encryption key.
-
-**Dependencies:** Belongs to a knowledge base, which is specified during creation.
-
-**Docs:** https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview
-"#
 }
 
 #[cfg(test)]
@@ -1313,38 +1129,35 @@ mod tests {
     }
 
     #[test]
-    fn test_hoist_md_created() {
+    fn test_readme_includes_resource_reference() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
         let config = make_config("my-search-svc", Some("resources"));
 
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
-        let hoist_md = project_dir.join("resources/search-resources/my-search-svc/HOIST.md");
-        assert!(hoist_md.exists());
-
-        let content = std::fs::read_to_string(&hoist_md).unwrap();
+        let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
         assert!(content.contains("my-search-svc"));
         assert!(content.contains("indexes"));
         assert!(content.contains("search-management"));
+        assert!(content.contains("Resource Type Reference"));
     }
 
     #[test]
-    fn test_hoist_md_includes_agentic_section_for_agentic_template() {
+    fn test_readme_includes_agentic_section_for_agentic_template() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
         let config = make_config("test-service", Some("search"));
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let hoist_md = project_dir.join("search/search-resources/test-service/HOIST.md");
-        let content = std::fs::read_to_string(&hoist_md).unwrap();
+        let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
         assert!(content.contains("agentic-retrieval"));
         assert!(content.contains("knowledge-bases"));
     }
 
     #[test]
-    fn test_category_readmes_created() {
+    fn test_no_subdirectory_readmes_created() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
         let config = make_config("test-service", Some("search"));
@@ -1352,15 +1165,10 @@ mod tests {
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
         let search_base = project_dir.join("search/search-resources/test-service");
-        let sm_readme = search_base.join("search-management/README.md");
-        assert!(sm_readme.exists());
-        let sm_content = std::fs::read_to_string(&sm_readme).unwrap();
-        assert!(sm_content.contains("Search Management Resources"));
-
-        let ar_readme = search_base.join("agentic-retrieval/README.md");
-        assert!(ar_readme.exists());
-        let ar_content = std::fs::read_to_string(&ar_readme).unwrap();
-        assert!(ar_content.contains("Agentic Retrieval"));
+        // No HOIST.md or category READMEs — all content is in root README.md
+        assert!(!search_base.join("HOIST.md").exists());
+        assert!(!search_base.join("search-management/README.md").exists());
+        assert!(!search_base.join("agentic-retrieval/README.md").exists());
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7] - 2026-02-09
+
+### Changed
+
+- **Single README.md** — consolidated `HOIST.md` and category `README.md` files (previously generated in `search-management/` and `agentic-retrieval/` subdirectories) into the project root `README.md`. The root README now includes the directory layout, JSON file conventions, and full resource type reference with links to API docs. Foundry agent documentation is also included when Foundry services are configured
+
 ## [0.2.6] - 2026-02-09
 
 ### Changed
