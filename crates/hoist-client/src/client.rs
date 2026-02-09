@@ -172,7 +172,11 @@ impl AzureSearchClient {
                     Err(ClientError::RateLimited { retry_after })
                 }
                 StatusCode::SERVICE_UNAVAILABLE => Err(ClientError::ServiceUnavailable(body)),
-                _ => Err(ClientError::from_response(status.as_u16(), &body)),
+                _ => Err(ClientError::from_response_with_url(
+                    status.as_u16(),
+                    &body,
+                    Some(url),
+                )),
             }
         }
     }

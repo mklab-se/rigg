@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-02-09
+
+### Improved
+
+- **Rich 403 error handling** — access-denied errors now show the service name, a clear explanation, the exact `az role assignment create` command to fix it, common RBAC role names, and a link to Microsoft's RBAC documentation. Previously displayed as an empty `Error: API error (403):` with no guidance
+- **Error log file** — when a client error occurs, detailed diagnostics (timestamp, response body, suggestion) are appended to `hoist-error.log` instead of flooding the terminal
+- **Empty error body fallback** — API errors with no response body now show `HTTP <status> with no error details` instead of a blank message
+
+### Tests
+
+- 434 tests across workspace (up from 426)
+
 ## [0.2.0] - 2026-02-08
 
 ### Added

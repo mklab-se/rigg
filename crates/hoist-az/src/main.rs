@@ -55,5 +55,67 @@ async fn main() -> Result<()> {
         }
     }
 
-    result
+    // Handle errors with user-friendly output
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Check if the root cause is a ClientError with rich context
+            if let Some(client_err) = err.downcast_ref::<hoist_client::ClientError>() {
+                eprintln!();
+                eprintln!("Error: {}", client_err);
+                eprintln!();
+                for line in client_err.suggestion().lines() {
+                    eprintln!("  {}", line);
+                }
+
+                // Write detailed error log
+                write_error_log(client_err);
+
+                std::process::exit(1);
+            }
+
+            // Fall through for other errors
+            Err(err)
+        }
+    }
+}
+
+/// Write detailed error information to `hoist-error.log` for diagnostics.
+fn write_error_log(err: &hoist_client::ClientError) {
+    use std::io::Write;
+
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let mut lines = Vec::new();
+
+    lines.push(format!("[{}] Error: {}", timestamp, err));
+
+    if let Some(body) = err.raw_body() {
+        if !body.is_empty() {
+            lines.push(format!("Response body: {}", body));
+        }
+    }
+
+    lines.push(format!("Suggestion: {}", err.suggestion()));
+    lines.push(String::new());
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("hoist-error.log")
+    {
+        Ok(mut file) => {
+            for line in &lines {
+                let _ = writeln!(file, "{}", line);
+            }
+            eprintln!("  Error details written to hoist-error.log");
+        }
+        Err(_) => {
+            // If we can't write the log file, show the raw body inline
+            if let Some(body) = err.raw_body() {
+                if !body.is_empty() {
+                    eprintln!("  Response: {}", body);
+                }
+            }
+        }
+    }
 }
