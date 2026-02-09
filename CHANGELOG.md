@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.11] - 2026-02-09
+
+### Fixed
+
+- **Knowledge source corruption with `2025-11-01-preview` API** — knowledge base and knowledge source API calls are now pinned to `2025-08-01-preview`, which is compatible with existing agentic retrieval resources. The `2025-11-01-preview` API introduced breaking schema changes (fields like `language`, `production_family`, `embeddingModel`, `chatCompletionModel` reorganized into `ingestionParameters`; `sourceDataSelect` renamed to `sourceDataFields`) that made it impossible to update knowledge sources created with the older schema — even from the Azure portal. Other resource types (indexes, indexers, skillsets, etc.) continue to use `2025-11-01-preview`
+
+### Tests
+
+- 448 tests across workspace
+
 ## [0.2.10] - 2026-02-09
 
 ### Fixed
