@@ -7,6 +7,8 @@ use anyhow::Result;
 use colored::Colorize;
 use tracing::info;
 
+use hoist_client::auth::AzCliAuth;
+use hoist_client::ArmClient;
 use hoist_client::AzureSearchClient;
 use hoist_core::config::FoundryServiceConfig;
 use hoist_core::constraints::check_immutability;
@@ -16,6 +18,7 @@ use hoist_core::resources::agent::compose_agent;
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
+use hoist_core::Config;
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
@@ -492,6 +495,9 @@ pub async fn run(
     let mut success_count = 0;
     let mut error_count = 0;
 
+    // Cache for discovered storage connection string (avoids repeated ARM calls)
+    let mut cached_connection_string: Option<String> = None;
+
     // Push search resources
     if !search_resources.is_empty() {
         let client = if let Some(ref server) = target {
@@ -528,8 +534,23 @@ pub async fn run(
 
             let clean_definition = strip_volatile_fields(*kind, definition);
 
+            // For new data sources/KS, inject credentials if missing
+            let final_definition =
+                if needs_credentials(*kind, &clean_definition, *exists, needs_recreate) {
+                    inject_credentials(
+                        *kind,
+                        &clean_definition,
+                        name,
+                        &config,
+                        &mut cached_connection_string,
+                    )
+                    .await?
+                } else {
+                    clean_definition
+                };
+
             match client
-                .create_or_update(*kind, name, &clean_definition)
+                .create_or_update(*kind, name, &final_definition)
                 .await
             {
                 Ok(_) => {
@@ -764,6 +785,188 @@ fn strip_volatile_fields(kind: ResourceKind, definition: &serde_json::Value) -> 
         .copied()
         .collect();
     strip_fields_recursive(definition, &all_fields)
+}
+
+/// Check if a resource needs credential injection before push.
+///
+/// Returns true when:
+/// - DataSource being created (or recreated) without a `credentials` object
+/// - KnowledgeSource being created (or recreated) with `<redacted>` connectionString
+fn needs_credentials(
+    kind: ResourceKind,
+    definition: &serde_json::Value,
+    exists: bool,
+    needs_recreate: bool,
+) -> bool {
+    let is_new = !exists || needs_recreate;
+    if !is_new {
+        return false;
+    }
+
+    match kind {
+        ResourceKind::DataSource => {
+            // credentials is a volatile field — stripped during pull, so it's absent on disk.
+            // If someone manually added it, respect that.
+            definition
+                .get("credentials")
+                .and_then(|c| c.get("connectionString"))
+                .and_then(|s| s.as_str())
+                .is_none_or(|s| s.is_empty())
+        }
+        ResourceKind::KnowledgeSource => {
+            // Azure returns "<redacted>" for connectionString in GET responses.
+            // Check if it's redacted or missing.
+            let conn = definition
+                .pointer("/azureBlobParameters/connectionString")
+                .and_then(|v| v.as_str());
+            matches!(conn, Some("<redacted>") | None)
+        }
+        _ => false,
+    }
+}
+
+/// Discover a storage account connection string via ARM.
+///
+/// Falls back gracefully — returns None on any failure (not logged in,
+/// no storage accounts found, etc.).
+async fn discover_storage_credentials(
+    config: &Config,
+    cached: &mut Option<String>,
+) -> Option<String> {
+    // Return cached value if available
+    if let Some(ref conn) = cached {
+        return Some(conn.clone());
+    }
+
+    let arm = ArmClient::new().ok()?;
+
+    // Get subscription ID: config first, then az cli
+    let subscription_id = config
+        .primary_search_service()
+        .and_then(|s| s.subscription.clone())
+        .or_else(|| {
+            AzCliAuth::check_status()
+                .ok()
+                .and_then(|s| s.subscription_id)
+        })?;
+
+    // Get resource group: config first, then ARM discovery
+    let search_svc = config.primary_search_service()?;
+    let resource_group = if let Some(rg) = search_svc.resource_group.clone() {
+        rg
+    } else {
+        arm.find_resource_group(&subscription_id, &search_svc.name)
+            .await
+            .ok()?
+    };
+
+    let accounts = arm
+        .list_storage_accounts(&subscription_id, &resource_group)
+        .await
+        .ok()?;
+
+    if accounts.is_empty() {
+        return None;
+    }
+
+    let account_name = if accounts.len() == 1 {
+        let name = &accounts[0].name;
+        println!();
+        info!("Auto-selected storage account: {}", name);
+        name.clone()
+    } else {
+        println!();
+        println!(
+            "Multiple storage accounts found in resource group '{}':",
+            resource_group
+        );
+        for (i, acct) in accounts.iter().enumerate() {
+            println!("  [{}] {}", i + 1, acct);
+        }
+        print!("Select storage account [1]: ");
+        io::stdout().flush().ok()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).ok()?;
+        let input = input.trim();
+
+        let idx = if input.is_empty() {
+            0
+        } else {
+            input.parse::<usize>().ok()?.checked_sub(1)?
+        };
+
+        accounts.get(idx)?.name.clone()
+    };
+
+    let conn_string = arm
+        .get_storage_connection_string(&subscription_id, &resource_group, &account_name)
+        .await
+        .ok()?;
+
+    *cached = Some(conn_string.clone());
+    Some(conn_string)
+}
+
+/// Inject credentials into a resource definition for new data sources or knowledge sources.
+///
+/// Tries ARM-based auto-discovery first, then falls back to prompting the user.
+async fn inject_credentials(
+    kind: ResourceKind,
+    definition: &serde_json::Value,
+    name: &str,
+    config: &Config,
+    cached: &mut Option<String>,
+) -> Result<serde_json::Value> {
+    // Try auto-discovery first
+    let conn_string = match discover_storage_credentials(config, cached).await {
+        Some(c) => c,
+        None => {
+            // Fall back to manual prompt
+            println!();
+            print!(
+                "Enter connection string for {} '{}' (or press Enter to skip): ",
+                kind.display_name(),
+                name
+            );
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            let input = input.trim().to_string();
+            if input.is_empty() {
+                return Ok(definition.clone());
+            }
+            input
+        }
+    };
+
+    let mut def = definition.clone();
+
+    match kind {
+        ResourceKind::DataSource => {
+            // Inject {"credentials": {"connectionString": "..."}}
+            if let Some(obj) = def.as_object_mut() {
+                obj.insert(
+                    "credentials".to_string(),
+                    serde_json::json!({"connectionString": conn_string}),
+                );
+            }
+        }
+        ResourceKind::KnowledgeSource => {
+            // Replace azureBlobParameters.connectionString
+            if let Some(blob_params) = def.get_mut("azureBlobParameters") {
+                if let Some(obj) = blob_params.as_object_mut() {
+                    obj.insert(
+                        "connectionString".to_string(),
+                        serde_json::Value::String(conn_string),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(def)
 }
 
 fn strip_fields_recursive(value: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
@@ -1043,6 +1246,214 @@ mod tests {
             format_json(&normalized_remote),
             format_json(&normalized_local),
             "knowledgeSources change must be detected by push"
+        );
+    }
+
+    // --- Credential injection tests ---
+
+    #[test]
+    fn test_needs_credentials_datasource_new_no_creds() {
+        let def = json!({"name": "ds-1", "type": "azureblob", "container": {"name": "docs"}});
+        assert!(needs_credentials(
+            ResourceKind::DataSource,
+            &def,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_datasource_update() {
+        let def = json!({"name": "ds-1", "type": "azureblob", "container": {"name": "docs"}});
+        // Existing resource — Azure preserves credentials on update
+        assert!(!needs_credentials(
+            ResourceKind::DataSource,
+            &def,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_datasource_recreate() {
+        let def = json!({"name": "ds-1", "type": "azureblob", "container": {"name": "docs"}});
+        // Drop-and-recreate needs credentials like a new resource
+        assert!(needs_credentials(
+            ResourceKind::DataSource,
+            &def,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_datasource_with_creds() {
+        let def = json!({
+            "name": "ds-1",
+            "type": "azureblob",
+            "credentials": {"connectionString": "DefaultEndpointsProtocol=https;AccountName=..."},
+            "container": {"name": "docs"}
+        });
+        // Credentials already present — no injection needed
+        assert!(!needs_credentials(
+            ResourceKind::DataSource,
+            &def,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_ks_redacted() {
+        let def = json!({
+            "name": "ks-1",
+            "azureBlobParameters": {
+                "containerName": "docs",
+                "connectionString": "<redacted>"
+            }
+        });
+        assert!(needs_credentials(
+            ResourceKind::KnowledgeSource,
+            &def,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_ks_missing_connection_string() {
+        let def = json!({
+            "name": "ks-1",
+            "azureBlobParameters": {"containerName": "docs"}
+        });
+        assert!(needs_credentials(
+            ResourceKind::KnowledgeSource,
+            &def,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_ks_real_value() {
+        let def = json!({
+            "name": "ks-1",
+            "azureBlobParameters": {
+                "containerName": "docs",
+                "connectionString": "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=abc"
+            }
+        });
+        assert!(!needs_credentials(
+            ResourceKind::KnowledgeSource,
+            &def,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_ks_update() {
+        let def = json!({
+            "name": "ks-1",
+            "azureBlobParameters": {
+                "containerName": "docs",
+                "connectionString": "<redacted>"
+            }
+        });
+        // Existing KS update — Azure preserves credentials
+        assert!(!needs_credentials(
+            ResourceKind::KnowledgeSource,
+            &def,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_needs_credentials_index() {
+        let def = json!({"name": "idx-1", "fields": []});
+        // Indexes don't need credentials
+        assert!(!needs_credentials(ResourceKind::Index, &def, false, false));
+    }
+
+    fn test_config() -> hoist_core::Config {
+        let toml_str = r#"
+            [[services.search]]
+            name = "test-search"
+        "#;
+        toml::from_str(toml_str).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_inject_credentials_datasource() {
+        let def = json!({
+            "name": "ds-1",
+            "type": "azureblob",
+            "container": {"name": "docs"}
+        });
+        let conn = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=abc";
+        let mut cached = Some(conn.to_string());
+        let config = test_config();
+
+        let result =
+            inject_credentials(ResourceKind::DataSource, &def, "ds-1", &config, &mut cached)
+                .await
+                .unwrap();
+
+        assert_eq!(
+            result
+                .get("credentials")
+                .unwrap()
+                .get("connectionString")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            conn
+        );
+        // Original fields preserved
+        assert_eq!(result.get("name").unwrap().as_str().unwrap(), "ds-1");
+        assert_eq!(result.get("type").unwrap().as_str().unwrap(), "azureblob");
+    }
+
+    #[tokio::test]
+    async fn test_inject_credentials_ks() {
+        let def = json!({
+            "name": "ks-1",
+            "azureBlobParameters": {
+                "containerName": "docs",
+                "connectionString": "<redacted>"
+            }
+        });
+        let conn = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=abc";
+        let mut cached = Some(conn.to_string());
+        let config = test_config();
+
+        let result = inject_credentials(
+            ResourceKind::KnowledgeSource,
+            &def,
+            "ks-1",
+            &config,
+            &mut cached,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result
+                .pointer("/azureBlobParameters/connectionString")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            conn
+        );
+        // Original fields preserved
+        assert_eq!(
+            result
+                .pointer("/azureBlobParameters/containerName")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "docs"
         );
     }
 }
