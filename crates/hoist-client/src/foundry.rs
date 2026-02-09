@@ -388,6 +388,12 @@ fn flatten_agent_response(agent: &Value) -> Value {
         }
     }
 
+    // Ensure tools and tool_resources always present (API may omit when empty)
+    flat.entry("tools".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    flat.entry("tool_resources".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+
     Value::Object(flat)
 }
 
@@ -603,6 +609,9 @@ mod tests {
         assert_eq!(obj.get("id").unwrap(), "simple");
         assert_eq!(obj.get("name").unwrap(), "simple");
         assert!(!obj.contains_key("model"));
+        // tools and tool_resources always present with defaults
+        assert_eq!(obj.get("tools").unwrap(), &json!([]));
+        assert_eq!(obj.get("tool_resources").unwrap(), &json!({}));
     }
 
     #[test]
