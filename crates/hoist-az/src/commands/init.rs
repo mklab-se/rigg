@@ -48,6 +48,8 @@ async fn run_fresh(
     template: InitTemplate,
     service_override: Option<String>,
 ) -> Result<()> {
+    crate::banner::print_banner();
+    println!();
     println!("Initializing hoist project in {}", project_dir.display());
     println!();
 
@@ -232,6 +234,8 @@ async fn run_fresh(
 /// Additive update: discover and add new services to an existing project
 async fn run_additive(project_dir: &Path) -> Result<()> {
     let mut config = Config::load(project_dir)?;
+    crate::banner::print_banner();
+    println!();
     println!("Updating hoist project in {}", project_dir.display());
     println!();
 

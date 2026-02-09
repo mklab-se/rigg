@@ -319,6 +319,10 @@ pub enum Commands {
 
     /// Show version information
     Version,
+
+    /// 🏗️
+    #[command(hide = true)]
+    Logo,
 }
 
 #[derive(Subcommand)]
@@ -452,7 +456,11 @@ impl Cli {
             Commands::Status => commands::status::run(self.output).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {
-                println!("hoist {}", env!("CARGO_PKG_VERSION"));
+                crate::banner::print_banner_with_version();
+                Ok(())
+            }
+            Commands::Logo => {
+                crate::banner::print_banner_with_version();
                 Ok(())
             }
         }

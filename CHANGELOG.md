@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5] - 2026-02-09
+
+### Added
+
+- **ASCII art banner** — `hoist init` and `hoist version` now display a bold block-letter HOIST logo
+- **`hoist logo` easter egg** — hidden command that prints the banner
+
 ## [0.2.4] - 2026-02-09
 
 ### Added

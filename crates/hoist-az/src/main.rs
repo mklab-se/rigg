@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+mod banner;
 mod cli;
 mod commands;
 mod update;
