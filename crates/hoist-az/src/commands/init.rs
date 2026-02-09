@@ -1,4 +1,4 @@
-//! Initialize a new hoist project
+//! Initialize a new hoist project for Azure AI Search and/or Microsoft Foundry
 
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -6,13 +6,22 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use tracing::info;
 
-use hoist_client::arm::{ArmClient, DiscoveredService};
+use hoist_client::arm::ArmClient;
 use hoist_client::auth::AzCliAuth;
-use hoist_core::config::{Config, ProjectConfig, ServiceConfig, SyncConfig};
+use hoist_core::config::{
+    Config, FoundryServiceConfig, ProjectConfig, SearchServiceConfig, ServicesConfig, SyncConfig,
+};
 use hoist_core::resources::ResourceKind;
+use hoist_core::service::ServiceDomain;
 use hoist_core::state::LocalState;
 
 use crate::cli::InitTemplate;
+
+/// Authenticated ARM context for discovery
+struct DiscoveryContext {
+    arm: ArmClient,
+    subscription_id: String,
+}
 
 pub async fn run(
     dir: Option<PathBuf>,
@@ -34,30 +43,71 @@ pub async fn run(
     println!("Initializing hoist project in {}", project_dir.display());
     println!();
 
-    // Resolve service name: flag > discovery > manual entry
-    let (service_name, subscription_id) = if let Some(name) = service_override {
-        (name, None)
+    // Resolve service configurations symmetrically
+    let (search_configs, foundry_configs) = if let Some(name) = service_override {
+        // --service flag: search is pre-selected, still ask about foundry
+        let search = vec![SearchServiceConfig {
+            name,
+            subscription: None,
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        }];
+        let foundry = match try_authenticate().await {
+            Ok(ctx) => discover_foundry_service(&ctx).await?.into_iter().collect(),
+            Err(_) => prompt_foundry_service_manual()?.into_iter().collect(),
+        };
+        (search, foundry)
     } else {
-        match try_discover_service().await {
-            Ok(discovered) => {
-                let sub_id = Some(discovered.subscription_id);
-                (discovered.name, sub_id)
+        match try_authenticate().await {
+            Ok(ctx) => {
+                let search: Vec<SearchServiceConfig> = discover_search_service(&ctx)
+                    .await?
+                    .map(|(name, sub)| {
+                        vec![SearchServiceConfig {
+                            name,
+                            subscription: sub,
+                            resource_group: None,
+                            api_version: "2024-07-01".to_string(),
+                            preview_api_version: "2025-11-01-preview".to_string(),
+                        }]
+                    })
+                    .unwrap_or_default();
+                let foundry: Vec<FoundryServiceConfig> =
+                    discover_foundry_service(&ctx).await?.into_iter().collect();
+                (search, foundry)
             }
             Err(_) => {
-                let name = prompt_service_name()?;
-                (name, None)
+                let search: Vec<SearchServiceConfig> = prompt_search_service_manual()?
+                    .map(|(name, _)| {
+                        vec![SearchServiceConfig {
+                            name,
+                            subscription: None,
+                            resource_group: None,
+                            api_version: "2024-07-01".to_string(),
+                            preview_api_version: "2025-11-01-preview".to_string(),
+                        }]
+                    })
+                    .unwrap_or_default();
+                let foundry: Vec<FoundryServiceConfig> =
+                    prompt_foundry_service_manual()?.into_iter().collect();
+                (search, foundry)
             }
         }
     };
 
+    if search_configs.is_empty() && foundry_configs.is_empty() {
+        anyhow::bail!("At least one service type must be selected.");
+    }
+
+    let primary_search_name = search_configs.first().map(|s| s.name.clone());
+
     // Create configuration
     let config = Config {
-        service: ServiceConfig {
-            name: service_name.clone(),
-            subscription: subscription_id,
-            resource_group: None,
-            api_version: "2024-07-01".to_string(),
-            preview_api_version: "2025-11-01-preview".to_string(),
+        service: None,
+        services: ServicesConfig {
+            search: search_configs,
+            foundry: foundry_configs,
         },
         project: ProjectConfig {
             name: Some(
@@ -72,7 +122,6 @@ pub async fn run(
         },
         sync: SyncConfig {
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
-            generate_docs: true,
             resources: Vec::new(),
         },
     };
@@ -92,8 +141,8 @@ pub async fn run(
     let gitignore_path = state_dir.join(".gitignore");
     std::fs::write(&gitignore_path, "# Ignore local state\n*\n!.gitignore\n")?;
 
-    // Create resource directories based on template
-    let resource_kinds = match template {
+    // Create resource directories based on template, filtered by configured services
+    let resource_kinds: Vec<ResourceKind> = match template {
         InitTemplate::Minimal => vec![ResourceKind::Index, ResourceKind::DataSource],
         InitTemplate::Full => vec![
             ResourceKind::Index,
@@ -104,27 +153,57 @@ pub async fn run(
             ResourceKind::Alias,
         ],
         InitTemplate::Agentic => ResourceKind::all().to_vec(),
-    };
+    }
+    .into_iter()
+    .filter(|k| match k.domain() {
+        ServiceDomain::Search => !config.services.search.is_empty(),
+        ServiceDomain::Foundry => !config.services.foundry.is_empty(),
+    })
+    .collect();
 
     let resource_base = config.resource_dir(&project_dir);
     if resource_base != project_dir {
         std::fs::create_dir_all(&resource_base)?;
     }
 
-    for kind in &resource_kinds {
-        let dir = resource_base.join(kind.directory_name());
-        std::fs::create_dir_all(&dir)?;
+    // Create search resource directories under service-scoped path
+    if let Some(ref svc_name) = primary_search_name {
+        let search_base = config.search_service_dir(&project_dir, svc_name);
+        for kind in &resource_kinds {
+            if kind.domain() == ServiceDomain::Search {
+                let dir = search_base.join(kind.directory_name());
+                std::fs::create_dir_all(&dir)?;
+            }
+        }
+
+        // Create documentation files
+        let search_kinds: Vec<ResourceKind> = resource_kinds
+            .iter()
+            .filter(|k| k.domain() == ServiceDomain::Search)
+            .copied()
+            .collect();
+        if !search_kinds.is_empty() {
+            create_hoist_md(&search_base, svc_name, &search_kinds)?;
+        }
     }
 
-    // Create documentation files
-    create_hoist_md(&resource_base, &service_name, &resource_kinds)?;
+    // Create foundry resource directories
+    for foundry_svc in &config.services.foundry {
+        let foundry_base =
+            config.foundry_service_dir(&project_dir, &foundry_svc.name, &foundry_svc.project);
+        let agents_dir = foundry_base.join("agents");
+        std::fs::create_dir_all(&agents_dir)?;
+    }
+
+    // Create README.md if it doesn't already exist
+    create_readme_if_missing(&project_dir, &config)?;
 
     println!();
     println!("Project initialized successfully!");
     println!();
 
-    // Prompt to pull existing resources
-    let pull_prompt = format!("Pull existing resources from {}?", service_name);
+    // Build pull prompt mentioning all configured services
+    let pull_prompt = build_pull_prompt(&config);
     if crate::commands::confirm::prompt_yes_default(&pull_prompt)? {
         println!();
         let selection = crate::commands::common::ResourceSelection {
@@ -153,9 +232,8 @@ pub async fn run(
     Ok(())
 }
 
-/// Try to discover a search service via Azure Resource Manager
-async fn try_discover_service() -> Result<DiscoveredService> {
-    // Check auth status first
+/// Try to authenticate and select a subscription for ARM discovery
+async fn try_authenticate() -> Result<DiscoveryContext> {
     let status = AzCliAuth::check_status().map_err(|e| {
         println!(
             "Not logged in to Azure CLI. Run 'az login' for auto-discovery, or enter manually."
@@ -168,10 +246,8 @@ async fn try_discover_service() -> Result<DiscoveredService> {
     }
     println!();
 
-    // Create ARM client
     let arm = ArmClient::new()?;
 
-    // List and select subscription
     println!("Fetching subscriptions...");
     let subscriptions = arm.list_subscriptions().await?;
 
@@ -179,7 +255,6 @@ async fn try_discover_service() -> Result<DiscoveredService> {
         anyhow::bail!("No Azure subscriptions found. Check your Azure access permissions.");
     }
 
-    // Always let user confirm, even with a single option
     let default_idx = status
         .subscription_id
         .as_ref()
@@ -189,27 +264,130 @@ async fn try_discover_service() -> Result<DiscoveredService> {
     let selected_sub = prompt_selection("Select subscription", &subscriptions, default_idx)?;
     println!();
 
-    // List and select search service
-    println!("Fetching Azure AI Search services...");
-    let services = arm
-        .list_search_services(&selected_sub.subscription_id)
-        .await?;
+    Ok(DiscoveryContext {
+        arm,
+        subscription_id: selected_sub.subscription_id.clone(),
+    })
+}
 
-    if services.is_empty() {
-        anyhow::bail!(
-            "No Azure AI Search services found in subscription '{}'. \
-             Create one in the Azure portal, or enter a service name manually.",
-            selected_sub.display_name
-        );
+/// Discover a search service via ARM APIs
+async fn discover_search_service(
+    ctx: &DiscoveryContext,
+) -> Result<Option<(String, Option<String>)>> {
+    if !crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
+        return Ok(None);
     }
 
-    let selected_service = prompt_selection("Select search service", &services, 0)?;
+    println!("Fetching Azure AI Search services...");
+    let services = ctx.arm.list_search_services(&ctx.subscription_id).await?;
 
-    Ok(DiscoveredService {
-        name: selected_service.name.clone(),
-        subscription_id: selected_sub.subscription_id.clone(),
-        location: selected_service.location.clone(),
-    })
+    if services.is_empty() {
+        println!("  No search services found in this subscription.");
+        return Ok(None);
+    }
+
+    let selected = auto_select_or_prompt("Select search service", &services, 0)?;
+    Ok(Some((
+        selected.name.clone(),
+        Some(ctx.subscription_id.clone()),
+    )))
+}
+
+/// Discover a Foundry service and project via ARM APIs
+async fn discover_foundry_service(ctx: &DiscoveryContext) -> Result<Option<FoundryServiceConfig>> {
+    if !crate::commands::confirm::prompt_yes_default("Manage Microsoft Foundry agents?")? {
+        return Ok(None);
+    }
+
+    println!("Fetching AI Services accounts...");
+    let accounts = ctx
+        .arm
+        .list_ai_services_accounts(&ctx.subscription_id)
+        .await?;
+
+    if accounts.is_empty() {
+        println!("  No AI Services accounts found in this subscription.");
+        return Ok(None);
+    }
+
+    let selected_account = auto_select_or_prompt("Select AI Services account", &accounts, 0)?;
+
+    println!("Fetching Microsoft Foundry projects...");
+    let projects = ctx
+        .arm
+        .list_foundry_projects(selected_account, &ctx.subscription_id)
+        .await?;
+
+    if projects.is_empty() {
+        println!("  No Foundry projects found for this account.");
+        return Ok(None);
+    }
+
+    let selected_project = auto_select_or_prompt("Select Foundry project", &projects, 0)?;
+
+    Ok(Some(FoundryServiceConfig {
+        name: selected_account.name.clone(),
+        project: selected_project.display_name().to_string(),
+        api_version: "2025-05-15-preview".to_string(),
+        subscription: Some(ctx.subscription_id.clone()),
+        resource_group: None,
+    }))
+}
+
+/// Prompt for search service name manually (no ARM discovery)
+fn prompt_search_service_manual() -> Result<Option<(String, Option<String>)>> {
+    if !crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
+        return Ok(None);
+    }
+
+    let name = prompt_service_name()?;
+    Ok(Some((name, None)))
+}
+
+/// Prompt for Foundry service configuration manually (no ARM discovery)
+fn prompt_foundry_service_manual() -> Result<Option<FoundryServiceConfig>> {
+    if !crate::commands::confirm::prompt_yes_default("Manage Microsoft Foundry agents?")? {
+        return Ok(None);
+    }
+
+    print!("AI Services account name (e.g., my-ai-service): ");
+    io::stdout().flush()?;
+    let mut svc_input = String::new();
+    io::stdin().lock().read_line(&mut svc_input)?;
+    let svc_name = svc_input.trim().to_string();
+    if svc_name.is_empty() {
+        anyhow::bail!("AI Services account name is required");
+    }
+
+    print!("Foundry project name (e.g., my-project): ");
+    io::stdout().flush()?;
+    let mut proj_input = String::new();
+    io::stdin().lock().read_line(&mut proj_input)?;
+    let proj_name = proj_input.trim().to_string();
+    if proj_name.is_empty() {
+        anyhow::bail!("Foundry project name is required");
+    }
+
+    Ok(Some(FoundryServiceConfig {
+        name: svc_name,
+        project: proj_name,
+        api_version: "2025-05-15-preview".to_string(),
+        subscription: None,
+        resource_group: None,
+    }))
+}
+
+/// Auto-select if only one item, otherwise prompt for selection
+fn auto_select_or_prompt<'a, T: std::fmt::Display>(
+    label: &str,
+    items: &'a [T],
+    default: usize,
+) -> Result<&'a T> {
+    if items.len() == 1 {
+        println!("  Found: {}", items[0]);
+        return Ok(&items[0]);
+    }
+    prompt_selection(label, items, default)
 }
 
 /// Prompt user to select from a numbered list
@@ -258,6 +436,31 @@ fn prompt_service_name() -> Result<String> {
     }
 
     Ok(name)
+}
+
+/// Build pull prompt mentioning all configured services
+fn build_pull_prompt(config: &Config) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(search) = config.services.search.first() {
+        parts.push(search.name.clone());
+    }
+
+    if !config.services.foundry.is_empty() {
+        if parts.is_empty() {
+            parts.push("Foundry agents".to_string());
+        } else {
+            parts.push("Foundry agents".to_string());
+            let search_part = parts.remove(0);
+            return format!(
+                "Pull existing resources from {} (and {})?",
+                search_part,
+                parts.join(", ")
+            );
+        }
+    }
+
+    format!("Pull existing resources from {}?", parts.join(", "))
 }
 
 fn create_hoist_md(
@@ -356,6 +559,91 @@ Each `.json` file represents one Azure AI Search resource. The files follow thes
     Ok(())
 }
 
+/// Create a README.md in the project root if one doesn't already exist
+fn create_readme_if_missing(project_dir: &Path, config: &Config) -> Result<()> {
+    let readme_path = project_dir.join("README.md");
+    if readme_path.exists() {
+        return Ok(());
+    }
+
+    let project_name = config.project.name.as_deref().unwrap_or("hoist project");
+
+    let mut services_section = String::new();
+    for svc in &config.services.search {
+        services_section.push_str(&format!("- **Azure AI Search**: `{}`\n", svc.name));
+    }
+    for svc in &config.services.foundry {
+        services_section.push_str(&format!(
+            "- **Microsoft Foundry**: `{}` (project: `{}`)\n",
+            svc.name, svc.project
+        ));
+    }
+
+    let readme = format!(
+        r#"# {project_name}
+
+Configuration-as-code managed by [hoist](https://github.com/mklab-se/hoist).
+
+## Services
+
+{services_section}
+## Quick Start
+
+```bash
+# Check authentication status
+hoist auth status
+
+# Pull all resource definitions from Azure
+hoist pull --all
+
+# Show what's configured
+hoist status
+
+# View detailed service description
+hoist describe
+
+# Show differences between local files and Azure
+hoist diff --all
+
+# Push local changes to Azure (preview first)
+hoist push --all --dry-run
+hoist push --all
+
+# Watch for remote changes
+hoist pull-watch --all
+```
+
+## Validating Configuration
+
+```bash
+# Validate local resource files for errors
+hoist validate --all
+```
+
+## Project Structure
+
+| Path | Description |
+|------|-------------|
+| `hoist.toml` | Project configuration (services, API versions, sync settings) |
+| `.hoist/` | Local state directory (gitignored) |
+| `search-resources/` | Azure AI Search resource definitions (JSON) |
+| `foundry-resources/` | Microsoft Foundry agent definitions |
+
+## Learn More
+
+- Run `hoist --help` for all available commands
+- Run `hoist <command> --help` for command-specific options
+"#,
+        project_name = project_name,
+        services_section = services_section,
+    );
+
+    std::fs::write(&readme_path, readme)?;
+    info!("Created README.md");
+
+    Ok(())
+}
+
 fn api_doc_url(kind: ResourceKind) -> &'static str {
     match kind {
         ResourceKind::Index => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update",
@@ -366,6 +654,7 @@ fn api_doc_url(kind: ResourceKind) -> &'static str {
         ResourceKind::Alias => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update",
         ResourceKind::KnowledgeBase => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-bases/create-or-update?view=rest-searchservice-2025-05-01-preview",
         ResourceKind::KnowledgeSource => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview",
+        ResourceKind::Agent => "https://learn.microsoft.com/en-us/azure/ai-services/agents/",
     }
 }
 
@@ -623,12 +912,30 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         std::fs::create_dir_all(&resource_base)?;
     }
 
+    let svc_name = config
+        .primary_search_service()
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+
+    // Create search resource directories under service-scoped path
+    let search_base = config.search_service_dir(project_dir, &svc_name);
     for kind in &resource_kinds {
-        let dir = resource_base.join(kind.directory_name());
-        std::fs::create_dir_all(&dir)?;
+        if kind.domain() == ServiceDomain::Search {
+            let dir = search_base.join(kind.directory_name());
+            std::fs::create_dir_all(&dir)?;
+        }
     }
 
-    create_hoist_md(&resource_base, &config.service.name, &resource_kinds)?;
+    // Create foundry resource directories
+    for foundry_svc in &config.services.foundry {
+        let foundry_base =
+            config.foundry_service_dir(project_dir, &foundry_svc.name, &foundry_svc.project);
+        let agents_dir = foundry_base.join("agents");
+        std::fs::create_dir_all(&agents_dir)?;
+    }
+
+    create_hoist_md(&search_base, &svc_name, &resource_kinds)?;
+    create_readme_if_missing(project_dir, config)?;
 
     Ok(())
 }
@@ -685,16 +992,21 @@ is indexed and queried by AI agents.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hoist_core::config::{FoundryServiceConfig, SearchServiceConfig};
     use tempfile::TempDir;
 
     fn make_config(service_name: &str, path: Option<&str>) -> Config {
         Config {
-            service: ServiceConfig {
-                name: service_name.to_string(),
-                subscription: None,
-                resource_group: None,
-                api_version: "2024-07-01".to_string(),
-                preview_api_version: "2025-11-01-preview".to_string(),
+            service: None,
+            services: ServicesConfig {
+                search: vec![SearchServiceConfig {
+                    name: service_name.to_string(),
+                    subscription: None,
+                    resource_group: None,
+                    api_version: "2024-07-01".to_string(),
+                    preview_api_version: "2025-11-01-preview".to_string(),
+                }],
+                foundry: vec![],
             },
             project: ProjectConfig {
                 name: Some("test-project".to_string()),
@@ -703,7 +1015,6 @@ mod tests {
             },
             sync: SyncConfig {
                 include_preview: false,
-                generate_docs: true,
                 resources: Vec::new(),
             },
         }
@@ -717,14 +1028,12 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        let resource_base = project_dir.join("search");
-        assert!(resource_base.join("search-management/indexes").is_dir());
-        assert!(resource_base
-            .join("search-management/data-sources")
-            .is_dir());
+        let search_base = project_dir.join("search/search-resources/test-service");
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
         // Should NOT have indexers, skillsets, synonym-maps
-        assert!(!resource_base.join("search-management/indexers").exists());
-        assert!(!resource_base.join("search-management/skillsets").exists());
+        assert!(!search_base.join("search-management/indexers").exists());
+        assert!(!search_base.join("search-management/skillsets").exists());
     }
 
     #[test]
@@ -735,19 +1044,15 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
-        let resource_base = project_dir.join("search");
-        assert!(resource_base.join("search-management/indexes").is_dir());
-        assert!(resource_base.join("search-management/indexers").is_dir());
-        assert!(resource_base
-            .join("search-management/data-sources")
-            .is_dir());
-        assert!(resource_base.join("search-management/skillsets").is_dir());
-        assert!(resource_base
-            .join("search-management/synonym-maps")
-            .is_dir());
-        assert!(resource_base.join("search-management/aliases").is_dir());
+        let search_base = project_dir.join("search/search-resources/test-service");
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/indexers").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
+        assert!(search_base.join("search-management/skillsets").is_dir());
+        assert!(search_base.join("search-management/synonym-maps").is_dir());
+        assert!(search_base.join("search-management/aliases").is_dir());
         // Should NOT have preview dirs
-        assert!(!resource_base
+        assert!(!search_base
             .join("agentic-retrieval/knowledge-bases")
             .exists());
     }
@@ -760,12 +1065,12 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let resource_base = project_dir.join("search");
-        assert!(resource_base.join("search-management/indexes").is_dir());
-        assert!(resource_base
+        let search_base = project_dir.join("search/search-resources/test-service");
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base
             .join("agentic-retrieval/knowledge-bases")
             .is_dir());
-        assert!(resource_base
+        assert!(search_base
             .join("agentic-retrieval/knowledge-sources")
             .is_dir());
     }
@@ -782,8 +1087,10 @@ mod tests {
         assert!(config_path.exists());
 
         let loaded = Config::load(project_dir).unwrap();
-        assert_eq!(loaded.service.name, "my-search");
-        assert_eq!(loaded.service.api_version, "2024-07-01");
+        // New format uses services.search, not legacy service
+        assert!(loaded.service.is_none());
+        assert_eq!(loaded.services.search[0].name, "my-search");
+        assert_eq!(loaded.services.search[0].api_version, "2024-07-01");
     }
 
     #[test]
@@ -810,7 +1117,7 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
-        let hoist_md = project_dir.join("resources/HOIST.md");
+        let hoist_md = project_dir.join("resources/search-resources/my-search-svc/HOIST.md");
         assert!(hoist_md.exists());
 
         let content = std::fs::read_to_string(&hoist_md).unwrap();
@@ -827,7 +1134,7 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let hoist_md = project_dir.join("search/HOIST.md");
+        let hoist_md = project_dir.join("search/search-resources/test-service/HOIST.md");
         let content = std::fs::read_to_string(&hoist_md).unwrap();
         assert!(content.contains("agentic-retrieval"));
         assert!(content.contains("knowledge-bases"));
@@ -841,12 +1148,13 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let sm_readme = project_dir.join("search/search-management/README.md");
+        let search_base = project_dir.join("search/search-resources/test-service");
+        let sm_readme = search_base.join("search-management/README.md");
         assert!(sm_readme.exists());
         let sm_content = std::fs::read_to_string(&sm_readme).unwrap();
         assert!(sm_content.contains("Search Management Resources"));
 
-        let ar_readme = project_dir.join("search/agentic-retrieval/README.md");
+        let ar_readme = search_base.join("agentic-retrieval/README.md");
         assert!(ar_readme.exists());
         let ar_content = std::fs::read_to_string(&ar_readme).unwrap();
         assert!(ar_content.contains("Agentic Retrieval"));
@@ -860,9 +1168,10 @@ mod tests {
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        // Resources should be directly under project root
-        assert!(project_dir.join("search-management/indexes").is_dir());
-        assert!(project_dir.join("search-management/data-sources").is_dir());
+        // Resources should be under search-resources/<service-name>
+        let search_base = project_dir.join("search-resources/test-service");
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
     }
 
     #[test]
@@ -872,6 +1181,82 @@ mod tests {
             assert!(url.starts_with("https://"));
             assert!(url.contains("learn.microsoft.com"));
         }
+    }
+
+    #[test]
+    fn test_readme_created_during_init() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("my-search", None);
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let readme = project_dir.join("README.md");
+        assert!(readme.exists());
+
+        let content = std::fs::read_to_string(&readme).unwrap();
+        assert!(content.contains("hoist"));
+        assert!(content.contains("my-search"));
+        assert!(content.contains("hoist pull"));
+        assert!(content.contains("hoist diff"));
+        assert!(content.contains("hoist push"));
+    }
+
+    #[test]
+    fn test_readme_not_overwritten_if_exists() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("my-search", None);
+
+        // Create a pre-existing README.md
+        std::fs::write(project_dir.join("README.md"), "# My Existing Project\n").unwrap();
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
+        assert_eq!(content, "# My Existing Project\n");
+    }
+
+    #[test]
+    fn test_readme_includes_foundry_service() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = Config {
+            service: None,
+            services: ServicesConfig {
+                search: vec![SearchServiceConfig {
+                    name: "my-search".to_string(),
+                    subscription: None,
+                    resource_group: None,
+                    api_version: "2024-07-01".to_string(),
+                    preview_api_version: "2025-11-01-preview".to_string(),
+                }],
+                foundry: vec![FoundryServiceConfig {
+                    name: "my-ai-svc".to_string(),
+                    project: "my-project".to_string(),
+                    api_version: "2025-05-15-preview".to_string(),
+                    subscription: None,
+                    resource_group: None,
+                }],
+            },
+            project: ProjectConfig {
+                name: Some("test-project".to_string()),
+                description: None,
+                path: None,
+            },
+            sync: SyncConfig {
+                include_preview: false,
+                resources: Vec::new(),
+            },
+        };
+
+        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
+
+        let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
+        assert!(content.contains("my-search"));
+        assert!(content.contains("my-ai-svc"));
+        assert!(content.contains("my-project"));
+        assert!(content.contains("Microsoft Foundry"));
     }
 
     #[test]

@@ -50,8 +50,8 @@ impl AzureSearchClient {
             http,
             auth,
             base_url: config.service_url(),
-            api_version: config.service.api_version.clone(),
-            preview_api_version: config.service.preview_api_version.clone(),
+            api_version: config.api_version_for(false).to_string(),
+            preview_api_version: config.api_version_for(true).to_string(),
         })
     }
 
@@ -66,8 +66,8 @@ impl AzureSearchClient {
             http,
             auth,
             base_url: format!("https://{}.search.windows.net", server_name),
-            api_version: config.service.api_version.clone(),
-            preview_api_version: config.service.preview_api_version.clone(),
+            api_version: config.api_version_for(false).to_string(),
+            preview_api_version: config.api_version_for(true).to_string(),
         })
     }
 

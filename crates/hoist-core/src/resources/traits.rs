@@ -1,12 +1,15 @@
-//! Resource trait definition for Azure AI Search resources
+//! Resource trait definition for Azure AI Search and Microsoft Foundry resources
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Enumeration of all supported Azure AI Search resource types
+use crate::service::ServiceDomain;
+
+/// Enumeration of all supported resource types across service domains
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceKind {
+    // Azure AI Search resources
     Index,
     Indexer,
     DataSource,
@@ -15,9 +18,19 @@ pub enum ResourceKind {
     Alias,
     KnowledgeBase,
     KnowledgeSource,
+    // Microsoft Foundry resources
+    Agent,
 }
 
 impl ResourceKind {
+    /// Returns the service domain this resource belongs to
+    pub fn domain(&self) -> ServiceDomain {
+        match self {
+            ResourceKind::Agent => ServiceDomain::Foundry,
+            _ => ServiceDomain::Search,
+        }
+    }
+
     /// Returns the API path segment for this resource type
     pub fn api_path(&self) -> &'static str {
         match self {
@@ -29,6 +42,7 @@ impl ResourceKind {
             ResourceKind::Alias => "aliases",
             ResourceKind::KnowledgeBase => "knowledgebases",
             ResourceKind::KnowledgeSource => "knowledgesources",
+            ResourceKind::Agent => "assistants",
         }
     }
 
@@ -43,6 +57,7 @@ impl ResourceKind {
             ResourceKind::Alias => "search-management/aliases",
             ResourceKind::KnowledgeBase => "agentic-retrieval/knowledge-bases",
             ResourceKind::KnowledgeSource => "agentic-retrieval/knowledge-sources",
+            ResourceKind::Agent => "agents",
         }
     }
 
@@ -65,10 +80,11 @@ impl ResourceKind {
             ResourceKind::Alias => "Alias",
             ResourceKind::KnowledgeBase => "Knowledge Base",
             ResourceKind::KnowledgeSource => "Knowledge Source",
+            ResourceKind::Agent => "Agent",
         }
     }
 
-    /// Returns all resource kinds
+    /// Returns all resource kinds across all domains
     pub fn all() -> &'static [ResourceKind] {
         &[
             ResourceKind::Index,
@@ -79,10 +95,11 @@ impl ResourceKind {
             ResourceKind::Alias,
             ResourceKind::KnowledgeBase,
             ResourceKind::KnowledgeSource,
+            ResourceKind::Agent,
         ]
     }
 
-    /// Returns non-preview resource kinds
+    /// Returns non-preview Search resource kinds (stable search resources only)
     pub fn stable() -> &'static [ResourceKind] {
         &[
             ResourceKind::Index,
@@ -91,6 +108,24 @@ impl ResourceKind {
             ResourceKind::Skillset,
             ResourceKind::SynonymMap,
         ]
+    }
+
+    /// Returns all Search resource kinds
+    pub fn search_kinds() -> Vec<ResourceKind> {
+        ResourceKind::all()
+            .iter()
+            .filter(|k| k.domain() == ServiceDomain::Search)
+            .copied()
+            .collect()
+    }
+
+    /// Returns all Foundry resource kinds
+    pub fn foundry_kinds() -> Vec<ResourceKind> {
+        ResourceKind::all()
+            .iter()
+            .filter(|k| k.domain() == ServiceDomain::Foundry)
+            .copied()
+            .collect()
     }
 }
 
@@ -142,8 +177,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_returns_eight_kinds() {
-        assert_eq!(ResourceKind::all().len(), 8);
+    fn test_all_returns_nine_kinds() {
+        assert_eq!(ResourceKind::all().len(), 9);
     }
 
     #[test]
@@ -165,6 +200,7 @@ mod tests {
         assert!(!ResourceKind::Skillset.is_preview());
         assert!(!ResourceKind::SynonymMap.is_preview());
         assert!(ResourceKind::Alias.is_preview());
+        assert!(!ResourceKind::Agent.is_preview());
     }
 
     #[test]
@@ -177,6 +213,7 @@ mod tests {
         assert_eq!(ResourceKind::Alias.api_path(), "aliases");
         assert_eq!(ResourceKind::KnowledgeBase.api_path(), "knowledgebases");
         assert_eq!(ResourceKind::KnowledgeSource.api_path(), "knowledgesources");
+        assert_eq!(ResourceKind::Agent.api_path(), "assistants");
     }
 
     #[test]
@@ -205,6 +242,7 @@ mod tests {
             ResourceKind::KnowledgeSource.directory_name(),
             "agentic-retrieval/knowledge-sources"
         );
+        assert_eq!(ResourceKind::Agent.directory_name(), "agents");
     }
 
     #[test]
@@ -237,6 +275,7 @@ mod tests {
         assert_eq!(ResourceKind::DataSource.display_name(), "Data Source");
         assert_eq!(ResourceKind::KnowledgeBase.display_name(), "Knowledge Base");
         assert_eq!(ResourceKind::Alias.display_name(), "Alias");
+        assert_eq!(ResourceKind::Agent.display_name(), "Agent");
     }
 
     #[test]
@@ -244,6 +283,7 @@ mod tests {
         assert_eq!(format!("{}", ResourceKind::Index), "Index");
         assert_eq!(format!("{}", ResourceKind::Skillset), "Skillset");
         assert_eq!(format!("{}", ResourceKind::Alias), "Alias");
+        assert_eq!(format!("{}", ResourceKind::Agent), "Agent");
     }
 
     #[test]
@@ -265,13 +305,71 @@ mod tests {
     }
 
     #[test]
+    fn test_serde_roundtrip_agent() {
+        let kind = ResourceKind::Agent;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"agent\"");
+        let back: ResourceKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, kind);
+    }
+
+    #[test]
     fn test_all_kinds_in_stable_or_preview() {
         for kind in ResourceKind::all() {
-            if kind.is_preview() {
-                assert!(!ResourceKind::stable().contains(kind));
-            } else {
-                assert!(ResourceKind::stable().contains(kind));
+            if kind.domain() == ServiceDomain::Search {
+                if kind.is_preview() {
+                    assert!(!ResourceKind::stable().contains(kind));
+                } else {
+                    assert!(ResourceKind::stable().contains(kind));
+                }
             }
+        }
+    }
+
+    #[test]
+    fn test_domain_search_kinds() {
+        let search = ResourceKind::search_kinds();
+        assert_eq!(search.len(), 8);
+        for kind in &search {
+            assert_eq!(kind.domain(), ServiceDomain::Search);
+        }
+    }
+
+    #[test]
+    fn test_domain_foundry_kinds() {
+        let foundry = ResourceKind::foundry_kinds();
+        assert_eq!(foundry.len(), 1);
+        assert_eq!(foundry[0], ResourceKind::Agent);
+        for kind in &foundry {
+            assert_eq!(kind.domain(), ServiceDomain::Foundry);
+        }
+    }
+
+    #[test]
+    fn test_agent_domain_is_foundry() {
+        assert_eq!(ResourceKind::Agent.domain(), ServiceDomain::Foundry);
+    }
+
+    #[test]
+    fn test_search_resources_domain_is_search() {
+        for kind in ResourceKind::stable() {
+            assert_eq!(kind.domain(), ServiceDomain::Search);
+        }
+        assert_eq!(ResourceKind::Alias.domain(), ServiceDomain::Search);
+        assert_eq!(ResourceKind::KnowledgeBase.domain(), ServiceDomain::Search);
+        assert_eq!(
+            ResourceKind::KnowledgeSource.domain(),
+            ServiceDomain::Search
+        );
+    }
+
+    #[test]
+    fn test_search_plus_foundry_equals_all() {
+        let mut combined = ResourceKind::search_kinds();
+        combined.extend(ResourceKind::foundry_kinds());
+        assert_eq!(combined.len(), ResourceKind::all().len());
+        for kind in ResourceKind::all() {
+            assert!(combined.contains(kind));
         }
     }
 }

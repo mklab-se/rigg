@@ -1,20 +1,22 @@
 //! CLI argument definitions using clap
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::commands;
 use crate::commands::common::SingularFlags;
 
-/// Manage Azure AI Search resources as code
+/// Configuration-as-code for Azure AI Search and Microsoft Foundry
 #[derive(Parser)]
 #[command(name = "hoist")]
 #[command(author, version, about)]
-#[command(long_about = "Manage Azure AI Search resources as code.\n\n\
-    Pull resource definitions (indexes, indexers, skillsets, etc.) from Azure as JSON files,\n\
+#[command(
+    long_about = "Configuration-as-code for Azure AI Search and Microsoft Foundry.\n\n\
+    Pull resource definitions (indexes, indexers, skillsets, agents, etc.) from Azure as JSON files,\n\
     edit them locally, and push changes back. Enables Git-based version control for your\n\
-    search service configuration.")]
+    search and AI service configuration."
+)]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v for debug, -vv for trace)
@@ -29,7 +31,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 
-    /// Azure Search service name (overrides config)
+    /// Azure AI Search service name (overrides config)
     #[arg(long, global = true)]
     pub service: Option<String>,
 
@@ -53,9 +55,119 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Shared resource type selection flags used by Pull, Push, Diff, and PullWatch
+#[derive(Args, Clone, Default)]
+pub struct ResourceTypeFlags {
+    /// Include all resource types
+    #[arg(long)]
+    pub all: bool,
+
+    // Search resource types (plural)
+    /// Include indexes
+    #[arg(long, help_heading = "Search Resources")]
+    pub indexes: bool,
+
+    /// Include indexers
+    #[arg(long, help_heading = "Search Resources")]
+    pub indexers: bool,
+
+    /// Include data sources
+    #[arg(long, help_heading = "Search Resources")]
+    pub datasources: bool,
+
+    /// Include skillsets
+    #[arg(long, help_heading = "Search Resources")]
+    pub skillsets: bool,
+
+    /// Include synonym maps
+    #[arg(long, help_heading = "Search Resources")]
+    pub synonymmaps: bool,
+
+    /// Include aliases
+    #[arg(long, help_heading = "Search Resources")]
+    pub aliases: bool,
+
+    /// Include knowledge bases (preview API)
+    #[arg(long, help_heading = "Search Resources")]
+    pub knowledgebases: bool,
+
+    /// Include knowledge sources (preview API)
+    #[arg(long, help_heading = "Search Resources")]
+    pub knowledgesources: bool,
+
+    // Foundry resource types (plural)
+    /// Include Foundry agents
+    #[arg(long, help_heading = "Foundry Resources")]
+    pub agents: bool,
+
+    // Search resource types (singular — by name)
+    /// Operate on a single index by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub index: Option<String>,
+
+    /// Operate on a single indexer by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub indexer: Option<String>,
+
+    /// Operate on a single data source by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub datasource: Option<String>,
+
+    /// Operate on a single skillset by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub skillset: Option<String>,
+
+    /// Operate on a single synonym map by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub synonymmap: Option<String>,
+
+    /// Operate on a single alias by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub alias: Option<String>,
+
+    /// Operate on a single knowledge base by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub knowledgebase: Option<String>,
+
+    /// Operate on a single knowledge source by name
+    #[arg(long, value_name = "NAME", help_heading = "Search Resources")]
+    pub knowledgesource: Option<String>,
+
+    // Foundry resource types (singular — by name)
+    /// Operate on a single Foundry agent by name
+    #[arg(long, value_name = "NAME", help_heading = "Foundry Resources")]
+    pub agent: Option<String>,
+
+    // Service scope
+    /// Only operate on Azure AI Search resources
+    #[arg(long, help_heading = "Service Scope")]
+    pub search_only: bool,
+
+    /// Only operate on Microsoft Foundry resources
+    #[arg(long, help_heading = "Service Scope")]
+    pub foundry_only: bool,
+}
+
+impl ResourceTypeFlags {
+    /// Extract singular flags for resource selection
+    pub fn singular_flags(&self) -> SingularFlags {
+        SingularFlags {
+            index: self.index.clone(),
+            indexer: self.indexer.clone(),
+            datasource: self.datasource.clone(),
+            skillset: self.skillset.clone(),
+            synonymmap: self.synonymmap.clone(),
+            alias: self.alias.clone(),
+            knowledgebase: self.knowledgebase.clone(),
+            knowledgesource: self.knowledgesource.clone(),
+            agent: self.agent.clone(),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Initialize a new hoist project with directory structure and config
+    /// Initialize a new hoist project for Azure AI Search and/or Foundry
     Init {
         /// Directory to initialize (defaults to current directory)
         dir: Option<PathBuf>,
@@ -79,73 +191,8 @@ pub enum Commands {
 
     /// Download resource definitions from Azure to local JSON files
     Pull {
-        /// Pull all resource types
-        #[arg(long)]
-        all: bool,
-
-        /// Include indexes
-        #[arg(long, help_heading = "Resource Types")]
-        indexes: bool,
-
-        /// Include indexers
-        #[arg(long, help_heading = "Resource Types")]
-        indexers: bool,
-
-        /// Include data sources
-        #[arg(long, help_heading = "Resource Types")]
-        datasources: bool,
-
-        /// Include skillsets
-        #[arg(long, help_heading = "Resource Types")]
-        skillsets: bool,
-
-        /// Include synonym maps
-        #[arg(long, help_heading = "Resource Types")]
-        synonymmaps: bool,
-
-        /// Include aliases
-        #[arg(long, help_heading = "Resource Types")]
-        aliases: bool,
-
-        /// Include knowledge bases (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgebases: bool,
-
-        /// Include knowledge sources (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgesources: bool,
-
-        /// Pull a single index by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        index: Option<String>,
-
-        /// Pull a single indexer by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        indexer: Option<String>,
-
-        /// Pull a single data source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        datasource: Option<String>,
-
-        /// Pull a single skillset by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        skillset: Option<String>,
-
-        /// Pull a single synonym map by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        synonymmap: Option<String>,
-
-        /// Pull a single alias by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        alias: Option<String>,
-
-        /// Pull a single knowledge base by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgebase: Option<String>,
-
-        /// Pull a single knowledge source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgesource: Option<String>,
+        #[command(flatten)]
+        resources: ResourceTypeFlags,
 
         /// Include dependent and child resources (use with singular flags)
         #[arg(long)]
@@ -170,73 +217,8 @@ pub enum Commands {
 
     /// Upload local JSON files to Azure, creating or updating resources
     Push {
-        /// Push all resource types
-        #[arg(long)]
-        all: bool,
-
-        /// Include indexes
-        #[arg(long, help_heading = "Resource Types")]
-        indexes: bool,
-
-        /// Include indexers
-        #[arg(long, help_heading = "Resource Types")]
-        indexers: bool,
-
-        /// Include data sources
-        #[arg(long, help_heading = "Resource Types")]
-        datasources: bool,
-
-        /// Include skillsets
-        #[arg(long, help_heading = "Resource Types")]
-        skillsets: bool,
-
-        /// Include synonym maps
-        #[arg(long, help_heading = "Resource Types")]
-        synonymmaps: bool,
-
-        /// Include aliases
-        #[arg(long, help_heading = "Resource Types")]
-        aliases: bool,
-
-        /// Include knowledge bases (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgebases: bool,
-
-        /// Include knowledge sources (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgesources: bool,
-
-        /// Push a single index by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        index: Option<String>,
-
-        /// Push a single indexer by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        indexer: Option<String>,
-
-        /// Push a single data source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        datasource: Option<String>,
-
-        /// Push a single skillset by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        skillset: Option<String>,
-
-        /// Push a single synonym map by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        synonymmap: Option<String>,
-
-        /// Push a single alias by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        alias: Option<String>,
-
-        /// Push a single knowledge base by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgebase: Option<String>,
-
-        /// Push a single knowledge source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgesource: Option<String>,
+        #[command(flatten)]
+        resources: ResourceTypeFlags,
 
         /// Include dependent and child resources (use with singular flags)
         #[arg(long)]
@@ -277,73 +259,8 @@ pub enum Commands {
 
     /// Compare local resource files against the live Azure service
     Diff {
-        /// Diff all resource types
-        #[arg(long)]
-        all: bool,
-
-        /// Include indexes
-        #[arg(long, help_heading = "Resource Types")]
-        indexes: bool,
-
-        /// Include indexers
-        #[arg(long, help_heading = "Resource Types")]
-        indexers: bool,
-
-        /// Include data sources
-        #[arg(long, help_heading = "Resource Types")]
-        datasources: bool,
-
-        /// Include skillsets
-        #[arg(long, help_heading = "Resource Types")]
-        skillsets: bool,
-
-        /// Include synonym maps
-        #[arg(long, help_heading = "Resource Types")]
-        synonymmaps: bool,
-
-        /// Include aliases
-        #[arg(long, help_heading = "Resource Types")]
-        aliases: bool,
-
-        /// Include knowledge bases (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgebases: bool,
-
-        /// Include knowledge sources (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgesources: bool,
-
-        /// Diff a single index by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        index: Option<String>,
-
-        /// Diff a single indexer by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        indexer: Option<String>,
-
-        /// Diff a single data source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        datasource: Option<String>,
-
-        /// Diff a single skillset by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        skillset: Option<String>,
-
-        /// Diff a single synonym map by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        synonymmap: Option<String>,
-
-        /// Diff a single alias by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        alias: Option<String>,
-
-        /// Diff a single knowledge base by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgebase: Option<String>,
-
-        /// Diff a single knowledge source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgesource: Option<String>,
+        #[command(flatten)]
+        resources: ResourceTypeFlags,
 
         /// Diff output format
         #[arg(long, value_enum, default_value = "text")]
@@ -367,73 +284,8 @@ pub enum Commands {
 
     /// Poll the server for changes and pull updates automatically
     PullWatch {
-        /// Pull all resource types
-        #[arg(long)]
-        all: bool,
-
-        /// Include indexes
-        #[arg(long, help_heading = "Resource Types")]
-        indexes: bool,
-
-        /// Include indexers
-        #[arg(long, help_heading = "Resource Types")]
-        indexers: bool,
-
-        /// Include data sources
-        #[arg(long, help_heading = "Resource Types")]
-        datasources: bool,
-
-        /// Include skillsets
-        #[arg(long, help_heading = "Resource Types")]
-        skillsets: bool,
-
-        /// Include synonym maps
-        #[arg(long, help_heading = "Resource Types")]
-        synonymmaps: bool,
-
-        /// Include aliases
-        #[arg(long, help_heading = "Resource Types")]
-        aliases: bool,
-
-        /// Include knowledge bases (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgebases: bool,
-
-        /// Include knowledge sources (preview API)
-        #[arg(long, help_heading = "Resource Types")]
-        knowledgesources: bool,
-
-        /// Watch a single index by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        index: Option<String>,
-
-        /// Watch a single indexer by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        indexer: Option<String>,
-
-        /// Watch a single data source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        datasource: Option<String>,
-
-        /// Watch a single skillset by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        skillset: Option<String>,
-
-        /// Watch a single synonym map by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        synonymmap: Option<String>,
-
-        /// Watch a single alias by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        alias: Option<String>,
-
-        /// Watch a single knowledge base by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgebase: Option<String>,
-
-        /// Watch a single knowledge source by name
-        #[arg(long, value_name = "NAME", help_heading = "Resource Types")]
-        knowledgesource: Option<String>,
+        #[command(flatten)]
+        resources: ResourceTypeFlags,
 
         /// Filter resources by name (substring match)
         #[arg(long, short)]
@@ -548,76 +400,15 @@ impl Cli {
             Commands::Config(cmd) => commands::config::run(cmd).await,
             Commands::Auth(cmd) => commands::auth::run(cmd).await,
             Commands::Pull {
-                all,
-                indexes,
-                indexers,
-                datasources,
-                skillsets,
-                synonymmaps,
-                aliases,
-                knowledgebases,
-                knowledgesources,
-                index,
-                indexer,
-                datasource,
-                skillset,
-                synonymmap,
-                alias,
-                knowledgebase,
-                knowledgesource,
+                resources,
                 recursive,
                 filter,
                 dry_run,
                 force,
                 source,
-            } => {
-                let singular = SingularFlags {
-                    index,
-                    indexer,
-                    datasource,
-                    skillset,
-                    synonymmap,
-                    alias,
-                    knowledgebase,
-                    knowledgesource,
-                };
-                commands::pull::run(
-                    all,
-                    indexes,
-                    indexers,
-                    datasources,
-                    skillsets,
-                    synonymmaps,
-                    aliases,
-                    knowledgebases,
-                    knowledgesources,
-                    &singular,
-                    recursive,
-                    filter,
-                    dry_run,
-                    force,
-                    source,
-                )
-                .await
-            }
+            } => commands::pull::run(&resources, recursive, filter, dry_run, force, source).await,
             Commands::Push {
-                all,
-                indexes,
-                indexers,
-                datasources,
-                skillsets,
-                synonymmaps,
-                aliases,
-                knowledgebases,
-                knowledgesources,
-                index,
-                indexer,
-                datasource,
-                skillset,
-                synonymmap,
-                alias,
-                knowledgebase,
-                knowledgesource,
+                resources,
                 recursive,
                 filter,
                 dry_run,
@@ -628,27 +419,8 @@ impl Cli {
                 suffix,
                 answers,
             } => {
-                let singular = SingularFlags {
-                    index,
-                    indexer,
-                    datasource,
-                    skillset,
-                    synonymmap,
-                    alias,
-                    knowledgebase,
-                    knowledgesource,
-                };
                 commands::push::run(
-                    all,
-                    indexes,
-                    indexers,
-                    datasources,
-                    skillsets,
-                    synonymmaps,
-                    aliases,
-                    knowledgebases,
-                    knowledgesources,
-                    &singular,
+                    &resources,
                     recursive,
                     filter,
                     dry_run,
@@ -661,107 +433,21 @@ impl Cli {
                 .await
             }
             Commands::Diff {
-                all,
-                indexes,
-                indexers,
-                datasources,
-                skillsets,
-                synonymmaps,
-                aliases,
-                knowledgebases,
-                knowledgesources,
-                index,
-                indexer,
-                datasource,
-                skillset,
-                synonymmap,
-                alias,
-                knowledgebase,
-                knowledgesource,
+                resources,
                 format,
                 exit_code,
-            } => {
-                let singular = SingularFlags {
-                    index,
-                    indexer,
-                    datasource,
-                    skillset,
-                    synonymmap,
-                    alias,
-                    knowledgebase,
-                    knowledgesource,
-                };
-                commands::diff::run(
-                    all,
-                    indexes,
-                    indexers,
-                    datasources,
-                    skillsets,
-                    synonymmaps,
-                    aliases,
-                    knowledgebases,
-                    knowledgesources,
-                    &singular,
-                    format,
-                    exit_code,
-                )
-                .await
-            }
+            } => commands::diff::run(&resources, format, exit_code).await,
             Commands::Validate {
                 strict,
                 check_references,
             } => commands::validate::run(strict, check_references, self.output).await,
             Commands::PullWatch {
-                all,
-                indexes,
-                indexers,
-                datasources,
-                skillsets,
-                synonymmaps,
-                aliases,
-                knowledgebases,
-                knowledgesources,
-                index,
-                indexer,
-                datasource,
-                skillset,
-                synonymmap,
-                alias,
-                knowledgebase,
-                knowledgesource,
+                resources,
                 filter,
                 force,
                 source,
                 interval,
-            } => {
-                let singular = SingularFlags {
-                    index,
-                    indexer,
-                    datasource,
-                    skillset,
-                    synonymmap,
-                    alias,
-                    knowledgebase,
-                    knowledgesource,
-                };
-                commands::pull_watch::run(
-                    all,
-                    indexes,
-                    indexers,
-                    datasources,
-                    skillsets,
-                    synonymmaps,
-                    aliases,
-                    knowledgebases,
-                    knowledgesources,
-                    &singular,
-                    filter,
-                    force,
-                    source,
-                    interval,
-                )
-                .await
-            }
+            } => commands::pull_watch::run(&resources, filter, force, source, interval).await,
             Commands::Describe => commands::describe_project::run(self.output).await,
             Commands::Status => commands::status::run(self.output).await,
             Commands::Completion { shell } => commands::completion::run(shell),

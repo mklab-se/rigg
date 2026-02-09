@@ -12,32 +12,25 @@ use tracing::info;
 use colored::Colorize;
 
 use hoist_client::AzureSearchClient;
+use hoist_core::config::FoundryServiceConfig;
 use hoist_core::normalize::{format_json, normalize};
+use hoist_core::resources::agent::{agent_volatile_fields, decompose_agent};
 use hoist_core::resources::ResourceKind;
+use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
-use hoist_core::templates::{build_search_config_context, ReadmeGenerator};
 use hoist_core::Config;
 use hoist_diff::Change;
 
+use crate::cli::ResourceTypeFlags;
 use crate::commands::common::{
-    get_volatile_fields, resolve_resource_selection, ResourceSelection, SingularFlags,
+    get_volatile_fields, resolve_resource_selection_from_flags, ResourceSelection,
 };
 use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;
 use crate::commands::load_config;
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    all: bool,
-    indexes: bool,
-    indexers: bool,
-    datasources: bool,
-    skillsets: bool,
-    synonymmaps: bool,
-    aliases: bool,
-    knowledgebases: bool,
-    knowledgesources: bool,
-    singular: &SingularFlags,
+    flags: &ResourceTypeFlags,
     recursive: bool,
     filter: Option<String>,
     dry_run: bool,
@@ -46,20 +39,7 @@ pub async fn run(
 ) -> Result<()> {
     let (project_root, config) = load_config()?;
 
-    let selection = resolve_resource_selection(
-        all,
-        indexes,
-        indexers,
-        datasources,
-        skillsets,
-        synonymmaps,
-        aliases,
-        knowledgebases,
-        knowledgesources,
-        singular,
-        config.sync.include_preview,
-        true,
-    );
+    let selection = resolve_resource_selection_from_flags(flags, config.sync.include_preview, true);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
@@ -216,19 +196,17 @@ pub async fn execute_pull(
         println!();
     }
 
-    // Create client (possibly for a different server)
-    let client = if let Some(server) = source {
-        AzureSearchClient::new_for_server(config, server)?
-    } else {
-        AzureSearchClient::new(config)?
-    };
-
-    let server_name = source.unwrap_or(&config.service.name);
-    info!(
-        "Connected to {} using {}",
-        server_name,
-        client.auth_method()
-    );
+    // Split kinds by service domain
+    let search_kinds: Vec<ResourceKind> = kinds
+        .iter()
+        .filter(|k| k.domain() == ServiceDomain::Search)
+        .copied()
+        .collect();
+    let foundry_kinds: Vec<ResourceKind> = kinds
+        .iter()
+        .filter(|k| k.domain() == ServiceDomain::Foundry)
+        .copied()
+        .collect();
 
     // Load existing state
     let checksums = Checksums::load(project_root)?;
@@ -239,136 +217,73 @@ pub async fn execute_pull(
     let mut deleted_resources: Vec<(ResourceKind, String, std::path::PathBuf)> = Vec::new();
     let mut total_unchanged: usize = 0;
 
-    // Fetch all resource kinds concurrently (max 5 in-flight requests)
-    let semaphore = Arc::new(Semaphore::new(5));
-    let fetched_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> = stream::iter(kinds.iter())
-        .map(|kind| {
-            let client = &client;
-            let sem = Arc::clone(&semaphore);
-            async move {
-                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
-                let result = client.list(*kind).await;
-                (*kind, result)
-            }
-        })
-        .buffer_unordered(5)
-        .collect()
-        .await;
+    // --- Search resources ---
+    if !search_kinds.is_empty() {
+        let client = if let Some(server) = source {
+            AzureSearchClient::new_for_server(config, server)?
+        } else {
+            AzureSearchClient::new(config)?
+        };
 
-    for (kind, result) in &fetched_results {
-        let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let default_name = config
+            .primary_search_service()
+            .map(|s| s.name)
+            .unwrap_or_default();
+        let search_service_name = source.unwrap_or(&default_name).to_string();
+        info!(
+            "Connected to {} using {}",
+            search_service_name,
+            client.auth_method()
+        );
 
-        // Build set of remote resource names (before filtering, for deletion detection)
-        let all_remote_names: std::collections::HashSet<String> = resources
-            .iter()
-            .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(String::from))
-            .collect();
-
-        // Filter by singular flag (exact name match) and/or pattern (substring match)
-        let exact_name = selection.name_filter(*kind);
-        let resources: Vec<&Value> = resources
-            .iter()
-            .filter(|r| {
-                let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                if let Some(exact) = exact_name {
-                    if name != exact {
-                        return false;
+        // Fetch all resource kinds concurrently (max 5 in-flight requests)
+        let semaphore = Arc::new(Semaphore::new(5));
+        let fetched_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> =
+            stream::iter(search_kinds.iter())
+                .map(|kind| {
+                    let client = &client;
+                    let sem = Arc::clone(&semaphore);
+                    async move {
+                        let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+                        let result = client.list(*kind).await;
+                        (*kind, result)
                     }
-                }
-                if let Some(pattern) = filter {
-                    if !name.contains(pattern) {
-                        return false;
-                    }
-                }
-                true
-            })
-            .collect();
+                })
+                .buffer_unordered(5)
+                .collect()
+                .await;
 
-        let resource_dir = config
-            .resource_dir(project_root)
-            .join(kind.directory_name());
+        discover_search_resources(
+            config,
+            project_root,
+            &search_service_name,
+            &fetched_results,
+            selection,
+            filter,
+            &checksums,
+            &mut new_resources,
+            &mut updated_resources,
+            &mut deleted_resources,
+            &mut total_unchanged,
+        )?;
+    }
 
-        for resource in &resources {
-            let name = resource
-                .get("name")
-                .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Resource missing name field"))?;
-
-            // Normalize the JSON
-            let volatile_fields = get_volatile_fields(*kind);
-            let normalized = normalize(resource, &volatile_fields, "name");
-            let json_content = format_json(&normalized);
-
-            // Check if content changed (remote vs stored checksum) and file on disk matches
-            let new_checksum = Checksums::calculate(&json_content);
-            let file_path = resource_dir.join(format!("{}.json", name));
-            let is_existing = checksums.get(*kind, name).is_some();
-            let remote_unchanged = checksums.get(*kind, name) == Some(&new_checksum);
-            let local_matches = file_path.exists()
-                && std::fs::read_to_string(&file_path).ok().as_deref()
-                    == Some(json_content.as_str());
-
-            if remote_unchanged && local_matches {
-                total_unchanged += 1;
-                continue;
-            }
-
-            // Compute diff for updated resources (compare current local vs incoming server)
-            let changes = if file_path.exists() {
-                std::fs::read_to_string(&file_path)
-                    .ok()
-                    .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-                    .map(|local_value| hoist_diff::diff(&local_value, &normalized, "name").changes)
-                    .unwrap_or_default()
-            } else {
-                vec![]
-            };
-
-            let entry = DiscoveredResource {
-                kind: *kind,
-                name: name.to_string(),
-                json_content,
-                new_checksum,
-                raw_resource: (*resource).clone(),
-                changes,
-            };
-
-            if is_existing {
-                updated_resources.push(entry);
-            } else {
-                new_resources.push(entry);
-            }
-        }
-
-        // Detect local files whose resources were deleted on the server
-        if resource_dir.exists() {
-            for entry in std::fs::read_dir(&resource_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-
-                let name = match path.file_stem().and_then(|n| n.to_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-
-                // If filter is set, only consider files matching the filter
-                if let Some(pattern) = filter {
-                    if !name.contains(pattern) {
-                        continue;
-                    }
-                }
-
-                // If this name doesn't exist on the server AND was previously tracked,
-                // it's been deleted. We check checksums to avoid flagging new local-only
-                // files that the user created for pushing.
-                if !all_remote_names.contains(&name) && checksums.get(*kind, &name).is_some() {
-                    deleted_resources.push((*kind, name, path));
-                }
-            }
+    // --- Foundry agents ---
+    if !foundry_kinds.is_empty() && config.has_foundry() {
+        for foundry_config in config.foundry_services() {
+            discover_foundry_agents(
+                config,
+                project_root,
+                foundry_config,
+                selection,
+                filter,
+                &checksums,
+                &mut new_resources,
+                &mut updated_resources,
+                &mut deleted_resources,
+                &mut total_unchanged,
+            )
+            .await?;
         }
     }
 
@@ -436,15 +351,27 @@ pub async fn execute_pull(
 
     let all_upserts: Vec<_> = new_resources.into_iter().chain(updated_resources).collect();
 
-    for entry in &all_upserts {
-        let resource_dir = config
-            .resource_dir(project_root)
-            .join(entry.kind.directory_name());
-        std::fs::create_dir_all(&resource_dir)?;
+    // Determine search service name for writing files
+    let write_search_service_name = config
+        .primary_search_service()
+        .map(|s| s.name)
+        .unwrap_or_default();
 
-        let file_path = resource_dir.join(format!("{}.json", entry.name));
-        std::fs::write(&file_path, &entry.json_content)?;
-        info!("Wrote {}", file_path.display());
+    for entry in &all_upserts {
+        if entry.kind == ResourceKind::Agent {
+            // Agent: write decomposed files
+            write_agent_files(config, project_root, entry)?;
+        } else {
+            // Search resource: write single JSON file under service-scoped dir
+            let resource_dir = config
+                .search_service_dir(project_root, &write_search_service_name)
+                .join(entry.kind.directory_name());
+            std::fs::create_dir_all(&resource_dir)?;
+
+            let file_path = resource_dir.join(format!("{}.json", entry.name));
+            std::fs::write(&file_path, &entry.json_content)?;
+            info!("Wrote {}", file_path.display());
+        }
 
         // Update state
         let etag = entry
@@ -468,8 +395,16 @@ pub async fn execute_pull(
 
     // Delete local files for resources removed on server
     for (kind, name, path) in &deleted_resources {
-        std::fs::remove_file(path)?;
-        info!("Deleted {}", path.display());
+        if *kind == ResourceKind::Agent {
+            // Agent: remove entire directory
+            if path.is_dir() {
+                std::fs::remove_dir_all(path)?;
+                info!("Deleted agent directory {}", path.display());
+            }
+        } else {
+            std::fs::remove_file(path)?;
+            info!("Deleted {}", path.display());
+        }
         state.remove(*kind, name);
         checksums.remove(*kind, name);
     }
@@ -499,36 +434,306 @@ pub async fn execute_pull(
         );
     }
 
-    // Generate SEARCH_CONFIG.md if generate_docs is enabled
-    if config.sync.generate_docs {
-        let resource_dir = config.resource_dir(project_root);
-        match build_search_config_context(
-            &config.service.name,
-            &resource_dir,
-            config.sync.include_preview,
-        ) {
-            Ok(ctx) => match ReadmeGenerator::new() {
-                Ok(gen) => match gen.generate_search_config(&ctx) {
-                    Ok(content) => {
-                        let config_path = project_root.join("SEARCH_CONFIG.md");
-                        std::fs::write(&config_path, content)?;
-                        info!("Generated {}", config_path.display());
+    Ok(())
+}
+
+/// Discover search resources from fetched API results.
+#[allow(clippy::too_many_arguments)]
+fn discover_search_resources(
+    config: &Config,
+    project_root: &Path,
+    service_name: &str,
+    fetched_results: &[(ResourceKind, Result<Vec<Value>, hoist_client::ClientError>)],
+    selection: &ResourceSelection,
+    filter: Option<&str>,
+    checksums: &Checksums,
+    new_resources: &mut Vec<DiscoveredResource>,
+    updated_resources: &mut Vec<DiscoveredResource>,
+    deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
+    total_unchanged: &mut usize,
+) -> Result<()> {
+    for (kind, result) in fetched_results {
+        let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Build set of remote resource names (before filtering, for deletion detection)
+        let all_remote_names: std::collections::HashSet<String> = resources
+            .iter()
+            .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect();
+
+        // Filter by singular flag (exact name match) and/or pattern (substring match)
+        let exact_name = selection.name_filter(*kind);
+        let resources: Vec<&Value> = resources
+            .iter()
+            .filter(|r| {
+                let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if let Some(exact) = exact_name {
+                    if name != exact {
+                        return false;
                     }
-                    Err(e) => {
-                        info!("Could not generate SEARCH_CONFIG.md: {}", e);
-                    }
-                },
-                Err(e) => {
-                    info!("Could not create readme generator: {}", e);
                 }
-            },
-            Err(e) => {
-                info!("Could not build search config context: {}", e);
+                if let Some(pattern) = filter {
+                    if !name.contains(pattern) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        let resource_dir = config
+            .search_service_dir(project_root, service_name)
+            .join(kind.directory_name());
+
+        for resource in &resources {
+            let name = resource
+                .get("name")
+                .and_then(|n| n.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Resource missing name field"))?;
+
+            // Normalize the JSON
+            let volatile_fields = get_volatile_fields(*kind);
+            let normalized = normalize(resource, &volatile_fields, "name");
+            let json_content = format_json(&normalized);
+
+            // Check if content changed (remote vs stored checksum) and file on disk matches
+            let new_checksum = Checksums::calculate(&json_content);
+            let file_path = resource_dir.join(format!("{}.json", name));
+            let is_existing = checksums.get(*kind, name).is_some();
+            let remote_unchanged = checksums.get(*kind, name) == Some(&new_checksum);
+            let local_matches = file_path.exists()
+                && std::fs::read_to_string(&file_path).ok().as_deref()
+                    == Some(json_content.as_str());
+
+            if remote_unchanged && local_matches {
+                *total_unchanged += 1;
+                continue;
+            }
+
+            // Compute diff for updated resources (compare current local vs incoming server)
+            let changes = if file_path.exists() {
+                std::fs::read_to_string(&file_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+                    .map(|local_value| hoist_diff::diff(&local_value, &normalized, "name").changes)
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+
+            let entry = DiscoveredResource {
+                kind: *kind,
+                name: name.to_string(),
+                json_content,
+                new_checksum,
+                raw_resource: (*resource).clone(),
+                changes,
+            };
+
+            if is_existing {
+                updated_resources.push(entry);
+            } else {
+                new_resources.push(entry);
+            }
+        }
+
+        // Detect local files whose resources were deleted on the server
+        if resource_dir.exists() {
+            for entry in std::fs::read_dir(&resource_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+
+                let name = match path.file_stem().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+
+                // If filter is set, only consider files matching the filter
+                if let Some(pattern) = filter {
+                    if !name.contains(pattern) {
+                        continue;
+                    }
+                }
+
+                // If this name doesn't exist on the server AND was previously tracked,
+                // it's been deleted.
+                if !all_remote_names.contains(&name) && checksums.get(*kind, &name).is_some() {
+                    deleted_resources.push((*kind, name, path));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Discover Foundry agents from the API and prepare them for writing.
+#[allow(clippy::too_many_arguments)]
+async fn discover_foundry_agents(
+    config: &Config,
+    project_root: &Path,
+    foundry_config: &FoundryServiceConfig,
+    selection: &ResourceSelection,
+    filter: Option<&str>,
+    checksums: &Checksums,
+    new_resources: &mut Vec<DiscoveredResource>,
+    updated_resources: &mut Vec<DiscoveredResource>,
+    deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
+    total_unchanged: &mut usize,
+) -> Result<()> {
+    let client = hoist_client::FoundryClient::new(foundry_config)?;
+    info!(
+        "Connected to Foundry {}/{} using {}",
+        foundry_config.name,
+        foundry_config.project,
+        client.auth_method()
+    );
+
+    let agents = client.list_agents().await?;
+    let kind = ResourceKind::Agent;
+
+    let all_remote_names: std::collections::HashSet<String> = agents
+        .iter()
+        .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from))
+        .collect();
+
+    let exact_name = selection.name_filter(kind);
+    let agents: Vec<&Value> = agents
+        .iter()
+        .filter(|a| {
+            let name = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if let Some(exact) = exact_name {
+                if name != exact {
+                    return false;
+                }
+            }
+            if let Some(pattern) = filter {
+                if !name.contains(pattern) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
+
+    for agent in &agents {
+        let name = agent
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Agent missing name field"))?;
+
+        // Strip volatile fields and create a canonical representation for checksumming
+        let volatile = agent_volatile_fields();
+        let normalized = normalize(agent, volatile, "name");
+        let json_content = format_json(&normalized);
+
+        let new_checksum = Checksums::calculate(&json_content);
+        let is_existing = checksums.get(kind, name).is_some();
+        let remote_unchanged = checksums.get(kind, name) == Some(&new_checksum);
+
+        // Check if local files match (config.json is the primary check)
+        let agent_dir = agents_dir.join(name);
+        let config_path = agent_dir.join("config.json");
+        let local_matches = config_path.exists() && remote_unchanged;
+
+        if remote_unchanged && local_matches {
+            *total_unchanged += 1;
+            continue;
+        }
+
+        let entry = DiscoveredResource {
+            kind,
+            name: name.to_string(),
+            json_content,
+            new_checksum,
+            raw_resource: (*agent).clone(),
+            changes: vec![],
+        };
+
+        if is_existing {
+            updated_resources.push(entry);
+        } else {
+            new_resources.push(entry);
+        }
+    }
+
+    // Detect deleted agents
+    if agents_dir.exists() {
+        for entry in std::fs::read_dir(&agents_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if let Some(pattern) = filter {
+                if !name.contains(pattern) {
+                    continue;
+                }
+            }
+            if !all_remote_names.contains(&name) && checksums.get(kind, &name).is_some() {
+                deleted_resources.push((kind, name, path));
             }
         }
     }
 
     Ok(())
+}
+
+/// Write decomposed agent files to disk.
+fn write_agent_files(
+    config: &Config,
+    project_root: &Path,
+    entry: &DiscoveredResource,
+) -> Result<()> {
+    let files = decompose_agent(&entry.raw_resource);
+
+    // Use the first configured Foundry service for directory path
+    let foundry_config = config
+        .foundry_services()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No Foundry service configured"))?;
+
+    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
+    let agent_dir = agents_dir.join(&entry.name);
+    std::fs::create_dir_all(&agent_dir)?;
+
+    // Write config.json
+    let config_content = format_json(&files.config);
+    std::fs::write(agent_dir.join("config.json"), &config_content)?;
+
+    // Write instructions.md
+    std::fs::write(agent_dir.join("instructions.md"), &files.instructions)?;
+
+    // Write tools.json
+    let tools_content = format_json(&files.tools);
+    std::fs::write(agent_dir.join("tools.json"), &tools_content)?;
+
+    // Write knowledge.json
+    let knowledge_content = format_json(&files.knowledge);
+    std::fs::write(agent_dir.join("knowledge.json"), &knowledge_content)?;
+
+    info!("Wrote agent {}", agent_dir.display());
+    Ok(())
+}
+
+/// Get the directory path for Foundry agents.
+fn foundry_agents_dir(
+    config: &Config,
+    project_root: &Path,
+    foundry_config: &FoundryServiceConfig,
+) -> std::path::PathBuf {
+    config
+        .foundry_service_dir(project_root, &foundry_config.name, &foundry_config.project)
+        .join("agents")
 }
 
 /// A resource discovered during the fetch phase, pending write.

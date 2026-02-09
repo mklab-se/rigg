@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Azure AI Search REST API client and authentication for hoist"
+description = "Azure AI Search and Microsoft Foundry REST API client and authentication for hoist"
 readme = "README.md"
 
 [dependencies]

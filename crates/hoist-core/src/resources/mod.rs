@@ -1,5 +1,6 @@
 //! Azure AI Search resource definitions
 
+pub mod agent;
 pub mod alias;
 pub mod datasource;
 pub mod index;

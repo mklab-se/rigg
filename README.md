@@ -5,9 +5,8 @@
 <h1 align="center">hoist</h1>
 
 <p align="center">
-  Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a>.<br>
-  Pull resource definitions from your search service as normalized JSON files,<br>
-  version them in Git, and push changes back.
+  Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a> and <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/">Microsoft Foundry</a>.<br>
+  Manage your entire Agentic RAG stack — from agent definitions to knowledge bases to search indexes — as version-controlled files.
 </p>
 
 <p align="center">
@@ -19,28 +18,30 @@
 
 ## The Problem
 
-Infrastructure-as-Code tools like ARM, Bicep, and Terraform are great at provisioning an Azure AI Search *service* — but they stop at the front door. The configuration *inside* the service — index schemas, skillsets, indexer schedules, knowledge base definitions — is what actually determines how your application behaves, and none of these tools manage it.
+Building an Agentic RAG (Retrieval-Augmented Generation) system in Azure means configuring resources across two services: **Azure AI Search** for the retrieval layer — indexes, skillsets, indexers, knowledge bases — and **Microsoft Foundry** for the agent layer — agent definitions, instructions, tools, and knowledge connections. Together, they form a pipeline where agents query knowledge bases, which route to knowledge sources, which search indexes built from your data.
 
-For traditional relational databases, this gap was filled long ago. SQL provides a standardized language for defining tables, indexes, and stored procedures, and a mature ecosystem of migration tools (Flyway, Liquibase, EF Migrations, Alembic) has evolved around it. Azure AI Search has no equivalent. It's a specialized search and vector database with a REST/JSON API, no schema definition language, and no migration framework.
+None of this configuration is managed by traditional IaC tools. ARM, Bicep, and Terraform provision the *services*, but the configuration *inside* them — the index schemas, skillset pipelines, agent instructions, and knowledge base retrieval rules that actually determine how your system behaves — lives in REST APIs and portal blades.
 
-In practice, this means search configurations are managed through the Azure portal or one-off scripts, which creates real problems:
+For relational databases, this gap was solved long ago with migration tools like Flyway, Liquibase, and Alembic. Azure AI Search and Microsoft Foundry have no equivalent. In practice, this means:
 
-- **No change history** — Azure doesn't track who changed an index schema or when. If a field type change breaks your application, there's no way to see what happened or roll back.
+- **No change history** — Azure doesn't track who changed an index schema, agent instruction, or knowledge base configuration. When something breaks, there's no way to see what happened or roll back.
 - **Portal drift** — The portal makes ad-hoc changes frictionless. In team environments, configurations silently diverge between services and between what's deployed and what anyone remembers deploying.
-- **No review process** — Index schema changes, scoring profile updates, and skillset modifications go live without review, even though they can fundamentally change application behavior.
-- **Manual environment promotion** — Copying configurations from dev to staging to production means manually exporting JSON, updating cross-resource references, and hoping nothing was missed.
-- **Growing stakes with agentic AI** — As Azure AI Search becomes the retrieval backbone for AI agents in Azure AI Foundry, these configurations become critical infrastructure. A misconfigured knowledge base or skillset silently degrades agent quality — making version control and review more important, not less.
-- **Configuration locked behind APIs** — There is no single place to see how your indexes, skillsets, indexers, and knowledge bases fit together. The full picture is spread across portal blades and REST endpoints, making it hard for anyone — human or AI — to reason about the service as a whole.
+- **No review process** — Agent instructions, scoring profiles, skillset configurations, and knowledge base retrieval rules go live without review, even though they fundamentally shape how your AI system responds.
+- **Fragmented view** — The full picture of how your agents, knowledge bases, knowledge sources, indexes, skillsets, and data sources connect is spread across two services, multiple portal blades, and REST endpoints. No one — human or AI — can easily reason about the system as a whole.
+- **Manual environment promotion** — Copying configurations from dev to staging to production means manually exporting JSON across both services, updating cross-resource references, and hoping nothing was missed.
 
 ## What Hoist Does
 
-`hoist` bridges the gap by treating your search service configuration as code. It pulls resource definitions as normalized JSON files, versions them in Git, and pushes changes back:
+`hoist` treats your entire Agentic RAG infrastructure as code. It pulls resource definitions from Azure AI Search and Microsoft Foundry as local files, versions them in Git, and pushes changes back. Whether you use both services together for a full RAG stack, or either one independently, hoist gives you:
 
-- **Version control** — track who changed what, when, and why via Git history
-- **Code review** — review index schema changes, skillset updates, and knowledge base configurations in pull requests
-- **Environment promotion** — copy resources between services (dev → staging → prod) with automatic reference rewriting
-- **Drift detection** — diff local files against the live service to catch manual portal changes
-- **AI-assisted development** — with every resource definition available as a local file, AI coding tools like Claude Code, GitHub Copilot, Codex, and others can read your entire search configuration in context, understand how resources relate to each other, and help you develop, troubleshoot, and evolve your implementation — no API calls or portal access required
+- **Version control** — track who changed what, when, and why via Git history across both your retrieval and agent layers
+- **Code review** — review agent instructions, knowledge base retrieval rules, index schema changes, and skillset updates in pull requests before they go live
+- **Unified project view** — `hoist describe` shows the full dependency chain from agents through knowledge bases to indexes, so humans and AI tools can reason about the complete system
+- **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
+- **Environment promotion** — copy resources between services (dev to staging to prod) with automatic reference rewriting
+- **AI-assisted development** — with every resource definition available as a local file, AI coding tools like Claude Code, GitHub Copilot, and others can read your entire search and agent configuration in context, understand how resources relate, and help you develop and troubleshoot — no portal access required
+
+You can use hoist for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
 
 ## Quick Start
 
@@ -58,8 +59,8 @@ brew install mklab-se/tap/hoist
 See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, and shell completions.
 
 ```bash
-# Initialize a project (discovers your service via Azure CLI)
-hoist init . --path search
+# Initialize a project (discovers your services via Azure CLI)
+hoist init .
 
 # Pull all resources as JSON files
 hoist pull --all
@@ -68,31 +69,80 @@ hoist pull --all
 hoist push --all
 ```
 
-After `init`, your project looks like this:
+During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. When there's only one option, it auto-selects. If you're not logged in to Azure CLI, you can enter service names manually.
+
+After pulling, your project contains normalized, version-control-friendly representations of every resource:
 
 ```
-hoist.toml                     # Project configuration
-.hoist/                        # Sync state (gitignored)
-search/
-  search-management/
-    indexes/
-      hotels.json
-    indexers/
-      hotels-indexer.json
-    data-sources/
-      cosmos-hotels.json
-    skillsets/
-      enrichment-pipeline.json
-    synonym-maps/
-      hotel-synonyms.json
-  agentic-retrieval/
-    knowledge-bases/
-      regulatory-kb.json
-    knowledge-sources/
-      regulatory-docs.json
+hoist.toml                          # Project configuration
+.hoist/                             # Sync state (gitignored)
+
+search-resources/
+  my-search-service/
+    search-management/
+      indexes/
+        regulatory-index.json       # Index schema (fields, vector search, semantic config)
+      indexers/
+        regulatory-indexer.json     # Indexer schedule and mapping
+      data-sources/
+        regulatory-datasource.json  # Data source connection
+      skillsets/
+        regulatory-skillset.json    # AI enrichment pipeline
+      synonym-maps/
+        terms.json
+    agentic-retrieval/
+      knowledge-bases/
+        regulatory-kb.json          # KB description, retrieval instructions, linked sources
+      knowledge-sources/
+        regulatory.json             # Source definition, ingestion config, created resources
+
+foundry-resources/
+  my-ai-service/
+    my-project/
+      agents/
+        research-assistant/
+          config.json               # Agent id, name, model, temperature
+          instructions.md           # Agent instructions (editable Markdown)
+          tools.json                # MCP tools, code interpreter, file search
+          knowledge.json            # Knowledge/tool resources
 ```
 
-Each JSON file is a normalized, deterministic representation of the resource — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key.
+Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Agent instructions are stored as Markdown for easy editing and diffing.
+
+Use `hoist describe` to see how everything connects:
+
+```
+My RAG System
+=============
+
+Services:
+  Azure AI Search: my-search-service
+  Microsoft Foundry: my-ai-service/my-project
+
+Foundry Agents (1):
+
+  research-assistant (gpt-4o)
+    Tools: mcp -> regulatory-kb
+    Instructions: You are a research assistant specialized in regulatory compliance...
+
+Agentic RAG Flows:
+
+  research-assistant
+  └─ Knowledge Base: regulatory-kb
+        Description:
+        Official regulatory and legal texts for EU digital law...
+        Output: extractiveData
+        Retrieval instructions:
+        You are a legal evidence retriever. Find and return relevant legal passages...
+        └─ Knowledge Source: regulatory (azureBlob)
+              Regulatory PDFs with structured metadata and vector search...
+              └─ Index: regulatory-index (13 fields, key: uid)
+                 1 vector profile(s), semantic search
+
+Indexes (1):
+  regulatory-index (13 fields, key: uid)
+    ...
+```
 
 ## Features
 
@@ -101,14 +151,20 @@ Each JSON file is a normalized, deterministic representation of the resource —
 Download resource definitions from Azure and upload local changes back:
 
 ```bash
-# Pull everything
+# Pull everything (search + foundry)
 hoist pull --all
 
 # Pull specific resource types
 hoist pull --indexes --skillsets
+hoist pull --agents
 
 # Pull a single resource by name
 hoist pull --index hotels
+hoist pull --agent research-assistant
+
+# Scope to one service domain
+hoist pull --search-only
+hoist pull --foundry-only
 
 # Push with dry-run preview
 hoist push --all --dry-run
@@ -167,6 +223,8 @@ hoist validate
 
 ## Resource Types
 
+### Azure AI Search
+
 | Resource | Flag | Singular | API |
 |---|---|---|---|
 | Index | `--indexes` | `--index <NAME>` | Stable |
@@ -174,10 +232,17 @@ hoist validate
 | Data Source | `--datasources` | `--datasource <NAME>` | Stable |
 | Skillset | `--skillsets` | `--skillset <NAME>` | Stable |
 | Synonym Map | `--synonymmaps` | `--synonymmap <NAME>` | Stable |
+| Alias | `--aliases` | `--alias <NAME>` | Preview |
 | Knowledge Base | `--knowledgebases` | `--knowledgebase <NAME>` | Preview |
 | Knowledge Source | `--knowledgesources` | `--knowledgesource <NAME>` | Preview |
 
-Preview resources (Knowledge Bases and Knowledge Sources) use the `2025-11-01-preview` API and are included by default with the `agentic` template.
+### Microsoft Foundry
+
+| Resource | Flag | Singular | API |
+|---|---|---|---|
+| Agent | `--agents` | `--agent <NAME>` | Preview (`2025-05-15-preview`) |
+
+Use `--search-only` or `--foundry-only` to scope operations to a single service domain. Preview resources require `include_preview = true` in config (enabled by default with the `agentic` init template).
 
 ## Authentication
 
@@ -200,19 +265,27 @@ hoist pull --all
 Project settings live in `hoist.toml`:
 
 ```toml
-[service]
+[project]
+name = "My RAG System"
+
+# Search service (at least one service type required)
+[[services.search]]
 name = "my-search-service"
-subscription = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 api_version = "2024-07-01"                    # default
 preview_api_version = "2025-11-01-preview"    # default
 
-[project]
-path = "search"
+# Foundry service (at least one service type required)
+[[services.foundry]]
+name = "my-ai-service"
+project = "my-project"
+api_version = "2025-05-15-preview"              # default
 
 [sync]
 include_preview = true
 generate_docs = true
 ```
+
+The legacy `[service]` format from v0.1.x is still supported and auto-migrates on load.
 
 View and modify settings with the `config` command:
 
@@ -234,8 +307,8 @@ hoist-diff  (standalone)
 
 | Crate | Purpose |
 |---|---|
-| `hoist-core` | Resource types, config, state tracking, JSON normalization, copy/rename logic |
-| `hoist-client` | Azure Search REST API client, ARM discovery, authentication |
+| `hoist-core` | Resource types, config, state tracking, JSON normalization, agent decomposition, copy/rename logic |
+| `hoist-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
 | `hoist-az` | Clap-based CLI, command implementations |
 

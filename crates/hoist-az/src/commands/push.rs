@@ -9,15 +9,19 @@ use colored::Colorize;
 use tracing::info;
 
 use hoist_client::AzureSearchClient;
+use hoist_core::config::FoundryServiceConfig;
 use hoist_core::constraints::check_immutability;
 use hoist_core::copy::NameMap;
 use hoist_core::normalize::{format_json, normalize};
+use hoist_core::resources::agent::compose_agent;
 use hoist_core::resources::ResourceKind;
+use hoist_core::service::ServiceDomain;
 use hoist_diff::Change;
 
+use crate::cli::ResourceTypeFlags;
 use crate::commands::common::{
-    get_read_only_fields, get_volatile_fields, order_by_dependencies, resolve_resource_selection,
-    SingularFlags,
+    get_read_only_fields, get_volatile_fields, order_by_dependencies, read_agent_files,
+    resolve_resource_selection_from_flags,
 };
 use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;
@@ -25,16 +29,7 @@ use crate::commands::load_config;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    all: bool,
-    indexes: bool,
-    indexers: bool,
-    datasources: bool,
-    skillsets: bool,
-    synonymmaps: bool,
-    aliases: bool,
-    knowledgebases: bool,
-    knowledgesources: bool,
-    singular: &SingularFlags,
+    flags: &ResourceTypeFlags,
     recursive: bool,
     filter: Option<String>,
     dry_run: bool,
@@ -47,20 +42,8 @@ pub async fn run(
     let (project_root, config) = load_config()?;
 
     // Push has no default fallback — user must specify resource types
-    let selection = resolve_resource_selection(
-        all,
-        indexes,
-        indexers,
-        datasources,
-        skillsets,
-        synonymmaps,
-        aliases,
-        knowledgebases,
-        knowledgesources,
-        singular,
-        config.sync.include_preview,
-        false,
-    );
+    let selection =
+        resolve_resource_selection_from_flags(flags, config.sync.include_preview, false);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
@@ -69,21 +52,22 @@ pub async fn run(
 
     let kinds = selection.kinds();
 
+    // Split kinds by service domain
+    let search_kinds: Vec<ResourceKind> = kinds
+        .iter()
+        .filter(|k| k.domain() == ServiceDomain::Search)
+        .copied()
+        .collect();
+    let has_foundry_kinds = kinds.iter().any(|k| k.domain() == ServiceDomain::Foundry);
+
     let is_copy_mode = copy || suffix.is_some() || answers.is_some();
 
-    // Create client (possibly for a different server)
-    let client = if let Some(ref server) = target {
-        AzureSearchClient::new_for_server(&config, server)?
-    } else {
-        AzureSearchClient::new(&config)?
-    };
-
-    let server_name = target.as_deref().unwrap_or(&config.service.name);
-    info!(
-        "Connected to {} using {}",
-        server_name,
-        client.auth_method()
-    );
+    // Compute server name for display (used in copy mode output)
+    let default_name = config
+        .primary_search_service()
+        .map(|s| s.name)
+        .unwrap_or_default();
+    let server_name = target.as_deref().unwrap_or(&default_name);
 
     // Collect resources to push
     let mut resources_to_push = Vec::new();
@@ -91,99 +75,226 @@ pub async fn run(
     let mut total_unchanged = 0;
     let mut change_details: HashMap<(ResourceKind, String), Vec<Change>> = HashMap::new();
 
-    for kind in &kinds {
-        let resource_dir = config
-            .resource_dir(&project_root)
-            .join(kind.directory_name());
-        if !resource_dir.exists() {
-            continue;
-        }
+    // --- Search resources ---
+    if !search_kinds.is_empty() {
+        let client = if let Some(ref server) = target {
+            AzureSearchClient::new_for_server(&config, server)?
+        } else {
+            AzureSearchClient::new(&config)?
+        };
 
-        // Read all JSON files in directory
-        for entry in std::fs::read_dir(&resource_dir)? {
-            let entry = entry?;
-            let path = entry.path();
+        info!(
+            "Connected to {} using {}",
+            server_name,
+            client.auth_method()
+        );
 
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let push_search_svc = config.primary_search_service().unwrap();
+        for kind in &search_kinds {
+            let resource_dir = config
+                .search_service_dir(&project_root, &push_search_svc.name)
+                .join(kind.directory_name());
+            if !resource_dir.exists() {
                 continue;
             }
 
-            let name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
+            // Read all JSON files in directory
+            for entry in std::fs::read_dir(&resource_dir)? {
+                let entry = entry?;
+                let path = entry.path();
 
-            // Filter by singular flag (exact name match)
-            if let Some(exact_name) = selection.name_filter(*kind) {
-                if name != exact_name {
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
                     continue;
                 }
-            }
 
-            // Filter if pattern specified (substring match)
-            if let Some(ref pattern) = filter {
-                if !name.contains(pattern) {
-                    continue;
-                }
-            }
+                let name = path
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
 
-            // Read and parse local file
-            let content = std::fs::read_to_string(&path)?;
-            let local: serde_json::Value = serde_json::from_str(&content)?;
-
-            // In copy mode, skip immutability checks (we're creating new resources)
-            if is_copy_mode {
-                resources_to_push.push((*kind, name.to_string(), local, false));
-                continue;
-            }
-
-            // Check if resource exists on server
-            let remote = client.get(*kind, name).await;
-
-            match remote {
-                Ok(existing) => {
-                    // For push comparison, strip both volatile fields (etag, context,
-                    // secrets) AND read-only fields (knowledgeSources, createdResources,
-                    // startTime, etc.) — read-only fields are kept in local files for
-                    // documentation but Azure rejects them on PUT.
-                    let volatile_fields = get_volatile_fields(*kind);
-                    let read_only_fields = get_read_only_fields(*kind);
-                    let push_strip: Vec<&str> = volatile_fields
-                        .iter()
-                        .chain(read_only_fields.iter())
-                        .copied()
-                        .collect();
-                    let normalized_existing = normalize(&existing, &push_strip, "name");
-                    let normalized_local = normalize(&local, &push_strip, "name");
-
-                    // Validate immutability constraints
-                    let violations =
-                        check_immutability(*kind, name, &normalized_existing, &normalized_local);
-
-                    if !violations.is_empty() {
-                        for v in violations {
-                            validation_errors.push(format!("{}", v));
-                        }
-                    } else {
-                        // Compare normalized remote against normalized local
-                        let remote_json = format_json(&normalized_existing);
-                        let local_json = format_json(&normalized_local);
-
-                        if remote_json == local_json {
-                            total_unchanged += 1;
-                        } else {
-                            // Compute diff: old=server, new=local (what will change on server)
-                            let diff_result =
-                                hoist_diff::diff(&normalized_existing, &normalized_local, "name");
-                            change_details.insert((*kind, name.to_string()), diff_result.changes);
-                            resources_to_push.push((*kind, name.to_string(), local, true));
-                        }
+                // Filter by singular flag (exact name match)
+                if let Some(exact_name) = selection.name_filter(*kind) {
+                    if name != exact_name {
+                        continue;
                     }
                 }
-                Err(hoist_client::ClientError::NotFound { .. }) => {
-                    resources_to_push.push((*kind, name.to_string(), local, false));
+
+                // Filter if pattern specified (substring match)
+                if let Some(ref pattern) = filter {
+                    if !name.contains(pattern) {
+                        continue;
+                    }
                 }
-                Err(e) => return Err(e.into()),
+
+                // Read and parse local file
+                let content = std::fs::read_to_string(&path)?;
+                let local: serde_json::Value = serde_json::from_str(&content)?;
+
+                // In copy mode, skip immutability checks (we're creating new resources)
+                if is_copy_mode {
+                    resources_to_push.push((*kind, name.to_string(), local, false));
+                    continue;
+                }
+
+                // Check if resource exists on server
+                let remote = client.get(*kind, name).await;
+
+                match remote {
+                    Ok(existing) => {
+                        // For push comparison, strip both volatile fields (etag, context,
+                        // secrets) AND read-only fields (knowledgeSources, createdResources,
+                        // startTime, etc.)
+                        let volatile_fields = get_volatile_fields(*kind);
+                        let read_only_fields = get_read_only_fields(*kind);
+                        let push_strip: Vec<&str> = volatile_fields
+                            .iter()
+                            .chain(read_only_fields.iter())
+                            .copied()
+                            .collect();
+                        let normalized_existing = normalize(&existing, &push_strip, "name");
+                        let normalized_local = normalize(&local, &push_strip, "name");
+
+                        // Validate immutability constraints
+                        let violations = check_immutability(
+                            *kind,
+                            name,
+                            &normalized_existing,
+                            &normalized_local,
+                        );
+
+                        if !violations.is_empty() {
+                            for v in violations {
+                                validation_errors.push(format!("{}", v));
+                            }
+                        } else {
+                            // Compare normalized remote against normalized local
+                            let remote_json = format_json(&normalized_existing);
+                            let local_json = format_json(&normalized_local);
+
+                            if remote_json == local_json {
+                                total_unchanged += 1;
+                            } else {
+                                // Compute diff: old=server, new=local
+                                let diff_result = hoist_diff::diff(
+                                    &normalized_existing,
+                                    &normalized_local,
+                                    "name",
+                                );
+                                change_details
+                                    .insert((*kind, name.to_string()), diff_result.changes);
+                                resources_to_push.push((*kind, name.to_string(), local, true));
+                            }
+                        }
+                    }
+                    Err(hoist_client::ClientError::NotFound { .. }) => {
+                        resources_to_push.push((*kind, name.to_string(), local, false));
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+    }
+
+    // --- Foundry agents ---
+    if has_foundry_kinds && config.has_foundry() {
+        for foundry_config in config.foundry_services() {
+            let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
+            info!(
+                "Connected to Foundry {}/{} using {}",
+                foundry_config.name,
+                foundry_config.project,
+                foundry_client.auth_method()
+            );
+
+            let agents_dir = config
+                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+                .join("agents");
+
+            if !agents_dir.exists() {
+                continue;
+            }
+
+            // Get existing agents to map name -> id
+            let existing_agents = foundry_client.list_agents().await?;
+            let agent_id_map: HashMap<String, String> = existing_agents
+                .iter()
+                .filter_map(|a| {
+                    let name = a.get("name")?.as_str()?.to_string();
+                    let id = a.get("id")?.as_str()?.to_string();
+                    Some((name, id))
+                })
+                .collect();
+
+            // Build name→remote_agent map for diffing
+            let remote_agent_map: HashMap<String, &serde_json::Value> = existing_agents
+                .iter()
+                .filter_map(|a| {
+                    let name = a.get("name")?.as_str()?.to_string();
+                    Some((name, a))
+                })
+                .collect();
+
+            let volatile = hoist_core::resources::agent::agent_volatile_fields();
+
+            for entry in std::fs::read_dir(&agents_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+
+                if let Some(exact_name) = selection.name_filter(ResourceKind::Agent) {
+                    if name != exact_name {
+                        continue;
+                    }
+                }
+                if let Some(ref pattern) = filter {
+                    if !name.contains(pattern) {
+                        continue;
+                    }
+                }
+
+                // Read decomposed agent files and compose into API payload
+                let agent_files = read_agent_files(&path)?;
+                let payload = compose_agent(&agent_files);
+
+                if is_copy_mode {
+                    let exists = agent_id_map.contains_key(&name);
+                    resources_to_push.push((ResourceKind::Agent, name, payload, exists));
+                    continue;
+                }
+
+                // Compare local vs remote to skip unchanged agents
+                match remote_agent_map.get(&name) {
+                    Some(remote) => {
+                        let normalized_local =
+                            hoist_core::normalize::normalize(&payload, volatile, "name");
+                        let normalized_remote =
+                            hoist_core::normalize::normalize(remote, volatile, "name");
+
+                        let local_json = hoist_core::normalize::format_json(&normalized_local);
+                        let remote_json = hoist_core::normalize::format_json(&normalized_remote);
+
+                        if local_json == remote_json {
+                            total_unchanged += 1;
+                        } else {
+                            let diff_result =
+                                hoist_diff::diff(&normalized_remote, &normalized_local, "name");
+                            change_details
+                                .insert((ResourceKind::Agent, name.clone()), diff_result.changes);
+                            resources_to_push.push((ResourceKind::Agent, name, payload, true));
+                        }
+                    }
+                    None => {
+                        // New agent — will be created
+                        resources_to_push.push((ResourceKind::Agent, name, payload, false));
+                    }
+                }
             }
         }
     }
@@ -203,8 +314,19 @@ pub async fn run(
         };
 
         let mut all_local = Vec::new();
+        let recurse_search_name = config
+            .primary_search_service()
+            .map(|s| s.name)
+            .unwrap_or_default();
         for k in &all_kinds {
-            let dir = config.resource_dir(&project_root).join(k.directory_name());
+            let dir = if k.domain() == ServiceDomain::Search {
+                config
+                    .search_service_dir(&project_root, &recurse_search_name)
+                    .join(k.directory_name())
+            } else {
+                // For Foundry kinds, skip here — agents are loaded separately
+                continue;
+            };
             if !dir.exists() {
                 continue;
             }
@@ -357,28 +479,91 @@ pub async fn run(
     // Push resources in dependency order
     let ordered = order_by_dependencies(&resources_to_push);
 
+    // Split ordered resources by domain for execution
+    let search_resources: Vec<_> = ordered
+        .iter()
+        .filter(|(k, _, _, _)| k.domain() == ServiceDomain::Search)
+        .collect();
+    let foundry_resources: Vec<_> = ordered
+        .iter()
+        .filter(|(k, _, _, _)| k.domain() == ServiceDomain::Foundry)
+        .collect();
+
     let mut success_count = 0;
     let mut error_count = 0;
 
-    for (kind, name, definition, exists) in ordered {
-        let action = if exists { "Updating" } else { "Creating" };
-        print!("{} {} '{}'... ", action, kind.display_name(), name);
-        io::stdout().flush()?;
+    // Push search resources
+    if !search_resources.is_empty() {
+        let client = if let Some(ref server) = target {
+            AzureSearchClient::new_for_server(&config, server)?
+        } else {
+            AzureSearchClient::new(&config)?
+        };
 
-        // Strip volatile fields before sending (they may be read-only on the server)
-        let clean_definition = strip_volatile_fields(kind, &definition);
+        for (kind, name, definition, exists) in &search_resources {
+            let action = if *exists { "Updating" } else { "Creating" };
+            print!("{} {} '{}'... ", action, kind.display_name(), name);
+            io::stdout().flush()?;
 
-        match client
-            .create_or_update(kind, &name, &clean_definition)
-            .await
-        {
-            Ok(_) => {
-                println!("done");
-                success_count += 1;
+            let clean_definition = strip_volatile_fields(*kind, definition);
+
+            match client
+                .create_or_update(*kind, name, &clean_definition)
+                .await
+            {
+                Ok(_) => {
+                    println!("done");
+                    success_count += 1;
+                }
+                Err(e) => {
+                    println!("FAILED: {}", e);
+                    error_count += 1;
+                }
             }
-            Err(e) => {
-                println!("FAILED: {}", e);
-                error_count += 1;
+        }
+    }
+
+    // Push Foundry agents
+    if !foundry_resources.is_empty() && config.has_foundry() {
+        for foundry_config in config.foundry_services() {
+            let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
+
+            for (kind, name, definition, exists) in &foundry_resources {
+                let action = if *exists { "Updating" } else { "Creating" };
+                print!("{} {} '{}'... ", action, kind.display_name(), name);
+                io::stdout().flush()?;
+
+                // Both create and update use the versions endpoint;
+                // update_agent creates a new version of an existing agent.
+                let result = if *exists {
+                    foundry_client.update_agent(name, definition).await
+                } else {
+                    foundry_client.create_agent(definition).await
+                };
+
+                match result {
+                    Ok(response) => {
+                        println!("done");
+                        success_count += 1;
+
+                        // If this was a create, store the server-assigned ID in config.json
+                        if !exists {
+                            if let Some(id) = response.get("id").and_then(|v| v.as_str()) {
+                                update_agent_config_id(
+                                    &config,
+                                    &project_root,
+                                    foundry_config,
+                                    name,
+                                    id,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("FAILED: {}", e);
+                        error_count += 1;
+                    }
+                }
             }
         }
     }
@@ -394,6 +579,47 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// After creating a new agent, update the local config.json with the server-assigned ID.
+fn update_agent_config_id(
+    config: &hoist_core::Config,
+    project_root: &std::path::Path,
+    foundry_config: &FoundryServiceConfig,
+    agent_name: &str,
+    agent_id: &str,
+) {
+    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
+    let config_path = agents_dir.join(agent_name).join("config.json");
+
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "id".to_string(),
+                    serde_json::Value::String(agent_id.to_string()),
+                );
+                if let Ok(formatted) = serde_json::to_string_pretty(&value) {
+                    let _ = std::fs::write(&config_path, formatted);
+                    info!(
+                        "Updated agent '{}' config with id '{}'",
+                        agent_name, agent_id
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Get the directory path for Foundry agents.
+fn foundry_agents_dir(
+    config: &hoist_core::Config,
+    project_root: &std::path::Path,
+    foundry_config: &FoundryServiceConfig,
+) -> std::path::PathBuf {
+    config
+        .foundry_service_dir(project_root, &foundry_config.name, &foundry_config.project)
+        .join("agents")
 }
 
 /// Build a NameMap from the copy flags (interactive, suffix, or answers file).
@@ -672,7 +898,12 @@ fn discover_connection_strings() -> Vec<(String, String)> {
         return Vec::new();
     };
 
-    let subscription_id = match &config.service.subscription {
+    let primary = match config.primary_search_service() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let subscription_id = match &primary.subscription {
         Some(sub) => sub.clone(),
         None => {
             // Try to get from az account show
@@ -693,8 +924,8 @@ fn discover_connection_strings() -> Vec<(String, String)> {
             return tokio::task::block_in_place(|| {
                 handle.block_on(discover_connection_strings_async(
                     &subscription_id,
-                    &config.service.name,
-                    config.service.resource_group.as_deref(),
+                    &primary.name,
+                    primary.resource_group.as_deref(),
                 ))
             });
         }
@@ -709,8 +940,8 @@ fn discover_connection_strings() -> Vec<(String, String)> {
 
     rt.block_on(discover_connection_strings_async(
         &subscription_id,
-        &config.service.name,
-        config.service.resource_group.as_deref(),
+        &primary.name,
+        primary.resource_group.as_deref(),
     ))
 }
 
@@ -1118,6 +1349,8 @@ mod tests {
         assert_eq!(secrets.len(), 1);
         assert_eq!(secrets[0].1, "storageConnectionStringSecret");
     }
+
+    // read_agent_files tests are in common.rs (the function lives there now)
 
     /// Verifies that knowledgeSources changes on a KB are detected by push.
     #[test]

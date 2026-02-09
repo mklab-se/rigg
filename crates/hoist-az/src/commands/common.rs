@@ -1,6 +1,12 @@
 //! Shared utilities used by multiple commands
 
+use anyhow::Result;
+
+use hoist_core::resources::agent::AgentFiles;
 use hoist_core::resources::{Resource, ResourceKind};
+use hoist_core::service::ServiceDomain;
+
+use crate::cli::ResourceTypeFlags;
 
 /// Resolve which resource kinds to operate on based on CLI flags.
 ///
@@ -25,51 +31,22 @@ pub fn resolve_resource_kinds(
     include_preview: bool,
     has_default_fallback: bool,
 ) -> Vec<ResourceKind> {
-    if all {
-        return if include_preview {
-            ResourceKind::all().to_vec()
-        } else {
-            ResourceKind::stable().to_vec()
-        };
-    }
-
-    let mut kinds = Vec::new();
-
-    if indexes {
-        kinds.push(ResourceKind::Index);
-    }
-    if indexers {
-        kinds.push(ResourceKind::Indexer);
-    }
-    if datasources {
-        kinds.push(ResourceKind::DataSource);
-    }
-    if skillsets {
-        kinds.push(ResourceKind::Skillset);
-    }
-    if synonymmaps {
-        kinds.push(ResourceKind::SynonymMap);
-    }
-    if aliases && include_preview {
-        kinds.push(ResourceKind::Alias);
-    }
-    if knowledgebases && include_preview {
-        kinds.push(ResourceKind::KnowledgeBase);
-    }
-    if knowledgesources && include_preview {
-        kinds.push(ResourceKind::KnowledgeSource);
-    }
-
-    // If nothing specified, default based on include_preview setting
-    if kinds.is_empty() && has_default_fallback {
-        kinds = if include_preview {
-            ResourceKind::all().to_vec()
-        } else {
-            ResourceKind::stable().to_vec()
-        };
-    }
-
-    kinds
+    let sel = resolve_resource_selection(
+        all,
+        indexes,
+        indexers,
+        datasources,
+        skillsets,
+        synonymmaps,
+        aliases,
+        knowledgebases,
+        knowledgesources,
+        false, // agents
+        &SingularFlags::default(),
+        include_preview,
+        has_default_fallback,
+    );
+    sel.kinds()
 }
 
 /// A resolved resource selection: which kinds to operate on and optional name filters.
@@ -119,6 +96,61 @@ pub struct SingularFlags {
     pub alias: Option<String>,
     pub knowledgebase: Option<String>,
     pub knowledgesource: Option<String>,
+    pub agent: Option<String>,
+}
+
+/// Resolve a ResourceSelection from `ResourceTypeFlags`.
+///
+/// Singular flags take precedence: `--knowledgebase my-kb` contributes
+/// `(KnowledgeBase, Some("my-kb"))` while `--knowledgebases` contributes
+/// `(KnowledgeBase, None)`.
+///
+/// If `--all` is set, singular flags are ignored.
+///
+/// `--search-only` / `--foundry-only` filter the result by service domain.
+/// Default fallback (no flags) returns search resources only for backward compat.
+pub fn resolve_resource_selection_from_flags(
+    flags: &ResourceTypeFlags,
+    include_preview: bool,
+    has_default_fallback: bool,
+) -> ResourceSelection {
+    let singular = flags.singular_flags();
+    let sel = resolve_resource_selection(
+        flags.all,
+        flags.indexes,
+        flags.indexers,
+        flags.datasources,
+        flags.skillsets,
+        flags.synonymmaps,
+        flags.aliases,
+        flags.knowledgebases,
+        flags.knowledgesources,
+        flags.agents,
+        &singular,
+        include_preview,
+        has_default_fallback,
+    );
+
+    // Apply service scope filters
+    if flags.search_only {
+        ResourceSelection {
+            selections: sel
+                .selections
+                .into_iter()
+                .filter(|(k, _)| k.domain() == ServiceDomain::Search)
+                .collect(),
+        }
+    } else if flags.foundry_only {
+        ResourceSelection {
+            selections: sel
+                .selections
+                .into_iter()
+                .filter(|(k, _)| k.domain() == ServiceDomain::Foundry)
+                .collect(),
+        }
+    } else {
+        sel
+    }
 }
 
 /// Resolve a ResourceSelection from both plural booleans and singular flags.
@@ -139,16 +171,22 @@ pub fn resolve_resource_selection(
     aliases: bool,
     knowledgebases: bool,
     knowledgesources: bool,
+    agents: bool,
     singular: &SingularFlags,
     include_preview: bool,
     has_default_fallback: bool,
 ) -> ResourceSelection {
     if all {
-        let kinds = if include_preview {
+        let mut kinds = if include_preview {
             ResourceKind::all().to_vec()
         } else {
-            ResourceKind::stable().to_vec()
+            let mut k = ResourceKind::stable().to_vec();
+            // Agent is GA (not preview), always include with --all
+            k.push(ResourceKind::Agent);
+            k
         };
+        // Deduplicate (Agent is already in all())
+        kinds.dedup();
         return ResourceSelection {
             selections: kinds.into_iter().map(|k| (k, None)).collect(),
         };
@@ -178,6 +216,7 @@ pub fn resolve_resource_selection(
             ResourceKind::KnowledgeSource,
             include_preview,
         ),
+        (singular.agent.as_ref(), ResourceKind::Agent, true),
     ];
 
     for (value, kind, allowed) in singular_pairs {
@@ -202,6 +241,7 @@ pub fn resolve_resource_selection(
             ResourceKind::KnowledgeSource,
             include_preview,
         ),
+        (agents, ResourceKind::Agent, true),
     ];
 
     for (flag, kind, allowed) in plural_pairs {
@@ -213,13 +253,19 @@ pub fn resolve_resource_selection(
         }
     }
 
-    // Default fallback if nothing specified
+    // Default fallback if nothing specified — include all configured resources
     if selections.is_empty() && has_default_fallback {
-        let kinds = if include_preview {
-            ResourceKind::all().to_vec()
+        let mut kinds: Vec<ResourceKind> = if include_preview {
+            ResourceKind::all()
+                .iter()
+                .filter(|k| k.domain() == ServiceDomain::Search)
+                .copied()
+                .collect()
         } else {
             ResourceKind::stable().to_vec()
         };
+        // Always include Foundry resources in default (pull command skips if not configured)
+        kinds.push(ResourceKind::Agent);
         return ResourceSelection {
             selections: kinds.into_iter().map(|k| (k, None)).collect(),
         };
@@ -244,6 +290,7 @@ pub fn get_volatile_fields(kind: ResourceKind) -> Vec<&'static str> {
         ResourceKind::KnowledgeSource => {
             hoist_core::resources::KnowledgeSource::volatile_fields().to_vec()
         }
+        ResourceKind::Agent => vec!["created_at", "object"],
     }
 }
 
@@ -263,6 +310,7 @@ pub fn get_read_only_fields(kind: ResourceKind) -> Vec<&'static str> {
         ResourceKind::KnowledgeSource => {
             hoist_core::resources::KnowledgeSource::read_only_fields().to_vec()
         }
+        ResourceKind::Agent => vec![],
     }
 }
 
@@ -279,6 +327,7 @@ pub fn order_by_dependencies(
         ResourceKind::KnowledgeBase,   // No dependencies
         ResourceKind::Indexer,         // Depends on data source, index, skillset
         ResourceKind::KnowledgeSource, // Depends on index, knowledge base
+        ResourceKind::Agent,           // Foundry: no cross-service dependencies
     ];
 
     let mut ordered = resources.to_vec();
@@ -286,6 +335,54 @@ pub fn order_by_dependencies(
         .sort_by_key(|(kind, _, _, _)| order.iter().position(|k| k == kind).unwrap_or(usize::MAX));
 
     ordered
+}
+
+/// Read decomposed agent files from an agent directory on disk.
+///
+/// Expects at minimum a `config.json` file. Optional files (`instructions.md`,
+/// `tools.json`, `knowledge.json`) default to empty values when absent.
+pub fn read_agent_files(agent_dir: &std::path::Path) -> Result<AgentFiles> {
+    let config_path = agent_dir.join("config.json");
+    let instructions_path = agent_dir.join("instructions.md");
+    let tools_path = agent_dir.join("tools.json");
+    let knowledge_path = agent_dir.join("knowledge.json");
+
+    let config: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        anyhow::bail!(
+            "Agent directory missing config.json: {}",
+            agent_dir.display()
+        );
+    };
+
+    let instructions = if instructions_path.exists() {
+        std::fs::read_to_string(&instructions_path)?
+    } else {
+        String::new()
+    };
+
+    let tools: serde_json::Value = if tools_path.exists() {
+        let content = std::fs::read_to_string(&tools_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!([])
+    };
+
+    let knowledge: serde_json::Value = if knowledge_path.exists() {
+        let content = std::fs::read_to_string(&knowledge_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        serde_json::json!({})
+    };
+
+    Ok(AgentFiles {
+        config,
+        instructions,
+        tools,
+        knowledge,
+    })
 }
 
 #[cfg(test)]
@@ -300,9 +397,10 @@ mod tests {
         let kinds = resolve_resource_kinds(
             true, false, false, false, false, false, false, false, false, true, false,
         );
-        assert_eq!(kinds.len(), 8);
+        assert_eq!(kinds.len(), 9);
         assert!(kinds.contains(&ResourceKind::KnowledgeBase));
         assert!(kinds.contains(&ResourceKind::KnowledgeSource));
+        assert!(kinds.contains(&ResourceKind::Agent));
     }
 
     #[test]
@@ -310,10 +408,12 @@ mod tests {
         let kinds = resolve_resource_kinds(
             true, false, false, false, false, false, false, false, false, false, false,
         );
-        assert_eq!(kinds.len(), 5);
+        // stable (5) + Agent (1) = 6
+        assert_eq!(kinds.len(), 6);
         assert!(!kinds.contains(&ResourceKind::Alias));
         assert!(!kinds.contains(&ResourceKind::KnowledgeBase));
         assert!(!kinds.contains(&ResourceKind::KnowledgeSource));
+        assert!(kinds.contains(&ResourceKind::Agent));
     }
 
     #[test]
@@ -329,7 +429,9 @@ mod tests {
         let kinds = resolve_resource_kinds(
             false, false, false, false, false, false, false, false, false, true, true,
         );
-        assert_eq!(kinds.len(), 8);
+        // Default fallback returns search resources (8) + Agent (1) = 9
+        assert_eq!(kinds.len(), 9);
+        assert!(kinds.contains(&ResourceKind::Agent));
     }
 
     #[test]
@@ -337,7 +439,12 @@ mod tests {
         let kinds = resolve_resource_kinds(
             false, false, false, false, false, false, false, false, false, false, true,
         );
-        assert_eq!(kinds, ResourceKind::stable().to_vec());
+        // stable (5) + Agent (1) = 6
+        assert_eq!(kinds.len(), 6);
+        assert!(kinds.contains(&ResourceKind::Agent));
+        for k in ResourceKind::stable() {
+            assert!(kinds.contains(k));
+        }
     }
 
     #[test]
@@ -373,21 +480,31 @@ mod tests {
         let kinds = resolve_resource_kinds(
             false, false, false, false, false, false, false, true, true, false, true,
         );
-        assert_eq!(kinds, ResourceKind::stable().to_vec());
+        // stable (5) + Agent (1) = 6
+        assert_eq!(kinds.len(), 6);
+        assert!(kinds.contains(&ResourceKind::Agent));
     }
 
     // === get_volatile_fields tests ===
 
     #[test]
-    fn test_volatile_fields_always_include_etag() {
-        for kind in ResourceKind::all() {
-            let fields = get_volatile_fields(*kind);
+    fn test_volatile_fields_search_resources_include_etag() {
+        for kind in ResourceKind::search_kinds() {
+            let fields = get_volatile_fields(kind);
             assert!(
                 fields.contains(&"@odata.etag"),
                 "{:?} missing @odata.etag",
                 kind
             );
         }
+    }
+
+    #[test]
+    fn test_volatile_fields_agent_has_created_at() {
+        let fields = get_volatile_fields(ResourceKind::Agent);
+        assert!(fields.contains(&"created_at"));
+        assert!(fields.contains(&"object"));
+        assert!(!fields.contains(&"@odata.etag"));
     }
 
     #[test]
@@ -548,7 +665,8 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
         assert_eq!(sel.kinds(), vec![ResourceKind::KnowledgeBase]);
@@ -560,6 +678,7 @@ mod tests {
         let sel = resolve_resource_selection(
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -582,7 +701,8 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, true, false, false, false, false, false, false, false, &singular, true, false,
+            false, true, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
         assert_eq!(sel.kinds().len(), 2);
@@ -596,10 +716,11 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            true, false, false, false, false, false, false, false, false, &singular, true, false,
+            true, false, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
-        assert_eq!(sel.kinds().len(), 8);
+        assert_eq!(sel.kinds().len(), 9);
         // --all clears all name filters
         assert_eq!(sel.name_filter(ResourceKind::KnowledgeBase), None);
     }
@@ -611,7 +732,8 @@ mod tests {
         singular.indexer = Some("my-ixer".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
         assert_eq!(sel.name_filter(ResourceKind::Index), Some("my-idx"));
@@ -626,7 +748,8 @@ mod tests {
 
         // Both --index specific-idx and --indexes are set
         let sel = resolve_resource_selection(
-            false, true, false, false, false, false, false, false, false, &singular, true, false,
+            false, true, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
         // Singular takes precedence — only one entry for Index
@@ -640,7 +763,8 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, false, false,
+            false, false, false, false, false, false, false, false, false, false, &singular, false,
+            false,
         );
 
         assert!(sel.is_empty());
@@ -655,7 +779,8 @@ mod tests {
         singular.knowledgebase = Some("my-kb".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, false, false,
+            false, false, false, false, false, false, false, false, false, false, &singular, false,
+            false,
         );
 
         assert_eq!(sel.kinds(), vec![ResourceKind::Index]);
@@ -666,6 +791,7 @@ mod tests {
     #[test]
     fn test_selection_no_flags_no_singular_no_fallback() {
         let sel = resolve_resource_selection(
+            false,
             false,
             false,
             false,
@@ -694,12 +820,13 @@ mod tests {
             false,
             false,
             false,
+            false,
             &no_singular(),
             true,
             true,
         );
-        // Falls back to all kinds (with preview)
-        assert_eq!(sel.kinds().len(), 8);
+        // Falls back to search kinds (8) + Agent (1) = 9
+        assert_eq!(sel.kinds().len(), 9);
         // All entries have no name filter
         for kind in sel.kinds() {
             assert_eq!(sel.name_filter(kind), None);
@@ -711,6 +838,7 @@ mod tests {
         let sel = resolve_resource_selection(
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -733,7 +861,8 @@ mod tests {
         singular.indexer = Some("my-ixer".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, true, false,
+            false, false, false, false, false, false, false, false, false, false, &singular, true,
+            false,
         );
 
         assert_eq!(sel.kinds().len(), 3);
@@ -751,11 +880,242 @@ mod tests {
         singular.index = Some("my-idx".to_string());
 
         let sel = resolve_resource_selection(
-            false, false, false, false, false, false, false, false, false, &singular, true,
+            false, false, false, false, false, false, false, false, false, false, &singular, true,
             true, // has_default_fallback=true
         );
 
         // Only Index, not all 8
         assert_eq!(sel.kinds(), vec![ResourceKind::Index]);
+    }
+
+    // === Foundry agent selection tests ===
+
+    #[test]
+    fn test_selection_agents_plural_flag() {
+        let sel = resolve_resource_selection(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &no_singular(),
+            true,
+            false,
+        );
+        assert_eq!(sel.kinds(), vec![ResourceKind::Agent]);
+    }
+
+    #[test]
+    fn test_selection_agent_singular_flag() {
+        let mut singular = no_singular();
+        singular.agent = Some("my-agent".to_string());
+
+        let sel = resolve_resource_selection(
+            false, false, false, false, false, false, false, false, false, false, &singular, true,
+            false,
+        );
+
+        assert_eq!(sel.kinds(), vec![ResourceKind::Agent]);
+        assert_eq!(sel.name_filter(ResourceKind::Agent), Some("my-agent"));
+    }
+
+    #[test]
+    fn test_selection_agents_with_search() {
+        let sel = resolve_resource_selection(
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &no_singular(),
+            true,
+            false,
+        );
+        assert_eq!(sel.kinds().len(), 2);
+        assert!(sel.kinds().contains(&ResourceKind::Index));
+        assert!(sel.kinds().contains(&ResourceKind::Agent));
+    }
+
+    #[test]
+    fn test_selection_default_fallback_includes_foundry() {
+        // Default fallback now includes Agent
+        let sel = resolve_resource_selection(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &no_singular(),
+            false,
+            true,
+        );
+        assert!(sel.kinds().contains(&ResourceKind::Agent));
+        // stable (5) + Agent (1) = 6
+        assert_eq!(sel.kinds().len(), 6);
+    }
+
+    // === resolve_resource_selection_from_flags tests ===
+
+    #[test]
+    fn test_flags_search_only_filters() {
+        let flags = ResourceTypeFlags {
+            all: true,
+            search_only: true,
+            ..Default::default()
+        };
+        let sel = resolve_resource_selection_from_flags(&flags, true, false);
+        for (kind, _) in &sel.selections {
+            assert_eq!(kind.domain(), ServiceDomain::Search);
+        }
+        assert!(!sel.kinds().contains(&ResourceKind::Agent));
+    }
+
+    #[test]
+    fn test_flags_foundry_only_filters() {
+        let flags = ResourceTypeFlags {
+            all: true,
+            foundry_only: true,
+            ..Default::default()
+        };
+        let sel = resolve_resource_selection_from_flags(&flags, true, false);
+        for (kind, _) in &sel.selections {
+            assert_eq!(kind.domain(), ServiceDomain::Foundry);
+        }
+        assert_eq!(sel.kinds(), vec![ResourceKind::Agent]);
+    }
+
+    #[test]
+    fn test_flags_singular_extraction() {
+        let flags = ResourceTypeFlags {
+            index: Some("my-idx".to_string()),
+            agent: Some("my-agent".to_string()),
+            ..Default::default()
+        };
+        let singular = flags.singular_flags();
+        assert_eq!(singular.index, Some("my-idx".to_string()));
+        assert_eq!(singular.agent, Some("my-agent".to_string()));
+        assert_eq!(singular.indexer, None);
+    }
+
+    // === read_agent_files tests ===
+
+    #[test]
+    fn test_read_agent_files_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("instructions.md"),
+            "You are a helpful assistant.",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("tools.json"),
+            r#"[{"type": "code_interpreter"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("knowledge.json"),
+            r#"{"file_search": {"vector_store_ids": ["vs_1"]}}"#,
+        )
+        .unwrap();
+
+        let files = read_agent_files(&agent_dir).unwrap();
+        assert_eq!(files.config["name"], "my-agent");
+        assert_eq!(files.instructions, "You are a helpful assistant.");
+        assert_eq!(files.tools.as_array().unwrap().len(), 1);
+        assert!(files.knowledge.get("file_search").is_some());
+    }
+
+    #[test]
+    fn test_read_agent_files_missing_optional_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("minimal-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_2", "name": "minimal", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+
+        let files = read_agent_files(&agent_dir).unwrap();
+        assert_eq!(files.config["name"], "minimal");
+        assert_eq!(files.instructions, "");
+        assert_eq!(files.tools, json!([]));
+        assert_eq!(files.knowledge, json!({}));
+    }
+
+    #[test]
+    fn test_read_agent_files_missing_config_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("bad-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let result = read_agent_files(&agent_dir);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing config.json"));
+    }
+
+    #[test]
+    fn test_read_agent_files_compose_roundtrip() {
+        use hoist_core::resources::agent::compose_agent;
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("roundtrip");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_rt", "name": "roundtrip", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(agent_dir.join("instructions.md"), "Be concise.").unwrap();
+        std::fs::write(agent_dir.join("tools.json"), r#"[{"type": "file_search"}]"#).unwrap();
+        std::fs::write(agent_dir.join("knowledge.json"), r#"{}"#).unwrap();
+
+        let files = read_agent_files(&agent_dir).unwrap();
+        let composed = compose_agent(&files);
+
+        assert_eq!(composed["id"], "asst_rt");
+        assert_eq!(composed["name"], "roundtrip");
+        assert_eq!(composed["instructions"], "Be concise.");
+        assert_eq!(composed["tools"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_read_agent_files_invalid_json_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("bad-json");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(agent_dir.join("config.json"), "not valid json").unwrap();
+
+        let result = read_agent_files(&agent_dir);
+        assert!(result.is_err());
     }
 }

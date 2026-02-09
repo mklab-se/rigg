@@ -28,11 +28,28 @@ pub trait AuthProvider: Send + Sync {
 }
 
 /// Azure CLI authentication provider
-pub struct AzCliAuth;
+pub struct AzCliAuth {
+    resource_scope: &'static str,
+}
 
 impl AzCliAuth {
+    /// Create an auth provider for Azure Search
+    pub fn for_search() -> Self {
+        Self {
+            resource_scope: "https://search.azure.com",
+        }
+    }
+
+    /// Create an auth provider for Microsoft Foundry
+    pub fn for_foundry() -> Self {
+        Self {
+            resource_scope: "https://ai.azure.com",
+        }
+    }
+
+    /// Create a new auth provider (defaults to Search scope for backward compatibility)
     pub fn new() -> Self {
-        Self
+        Self::for_search()
     }
 
     /// Check if Azure CLI is available and logged in
@@ -124,7 +141,7 @@ impl AuthProvider for AzCliAuth {
                 "account",
                 "get-access-token",
                 "--resource",
-                "https://search.azure.com",
+                self.resource_scope,
                 "--query",
                 "accessToken",
                 "--output",
@@ -160,11 +177,17 @@ pub struct EnvAuth {
     client_id: String,
     client_secret: String,
     tenant_id: String,
+    resource_scope: &'static str,
 }
 
 impl EnvAuth {
-    /// Create from environment variables
+    /// Create from environment variables (defaults to Search scope)
     pub fn from_env() -> Result<Self, AuthError> {
+        Self::from_env_for_scope("https://search.azure.com")
+    }
+
+    /// Create from environment variables for a specific resource scope
+    pub fn from_env_for_scope(scope: &'static str) -> Result<Self, AuthError> {
         let client_id = std::env::var("AZURE_CLIENT_ID")
             .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_ID".to_string()))?;
         let client_secret = std::env::var("AZURE_CLIENT_SECRET")
@@ -176,6 +199,7 @@ impl EnvAuth {
             client_id,
             client_secret,
             tenant_id,
+            resource_scope: scope,
         })
     }
 
@@ -195,7 +219,7 @@ impl AuthProvider for EnvAuth {
                 "account",
                 "get-access-token",
                 "--resource",
-                "https://search.azure.com",
+                self.resource_scope,
                 "--query",
                 "accessToken",
                 "--output",
@@ -232,16 +256,34 @@ pub struct AuthStatus {
     pub subscription_id: Option<String>,
 }
 
-/// Get the best available authentication provider
+/// Get the best available authentication provider for Search (backward compat)
 pub fn get_auth_provider() -> Result<Box<dyn AuthProvider>, AuthError> {
+    get_auth_provider_for_scope("https://search.azure.com")
+}
+
+/// Get the best available authentication provider for a specific service domain
+pub fn get_auth_provider_for(
+    domain: hoist_core::ServiceDomain,
+) -> Result<Box<dyn AuthProvider>, AuthError> {
+    let scope = match domain {
+        hoist_core::ServiceDomain::Search => "https://search.azure.com",
+        hoist_core::ServiceDomain::Foundry => "https://ai.azure.com",
+    };
+    get_auth_provider_for_scope(scope)
+}
+
+/// Get the best available authentication provider for a specific resource scope
+fn get_auth_provider_for_scope(scope: &'static str) -> Result<Box<dyn AuthProvider>, AuthError> {
     // First try environment variables
     if EnvAuth::is_configured() {
-        return Ok(Box::new(EnvAuth::from_env()?));
+        return Ok(Box::new(EnvAuth::from_env_for_scope(scope)?));
     }
 
     // Fall back to Azure CLI
     AzCliAuth::check_status()?;
-    Ok(Box::new(AzCliAuth::new()))
+    Ok(Box::new(AzCliAuth {
+        resource_scope: scope,
+    }))
 }
 
 #[cfg(test)]
@@ -373,6 +415,48 @@ mod tests {
     fn test_az_cli_auth_method_name() {
         let auth = AzCliAuth::new();
         assert_eq!(auth.method_name(), "Azure CLI");
+    }
+
+    #[test]
+    fn test_az_cli_auth_search_scope() {
+        let auth = AzCliAuth::for_search();
+        assert_eq!(auth.resource_scope, "https://search.azure.com");
+    }
+
+    #[test]
+    fn test_az_cli_auth_foundry_scope() {
+        let auth = AzCliAuth::for_foundry();
+        assert_eq!(auth.resource_scope, "https://ai.azure.com");
+    }
+
+    #[test]
+    fn test_az_cli_auth_new_defaults_to_search() {
+        let auth = AzCliAuth::new();
+        assert_eq!(auth.resource_scope, "https://search.azure.com");
+    }
+
+    #[test]
+    fn test_env_auth_from_env_scope_foundry() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        set_azure_env_vars();
+
+        let result = EnvAuth::from_env_for_scope("https://ai.azure.com");
+        assert!(result.is_ok());
+        let auth = result.unwrap();
+        assert_eq!(auth.resource_scope, "https://ai.azure.com");
+
+        clear_azure_env_vars();
+    }
+
+    #[test]
+    fn test_env_auth_from_env_default_scope_is_search() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        set_azure_env_vars();
+
+        let auth = EnvAuth::from_env().unwrap();
+        assert_eq!(auth.resource_scope, "https://search.azure.com");
+
+        clear_azure_env_vars();
     }
 
     #[test]

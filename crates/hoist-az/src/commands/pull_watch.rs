@@ -5,22 +5,13 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::time::sleep;
 
-use crate::commands::common::{resolve_resource_selection, SingularFlags};
+use crate::cli::ResourceTypeFlags;
+use crate::commands::common::resolve_resource_selection_from_flags;
 use crate::commands::load_config;
 use crate::commands::pull::execute_pull;
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    all: bool,
-    indexes: bool,
-    indexers: bool,
-    datasources: bool,
-    skillsets: bool,
-    synonymmaps: bool,
-    aliases: bool,
-    knowledgebases: bool,
-    knowledgesources: bool,
-    singular: &SingularFlags,
+    flags: &ResourceTypeFlags,
     filter: Option<String>,
     force: bool,
     source: Option<String>,
@@ -28,27 +19,18 @@ pub async fn run(
 ) -> Result<()> {
     let (project_root, config) = load_config()?;
 
-    let selection = resolve_resource_selection(
-        all,
-        indexes,
-        indexers,
-        datasources,
-        skillsets,
-        synonymmaps,
-        aliases,
-        knowledgebases,
-        knowledgesources,
-        singular,
-        config.sync.include_preview,
-        true,
-    );
+    let selection = resolve_resource_selection_from_flags(flags, config.sync.include_preview, true);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
         return Ok(());
     }
 
-    let server_name = source.as_deref().unwrap_or(&config.service.name);
+    let default_name = config
+        .primary_search_service()
+        .map(|s| s.name)
+        .unwrap_or_default();
+    let server_name = source.as_deref().unwrap_or(&default_name);
 
     println!("Watching for changes on {}...", server_name);
     println!("  Interval: {}s", interval);

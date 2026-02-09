@@ -29,9 +29,17 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
         ResourceKind::stable()
     };
 
+    let primary_search_name = config
+        .primary_search_service()
+        .map(|s| s.name)
+        .unwrap_or_default();
+
     for kind in kinds {
+        if kind.domain() == hoist_core::service::ServiceDomain::Foundry {
+            continue; // Agent validation is handled below
+        }
         let resource_dir = config
-            .resource_dir(&project_root)
+            .search_service_dir(&project_root, &primary_search_name)
             .join(kind.directory_name());
         if !resource_dir.exists() {
             continue;
@@ -89,6 +97,38 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
         }
 
         resources.insert(*kind, kind_resources);
+    }
+
+    // Validate Foundry agents
+    if config.has_foundry() {
+        let mut agent_resources = Vec::new();
+        for foundry_config in config.foundry_services() {
+            let agents_dir = config
+                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+                .join("agents");
+            if !agents_dir.exists() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&agents_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+
+                if let Some(resource) = validate_agent_dir(&path, &name, &mut errors, &mut warnings)
+                {
+                    agent_resources.push(resource);
+                }
+            }
+        }
+        if !agent_resources.is_empty() {
+            resources.insert(ResourceKind::Agent, agent_resources);
+        }
     }
 
     // Run lint checks
@@ -157,10 +197,82 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
                 );
                 println!("      Set sync.include_preview = true to include them.");
             }
+
+            if config.has_foundry() {
+                let agent_count = resources
+                    .get(&ResourceKind::Agent)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                if agent_count > 0 {
+                    println!("      Validated {} Foundry agent(s).", agent_count);
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+/// Validate a single agent directory. Returns the parsed config value on success,
+/// pushing any issues into the errors/warnings vecs.
+fn validate_agent_dir(
+    agent_dir: &std::path::Path,
+    name: &str,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> Option<(String, serde_json::Value)> {
+    let config_path = agent_dir.join("config.json");
+    if !config_path.exists() {
+        errors.push(format!("agents/{}: missing config.json", name));
+        return None;
+    }
+
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            errors.push(format!("agents/{}/config.json: read error - {}", name, e));
+            return None;
+        }
+    };
+
+    match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(value) => {
+            // Validate name matches directory
+            if let Some(json_name) = value.get("name").and_then(|n| n.as_str()) {
+                if json_name != name {
+                    errors.push(format!(
+                        "agents/{}/config.json: name field '{}' doesn't match directory",
+                        name, json_name
+                    ));
+                }
+            } else {
+                errors.push(format!(
+                    "agents/{}/config.json: missing required 'name' field",
+                    name
+                ));
+            }
+
+            // Validate model field exists
+            if value.get("model").and_then(|m| m.as_str()).is_none() {
+                warnings.push(format!(
+                    "agents/{}/config.json: missing 'model' field",
+                    name
+                ));
+            }
+
+            // Validate instructions.md exists (warning, not error)
+            let instructions_path = agent_dir.join("instructions.md");
+            if !instructions_path.exists() {
+                warnings.push(format!("agents/{}: missing instructions.md", name));
+            }
+
+            Some((name.to_string(), value))
+        }
+        Err(e) => {
+            errors.push(format!("agents/{}/config.json: invalid JSON - {}", name, e));
+            None
+        }
+    }
 }
 
 /// Field count threshold for the "large index" lint warning.
@@ -950,5 +1062,179 @@ mod tests {
         let mut warnings = Vec::new();
         lint_resources(&resources, &mut warnings);
         assert!(warnings.is_empty());
+    }
+
+    // === Foundry agent validation tests ===
+
+    #[test]
+    fn test_validate_agent_dir_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("instructions.md"),
+            "You are a helpful assistant.",
+        )
+        .unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert!(result.is_some());
+        assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings
+        );
+        assert_eq!(result.unwrap().0, "my-agent");
+    }
+
+    #[test]
+    fn test_validate_agent_dir_missing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("bad-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let result = validate_agent_dir(&agent_dir, "bad-agent", &mut errors, &mut warnings);
+
+        assert!(result.is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("missing config.json"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("bad-json");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("config.json"), "not valid json").unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let result = validate_agent_dir(&agent_dir, "bad-json", &mut errors, &mut warnings);
+
+        assert!(result.is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("invalid JSON"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_name_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "wrong-name", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert!(result.is_some());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("doesn't match directory"));
+        assert!(errors[0].contains("wrong-name"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_missing_name_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert!(result.is_some());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("missing required 'name' field"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_missing_model_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "my-agent"}"#,
+        )
+        .unwrap();
+        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("missing 'model' field"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_missing_instructions_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        // No instructions.md file
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert!(errors.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("missing instructions.md"));
+    }
+
+    #[test]
+    fn test_validate_agent_dir_multiple_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        // Name mismatch + no model + no instructions
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "wrong-name"}"#,
+        )
+        .unwrap();
+
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+
+        assert_eq!(errors.len(), 1); // name mismatch
+        assert_eq!(warnings.len(), 2); // missing model + missing instructions
     }
 }

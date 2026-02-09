@@ -76,12 +76,18 @@ struct AliasSummary {
 #[derive(Debug, Clone)]
 struct KnowledgeBaseSummary {
     name: String,
+    description: Option<String>,
+    retrieval_instructions: Option<String>,
+    output_mode: Option<String>,
+    knowledge_sources: Vec<String>,
 }
 
 /// Summary of a knowledge source resource
 #[derive(Debug, Clone)]
 struct KnowledgeSourceSummary {
     name: String,
+    description: Option<String>,
+    kind: Option<String>,
     index_name: Option<String>,
     knowledge_base: Option<String>,
 }
@@ -94,10 +100,29 @@ struct Dependency {
     kind: String,
 }
 
+/// Summary of a tool used by an agent
+#[derive(Debug, Clone)]
+struct AgentToolSummary {
+    tool_type: String,
+    knowledge_base_name: Option<String>,
+}
+
+/// Summary of a Foundry agent resource
+#[derive(Debug, Clone)]
+struct AgentSummary {
+    name: String,
+    model: String,
+    tool_count: usize,
+    tools: Vec<AgentToolSummary>,
+    instruction_preview: String,
+}
+
 /// All project resource summaries collected together
 #[derive(Debug, Default)]
 struct ProjectSummary {
-    service_name: String,
+    project_name: String,
+    search_services: Vec<String>,
+    foundry_services: Vec<String>,
     indexes: Vec<IndexSummary>,
     data_sources: Vec<DataSourceSummary>,
     indexers: Vec<IndexerSummary>,
@@ -106,6 +131,7 @@ struct ProjectSummary {
     aliases: Vec<AliasSummary>,
     knowledge_bases: Vec<KnowledgeBaseSummary>,
     knowledge_sources: Vec<KnowledgeSourceSummary>,
+    agents: Vec<AgentSummary>,
     dependencies: Vec<Dependency>,
 }
 
@@ -113,7 +139,6 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     let (project_root, config) = load_config()?;
 
     let include_preview = config.sync.include_preview;
-    let resource_base = config.resource_dir(&project_root);
 
     let kinds: Vec<ResourceKind> = if include_preview {
         ResourceKind::all().to_vec()
@@ -122,63 +147,131 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     };
 
     let mut summary = ProjectSummary {
-        service_name: config.service.name.clone(),
+        project_name: config
+            .project
+            .name
+            .clone()
+            .unwrap_or_else(|| "hoist project".to_string()),
+        search_services: config
+            .search_services()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect(),
+        foundry_services: config
+            .foundry_services()
+            .iter()
+            .map(|f| format!("{}/{}", f.name, f.project))
+            .collect(),
         ..Default::default()
     };
 
-    for kind in &kinds {
-        let resource_dir = resource_base.join(kind.directory_name());
-        if !resource_dir.exists() {
-            continue;
+    // Scan search resources from each configured search service
+    for search_svc in config.search_services() {
+        let search_base = config.search_service_dir(&project_root, &search_svc.name);
+
+        for kind in &kinds {
+            if kind.domain() != hoist_core::service::ServiceDomain::Search {
+                continue;
+            }
+            let resource_dir = search_base.join(kind.directory_name());
+            if !resource_dir.exists() {
+                continue;
+            }
+
+            let values = read_json_files(&resource_dir)?;
+
+            match kind {
+                ResourceKind::Index => {
+                    for v in &values {
+                        summary.indexes.push(parse_index(v));
+                    }
+                }
+                ResourceKind::DataSource => {
+                    for v in &values {
+                        summary.data_sources.push(parse_data_source(v));
+                    }
+                }
+                ResourceKind::Indexer => {
+                    for v in &values {
+                        let indexer = parse_indexer(v);
+                        add_indexer_dependencies(&indexer, &mut summary.dependencies);
+                        summary.indexers.push(indexer);
+                    }
+                }
+                ResourceKind::Skillset => {
+                    for v in &values {
+                        summary.skillsets.push(parse_skillset(v));
+                    }
+                }
+                ResourceKind::SynonymMap => {
+                    for v in &values {
+                        summary.synonym_maps.push(parse_synonym_map(v));
+                    }
+                }
+                ResourceKind::Alias => {
+                    for v in &values {
+                        summary.aliases.push(parse_alias(v));
+                    }
+                }
+                ResourceKind::KnowledgeBase => {
+                    for v in &values {
+                        summary.knowledge_bases.push(parse_knowledge_base(v));
+                    }
+                }
+                ResourceKind::KnowledgeSource => {
+                    for v in &values {
+                        let ks = parse_knowledge_source(v);
+                        add_knowledge_source_dependencies(&ks, &mut summary.dependencies);
+                        summary.knowledge_sources.push(ks);
+                    }
+                }
+                ResourceKind::Agent => {}
+            }
         }
+    }
 
-        let values = read_json_files(&resource_dir)?;
+    // Scan Foundry agents from decomposed directories
+    if config.has_foundry() {
+        for foundry_config in config.foundry_services() {
+            let agents_dir = config
+                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+                .join("agents");
+            if agents_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(agent) = parse_agent_dir(&path) {
+                                summary.agents.push(agent);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-        match kind {
-            ResourceKind::Index => {
-                for v in &values {
-                    summary.indexes.push(parse_index(v));
-                }
+    // Build agent → KB dependencies
+    for agent in &summary.agents {
+        for tool in &agent.tools {
+            if let Some(ref kb_name) = tool.knowledge_base_name {
+                summary.dependencies.push(Dependency {
+                    from: agent.name.clone(),
+                    to: kb_name.clone(),
+                    kind: "Knowledge Base".to_string(),
+                });
             }
-            ResourceKind::DataSource => {
-                for v in &values {
-                    summary.data_sources.push(parse_data_source(v));
-                }
-            }
-            ResourceKind::Indexer => {
-                for v in &values {
-                    let indexer = parse_indexer(v);
-                    add_indexer_dependencies(&indexer, &mut summary.dependencies);
-                    summary.indexers.push(indexer);
-                }
-            }
-            ResourceKind::Skillset => {
-                for v in &values {
-                    summary.skillsets.push(parse_skillset(v));
-                }
-            }
-            ResourceKind::SynonymMap => {
-                for v in &values {
-                    summary.synonym_maps.push(parse_synonym_map(v));
-                }
-            }
-            ResourceKind::Alias => {
-                for v in &values {
-                    summary.aliases.push(parse_alias(v));
-                }
-            }
-            ResourceKind::KnowledgeBase => {
-                for v in &values {
-                    summary.knowledge_bases.push(parse_knowledge_base(v));
-                }
-            }
-            ResourceKind::KnowledgeSource => {
-                for v in &values {
-                    let ks = parse_knowledge_source(v);
-                    add_knowledge_source_dependencies(&ks, &mut summary.dependencies);
-                    summary.knowledge_sources.push(ks);
-                }
-            }
+        }
+    }
+
+    // Build KB → KS dependencies from knowledge base data
+    for kb in &summary.knowledge_bases {
+        for ks_name in &kb.knowledge_sources {
+            summary.dependencies.push(Dependency {
+                from: kb.name.clone(),
+                to: ks_name.clone(),
+                kind: "Knowledge Source".to_string(),
+            });
         }
     }
 
@@ -193,6 +286,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     summary
         .knowledge_sources
         .sort_by(|a, b| a.name.cmp(&b.name));
+    summary.agents.sort_by(|a, b| a.name.cmp(&b.name));
     summary.dependencies.sort_by(|a, b| {
         a.from
             .cmp(&b.from)
@@ -413,15 +507,67 @@ fn parse_alias(v: &Value) -> AliasSummary {
 
 fn parse_knowledge_base(v: &Value) -> KnowledgeBaseSummary {
     let name = get_name(v);
-    KnowledgeBaseSummary { name }
+
+    let description = v
+        .get("description")
+        .and_then(|d| d.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let retrieval_instructions = v
+        .get("retrievalInstructions")
+        .and_then(|r| r.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let output_mode = v
+        .get("outputMode")
+        .and_then(|o| o.as_str())
+        .map(String::from);
+
+    let knowledge_sources = v
+        .get("knowledgeSources")
+        .and_then(|ks| ks.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|ks| ks.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    KnowledgeBaseSummary {
+        name,
+        description,
+        retrieval_instructions,
+        output_mode,
+        knowledge_sources,
+    }
 }
 
 fn parse_knowledge_source(v: &Value) -> KnowledgeSourceSummary {
     let name = get_name(v);
+
+    let description = v
+        .get("description")
+        .and_then(|d| d.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let kind = v.get("kind").and_then(|k| k.as_str()).map(String::from);
+
+    // Try top-level indexName first, then fall back to createdResources.index
     let index_name = v
         .get("indexName")
         .and_then(|n| n.as_str())
-        .map(|s| s.to_string());
+        .map(String::from)
+        .or_else(|| {
+            v.get("azureBlobParameters")
+                .and_then(|b| b.get("createdResources"))
+                .and_then(|cr| cr.get("index"))
+                .and_then(|i| i.as_str())
+                .map(String::from)
+        });
+
     let knowledge_base = v
         .get("knowledgeBaseName")
         .and_then(|n| n.as_str())
@@ -429,9 +575,105 @@ fn parse_knowledge_source(v: &Value) -> KnowledgeSourceSummary {
 
     KnowledgeSourceSummary {
         name,
+        description,
+        kind,
         index_name,
         knowledge_base,
     }
+}
+
+fn parse_agent_dir(agent_dir: &Path) -> Option<AgentSummary> {
+    let name = agent_dir.file_name().and_then(|n| n.to_str())?.to_string();
+
+    let config_path = agent_dir.join("config.json");
+    let model = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+            .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let tools_path = agent_dir.join("tools.json");
+    let (tool_count, tools) = if tools_path.exists() {
+        std::fs::read_to_string(&tools_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<Value>(&c).ok())
+            .and_then(|v| {
+                v.as_array().map(|arr| {
+                    let tools: Vec<AgentToolSummary> = arr
+                        .iter()
+                        .map(|tool| {
+                            let tool_type = tool
+                                .get("type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let kb_name = if tool_type == "mcp" {
+                                extract_kb_from_mcp_url(
+                                    tool.get("server_url").and_then(|u| u.as_str()),
+                                )
+                            } else {
+                                None
+                            };
+                            AgentToolSummary {
+                                tool_type,
+                                knowledge_base_name: kb_name,
+                            }
+                        })
+                        .collect();
+                    (tools.len(), tools)
+                })
+            })
+            .unwrap_or((0, Vec::new()))
+    } else {
+        (0, Vec::new())
+    };
+
+    let instructions_path = agent_dir.join("instructions.md");
+    let instruction_preview = if instructions_path.exists() {
+        std::fs::read_to_string(&instructions_path)
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    Some(AgentSummary {
+        name,
+        model,
+        tool_count,
+        tools,
+        instruction_preview,
+    })
+}
+
+/// Print multi-line text with a consistent indent prefix on each line.
+/// Blank lines are preserved but printed as just the prefix.
+fn print_indented(text: &str, prefix: &str) {
+    for line in text.lines() {
+        if line.is_empty() {
+            println!("{}", prefix.trim_end());
+        } else {
+            println!("{}{}", prefix, line);
+        }
+    }
+}
+
+/// Extract knowledge base name from an MCP server_url.
+/// URL format: `https://{service}.search.windows.net/knowledgebases/{kb-name}/mcp?...`
+fn extract_kb_from_mcp_url(url: Option<&str>) -> Option<String> {
+    let url = url?;
+    let marker = "/knowledgebases/";
+    let kb_start = url.find(marker)? + marker.len();
+    let rest = &url[kb_start..];
+    let kb_end = rest.find('/')?;
+    Some(rest[..kb_end].to_string())
 }
 
 fn add_knowledge_source_dependencies(ks: &KnowledgeSourceSummary, deps: &mut Vec<Dependency>) {
@@ -456,9 +698,202 @@ fn add_knowledge_source_dependencies(ks: &KnowledgeSourceSummary, deps: &mut Vec
 // ---------------------------------------------------------------------------
 
 fn print_text(summary: &ProjectSummary) {
-    println!("Service Configuration: {}", summary.service_name);
-    println!("{}", "=".repeat(23 + summary.service_name.len()));
+    println!("{}", summary.project_name);
+    println!("{}", "=".repeat(summary.project_name.len()));
     println!();
+
+    if !summary.search_services.is_empty() || !summary.foundry_services.is_empty() {
+        println!("Services:");
+        for svc in &summary.search_services {
+            println!("  Azure AI Search: {}", svc);
+        }
+        for svc in &summary.foundry_services {
+            println!("  Microsoft Foundry: {}", svc);
+        }
+        println!();
+    }
+
+    // ── Foundry Agents ─────────────────────────────────────────────
+    if !summary.agents.is_empty() {
+        println!("Foundry Agents ({}):", summary.agents.len());
+        println!();
+        for agent in &summary.agents {
+            let model_part = if agent.model.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", agent.model)
+            };
+            println!("  {}{}", agent.name, model_part);
+
+            // Tools summary
+            if !agent.tools.is_empty() {
+                let tool_labels: Vec<String> = agent
+                    .tools
+                    .iter()
+                    .map(|t| match &t.knowledge_base_name {
+                        Some(kb) => format!("{} -> {}", t.tool_type, kb),
+                        None => t.tool_type.clone(),
+                    })
+                    .collect();
+                println!("    Tools: {}", tool_labels.join(", "));
+            }
+
+            if !agent.instruction_preview.is_empty() {
+                println!("    Instructions: {}", agent.instruction_preview);
+            }
+            println!();
+        }
+
+        // ── Agentic RAG Flows ──────────────────────────────────────
+        // Build lookup maps for cross-referencing
+        let kb_map: std::collections::HashMap<&str, &KnowledgeBaseSummary> = summary
+            .knowledge_bases
+            .iter()
+            .map(|kb| (kb.name.as_str(), kb))
+            .collect();
+        let ks_map: std::collections::HashMap<&str, &KnowledgeSourceSummary> = summary
+            .knowledge_sources
+            .iter()
+            .map(|ks| (ks.name.as_str(), ks))
+            .collect();
+        let idx_map: std::collections::HashMap<&str, &IndexSummary> = summary
+            .indexes
+            .iter()
+            .map(|idx| (idx.name.as_str(), idx))
+            .collect();
+
+        // Collect agents that have KB connections
+        let agents_with_kbs: Vec<&AgentSummary> = summary
+            .agents
+            .iter()
+            .filter(|a| a.tools.iter().any(|t| t.knowledge_base_name.is_some()))
+            .collect();
+
+        if !agents_with_kbs.is_empty() {
+            println!("Agentic RAG Flows:");
+            println!();
+
+            // Track which KBs we've already fully described
+            let mut described_kbs: std::collections::HashSet<&str> =
+                std::collections::HashSet::new();
+
+            for agent in &agents_with_kbs {
+                let kb_names: Vec<&str> = agent
+                    .tools
+                    .iter()
+                    .filter_map(|t| t.knowledge_base_name.as_deref())
+                    .collect();
+
+                println!("  {}", agent.name);
+
+                for (i, kb_name) in kb_names.iter().enumerate() {
+                    let is_last_kb = i == kb_names.len() - 1;
+                    let branch = if is_last_kb { "└─" } else { "├─" };
+                    let cont = if is_last_kb { "   " } else { "│  " };
+
+                    if described_kbs.contains(kb_name) {
+                        println!("  {} Knowledge Base: {} (described above)", branch, kb_name);
+                        continue;
+                    }
+                    described_kbs.insert(kb_name);
+
+                    if let Some(kb) = kb_map.get(kb_name) {
+                        println!("  {} Knowledge Base: {}", branch, kb.name);
+                        let kb_indent = format!("  {}   ", cont);
+                        if let Some(ref desc) = kb.description {
+                            println!("  {}   Description:", cont);
+                            print_indented(desc, &kb_indent);
+                        }
+                        if let Some(ref mode) = kb.output_mode {
+                            println!("  {}   Output: {}", cont, mode);
+                        }
+                        if let Some(ref retrieval) = kb.retrieval_instructions {
+                            println!("  {}   Retrieval instructions:", cont);
+                            print_indented(retrieval, &kb_indent);
+                        }
+
+                        // Knowledge sources under this KB
+                        for (j, ks_name) in kb.knowledge_sources.iter().enumerate() {
+                            let is_last_ks = j == kb.knowledge_sources.len() - 1;
+                            let ks_branch = if is_last_ks { "└─" } else { "├─" };
+                            let ks_cont = if is_last_ks { "   " } else { "│  " };
+
+                            if let Some(ks) = ks_map.get(ks_name.as_str()) {
+                                let kind_part = ks
+                                    .kind
+                                    .as_ref()
+                                    .map(|k| format!(" ({})", k))
+                                    .unwrap_or_default();
+                                println!(
+                                    "  {}   {} Knowledge Source: {}{}",
+                                    cont, ks_branch, ks.name, kind_part
+                                );
+                                if let Some(ref desc) = ks.description {
+                                    let ks_indent = format!("  {}   {}   ", cont, ks_cont);
+                                    print_indented(desc, &ks_indent);
+                                }
+
+                                // Index under this knowledge source
+                                if let Some(ref idx_name) = ks.index_name {
+                                    if let Some(idx) = idx_map.get(idx_name.as_str()) {
+                                        let key_field = idx.fields.iter().find(|f| f.is_key);
+                                        let key_info = key_field
+                                            .map(|f| format!(", key: {}", f.name))
+                                            .unwrap_or_default();
+                                        println!(
+                                            "  {}   {}   └─ Index: {} ({} fields{})",
+                                            cont,
+                                            ks_cont,
+                                            idx.name,
+                                            idx.fields.len(),
+                                            key_info,
+                                        );
+                                        let mut caps = Vec::new();
+                                        if idx.vector_profile_count > 0 {
+                                            caps.push(format!(
+                                                "{} vector profile(s)",
+                                                idx.vector_profile_count
+                                            ));
+                                        }
+                                        if idx.has_semantic_config {
+                                            caps.push("semantic search".to_string());
+                                        }
+                                        if !caps.is_empty() {
+                                            println!(
+                                                "  {}   {}      {}",
+                                                cont,
+                                                ks_cont,
+                                                caps.join(", ")
+                                            );
+                                        }
+                                    } else {
+                                        println!(
+                                            "  {}   {}   └─ Index: {}",
+                                            cont, ks_cont, idx_name
+                                        );
+                                    }
+                                }
+                            } else {
+                                println!(
+                                    "  {}   {} Knowledge Source: {}",
+                                    cont, ks_branch, ks_name
+                                );
+                            }
+                        }
+                    } else {
+                        // KB not found locally (might be in a different service)
+                        println!(
+                            "  {} Knowledge Base: {} (not in local config)",
+                            branch, kb_name
+                        );
+                    }
+                }
+                println!();
+            }
+        }
+    }
+
+    // ── Search Resources ────────────────────────────────────────────
 
     // Indexes
     if !summary.indexes.is_empty() {
@@ -572,7 +1007,15 @@ fn print_text(summary: &ProjectSummary) {
     if !summary.knowledge_bases.is_empty() {
         println!("Knowledge Bases ({}):", summary.knowledge_bases.len());
         for kb in &summary.knowledge_bases {
-            println!("  {}", kb.name);
+            let sources_part = if kb.knowledge_sources.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {}", kb.knowledge_sources.join(", "))
+            };
+            println!("  {}{}", kb.name, sources_part);
+            if let Some(ref desc) = kb.description {
+                print_indented(desc, "    ");
+            }
         }
         println!();
     }
@@ -581,17 +1024,25 @@ fn print_text(summary: &ProjectSummary) {
     if !summary.knowledge_sources.is_empty() {
         println!("Knowledge Sources ({}):", summary.knowledge_sources.len());
         for ks in &summary.knowledge_sources {
-            let mut parts = Vec::new();
+            let kind_part = ks
+                .kind
+                .as_ref()
+                .map(|k| format!(" ({})", k))
+                .unwrap_or_default();
+            let mut targets = Vec::new();
             if let Some(ref idx) = ks.index_name {
-                parts.push(format!("Index: {}", idx));
+                targets.push(format!("Index: {}", idx));
             }
             if let Some(ref kb) = ks.knowledge_base {
-                parts.push(format!("KB: {}", kb));
+                targets.push(format!("KB: {}", kb));
             }
-            if parts.is_empty() {
-                println!("  {}", ks.name);
+            if targets.is_empty() {
+                println!("  {}{}", ks.name, kind_part);
             } else {
-                println!("  {} -> {}", ks.name, parts.join(", "));
+                println!("  {}{} -> {}", ks.name, kind_part, targets.join(", "));
+            }
+            if let Some(ref desc) = ks.description {
+                print_indented(desc, "    ");
             }
         }
         println!();
@@ -730,6 +1181,10 @@ fn print_json(summary: &ProjectSummary) {
         .map(|kb| {
             json!({
                 "name": kb.name,
+                "description": kb.description,
+                "retrieval_instructions": kb.retrieval_instructions,
+                "output_mode": kb.output_mode,
+                "knowledge_sources": kb.knowledge_sources,
             })
         })
         .collect();
@@ -740,8 +1195,34 @@ fn print_json(summary: &ProjectSummary) {
         .map(|ks| {
             json!({
                 "name": ks.name,
+                "description": ks.description,
+                "kind": ks.kind,
                 "index_name": ks.index_name,
                 "knowledge_base": ks.knowledge_base,
+            })
+        })
+        .collect();
+
+    let agents: Vec<Value> = summary
+        .agents
+        .iter()
+        .map(|a| {
+            let tools: Vec<Value> = a
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": t.tool_type,
+                        "knowledge_base": t.knowledge_base_name,
+                    })
+                })
+                .collect();
+            json!({
+                "name": a.name,
+                "model": a.model,
+                "tool_count": a.tool_count,
+                "tools": tools,
+                "instruction_preview": a.instruction_preview,
             })
         })
         .collect();
@@ -759,7 +1240,9 @@ fn print_json(summary: &ProjectSummary) {
         .collect();
 
     let output = json!({
-        "service_name": summary.service_name,
+        "project_name": summary.project_name,
+        "search_services": summary.search_services,
+        "foundry_services": summary.foundry_services,
         "indexes": indexes,
         "data_sources": data_sources,
         "indexers": indexers,
@@ -768,6 +1251,7 @@ fn print_json(summary: &ProjectSummary) {
         "aliases": aliases,
         "knowledge_bases": knowledge_bases,
         "knowledge_sources": knowledge_sources,
+        "agents": agents,
         "dependencies": deps,
     });
 
@@ -972,29 +1456,81 @@ mod tests {
     #[test]
     fn test_parse_knowledge_base() {
         let v = json!({
-            "name": "regulatory-kb"
+            "name": "regulatory-kb",
+            "description": "Official regulatory and legal texts",
+            "retrievalInstructions": "You are a legal evidence retriever working over an EU regulatory knowledge base.",
+            "outputMode": "extractiveData",
+            "knowledgeSources": [{"name": "regulatory"}]
         });
         let kb = parse_knowledge_base(&v);
         assert_eq!(kb.name, "regulatory-kb");
+        assert_eq!(
+            kb.description.as_deref(),
+            Some("Official regulatory and legal texts")
+        );
+        assert!(kb
+            .retrieval_instructions
+            .as_ref()
+            .unwrap()
+            .contains("legal evidence"));
+        assert_eq!(kb.output_mode.as_deref(), Some("extractiveData"));
+        assert_eq!(kb.knowledge_sources, vec!["regulatory"]);
+    }
+
+    #[test]
+    fn test_parse_knowledge_base_minimal() {
+        let v = json!({"name": "empty-kb"});
+        let kb = parse_knowledge_base(&v);
+        assert_eq!(kb.name, "empty-kb");
+        assert!(kb.description.is_none());
+        assert!(kb.retrieval_instructions.is_none());
+        assert!(kb.output_mode.is_none());
+        assert!(kb.knowledge_sources.is_empty());
     }
 
     #[test]
     fn test_parse_knowledge_source() {
         let v = json!({
             "name": "regulatory-docs",
+            "description": "Legal and compliance documents",
+            "kind": "azureBlob",
             "indexName": "regulatory-index",
             "knowledgeBaseName": "regulatory-kb"
         });
         let ks = parse_knowledge_source(&v);
         assert_eq!(ks.name, "regulatory-docs");
+        assert_eq!(
+            ks.description.as_deref(),
+            Some("Legal and compliance documents")
+        );
+        assert_eq!(ks.kind.as_deref(), Some("azureBlob"));
         assert_eq!(ks.index_name.as_deref(), Some("regulatory-index"));
         assert_eq!(ks.knowledge_base.as_deref(), Some("regulatory-kb"));
+    }
+
+    #[test]
+    fn test_parse_knowledge_source_created_resources_fallback() {
+        let v = json!({
+            "name": "regulatory",
+            "kind": "azureBlob",
+            "azureBlobParameters": {
+                "createdResources": {
+                    "index": "regulatory-index",
+                    "indexer": "regulatory-indexer"
+                }
+            }
+        });
+        let ks = parse_knowledge_source(&v);
+        assert_eq!(ks.name, "regulatory");
+        assert_eq!(ks.index_name.as_deref(), Some("regulatory-index"));
     }
 
     #[test]
     fn test_add_knowledge_source_dependencies() {
         let ks = KnowledgeSourceSummary {
             name: "regulatory-docs".to_string(),
+            description: None,
+            kind: None,
             index_name: Some("regulatory-index".to_string()),
             knowledge_base: Some("regulatory-kb".to_string()),
         };
@@ -1010,6 +1546,80 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_agent_dir_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("my-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("instructions.md"),
+            "You are a helpful assistant for regulatory compliance.",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("tools.json"),
+            r#"[{"type": "code_interpreter"}, {"type": "file_search"}]"#,
+        )
+        .unwrap();
+
+        let agent = parse_agent_dir(&agent_dir).unwrap();
+        assert_eq!(agent.name, "my-agent");
+        assert_eq!(agent.model, "gpt-4o");
+        assert_eq!(agent.tool_count, 2);
+        assert_eq!(agent.tools.len(), 2);
+        assert_eq!(agent.tools[0].tool_type, "code_interpreter");
+        assert!(agent.tools[0].knowledge_base_name.is_none());
+        assert!(agent
+            .instruction_preview
+            .contains("helpful assistant for regulatory"));
+    }
+
+    #[test]
+    fn test_parse_agent_dir_minimal() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("minimal-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        // Only config.json, no tools or instructions
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_2", "name": "minimal-agent", "model": "gpt-4o-mini"}"#,
+        )
+        .unwrap();
+
+        let agent = parse_agent_dir(&agent_dir).unwrap();
+        assert_eq!(agent.name, "minimal-agent");
+        assert_eq!(agent.model, "gpt-4o-mini");
+        assert_eq!(agent.tool_count, 0);
+        assert!(agent.tools.is_empty());
+        assert_eq!(agent.instruction_preview, "");
+    }
+
+    #[test]
+    fn test_parse_agent_dir_long_instructions_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("verbose-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_3", "name": "verbose-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        let long_line = "A".repeat(200);
+        std::fs::write(agent_dir.join("instructions.md"), &long_line).unwrap();
+
+        let agent = parse_agent_dir(&agent_dir).unwrap();
+        assert_eq!(agent.instruction_preview.len(), 200);
+        assert!(!agent.instruction_preview.ends_with("..."));
+    }
+
+    #[test]
     fn test_get_name_present() {
         let v = json!({"name": "test-resource"});
         assert_eq!(get_name(&v), "test-resource");
@@ -1019,6 +1629,57 @@ mod tests {
     fn test_get_name_missing() {
         let v = json!({"other": "field"});
         assert_eq!(get_name(&v), "(unnamed)");
+    }
+
+    #[test]
+    fn test_extract_kb_from_mcp_url() {
+        let url =
+            "https://svc.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2025-11-01-Preview";
+        assert_eq!(
+            extract_kb_from_mcp_url(Some(url)),
+            Some("regulatory-kb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_kb_from_mcp_url_none() {
+        assert_eq!(extract_kb_from_mcp_url(None), None);
+        assert_eq!(
+            extract_kb_from_mcp_url(Some("https://example.com/other")),
+            None
+        );
+    }
+
+    #[test]
+    fn test_print_indented_captures_output() {
+        // print_indented writes to stdout; we just verify it doesn't panic
+        // and test it indirectly via the describe output
+        print_indented("single line", "  ");
+        print_indented("line one\nline two\n\nline four", "    ");
+    }
+
+    #[test]
+    fn test_parse_agent_dir_with_mcp_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("rag-agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+
+        std::fs::write(
+            agent_dir.join("config.json"),
+            r#"{"id": "asst_1", "name": "rag-agent", "model": "gpt-4o"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agent_dir.join("tools.json"),
+            r#"[{"type": "mcp", "server_label": "kb_test", "server_url": "https://svc.search.windows.net/knowledgebases/my-kb/mcp?api-version=2025-11-01-Preview"}]"#,
+        )
+        .unwrap();
+
+        let agent = parse_agent_dir(&agent_dir).unwrap();
+        assert_eq!(agent.tool_count, 1);
+        assert_eq!(agent.tools.len(), 1);
+        assert_eq!(agent.tools[0].tool_type, "mcp");
+        assert_eq!(agent.tools[0].knowledge_base_name.as_deref(), Some("my-kb"));
     }
 
     #[test]

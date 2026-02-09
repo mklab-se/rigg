@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::service::ServiceDomain;
+
 /// Configuration errors
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -22,14 +24,29 @@ pub enum ConfigError {
 /// Main configuration file (hoist.toml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Azure Search service configuration
-    pub service: ServiceConfig,
+    /// Legacy Azure Search service configuration (auto-migrated to services.search)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceConfig>,
+    /// Multi-service configuration (v0.2.0+)
+    #[serde(default)]
+    pub services: ServicesConfig,
     /// Project settings
     #[serde(default)]
     pub project: ProjectConfig,
     /// Pull/push settings
     #[serde(default)]
     pub sync: SyncConfig,
+}
+
+/// Multi-service configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServicesConfig {
+    /// Azure AI Search services
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search: Vec<SearchServiceConfig>,
+    /// Microsoft Foundry services
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foundry: Vec<FoundryServiceConfig>,
 }
 
 /// Azure Search service connection settings
@@ -51,12 +68,53 @@ pub struct ServiceConfig {
     pub preview_api_version: String,
 }
 
+/// Search service configuration (v0.2.0+ format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchServiceConfig {
+    /// Search service name
+    pub name: String,
+    /// Azure subscription ID (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
+    /// Resource group (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_group: Option<String>,
+    /// API version to use
+    #[serde(default = "default_api_version")]
+    pub api_version: String,
+    /// Preview API version
+    #[serde(default = "default_preview_api_version")]
+    pub preview_api_version: String,
+}
+
+/// Foundry service configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FoundryServiceConfig {
+    /// AI services host name (e.g., "my-ai-service")
+    pub name: String,
+    /// Foundry project name
+    pub project: String,
+    /// API version to use
+    #[serde(default = "default_foundry_api_version")]
+    pub api_version: String,
+    /// Azure subscription ID (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
+    /// Resource group (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_group: Option<String>,
+}
+
 fn default_api_version() -> String {
     "2024-07-01".to_string()
 }
 
 fn default_preview_api_version() -> String {
     "2025-11-01-preview".to_string()
+}
+
+fn default_foundry_api_version() -> String {
+    "2025-05-15-preview".to_string()
 }
 
 /// Project-level settings
@@ -79,9 +137,6 @@ pub struct SyncConfig {
     /// Include preview API resources (knowledge bases, knowledge sources)
     #[serde(default = "default_true")]
     pub include_preview: bool,
-    /// Generate README files
-    #[serde(default = "default_true")]
-    pub generate_docs: bool,
     /// Resource types to sync (empty = all)
     #[serde(default)]
     pub resources: Vec<String>,
@@ -95,7 +150,6 @@ impl Default for SyncConfig {
     fn default() -> Self {
         Self {
             include_preview: true,
-            generate_docs: true,
             resources: Vec::new(),
         }
     }
@@ -137,15 +191,104 @@ impl Config {
 
     /// Validate configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.service.name.is_empty() {
-            return Err(ConfigError::Invalid("service.name is required".to_string()));
+        // Must have at least one search or foundry service
+        let has_legacy = self.service.as_ref().is_some_and(|s| !s.name.is_empty());
+        let has_search = !self.services.search.is_empty();
+        let has_foundry = !self.services.foundry.is_empty();
+
+        if !has_legacy && !has_search && !has_foundry {
+            return Err(ConfigError::Invalid(
+                "At least one service must be configured (service, services.search, or services.foundry)".to_string(),
+            ));
         }
+
+        // Validate legacy service name
+        if let Some(ref svc) = self.service {
+            if svc.name.is_empty() && !has_search && !has_foundry {
+                return Err(ConfigError::Invalid("service.name is required".to_string()));
+            }
+        }
+
+        // Validate search services
+        for (i, svc) in self.services.search.iter().enumerate() {
+            if svc.name.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "services.search[{}].name is required",
+                    i
+                )));
+            }
+        }
+
+        // Validate foundry services
+        for (i, svc) in self.services.foundry.iter().enumerate() {
+            if svc.name.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "services.foundry[{}].name is required",
+                    i
+                )));
+            }
+            if svc.project.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "services.foundry[{}].project is required",
+                    i
+                )));
+            }
+        }
+
         Ok(())
     }
 
-    /// Get the base URL for the Azure Search service
+    /// Get all search service configs (including legacy auto-migrated)
+    pub fn search_services(&self) -> Vec<SearchServiceConfig> {
+        let mut result = self.services.search.clone();
+
+        // Auto-migrate legacy [service] to search config
+        if let Some(ref legacy) = self.service {
+            if !legacy.name.is_empty() {
+                // Only auto-migrate if no services.search already has this name
+                let already_present = result.iter().any(|s| s.name == legacy.name);
+                if !already_present {
+                    result.insert(
+                        0,
+                        SearchServiceConfig {
+                            name: legacy.name.clone(),
+                            subscription: legacy.subscription.clone(),
+                            resource_group: legacy.resource_group.clone(),
+                            api_version: legacy.api_version.clone(),
+                            preview_api_version: legacy.preview_api_version.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get all foundry service configs
+    pub fn foundry_services(&self) -> &[FoundryServiceConfig] {
+        &self.services.foundry
+    }
+
+    /// Quick check if any foundry services are configured
+    pub fn has_foundry(&self) -> bool {
+        !self.services.foundry.is_empty()
+    }
+
+    /// Get the primary search service config (first one, for backward compat)
+    pub fn primary_search_service(&self) -> Option<SearchServiceConfig> {
+        self.search_services().into_iter().next()
+    }
+
+    /// Get the base URL for the Azure Search service (backward compat helper)
     pub fn service_url(&self) -> String {
-        format!("https://{}.search.windows.net", self.service.name)
+        if let Some(ref svc) = self.service {
+            return format!("https://{}.search.windows.net", svc.name);
+        }
+        if let Some(svc) = self.services.search.first() {
+            return format!("https://{}.search.windows.net", svc.name);
+        }
+        String::new()
     }
 
     /// Get the base directory for resource files (project_root or project_root/path)
@@ -156,13 +299,79 @@ impl Config {
         }
     }
 
-    /// Get the API version to use for a resource
+    /// Base directory for a specific search service's resources
+    /// Returns: resource_dir / "search-resources" / service_name
+    pub fn search_service_dir(&self, project_root: &Path, service_name: &str) -> PathBuf {
+        self.resource_dir(project_root)
+            .join(ServiceDomain::Search.directory_prefix())
+            .join(service_name)
+    }
+
+    /// Base directory for a specific foundry service/project's resources
+    /// Returns: resource_dir / "foundry-resources" / service_name / project_name
+    pub fn foundry_service_dir(
+        &self,
+        project_root: &Path,
+        service_name: &str,
+        project: &str,
+    ) -> PathBuf {
+        self.resource_dir(project_root)
+            .join(ServiceDomain::Foundry.directory_prefix())
+            .join(service_name)
+            .join(project)
+    }
+
+    /// Get the API version to use for a resource (backward compat helper)
     pub fn api_version_for(&self, preview: bool) -> &str {
-        if preview {
-            &self.service.preview_api_version
-        } else {
-            &self.service.api_version
+        if let Some(ref svc) = self.service {
+            if preview {
+                return &svc.preview_api_version;
+            } else {
+                return &svc.api_version;
+            }
         }
+        if let Some(svc) = self.services.search.first() {
+            if preview {
+                return &svc.preview_api_version;
+            } else {
+                return &svc.api_version;
+            }
+        }
+        if preview {
+            "2025-11-01-preview"
+        } else {
+            "2024-07-01"
+        }
+    }
+}
+
+impl SearchServiceConfig {
+    /// Get the base URL for this search service
+    pub fn service_url(&self) -> String {
+        format!("https://{}.search.windows.net", self.name)
+    }
+}
+
+impl FoundryServiceConfig {
+    /// Get the base URL for this Foundry service
+    pub fn service_url(&self) -> String {
+        format!("https://{}.services.ai.azure.com", self.name)
+    }
+}
+
+/// Create a Config with legacy [service] format (backward compat helper)
+pub fn make_legacy_config(name: &str) -> Config {
+    Config {
+        service: Some(ServiceConfig {
+            name: name.to_string(),
+            subscription: None,
+            resource_group: None,
+            api_version: default_api_version(),
+            preview_api_version: default_preview_api_version(),
+        }),
+        services: ServicesConfig::default(),
+        project: ProjectConfig::default(),
+        sync: SyncConfig::default(),
     }
 }
 
@@ -172,17 +381,7 @@ mod tests {
     use std::fs;
 
     fn make_config(name: &str) -> Config {
-        Config {
-            service: ServiceConfig {
-                name: name.to_string(),
-                subscription: None,
-                resource_group: None,
-                api_version: "2024-07-01".to_string(),
-                preview_api_version: "2025-11-01-preview".to_string(),
-            },
-            project: ProjectConfig::default(),
-            sync: SyncConfig::default(),
-        }
+        make_legacy_config(name)
     }
 
     #[test]
@@ -240,8 +439,8 @@ mod tests {
         config.save(dir.path()).unwrap();
 
         let loaded = Config::load(dir.path()).unwrap();
-        assert_eq!(loaded.service.name, "test-service");
-        assert_eq!(loaded.service.api_version, "2024-07-01");
+        assert_eq!(loaded.service.as_ref().unwrap().name, "test-service");
+        assert_eq!(loaded.service.as_ref().unwrap().api_version, "2024-07-01");
     }
 
     #[test]
@@ -252,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_toml_string() {
+    fn test_load_from_toml_string_legacy() {
         let toml = r#"
 [service]
 name = "my-svc"
@@ -261,18 +460,15 @@ name = "my-svc"
 include_preview = false
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.service.name, "my-svc");
+        assert_eq!(config.service.as_ref().unwrap().name, "my-svc");
         assert!(!config.sync.include_preview);
-        // Defaults should apply
-        assert_eq!(config.service.api_version, "2024-07-01");
-        assert!(config.sync.generate_docs);
+        assert_eq!(config.service.as_ref().unwrap().api_version, "2024-07-01");
     }
 
     #[test]
     fn test_sync_config_defaults() {
         let sync = SyncConfig::default();
         assert!(sync.include_preview);
-        assert!(sync.generate_docs);
         assert!(sync.resources.is_empty());
     }
 
@@ -311,6 +507,240 @@ include_preview = false
         let config = make_config("svc");
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(!toml_str.contains("path"));
+    }
+
+    // === New multi-service config tests ===
+
+    #[test]
+    fn test_new_format_search_only() {
+        let toml = r#"
+[[services.search]]
+name = "my-search-service"
+api_version = "2024-07-01"
+
+[project]
+name = "My Project"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+        assert!(config.service.is_none());
+        assert_eq!(config.services.search.len(), 1);
+        assert_eq!(config.services.search[0].name, "my-search-service");
+    }
+
+    #[test]
+    fn test_new_format_foundry_only() {
+        let toml = r#"
+[[services.foundry]]
+name = "my-ai-service"
+project = "my-project"
+
+[project]
+name = "My Project"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+        assert!(config.has_foundry());
+        assert_eq!(config.services.foundry[0].name, "my-ai-service");
+        assert_eq!(config.services.foundry[0].project, "my-project");
+        assert_eq!(config.services.foundry[0].api_version, "2025-05-15-preview");
+    }
+
+    #[test]
+    fn test_new_format_both_services() {
+        let toml = r#"
+[[services.search]]
+name = "my-search"
+
+[[services.foundry]]
+name = "my-ai"
+project = "proj-1"
+
+[project]
+name = "RAG System"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.search_services().len(), 1);
+        assert!(config.has_foundry());
+    }
+
+    #[test]
+    fn test_legacy_auto_migration() {
+        let toml = r#"
+[service]
+name = "legacy-svc"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let search = config.search_services();
+        assert_eq!(search.len(), 1);
+        assert_eq!(search[0].name, "legacy-svc");
+    }
+
+    #[test]
+    fn test_legacy_not_duplicated_in_search_services() {
+        let toml = r#"
+[service]
+name = "my-svc"
+
+[[services.search]]
+name = "my-svc"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let search = config.search_services();
+        // Should not duplicate — same name in both legacy and services.search
+        assert_eq!(search.len(), 1);
+    }
+
+    #[test]
+    fn test_foundry_validation_requires_project() {
+        let toml = r#"
+[[services.foundry]]
+name = "my-ai"
+project = ""
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_foundry_service_url() {
+        let svc = FoundryServiceConfig {
+            name: "my-ai-service".to_string(),
+            project: "proj-1".to_string(),
+            api_version: "2025-05-15-preview".to_string(),
+            subscription: None,
+            resource_group: None,
+        };
+        assert_eq!(
+            svc.service_url(),
+            "https://my-ai-service.services.ai.azure.com"
+        );
+    }
+
+    #[test]
+    fn test_search_service_url() {
+        let svc = SearchServiceConfig {
+            name: "my-search".to_string(),
+            subscription: None,
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        };
+        assert_eq!(svc.service_url(), "https://my-search.search.windows.net");
+    }
+
+    #[test]
+    fn test_primary_search_service() {
+        let config = make_config("primary-svc");
+        let primary = config.primary_search_service().unwrap();
+        assert_eq!(primary.name, "primary-svc");
+    }
+
+    #[test]
+    fn test_has_foundry_false_when_empty() {
+        let config = make_config("svc");
+        assert!(!config.has_foundry());
+    }
+
+    #[test]
+    fn test_no_services_validation_fails() {
+        let config = Config {
+            service: None,
+            services: ServicesConfig::default(),
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_search_service_dir_without_path() {
+        let config = make_config("my-search");
+        let root = Path::new("/projects/search");
+        assert_eq!(
+            config.search_service_dir(root, "my-search"),
+            PathBuf::from("/projects/search/search-resources/my-search")
+        );
+    }
+
+    #[test]
+    fn test_search_service_dir_with_path() {
+        let mut config = make_config("my-search");
+        config.project.path = Some("resources".to_string());
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            config.search_service_dir(root, "my-search"),
+            PathBuf::from("/projects/myapp/resources/search-resources/my-search")
+        );
+    }
+
+    #[test]
+    fn test_foundry_service_dir_without_path() {
+        let config = make_config("svc");
+        let root = Path::new("/projects/ai");
+        assert_eq!(
+            config.foundry_service_dir(root, "my-ai-service", "my-project"),
+            PathBuf::from("/projects/ai/foundry-resources/my-ai-service/my-project")
+        );
+    }
+
+    #[test]
+    fn test_foundry_service_dir_with_path() {
+        let mut config = make_config("svc");
+        config.project.path = Some("resources".to_string());
+        let root = Path::new("/projects/ai");
+        assert_eq!(
+            config.foundry_service_dir(root, "my-ai-service", "my-project"),
+            PathBuf::from("/projects/ai/resources/foundry-resources/my-ai-service/my-project")
+        );
+    }
+
+    #[test]
+    fn test_foundry_default_api_version() {
+        let toml = r#"
+[[services.foundry]]
+name = "my-ai"
+project = "proj-1"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.services.foundry[0].api_version, "2025-05-15-preview");
+    }
+
+    #[test]
+    fn test_save_load_roundtrip_new_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            service: None,
+            services: ServicesConfig {
+                search: vec![SearchServiceConfig {
+                    name: "test-search".to_string(),
+                    subscription: None,
+                    resource_group: None,
+                    api_version: "2024-07-01".to_string(),
+                    preview_api_version: "2025-11-01-preview".to_string(),
+                }],
+                foundry: vec![FoundryServiceConfig {
+                    name: "test-ai".to_string(),
+                    project: "test-proj".to_string(),
+                    api_version: "2025-05-15-preview".to_string(),
+                    subscription: None,
+                    resource_group: None,
+                }],
+            },
+            project: ProjectConfig {
+                name: Some("Test".to_string()),
+                description: None,
+                path: None,
+            },
+            sync: SyncConfig::default(),
+        };
+        config.save(dir.path()).unwrap();
+
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.services.search[0].name, "test-search");
+        assert_eq!(loaded.services.foundry[0].name, "test-ai");
+        assert_eq!(loaded.services.foundry[0].project, "test-proj");
     }
 }
 

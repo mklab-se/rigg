@@ -1,4 +1,4 @@
-//! hoist - Azure AI Search configuration management CLI
+//! hoist - Configuration-as-code for Azure AI Search and Microsoft Foundry
 
 use anyhow::Result;
 use clap::Parser;
