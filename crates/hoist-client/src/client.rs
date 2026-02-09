@@ -29,18 +29,6 @@ fn retry_delay(error: &ClientError, attempt: u32) -> Duration {
     }
 }
 
-/// API version for agentic retrieval resources (KnowledgeBase, KnowledgeSource).
-///
-/// Pinned to `2025-08-01-preview` because `2025-11-01-preview` introduced breaking
-/// schema changes: fields like `language`, `production_family`, `embeddingModel`,
-/// and `chatCompletionModel` were reorganized into a nested `ingestionParameters`
-/// object, and `sourceDataSelect` was renamed to `sourceDataFields`. Knowledge
-/// sources created with the older schema cannot be updated through `2025-11-01-preview`
-/// without migration (creating new objects with new names).
-///
-/// See: https://learn.microsoft.com/en-us/azure/search/agentic-retrieval-how-to-migrate
-const AGENTIC_RETRIEVAL_API_VERSION: &str = "2025-08-01-preview";
-
 /// Azure Search API client
 pub struct AzureSearchClient {
     http: Client,
@@ -99,19 +87,11 @@ impl AzureSearchClient {
     }
 
     /// Get the API version to use for a resource kind.
-    ///
-    /// - KnowledgeBase / KnowledgeSource use `AGENTIC_RETRIEVAL_API_VERSION`
-    ///   (`2025-08-01-preview`) because `2025-11-01-preview` has breaking schema changes.
-    /// - All other resources use the preview API version — it is a superset of the
-    ///   stable API and avoids failures when stable resources contain preview-only
-    ///   features (e.g. a skillset with ChatCompletionSkill).
-    fn api_version_for(&self, kind: ResourceKind) -> &str {
-        match kind {
-            ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource => {
-                AGENTIC_RETRIEVAL_API_VERSION
-            }
-            _ => &self.preview_api_version,
-        }
+    /// Always uses the preview API version — it is a superset of the stable API
+    /// and avoids failures when stable resources contain preview-only features
+    /// (e.g. a skillset with ChatCompletionSkill).
+    fn api_version_for(&self, _kind: ResourceKind) -> &str {
+        &self.preview_api_version
     }
 
     /// Build URL for a resource collection
@@ -336,22 +316,22 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_url_knowledge_base_uses_agentic_version() {
+    fn test_collection_url_knowledge_base_uses_preview_version() {
         let client = make_client();
         let url = client.collection_url(ResourceKind::KnowledgeBase);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgebases?api-version=2025-08-01-preview"
+            "https://test-svc.search.windows.net/knowledgebases?api-version=2025-11-01-preview"
         );
     }
 
     #[test]
-    fn test_collection_url_knowledge_source_uses_agentic_version() {
+    fn test_collection_url_knowledge_source_uses_preview_version() {
         let client = make_client();
         let url = client.collection_url(ResourceKind::KnowledgeSource);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgesources?api-version=2025-08-01-preview"
+            "https://test-svc.search.windows.net/knowledgesources?api-version=2025-11-01-preview"
         );
     }
 
@@ -366,12 +346,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_url_knowledge_base_uses_agentic_version() {
+    fn test_resource_url_knowledge_base_uses_preview_version() {
         let client = make_client();
         let url = client.resource_url(ResourceKind::KnowledgeBase, "my-kb");
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgebases/my-kb?api-version=2025-08-01-preview"
+            "https://test-svc.search.windows.net/knowledgebases/my-kb?api-version=2025-11-01-preview"
         );
     }
 
@@ -393,28 +373,16 @@ mod tests {
     }
 
     #[test]
-    fn test_all_kinds_use_expected_api_version() {
+    fn test_all_kinds_use_preview_version() {
         let client = make_client();
         for kind in ResourceKind::all() {
             let url = client.collection_url(*kind);
-            match kind {
-                ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource => {
-                    assert!(
-                        url.contains("2025-08-01-preview"),
-                        "{:?} should use agentic retrieval API version, got: {}",
-                        kind,
-                        url
-                    );
-                }
-                _ => {
-                    assert!(
-                        url.contains("2025-11-01-preview"),
-                        "{:?} should use preview API version, got: {}",
-                        kind,
-                        url
-                    );
-                }
-            }
+            assert!(
+                url.contains("2025-11-01-preview"),
+                "{:?} should use preview API version, got: {}",
+                kind,
+                url
+            );
         }
     }
 

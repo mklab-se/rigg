@@ -2,7 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.2.11] - 2026-02-09
+## [0.2.12] - 2026-02-09
+
+### Fixed
+
+- **Reverted `2025-08-01-preview` API pin for knowledge resources** — v0.2.11 pinned knowledge base and knowledge source operations to `2025-08-01-preview`, but that API version uses different endpoint paths (`/agents/` instead of `/knowledgebases/`), causing all knowledge resource operations to fail with "api-version does not exist". All resources now use `2025-11-01-preview` again, matching the Azure portal's current API version
+
+### Note
+
+- Knowledge sources created through the Azure portal before December 2025 use the older `2025-08-01-preview` schema. These resources cannot be updated through the current `2025-11-01-preview` API (neither by hoist nor the portal) due to breaking schema changes in the Azure platform. The fix is to recreate affected knowledge sources through the portal, which now uses `2025-11-01-preview`. See [Microsoft's migration guide](https://learn.microsoft.com/en-us/azure/search/agentic-retrieval-how-to-migrate)
+
+### Tests
+
+- 448 tests across workspace
+
+## [0.2.11] - 2026-02-09 [yanked]
 
 ### Fixed
 
