@@ -94,7 +94,12 @@ search-resources/
       knowledge-bases/
         regulatory-kb.json          # KB description, retrieval instructions, linked sources
       knowledge-sources/
-        regulatory.json             # Source definition, ingestion config, created resources
+        regulatory/
+          regulatory.json           # KS definition, ingestion config, created resources
+          regulatory-index.json     # Managed index (auto-provisioned by Azure)
+          regulatory-indexer.json   # Managed indexer
+          regulatory-datasource.json # Managed data source
+          regulatory-skillset.json  # Managed skillset
 
 foundry-resources/
   my-ai-service/
@@ -188,22 +193,22 @@ hoist diff --all
     scoringProfiles[0].functions: 2 → 3 items
 ```
 
-### Cross-Service Copy
+### Copy
 
-Copy resources between search services with automatic name remapping and reference rewriting:
+Copy resources locally under new names, then push separately:
 
 ```bash
-# Copy with a suffix (auto-generates new names)
-hoist push --all --target prod-search --suffix "-v2"
+# Copy a knowledge source and all its managed sub-resources
+hoist copy my-ks my-new-ks --knowledgesource
 
-# Copy with interactive name prompts
-hoist push --knowledgebase my-kb --recursive --copy --target staging
+# Copy a standalone index
+hoist copy hotels hotels-v2 --index
 
-# Copy with a pre-built name mapping
-hoist push --all --target prod-search --answers name-map.json
+# Then push the copy
+hoist push --knowledgesources
 ```
 
-The `--recursive` flag automatically includes dependent and child resources. For example, `--knowledgebase my-kb --recursive` includes the knowledge base, all its knowledge sources, and their referenced indexes.
+Knowledge source copy automatically renames all managed sub-resources (index, indexer, data source, skillset) and rewrites cross-references. No network calls — files are created locally for review before pushing.
 
 ### Watch Mode
 

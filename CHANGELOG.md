@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-02-09
+
+### Added
+
+- **Managed sub-resources for knowledge sources** — knowledge sources auto-provision index, indexer, data source, and skillset sub-resources. These are now stored nested under the parent KS directory (`agentic-retrieval/knowledge-sources/<ks-name>/`) instead of mixed into `search-management/`. Hoist detects managed resources from the `createdResources` field in the KS definition and routes files automatically
+- **Cascade push** — `hoist push --knowledgesources` pushes the KS first (triggering Azure to provision/reset sub-resources), then overlays customizations for the managed index, skillset, data source, and indexer in dependency order
+- **Drop-and-recreate for immutable index changes** — when an index has removed or changed fields that Azure won't allow in-place, push now offers to drop and recreate the index (with a clear data-loss warning)
+- **Knowledge source drop-and-recreate** — when a KS cascade push fails due to Azure's managed resource conflict bug (can't update a managed index with fewer fields), push offers to delete and re-provision the KS and all its sub-resources
+- **`hoist copy` command** — local-only resource copying that replaces `push --copy`. Copies files and rewrites all names and cross-references without making network calls. Supports knowledge source copy (KS + all managed sub-resources) and standalone resource copy
+- **Data source credential auto-discovery** — push now auto-discovers Azure Blob Storage connection strings via ARM `listKeys` API when credentials are missing (previously only worked in copy mode)
+- **Managed-aware diff/status/describe/validate** — all commands understand the nested directory layout and distinguish managed vs standalone resources
+
+### Changed
+
+- **Breaking: directory layout** — managed sub-resources moved from `search-management/` to `agentic-retrieval/knowledge-sources/<ks-name>/`. Existing v0.2 projects should re-pull to migrate
+- **Breaking: `push --copy` removed** — use `hoist copy` followed by `hoist push` instead. The `--suffix` and `--answers` flags are also removed
+- **`--knowledgesources` flag expands scope** — on pull, push, and diff, this flag now automatically includes managed sub-resource types (index, indexer, data source, skillset)
+- **Standalone flags skip managed** — `--indexes`, `--skillsets`, etc. only operate on standalone resources in `search-management/`, not managed sub-resources
+
+### Tests
+
+- 470 tests across workspace (up from 448)
+
 ## [0.2.12] - 2026-02-09
 
 ### Fixed

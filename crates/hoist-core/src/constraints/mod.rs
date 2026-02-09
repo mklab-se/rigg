@@ -4,7 +4,7 @@ pub mod dependencies;
 pub mod immutability;
 
 pub use dependencies::{check_dependencies, DependencyViolation};
-pub use immutability::{check_immutability, ImmutabilityViolation};
+pub use immutability::{check_immutability, ImmutabilityViolation, ViolationSeverity};
 
 use thiserror::Error;
 

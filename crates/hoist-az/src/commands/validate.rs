@@ -38,6 +38,7 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
         if kind.domain() == hoist_core::service::ServiceDomain::Foundry {
             continue; // Agent validation is handled below
         }
+
         let resource_dir = config
             .search_service_dir(&project_root, &primary_search_name)
             .join(kind.directory_name());
@@ -47,51 +48,110 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
 
         let mut kind_resources = Vec::new();
 
-        for entry in std::fs::read_dir(&resource_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-
-            let name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?
-                .to_string();
-
-            // Parse JSON
-            let content = std::fs::read_to_string(&path)?;
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(value) => {
-                    // Validate JSON name matches filename
-                    if let Some(json_name) = value.get("name").and_then(|n| n.as_str()) {
-                        if json_name != name {
-                            errors.push(format!(
-                                "{}/{}.json: name field '{}' doesn't match filename",
-                                kind.directory_name(),
-                                name,
-                                json_name
-                            ));
-                        }
-                    } else {
-                        errors.push(format!(
-                            "{}/{}.json: missing required 'name' field",
-                            kind.directory_name(),
-                            name
-                        ));
-                    }
-
-                    kind_resources.push((name, value));
+        if *kind == ResourceKind::KnowledgeSource {
+            // KS are stored as subdirectories: <ks-name>/<ks-name>.json
+            for entry in std::fs::read_dir(&resource_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
                 }
-                Err(e) => {
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                let ks_file = path.join(format!("{}.json", name));
+                if !ks_file.exists() {
                     errors.push(format!(
-                        "{}/{}.json: invalid JSON - {}",
+                        "{}/{}/{}.json: missing KS definition file",
                         kind.directory_name(),
                         name,
-                        e
+                        name
                     ));
+                    continue;
+                }
+                let content = std::fs::read_to_string(&ks_file)?;
+                match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(value) => {
+                        if let Some(json_name) = value.get("name").and_then(|n| n.as_str()) {
+                            if json_name != name {
+                                errors.push(format!(
+                                    "{}/{}/{}.json: name field '{}' doesn't match directory",
+                                    kind.directory_name(),
+                                    name,
+                                    name,
+                                    json_name
+                                ));
+                            }
+                        } else {
+                            errors.push(format!(
+                                "{}/{}/{}.json: missing required 'name' field",
+                                kind.directory_name(),
+                                name,
+                                name
+                            ));
+                        }
+                        kind_resources.push((name, value));
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "{}/{}/{}.json: invalid JSON - {}",
+                            kind.directory_name(),
+                            name,
+                            name,
+                            e
+                        ));
+                    }
+                }
+            }
+        } else {
+            // Standard flat JSON files
+            for entry in std::fs::read_dir(&resource_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+
+                let name = path
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?
+                    .to_string();
+
+                // Parse JSON
+                let content = std::fs::read_to_string(&path)?;
+                match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(value) => {
+                        // Validate JSON name matches filename
+                        if let Some(json_name) = value.get("name").and_then(|n| n.as_str()) {
+                            if json_name != name {
+                                errors.push(format!(
+                                    "{}/{}.json: name field '{}' doesn't match filename",
+                                    kind.directory_name(),
+                                    name,
+                                    json_name
+                                ));
+                            }
+                        } else {
+                            errors.push(format!(
+                                "{}/{}.json: missing required 'name' field",
+                                kind.directory_name(),
+                                name
+                            ));
+                        }
+
+                        kind_resources.push((name, value));
+                    }
+                    Err(e) => {
+                        errors.push(format!(
+                            "{}/{}.json: invalid JSON - {}",
+                            kind.directory_name(),
+                            name,
+                            e
+                        ));
+                    }
                 }
             }
         }

@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::PathBuf;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -11,9 +10,10 @@ use tracing::info;
 use hoist_client::AzureSearchClient;
 use hoist_core::config::FoundryServiceConfig;
 use hoist_core::constraints::check_immutability;
-use hoist_core::copy::NameMap;
+use hoist_core::constraints::ViolationSeverity;
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::agent::compose_agent;
+use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_diff::Change;
@@ -27,7 +27,6 @@ use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;
 use crate::commands::load_config;
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     flags: &ResourceTypeFlags,
     recursive: bool,
@@ -35,9 +34,6 @@ pub async fn run(
     dry_run: bool,
     force: bool,
     target: Option<String>,
-    copy: bool,
-    suffix: Option<String>,
-    answers: Option<PathBuf>,
 ) -> Result<()> {
     let (project_root, config) = load_config()?;
 
@@ -60,9 +56,6 @@ pub async fn run(
         .collect();
     let has_foundry_kinds = kinds.iter().any(|k| k.domain() == ServiceDomain::Foundry);
 
-    let is_copy_mode = copy || suffix.is_some() || answers.is_some();
-
-    // Compute server name for display (used in copy mode output)
     let default_name = config
         .primary_search_service()
         .map(|s| s.name)
@@ -72,6 +65,7 @@ pub async fn run(
     // Collect resources to push
     let mut resources_to_push = Vec::new();
     let mut validation_errors = Vec::new();
+    let mut recreate_candidates: Vec<(ResourceKind, String)> = Vec::new();
     let mut total_unchanged = 0;
     let mut change_details: HashMap<(ResourceKind, String), Vec<Change>> = HashMap::new();
 
@@ -90,15 +84,91 @@ pub async fn run(
         );
 
         let push_search_svc = config.primary_search_service().unwrap();
+        let service_dir = config.search_service_dir(&project_root, &push_search_svc.name);
+
+        // Build managed map from local KS files
+        let managed_map = build_local_managed_map(&service_dir);
+
+        // Determine which kinds to push, handling --knowledge-sources expansion
+        let has_ks = search_kinds.contains(&ResourceKind::KnowledgeSource);
+
         for kind in &search_kinds {
-            let resource_dir = config
-                .search_service_dir(&project_root, &push_search_svc.name)
-                .join(kind.directory_name());
+            // For standalone resource types, read from their standard directories
+            // but skip managed resources (they'll be pushed via KS cascade)
+            if *kind == ResourceKind::KnowledgeSource {
+                // Read KS definitions from their subdirectories
+                let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+                if !ks_base.exists() {
+                    continue;
+                }
+                for entry in std::fs::read_dir(&ks_base)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let ks_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if let Some(exact_name) = selection.name_filter(*kind) {
+                        if ks_name != exact_name {
+                            continue;
+                        }
+                    }
+                    if let Some(ref pattern) = filter {
+                        if !ks_name.contains(pattern) {
+                            continue;
+                        }
+                    }
+                    let ks_file = path.join(format!("{}.json", ks_name));
+                    if !ks_file.exists() {
+                        continue;
+                    }
+                    let content = std::fs::read_to_string(&ks_file)?;
+                    let local: serde_json::Value = serde_json::from_str(&content)?;
+
+                    collect_push_resource(
+                        &client,
+                        *kind,
+                        &ks_name,
+                        local,
+                        &mut resources_to_push,
+                        &mut validation_errors,
+                        &mut recreate_candidates,
+                        &mut total_unchanged,
+                        &mut change_details,
+                    )
+                    .await;
+
+                    // If --knowledge-sources, also collect managed sub-resources from this KS dir
+                    if has_ks {
+                        let managed_subs = managed::read_managed_sub_resources(&path, &ks_name);
+                        for (sub_kind, sub_name, sub_def) in managed_subs {
+                            collect_push_resource(
+                                &client,
+                                sub_kind,
+                                &sub_name,
+                                sub_def,
+                                &mut resources_to_push,
+                                &mut validation_errors,
+                                &mut recreate_candidates,
+                                &mut total_unchanged,
+                                &mut change_details,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // For other resource types, read from standalone directories
+            let resource_dir = service_dir.join(kind.directory_name());
             if !resource_dir.exists() {
                 continue;
             }
 
-            // Read all JSON files in directory
             for entry in std::fs::read_dir(&resource_dir)? {
                 let entry = entry?;
                 let path = entry.path();
@@ -112,84 +182,67 @@ pub async fn run(
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
 
-                // Filter by singular flag (exact name match)
+                // Skip managed resources in standalone dirs — they're pushed via KS cascade
+                if managed::managing_ks(&managed_map, *kind, name).is_some() {
+                    continue;
+                }
+
                 if let Some(exact_name) = selection.name_filter(*kind) {
                     if name != exact_name {
                         continue;
                     }
                 }
-
-                // Filter if pattern specified (substring match)
                 if let Some(ref pattern) = filter {
                     if !name.contains(pattern) {
                         continue;
                     }
                 }
 
-                // Read and parse local file
                 let content = std::fs::read_to_string(&path)?;
                 let local: serde_json::Value = serde_json::from_str(&content)?;
 
-                // In copy mode, skip immutability checks (we're creating new resources)
-                if is_copy_mode {
-                    resources_to_push.push((*kind, name.to_string(), local, false));
-                    continue;
-                }
+                collect_push_resource(
+                    &client,
+                    *kind,
+                    name,
+                    local,
+                    &mut resources_to_push,
+                    &mut validation_errors,
+                    &mut recreate_candidates,
+                    &mut total_unchanged,
+                    &mut change_details,
+                )
+                .await;
+            }
+        }
 
-                // Check if resource exists on server
-                let remote = client.get(*kind, name).await;
+        // Handle drop-and-recreate for RequiresRecreate violations
+        if !recreate_candidates.is_empty() {
+            println!();
+            println!(
+                "{} resource(s) have immutable field changes that require drop-and-recreate:",
+                recreate_candidates.len()
+            );
+            for (kind, name) in &recreate_candidates {
+                println!("  {} {} '{}'", "!".red(), kind.display_name(), name);
+            }
+            println!();
+            println!("WARNING: Drop-and-recreate will DELETE these resources and their data.");
+            println!("Re-indexing will be required after recreation.");
+            if !force && !prompt_yes_no("Drop and recreate these resources?")? {
+                anyhow::bail!("Push blocked: immutable field changes require drop-and-recreate.");
+            }
 
-                match remote {
-                    Ok(existing) => {
-                        // For push comparison, strip both volatile fields (etag, context,
-                        // secrets) AND read-only fields (knowledgeSources, createdResources,
-                        // startTime, etc.)
-                        let volatile_fields = get_volatile_fields(*kind);
-                        let read_only_fields = get_read_only_fields(*kind);
-                        let push_strip: Vec<&str> = volatile_fields
-                            .iter()
-                            .chain(read_only_fields.iter())
-                            .copied()
-                            .collect();
-                        let normalized_existing = normalize(&existing, &push_strip);
-                        let normalized_local = normalize(&local, &push_strip);
-
-                        // Validate immutability constraints
-                        let violations = check_immutability(
-                            *kind,
-                            name,
-                            &normalized_existing,
-                            &normalized_local,
-                        );
-
-                        if !violations.is_empty() {
-                            for v in violations {
-                                validation_errors.push(format!("{}", v));
-                            }
-                        } else {
-                            // Compare normalized remote against normalized local
-                            let remote_json = format_json(&normalized_existing);
-                            let local_json = format_json(&normalized_local);
-
-                            if remote_json == local_json {
-                                total_unchanged += 1;
-                            } else {
-                                // Compute diff: old=server, new=local
-                                let diff_result = hoist_diff::diff(
-                                    &normalized_existing,
-                                    &normalized_local,
-                                    "name",
-                                );
-                                change_details
-                                    .insert((*kind, name.to_string()), diff_result.changes);
-                                resources_to_push.push((*kind, name.to_string(), local, true));
-                            }
-                        }
-                    }
-                    Err(hoist_client::ClientError::NotFound { .. }) => {
-                        resources_to_push.push((*kind, name.to_string(), local, false));
-                    }
-                    Err(e) => return Err(e.into()),
+            // Mark these for drop-and-recreate during push execution
+            for (kind, name) in &recreate_candidates {
+                // Re-read the local file to get the definition
+                let resource_dir = service_dir.join(kind.directory_name());
+                let path = resource_dir.join(format!("{}.json", name));
+                if path.exists() {
+                    let content = std::fs::read_to_string(&path)?;
+                    let local: serde_json::Value = serde_json::from_str(&content)?;
+                    // Push with exists=true so it triggers the drop-and-recreate path
+                    resources_to_push.push((*kind, name.clone(), local, true));
                 }
             }
         }
@@ -214,16 +267,8 @@ pub async fn run(
                 continue;
             }
 
-            // Get existing agents to map name -> id
+            // Get existing agents for diffing
             let existing_agents = foundry_client.list_agents().await?;
-            let agent_id_map: HashMap<String, String> = existing_agents
-                .iter()
-                .filter_map(|a| {
-                    let name = a.get("name")?.as_str()?.to_string();
-                    let id = a.get("id")?.as_str()?.to_string();
-                    Some((name, id))
-                })
-                .collect();
 
             // Build name→remote_agent map for diffing
             let remote_agent_map: HashMap<String, &serde_json::Value> = existing_agents
@@ -262,12 +307,6 @@ pub async fn run(
                 // Read decomposed agent files and compose into API payload
                 let agent_files = read_agent_files(&path)?;
                 let payload = compose_agent(&agent_files);
-
-                if is_copy_mode {
-                    let exists = agent_id_map.contains_key(&name);
-                    resources_to_push.push((ResourceKind::Agent, name, payload, exists));
-                    continue;
-                }
 
                 // Compare local vs remote to skip unchanged agents
                 match remote_agent_map.get(&name) {
@@ -363,7 +402,6 @@ pub async fn run(
                     k.display_name(),
                     n
                 );
-                // In copy mode, mark as new (false); otherwise check server later
                 resources_to_push.push((k, n, v, false));
             }
         }
@@ -394,44 +432,8 @@ pub async fn run(
         return Ok(());
     }
 
-    // Apply copy mode transformations
-    if is_copy_mode {
-        let name_map = build_name_map(
-            &resources_to_push,
-            copy,
-            suffix.as_deref(),
-            answers.as_deref(),
-        )?;
-
-        // Apply name mappings and reference rewrites
-        for (kind, name, definition, _exists) in &mut resources_to_push {
-            if let Some(new_name) = name_map.get(*kind, name) {
-                *name = new_name.to_string();
-                // Update the "name" field in the JSON definition
-                if let Some(obj) = definition.as_object_mut() {
-                    obj.insert("name".to_string(), serde_json::Value::String(name.clone()));
-                }
-            }
-
-            // Rewrite cross-references
-            let warnings = hoist_core::copy::rewrite_references(*kind, definition, &name_map);
-            for warning in warnings {
-                println!("  Warning: {}", warning);
-            }
-        }
-
-        // Prompt for credentials needed to create new resources
-        prompt_copy_secrets(&mut resources_to_push)?;
-    }
-
     // Show what will be pushed
-    if is_copy_mode && target.is_some() {
-        println!("Resources to copy to '{}':", server_name);
-    } else if is_copy_mode {
-        println!("Resources to copy:");
-    } else {
-        println!("Resources to push:");
-    }
+    println!("Resources to push:");
 
     for (kind, name, _, exists) in &resources_to_push {
         if *exists {
@@ -499,7 +501,28 @@ pub async fn run(
         };
 
         for (kind, name, definition, exists) in &search_resources {
-            let action = if *exists { "Updating" } else { "Creating" };
+            let needs_recreate = recreate_candidates.contains(&(*kind, name.clone()));
+
+            if needs_recreate {
+                print!("Dropping {} '{}'... ", kind.display_name(), name);
+                io::stdout().flush()?;
+                match client.delete(*kind, name).await {
+                    Ok(_) => println!("done"),
+                    Err(e) => {
+                        println!("FAILED: {}", e);
+                        error_count += 1;
+                        continue;
+                    }
+                }
+            }
+
+            let action = if needs_recreate {
+                "Recreating"
+            } else if *exists {
+                "Updating"
+            } else {
+                "Creating"
+            };
             print!("{} {} '{}'... ", action, kind.display_name(), name);
             io::stdout().flush()?;
 
@@ -579,6 +602,109 @@ pub async fn run(
     Ok(())
 }
 
+/// Build a managed map from local KS files on disk.
+fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
+    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+    if !ks_base.exists() {
+        return ManagedMap::new();
+    }
+
+    let mut ks_pairs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&ks_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let ks_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let ks_file = path.join(format!("{}.json", ks_name));
+            if let Ok(content) = std::fs::read_to_string(&ks_file) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                    ks_pairs.push((ks_name, value));
+                }
+            }
+        }
+    }
+
+    managed::build_managed_map(&ks_pairs)
+}
+
+/// Collect a single resource for push, checking immutability and diffing.
+#[allow(clippy::too_many_arguments)]
+async fn collect_push_resource(
+    client: &AzureSearchClient,
+    kind: ResourceKind,
+    name: &str,
+    local: serde_json::Value,
+    resources_to_push: &mut Vec<(ResourceKind, String, serde_json::Value, bool)>,
+    validation_errors: &mut Vec<String>,
+    recreate_candidates: &mut Vec<(ResourceKind, String)>,
+    total_unchanged: &mut usize,
+    change_details: &mut HashMap<(ResourceKind, String), Vec<Change>>,
+) {
+    let remote = client.get(kind, name).await;
+
+    match remote {
+        Ok(existing) => {
+            let volatile_fields = get_volatile_fields(kind);
+            let read_only_fields = get_read_only_fields(kind);
+            let push_strip: Vec<&str> = volatile_fields
+                .iter()
+                .chain(read_only_fields.iter())
+                .copied()
+                .collect();
+            let normalized_existing = normalize(&existing, &push_strip);
+            let normalized_local = normalize(&local, &push_strip);
+
+            let violations =
+                check_immutability(kind, name, &normalized_existing, &normalized_local);
+
+            if !violations.is_empty() {
+                let has_recreate = violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::RequiresRecreate);
+                let has_hard_block = violations
+                    .iter()
+                    .any(|v| v.severity == ViolationSeverity::HardBlock);
+
+                if has_hard_block {
+                    for v in violations {
+                        validation_errors.push(format!("{}", v));
+                    }
+                } else if has_recreate {
+                    recreate_candidates.push((kind, name.to_string()));
+                }
+            } else {
+                let remote_json = format_json(&normalized_existing);
+                let local_json = format_json(&normalized_local);
+
+                if remote_json == local_json {
+                    *total_unchanged += 1;
+                } else {
+                    let diff_result =
+                        hoist_diff::diff(&normalized_existing, &normalized_local, "name");
+                    change_details.insert((kind, name.to_string()), diff_result.changes);
+                    resources_to_push.push((kind, name.to_string(), local, true));
+                }
+            }
+        }
+        Err(hoist_client::ClientError::NotFound { .. }) => {
+            resources_to_push.push((kind, name.to_string(), local, false));
+        }
+        Err(e) => {
+            validation_errors.push(format!(
+                "Error checking {} '{}': {}",
+                kind.display_name(),
+                name,
+                e
+            ));
+        }
+    }
+}
+
 /// After creating a new agent, update the local config.json with the server-assigned ID.
 fn update_agent_config_id(
     config: &hoist_core::Config,
@@ -620,56 +746,6 @@ fn foundry_agents_dir(
         .join("agents")
 }
 
-/// Build a NameMap from the copy flags (interactive, suffix, or answers file).
-fn build_name_map(
-    resources: &[(ResourceKind, String, serde_json::Value, bool)],
-    interactive: bool,
-    suffix: Option<&str>,
-    answers_file: Option<&std::path::Path>,
-) -> Result<NameMap> {
-    if let Some(path) = answers_file {
-        return NameMap::from_answers_file(path);
-    }
-
-    if let Some(suffix) = suffix {
-        let pairs: Vec<_> = resources
-            .iter()
-            .map(|(k, n, _, _)| (*k, n.clone()))
-            .collect();
-        return Ok(NameMap::from_suffix(&pairs, suffix));
-    }
-
-    if interactive {
-        return prompt_name_map(resources);
-    }
-
-    Ok(NameMap::new())
-}
-
-/// Interactively prompt the user for new names for each resource.
-fn prompt_name_map(
-    resources: &[(ResourceKind, String, serde_json::Value, bool)],
-) -> Result<NameMap> {
-    let mut name_map = NameMap::new();
-    println!("Enter new names for each resource (press Enter to keep the same name):");
-
-    for (kind, name, _, _) in resources {
-        print!("  {} '{}' -> ", kind.display_name(), name);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let new_name = input.trim();
-
-        if !new_name.is_empty() && new_name != name {
-            name_map.insert(*kind, name, new_name);
-        }
-    }
-    println!();
-
-    Ok(name_map)
-}
-
 /// Remove volatile and read-only fields from a resource definition before sending to Azure.
 ///
 /// Recurses through the entire JSON tree, stripping field names at every level.
@@ -707,279 +783,6 @@ fn strip_fields_recursive(value: &serde_json::Value, fields: &[&str]) -> serde_j
         ),
         _ => value.clone(),
     }
-}
-
-/// Find all string fields with `<redacted>` placeholder values in a JSON tree.
-/// Returns dot-separated paths (e.g., "azureBlobParameters.connectionString").
-fn find_redacted_fields(value: &serde_json::Value, prefix: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    match value {
-        serde_json::Value::Object(map) => {
-            for (k, v) in map {
-                let path = if prefix.is_empty() {
-                    k.clone()
-                } else {
-                    format!("{}.{}", prefix, k)
-                };
-                fields.extend(find_redacted_fields(v, &path));
-            }
-        }
-        serde_json::Value::String(s) if s == "<redacted>" || s == "<REDACTED>" => {
-            fields.push(prefix.to_string());
-        }
-        _ => {}
-    }
-    fields
-}
-
-/// Set a value at a dot-separated JSON path (e.g., "credentials.connectionString").
-/// Creates intermediate objects if they don't exist.
-fn set_at_path(value: &mut serde_json::Value, path: &str, new_value: &str) {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut current = value;
-
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            // Set the leaf value
-            if let Some(obj) = current.as_object_mut() {
-                obj.insert(
-                    part.to_string(),
-                    serde_json::Value::String(new_value.to_string()),
-                );
-            }
-        } else {
-            // Navigate or create intermediate objects
-            if current.get(*part).is_none() {
-                if let Some(obj) = current.as_object_mut() {
-                    obj.insert(part.to_string(), serde_json::json!({}));
-                }
-            }
-            current = current.get_mut(*part).unwrap();
-        }
-    }
-}
-
-/// Collect secrets needed for each resource in copy mode and return them as
-/// (index, field_path, prompt_text) tuples.
-fn collect_copy_secrets(
-    resources: &[(ResourceKind, String, serde_json::Value, bool)],
-) -> Vec<(usize, String, String)> {
-    let mut secrets = Vec::new();
-
-    for (i, (kind, name, definition, _)) in resources.iter().enumerate() {
-        // Check for missing credential fields (stripped as volatile during pull)
-        match kind {
-            ResourceKind::DataSource => {
-                if definition.get("credentials").is_none() {
-                    secrets.push((
-                        i,
-                        "credentials.connectionString".to_string(),
-                        format!("Connection string for Data Source '{}'", name),
-                    ));
-                }
-            }
-            ResourceKind::KnowledgeBase => {
-                if definition.get("storageConnectionStringSecret").is_none() {
-                    secrets.push((
-                        i,
-                        "storageConnectionStringSecret".to_string(),
-                        format!("Storage connection string for Knowledge Base '{}' (press Enter to skip)", name),
-                    ));
-                }
-            }
-            _ => {}
-        }
-
-        // Check for <redacted> placeholder values anywhere in the definition
-        let redacted = find_redacted_fields(definition, "");
-        for path in redacted {
-            secrets.push((
-                i,
-                path.clone(),
-                format!("{} for {} '{}'", path, kind.display_name(), name),
-            ));
-        }
-    }
-
-    secrets
-}
-
-/// Prompt the user for credentials needed to create new resources in copy mode.
-///
-/// Tries to auto-discover storage account connection strings via the ARM API.
-/// Falls back to interactive prompts if discovery fails.
-fn prompt_copy_secrets(
-    resources: &mut [(ResourceKind, String, serde_json::Value, bool)],
-) -> Result<()> {
-    let secrets = collect_copy_secrets(resources);
-
-    if secrets.is_empty() {
-        return Ok(());
-    }
-
-    // Try to discover connection strings via ARM (runs a small tokio block)
-    let discovered = discover_connection_strings();
-
-    if !discovered.is_empty() {
-        println!(
-            "New resources need credentials. Found {} storage account(s):",
-            discovered.len()
-        );
-
-        // Let the user pick which connection string to use
-        let conn_str = if discovered.len() == 1 {
-            let (name, conn) = &discovered[0];
-            println!("  Using storage account '{}'", name);
-            Some(conn.clone())
-        } else {
-            println!();
-            for (i, (name, _)) in discovered.iter().enumerate() {
-                println!("  {}. {}", i + 1, name);
-            }
-            print!("\nWhich storage account to use? [1]: ");
-            io::stdout().flush()?;
-
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            let choice = input.trim();
-
-            let idx = if choice.is_empty() {
-                0
-            } else {
-                choice.parse::<usize>().unwrap_or(1).saturating_sub(1)
-            };
-
-            discovered.get(idx).map(|(_, conn)| conn.clone())
-        };
-
-        if let Some(conn_str) = conn_str {
-            // Apply the connection string to all resources that need it
-            for (idx, path, _) in &secrets {
-                set_at_path(&mut resources[*idx].2, path, &conn_str);
-            }
-            println!();
-            return Ok(());
-        }
-    }
-
-    // Fallback: prompt individually
-    println!("New resources need credentials that aren't stored in local files.");
-    println!("Enter values below (secrets are not masked):\n");
-
-    for (idx, path, prompt) in &secrets {
-        print!("  {}: ", prompt);
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let value = input.trim();
-
-        if value.is_empty() {
-            continue; // Skip — user pressed Enter
-        }
-
-        // Inject the value into the resource definition
-        set_at_path(&mut resources[*idx].2, path, value);
-    }
-    println!();
-
-    Ok(())
-}
-
-/// Try to discover storage account connection strings via the ARM API.
-///
-/// Returns a list of (account_name, connection_string) pairs.
-/// Returns empty vec on any failure (falls back to manual prompts).
-fn discover_connection_strings() -> Vec<(String, String)> {
-    // Load config to get subscription ID and service name
-    let Ok((_, config)) = crate::commands::load_config() else {
-        return Vec::new();
-    };
-
-    let primary = match config.primary_search_service() {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-
-    let subscription_id = match &primary.subscription {
-        Some(sub) => sub.clone(),
-        None => {
-            // Try to get from az account show
-            match hoist_client::auth::AzCliAuth::check_status() {
-                Ok(status) => match status.subscription_id {
-                    Some(id) => id,
-                    None => return Vec::new(),
-                },
-                Err(_) => return Vec::new(),
-            }
-        }
-    };
-
-    // Use a blocking runtime since we're inside sync code called from async context
-    let rt = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            // We're inside an async runtime — use block_in_place
-            return tokio::task::block_in_place(|| {
-                handle.block_on(discover_connection_strings_async(
-                    &subscription_id,
-                    &primary.name,
-                    primary.resource_group.as_deref(),
-                ))
-            });
-        }
-        Err(_) => {
-            // No runtime — create one
-            match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(_) => return Vec::new(),
-            }
-        }
-    };
-
-    rt.block_on(discover_connection_strings_async(
-        &subscription_id,
-        &primary.name,
-        primary.resource_group.as_deref(),
-    ))
-}
-
-async fn discover_connection_strings_async(
-    subscription_id: &str,
-    service_name: &str,
-    resource_group: Option<&str>,
-) -> Vec<(String, String)> {
-    let arm = match hoist_client::ArmClient::new() {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    // Find resource group (from config or by looking up the search service)
-    let rg = match resource_group {
-        Some(rg) => rg.to_string(),
-        None => match arm.find_resource_group(subscription_id, service_name).await {
-            Ok(rg) => rg,
-            Err(_) => return Vec::new(),
-        },
-    };
-
-    // List storage accounts in the same resource group
-    let accounts = match arm.list_storage_accounts(subscription_id, &rg).await {
-        Ok(a) => a,
-        Err(_) => return Vec::new(),
-    };
-
-    // Get connection strings for each
-    let mut results = Vec::new();
-    for account in &accounts {
-        if let Ok(conn) = arm
-            .get_storage_connection_string(subscription_id, &rg, &account.name)
-            .await
-        {
-            results.push((account.name.clone(), conn));
-        }
-    }
-
-    results
 }
 
 #[cfg(test)]
@@ -1211,144 +1014,6 @@ mod tests {
             "knowledgeSources is pushable and must be preserved"
         );
     }
-
-    // === find_redacted_fields tests ===
-
-    #[test]
-    fn test_find_redacted_fields_top_level() {
-        let value = json!({
-            "name": "test",
-            "connectionString": "<redacted>"
-        });
-        let fields = find_redacted_fields(&value, "");
-        assert_eq!(fields, vec!["connectionString"]);
-    }
-
-    #[test]
-    fn test_find_redacted_fields_nested() {
-        let value = json!({
-            "name": "ks-1",
-            "azureBlobParameters": {
-                "containerName": "docs",
-                "connectionString": "<redacted>"
-            }
-        });
-        let fields = find_redacted_fields(&value, "");
-        assert_eq!(fields, vec!["azureBlobParameters.connectionString"]);
-    }
-
-    #[test]
-    fn test_find_redacted_fields_none() {
-        let value = json!({
-            "name": "test",
-            "description": "Normal value"
-        });
-        let fields = find_redacted_fields(&value, "");
-        assert!(fields.is_empty());
-    }
-
-    #[test]
-    fn test_find_redacted_fields_uppercase() {
-        let value = json!({"secret": "<REDACTED>"});
-        let fields = find_redacted_fields(&value, "");
-        assert_eq!(fields, vec!["secret"]);
-    }
-
-    // === set_at_path tests ===
-
-    #[test]
-    fn test_set_at_path_simple() {
-        let mut value = json!({"name": "test"});
-        set_at_path(&mut value, "description", "hello");
-        assert_eq!(value["description"], "hello");
-    }
-
-    #[test]
-    fn test_set_at_path_nested_existing() {
-        let mut value = json!({
-            "azureBlobParameters": {
-                "connectionString": "<redacted>",
-                "containerName": "docs"
-            }
-        });
-        set_at_path(
-            &mut value,
-            "azureBlobParameters.connectionString",
-            "real-secret",
-        );
-        assert_eq!(
-            value["azureBlobParameters"]["connectionString"],
-            "real-secret"
-        );
-        assert_eq!(value["azureBlobParameters"]["containerName"], "docs");
-    }
-
-    #[test]
-    fn test_set_at_path_creates_intermediate() {
-        let mut value = json!({"name": "ds-1"});
-        set_at_path(&mut value, "credentials.connectionString", "secret");
-        assert_eq!(value["credentials"]["connectionString"], "secret");
-    }
-
-    // === collect_copy_secrets tests ===
-
-    #[test]
-    fn test_collect_copy_secrets_datasource_missing_credentials() {
-        let resources = vec![(
-            ResourceKind::DataSource,
-            "ds-1".to_string(),
-            json!({"name": "ds-1", "type": "azureblob"}),
-            false,
-        )];
-        let secrets = collect_copy_secrets(&resources);
-        assert_eq!(secrets.len(), 1);
-        assert_eq!(secrets[0].1, "credentials.connectionString");
-    }
-
-    #[test]
-    fn test_collect_copy_secrets_ks_redacted() {
-        let resources = vec![(
-            ResourceKind::KnowledgeSource,
-            "ks-1".to_string(),
-            json!({
-                "name": "ks-1",
-                "azureBlobParameters": {
-                    "connectionString": "<redacted>"
-                }
-            }),
-            false,
-        )];
-        let secrets = collect_copy_secrets(&resources);
-        assert_eq!(secrets.len(), 1);
-        assert_eq!(secrets[0].1, "azureBlobParameters.connectionString");
-    }
-
-    #[test]
-    fn test_collect_copy_secrets_index_needs_nothing() {
-        let resources = vec![(
-            ResourceKind::Index,
-            "idx-1".to_string(),
-            json!({"name": "idx-1", "fields": []}),
-            false,
-        )];
-        let secrets = collect_copy_secrets(&resources);
-        assert!(secrets.is_empty());
-    }
-
-    #[test]
-    fn test_collect_copy_secrets_kb_missing_storage_secret() {
-        let resources = vec![(
-            ResourceKind::KnowledgeBase,
-            "kb-1".to_string(),
-            json!({"name": "kb-1", "description": "Test"}),
-            false,
-        )];
-        let secrets = collect_copy_secrets(&resources);
-        assert_eq!(secrets.len(), 1);
-        assert_eq!(secrets[0].1, "storageConnectionStringSecret");
-    }
-
-    // read_agent_files tests are in common.rs (the function lives there now)
 
     /// Verifies that knowledgeSources changes on a KB are detected by push.
     #[test]

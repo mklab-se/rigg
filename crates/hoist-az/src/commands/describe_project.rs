@@ -219,7 +219,9 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                     }
                 }
                 ResourceKind::KnowledgeSource => {
-                    for v in &values {
+                    // KS are now stored as subdirectories; read from each subdir
+                    let ks_values = read_ks_from_dirs(&resource_dir);
+                    for v in &ks_values {
                         let ks = parse_knowledge_source(v);
                         add_knowledge_source_dependencies(&ks, &mut summary.dependencies);
                         summary.knowledge_sources.push(ks);
@@ -316,6 +318,33 @@ fn read_json_files(dir: &Path) -> Result<Vec<Value>> {
         values.push(value);
     }
     Ok(values)
+}
+
+/// Read knowledge source definitions from subdirectories.
+/// Each KS is stored as `<ks-name>/<ks-name>.json` within the knowledge-sources dir.
+fn read_ks_from_dirs(ks_base: &Path) -> Vec<Value> {
+    let mut values = Vec::new();
+    let entries = match std::fs::read_dir(ks_base) {
+        Ok(e) => e,
+        Err(_) => return values,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let ks_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let ks_file = path.join(format!("{}.json", ks_name));
+        if let Ok(content) = std::fs::read_to_string(&ks_file) {
+            if let Ok(value) = serde_json::from_str::<Value>(&content) {
+                values.push(value);
+            }
+        }
+    }
+    values
 }
 
 // ---------------------------------------------------------------------------

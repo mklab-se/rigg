@@ -15,6 +15,7 @@ use hoist_client::AzureSearchClient;
 use hoist_core::config::FoundryServiceConfig;
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::agent::{agent_volatile_fields, decompose_agent};
+use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
@@ -216,6 +217,7 @@ pub async fn execute_pull(
     let mut updated_resources = Vec::new();
     let mut deleted_resources: Vec<(ResourceKind, String, std::path::PathBuf)> = Vec::new();
     let mut total_unchanged: usize = 0;
+    let mut managed_map = ManagedMap::new();
 
     // --- Search resources ---
     if !search_kinds.is_empty() {
@@ -236,10 +238,49 @@ pub async fn execute_pull(
             client.auth_method()
         );
 
+        // Determine which kinds to actually fetch. If --knowledge-sources is
+        // requested, also fetch managed sub-resource kinds.
+        let mut fetch_kinds = search_kinds.clone();
+        if fetch_kinds.contains(&ResourceKind::KnowledgeSource) {
+            for managed_kind in managed::MANAGED_SUB_RESOURCE_KINDS {
+                if !fetch_kinds.contains(managed_kind) {
+                    fetch_kinds.push(*managed_kind);
+                }
+            }
+        }
+
+        // Fetch knowledge sources first if included, to build managed map
+        let has_ks = fetch_kinds.contains(&ResourceKind::KnowledgeSource);
+        if has_ks {
+            let ks_results = client.list(ResourceKind::KnowledgeSource).await;
+            if let Ok(ks_list) = &ks_results {
+                let ks_pairs: Vec<(String, Value)> = ks_list
+                    .iter()
+                    .filter_map(|r| {
+                        r.get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|n| (n.to_string(), r.clone()))
+                    })
+                    .collect();
+                managed_map = managed::build_managed_map(&ks_pairs);
+            }
+        }
+
         // Fetch all resource kinds concurrently (max 5 in-flight requests)
+        // Skip KnowledgeSource if we already fetched it above
+        let remaining_kinds: Vec<ResourceKind> = if has_ks {
+            fetch_kinds
+                .iter()
+                .filter(|k| **k != ResourceKind::KnowledgeSource)
+                .copied()
+                .collect()
+        } else {
+            fetch_kinds.clone()
+        };
+
         let semaphore = Arc::new(Semaphore::new(5));
-        let fetched_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> =
-            stream::iter(search_kinds.iter())
+        let mut fetched_results: Vec<(ResourceKind, Result<Vec<Value>, _>)> =
+            stream::iter(remaining_kinds.iter())
                 .map(|kind| {
                     let client = &client;
                     let sem = Arc::clone(&semaphore);
@@ -253,6 +294,12 @@ pub async fn execute_pull(
                 .collect()
                 .await;
 
+        // Add KS results back if we fetched them separately
+        if has_ks {
+            let ks_result = client.list(ResourceKind::KnowledgeSource).await;
+            fetched_results.push((ResourceKind::KnowledgeSource, ks_result));
+        }
+
         discover_search_resources(
             config,
             project_root,
@@ -261,6 +308,7 @@ pub async fn execute_pull(
             selection,
             filter,
             &checksums,
+            &managed_map,
             &mut new_resources,
             &mut updated_resources,
             &mut deleted_resources,
@@ -362,13 +410,17 @@ pub async fn execute_pull(
             // Agent: write decomposed files
             write_agent_files(config, project_root, entry)?;
         } else {
-            // Search resource: write single JSON file under service-scoped dir
-            let resource_dir = config
-                .search_service_dir(project_root, &write_search_service_name)
-                .join(entry.kind.directory_name());
+            // Search resource: write to managed-aware path
+            let service_dir = config.search_service_dir(project_root, &write_search_service_name);
+            let resource_dir = service_dir.join(managed::resource_directory(
+                entry.kind,
+                &entry.name,
+                &managed_map,
+            ));
             std::fs::create_dir_all(&resource_dir)?;
 
-            let file_path = resource_dir.join(format!("{}.json", entry.name));
+            let filename = managed::resource_filename(entry.kind, &entry.name, &managed_map);
+            let file_path = resource_dir.join(&filename);
             std::fs::write(&file_path, &entry.json_content)?;
             info!("Wrote {}", file_path.display());
         }
@@ -380,7 +432,7 @@ pub async fn execute_pull(
             .and_then(|e| e.as_str())
             .map(String::from);
 
-        state.set(
+        state.set_managed(
             entry.kind,
             &entry.name,
             ResourceState {
@@ -389,8 +441,14 @@ pub async fn execute_pull(
                 checksum: entry.new_checksum.clone(),
                 synced_at: chrono::Utc::now(),
             },
+            &managed_map,
         );
-        checksums.set(entry.kind, &entry.name, entry.new_checksum.clone());
+        checksums.set_managed(
+            entry.kind,
+            &entry.name,
+            entry.new_checksum.clone(),
+            &managed_map,
+        );
     }
 
     // Delete local files for resources removed on server
@@ -401,12 +459,16 @@ pub async fn execute_pull(
                 std::fs::remove_dir_all(path)?;
                 info!("Deleted agent directory {}", path.display());
             }
+        } else if *kind == ResourceKind::KnowledgeSource && path.is_dir() {
+            // KS: remove entire directory (includes managed sub-resources)
+            std::fs::remove_dir_all(path)?;
+            info!("Deleted knowledge source directory {}", path.display());
         } else {
             std::fs::remove_file(path)?;
             info!("Deleted {}", path.display());
         }
-        state.remove(*kind, name);
-        checksums.remove(*kind, name);
+        state.remove_managed(*kind, name, &managed_map);
+        checksums.remove_managed(*kind, name, &managed_map);
     }
 
     // Save state
@@ -447,11 +509,14 @@ fn discover_search_resources(
     selection: &ResourceSelection,
     filter: Option<&str>,
     checksums: &Checksums,
+    managed_map: &ManagedMap,
     new_resources: &mut Vec<DiscoveredResource>,
     updated_resources: &mut Vec<DiscoveredResource>,
     deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
     total_unchanged: &mut usize,
 ) -> Result<()> {
+    let service_dir = config.search_service_dir(project_root, service_name);
+
     for (kind, result) in fetched_results {
         let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -462,6 +527,8 @@ fn discover_search_resources(
             .collect();
 
         // Filter by singular flag (exact name match) and/or pattern (substring match)
+        // For managed sub-resources pulled via --knowledge-sources, skip the selection
+        // filter since they were implicitly included.
         let exact_name = selection.name_filter(*kind);
         let resources: Vec<&Value> = resources
             .iter()
@@ -481,15 +548,16 @@ fn discover_search_resources(
             })
             .collect();
 
-        let resource_dir = config
-            .search_service_dir(project_root, service_name)
-            .join(kind.directory_name());
-
         for resource in &resources {
             let name = resource
                 .get("name")
                 .and_then(|n| n.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Resource missing name field"))?;
+
+            // Route file to correct directory based on managed map
+            let resource_dir =
+                service_dir.join(managed::resource_directory(*kind, name, managed_map));
+            let filename = managed::resource_filename(*kind, name, managed_map);
 
             // Normalize the JSON
             let volatile_fields = get_volatile_fields(*kind);
@@ -498,9 +566,10 @@ fn discover_search_resources(
 
             // Check if content changed (remote vs stored checksum) and file on disk matches
             let new_checksum = Checksums::calculate(&json_content);
-            let file_path = resource_dir.join(format!("{}.json", name));
-            let is_existing = checksums.get(*kind, name).is_some();
-            let remote_unchanged = checksums.get(*kind, name) == Some(&new_checksum);
+            let file_path = resource_dir.join(&filename);
+            let is_existing = checksums.get_managed(*kind, name, managed_map).is_some();
+            let remote_unchanged =
+                checksums.get_managed(*kind, name, managed_map) == Some(&new_checksum);
             let local_matches = file_path.exists()
                 && std::fs::read_to_string(&file_path).ok().as_deref()
                     == Some(json_content.as_str());
@@ -538,31 +607,67 @@ fn discover_search_resources(
         }
 
         // Detect local files whose resources were deleted on the server
-        if resource_dir.exists() {
-            for entry in std::fs::read_dir(&resource_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-
-                let name = match path.file_stem().and_then(|n| n.to_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-
-                // If filter is set, only consider files matching the filter
-                if let Some(pattern) = filter {
-                    if !name.contains(pattern) {
+        // For knowledge sources, scan subdirectories
+        if *kind == ResourceKind::KnowledgeSource {
+            let ks_base_dir = service_dir.join("agentic-retrieval/knowledge-sources");
+            if ks_base_dir.exists() {
+                for entry in std::fs::read_dir(&ks_base_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if !path.is_dir() {
                         continue;
                     }
+                    let name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if let Some(pattern) = filter {
+                        if !name.contains(pattern) {
+                            continue;
+                        }
+                    }
+                    if !all_remote_names.contains(&name)
+                        && checksums.get_managed(*kind, &name, managed_map).is_some()
+                    {
+                        // Delete entire KS directory (includes managed sub-resources)
+                        deleted_resources.push((*kind, name, path));
+                    }
                 }
+            }
+        } else {
+            // For other resources, scan the appropriate directories
+            // Check standalone directory
+            let standalone_dir = service_dir.join(kind.directory_name());
+            if standalone_dir.exists() {
+                for entry in std::fs::read_dir(&standalone_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
 
-                // If this name doesn't exist on the server AND was previously tracked,
-                // it's been deleted.
-                if !all_remote_names.contains(&name) && checksums.get(*kind, &name).is_some() {
-                    deleted_resources.push((*kind, name, path));
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+
+                    let name = match path.file_stem().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+
+                    if let Some(pattern) = filter {
+                        if !name.contains(pattern) {
+                            continue;
+                        }
+                    }
+
+                    // Skip managed resources when scanning standalone dirs
+                    if managed::managing_ks(managed_map, *kind, &name).is_some() {
+                        continue;
+                    }
+
+                    if !all_remote_names.contains(&name)
+                        && checksums.get_managed(*kind, &name, managed_map).is_some()
+                    {
+                        deleted_resources.push((*kind, name, path));
+                    }
                 }
             }
         }

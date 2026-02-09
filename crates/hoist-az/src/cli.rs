@@ -243,18 +243,47 @@ pub enum Commands {
         /// Push to a different server instead of the configured one
         #[arg(long)]
         target: Option<String>,
+    },
 
-        /// Copy resources under new names instead of updating in place
-        #[arg(long)]
-        copy: bool,
+    /// Copy a resource locally under a new name (no network calls)
+    Copy {
+        /// Source resource name
+        source: String,
 
-        /// Copy with auto-generated names by appending a suffix (implies --copy)
-        #[arg(long)]
-        suffix: Option<String>,
+        /// Target resource name
+        target: String,
 
-        /// Copy with names from a JSON mapping file (implies --copy)
-        #[arg(long)]
-        answers: Option<PathBuf>,
+        /// Copy a knowledge source and all its managed sub-resources
+        #[arg(long, group = "resource_type")]
+        knowledgesource: bool,
+
+        /// Copy a knowledge base
+        #[arg(long, group = "resource_type")]
+        knowledgebase: bool,
+
+        /// Copy a standalone index
+        #[arg(long, group = "resource_type")]
+        index: bool,
+
+        /// Copy a standalone indexer
+        #[arg(long, group = "resource_type")]
+        indexer: bool,
+
+        /// Copy a standalone data source
+        #[arg(long, group = "resource_type")]
+        datasource: bool,
+
+        /// Copy a standalone skillset
+        #[arg(long, group = "resource_type")]
+        skillset: bool,
+
+        /// Copy a standalone synonym map
+        #[arg(long, group = "resource_type")]
+        synonymmap: bool,
+
+        /// Copy a standalone alias
+        #[arg(long, group = "resource_type")]
+        alias: bool,
     },
 
     /// Compare local resource files against the live Azure service
@@ -419,23 +448,33 @@ impl Cli {
                 force,
                 yes,
                 target,
-                copy,
-                suffix,
-                answers,
             } => {
-                commands::push::run(
-                    &resources,
-                    recursive,
-                    filter,
-                    dry_run,
-                    force || yes,
-                    target,
-                    copy,
-                    suffix,
-                    answers,
-                )
-                .await
+                commands::push::run(&resources, recursive, filter, dry_run, force || yes, target)
+                    .await
             }
+            Commands::Copy {
+                source,
+                target,
+                knowledgesource,
+                knowledgebase,
+                index,
+                indexer,
+                datasource,
+                skillset,
+                synonymmap,
+                alias,
+            } => commands::copy::run(
+                &source,
+                &target,
+                knowledgesource,
+                knowledgebase,
+                index,
+                indexer,
+                datasource,
+                skillset,
+                synonymmap,
+                alias,
+            ),
             Commands::Diff {
                 resources,
                 format,

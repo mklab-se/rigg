@@ -80,10 +80,17 @@ hoist.toml
 .hoist/          # state.json, checksums.json (gitignored)
 search-resources/
   <search-service>/
-    search-management/
+    search-management/           # Standalone (non-managed) resources only
       indexes/  indexers/  data-sources/  skillsets/  synonym-maps/  aliases/
     agentic-retrieval/
-      knowledge-bases/  knowledge-sources/
+      knowledge-bases/           # Flat JSON files
+      knowledge-sources/         # Each KS is a directory with managed sub-resources
+        <ks-name>/
+          <ks-name>.json           # The KS definition
+          <ks-name>-index.json     # Managed index (from createdResources)
+          <ks-name>-indexer.json   # Managed indexer
+          <ks-name>-datasource.json # Managed data source
+          <ks-name>-skillset.json  # Managed skillset
 foundry-resources/
   <foundry-service>/
     <project>/
@@ -91,6 +98,8 @@ foundry-resources/
         <agent-name>/
           config.json  instructions.md  tools.json  knowledge.json
 ```
+
+Knowledge source managed sub-resources (auto-provisioned by Azure via `createdResources`) are nested under their parent KS directory. Standalone resources (not managed by a KS) remain in `search-management/`.
 
 Legacy projects using `[service]` config and a custom path (e.g., `search/`) continue to work unchanged.
 
@@ -121,6 +130,8 @@ Legacy `[service]` format auto-migrates to `services.search[0]` on load.
 
 ## Key Patterns
 
+- **Managed resources**: Knowledge sources auto-provision sub-resources (index, indexer, data source, skillset) listed in `createdResources`. The `managed.rs` module tracks ownership via `ManagedMap` (`HashMap<(ResourceKind, String), String>` mapping `(kind, azure_name)` to `ks_name`). Pull routes managed resources to KS subdirectories; push does cascade push (KS → Index → Skillset → DataSource → Indexer); diff reads from managed-aware paths; standalone flags (`--indexes`) skip managed resources.
+- **Drop-and-recreate**: When pushing an index with removed fields (immutable in Azure), hoist detects `ViolationSeverity::RequiresRecreate` and offers to delete and recreate the resource.
 - **Checksum-based change detection**: Pull skips writing files when content hasn't changed, but always verifies the file exists on disk (stale checksums don't suppress re-writes).
 - **JSON normalization**: Strips volatile fields (`@odata.etag`, `@odata.context`, credentials), preserves Azure's property ordering (via `serde_json` `preserve_order` feature), sorts arrays by identity key, redacts secrets.
 - **Auth chain**: Environment variables (service principal) take priority, then Azure CLI. Auth is scoped per service domain (`search.azure.com` for Search, `ai.azure.com` for Foundry). ARM discovery uses a separate token scoped to `management.azure.com`.

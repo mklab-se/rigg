@@ -23,6 +23,21 @@ fn count_resources(dir: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Count knowledge source directories (each subdirectory is one KS with its managed resources)
+fn count_ks_dirs(dir: &std::path::Path) -> usize {
+    if !dir.exists() {
+        return 0;
+    }
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// Count agent directories (each subdirectory is one agent)
 fn count_agent_dirs(dir: &std::path::Path) -> usize {
     if !dir.exists() {
@@ -62,15 +77,23 @@ pub async fn run(output: OutputFormat) -> Result<()> {
         }
 
         if config.sync.include_preview {
-            for kind in [ResourceKind::KnowledgeBase, ResourceKind::KnowledgeSource] {
-                let dir = search_base.join(kind.directory_name());
-                let count = count_resources(&dir);
-                let entry = resource_counts
-                    .entry(kind.display_name().to_string())
-                    .or_insert(json!(0));
-                *entry = json!(entry.as_u64().unwrap_or(0) + count as u64);
-                total += count;
-            }
+            // Knowledge bases are flat JSON files
+            let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
+            let kb_count = count_resources(&kb_dir);
+            let kb_entry = resource_counts
+                .entry(ResourceKind::KnowledgeBase.display_name().to_string())
+                .or_insert(json!(0));
+            *kb_entry = json!(kb_entry.as_u64().unwrap_or(0) + kb_count as u64);
+            total += kb_count;
+
+            // Knowledge sources are directories (each subdir = one KS with managed resources)
+            let ks_dir = search_base.join(ResourceKind::KnowledgeSource.directory_name());
+            let ks_count = count_ks_dirs(&ks_dir);
+            let ks_entry = resource_counts
+                .entry(ResourceKind::KnowledgeSource.display_name().to_string())
+                .or_insert(json!(0));
+            *ks_entry = json!(ks_entry.as_u64().unwrap_or(0) + ks_count as u64);
+            total += ks_count;
         }
     }
 
@@ -162,14 +185,37 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                 if config.sync.include_preview {
                     println!();
                     println!("  Preview Resources:");
-                    for kind in [ResourceKind::KnowledgeBase, ResourceKind::KnowledgeSource] {
-                        let dir = search_base.join(kind.directory_name());
-                        if !dir.exists() {
-                            println!("    {}: (not initialized)", kind.display_name());
-                        } else {
-                            let count = count_resources(&dir);
-                            println!("    {}: {}", kind.display_name(), count);
-                        }
+
+                    // Knowledge bases are flat JSON files
+                    let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
+                    if !kb_dir.exists() {
+                        println!(
+                            "    {}: (not initialized)",
+                            ResourceKind::KnowledgeBase.display_name()
+                        );
+                    } else {
+                        let count = count_resources(&kb_dir);
+                        println!(
+                            "    {}: {}",
+                            ResourceKind::KnowledgeBase.display_name(),
+                            count
+                        );
+                    }
+
+                    // Knowledge sources are directories
+                    let ks_dir = search_base.join(ResourceKind::KnowledgeSource.directory_name());
+                    if !ks_dir.exists() {
+                        println!(
+                            "    {}: (not initialized)",
+                            ResourceKind::KnowledgeSource.display_name()
+                        );
+                    } else {
+                        let count = count_ks_dirs(&ks_dir);
+                        println!(
+                            "    {}: {}",
+                            ResourceKind::KnowledgeSource.display_name(),
+                            count
+                        );
                     }
                 }
             }

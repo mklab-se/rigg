@@ -7,6 +7,7 @@ use tracing::info;
 use hoist_client::AzureSearchClient;
 use hoist_core::normalize::normalize;
 use hoist_core::resources::agent::{agent_volatile_fields, compose_agent};
+use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_diff::{
@@ -59,14 +60,14 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
     if !search_kinds.is_empty() && !primary_search_name.is_empty() {
         let client = AzureSearchClient::new(&config)?;
 
-        for kind in &search_kinds {
-            let resource_dir = config
-                .search_service_dir(&project_root, &primary_search_name)
-                .join(kind.directory_name());
-            if !resource_dir.exists() {
-                continue;
-            }
+        let service_dir = config.search_service_dir(&project_root, &primary_search_name);
 
+        // Build managed map from local KS files
+        let managed_map = build_local_managed_map(&service_dir);
+
+        let has_ks = search_kinds.contains(&ResourceKind::KnowledgeSource);
+
+        for kind in &search_kinds {
             // Strip both volatile and read-only fields — matches push behavior.
             // Read-only fields (knowledgeSources, createdResources, etc.) can't be
             // pushed, so showing them as diffs would be misleading.
@@ -77,7 +78,76 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
 
             let exact_name = selection.name_filter(*kind);
 
-            // Read all JSON files in directory
+            if *kind == ResourceKind::KnowledgeSource {
+                // Read KS definitions from their subdirectories
+                let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+                if !ks_base.exists() {
+                    continue;
+                }
+                for entry in std::fs::read_dir(&ks_base)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let ks_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    if let Some(exact) = exact_name {
+                        if ks_name != exact {
+                            continue;
+                        }
+                    }
+                    let ks_file = path.join(format!("{}.json", ks_name));
+                    if !ks_file.exists() {
+                        continue;
+                    }
+
+                    diff_resource(
+                        &client,
+                        *kind,
+                        &ks_name,
+                        &ks_file,
+                        &strip_fields,
+                        &mut all_diffs,
+                        &mut has_changes,
+                    )
+                    .await?;
+
+                    // If --knowledge-sources, also diff managed sub-resources
+                    if has_ks {
+                        let managed_subs = managed::read_managed_sub_resources(&path, &ks_name);
+                        for (sub_kind, sub_name, sub_def) in managed_subs {
+                            let sub_volatile = get_volatile_fields(sub_kind);
+                            let sub_read_only = get_read_only_fields(sub_kind);
+                            let sub_strip: Vec<&str> = sub_volatile
+                                .iter()
+                                .chain(sub_read_only.iter())
+                                .copied()
+                                .collect();
+                            diff_resource_value(
+                                &client,
+                                sub_kind,
+                                &sub_name,
+                                &sub_def,
+                                &sub_strip,
+                                &mut all_diffs,
+                                &mut has_changes,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // For other resource types, read from standalone directories
+            let resource_dir = service_dir.join(kind.directory_name());
+            if !resource_dir.exists() {
+                continue;
+            }
+
             for entry in std::fs::read_dir(&resource_dir)? {
                 let entry = entry?;
                 let path = entry.path();
@@ -91,6 +161,11 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                     .and_then(|n| n.to_str())
                     .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
 
+                // Skip managed resources — they're diffed via KS cascade
+                if managed::managing_ks(&managed_map, *kind, name).is_some() {
+                    continue;
+                }
+
                 // Filter by singular flag (exact name match)
                 if let Some(exact) = exact_name {
                     if name != exact {
@@ -98,47 +173,21 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                     }
                 }
 
-                // Read local file
-                let content = std::fs::read_to_string(&path)?;
-                let local: serde_json::Value = serde_json::from_str(&content)?;
-                let local_normalized = normalize(&local, &strip_fields);
-
-                // Fetch remote
-                let resource_id = format!("{}/{}", kind.directory_name(), name);
-
-                match client.get(*kind, name).await {
-                    Ok(remote) => {
-                        let remote_normalized = normalize(&remote, &strip_fields);
-                        let diff_result = diff(&local_normalized, &remote_normalized, "name");
-
-                        if !diff_result.is_equal {
-                            has_changes = true;
-                        }
-
-                        all_diffs.push((resource_id, diff_result));
-                    }
-                    Err(hoist_client::ClientError::NotFound { .. }) => {
-                        // Local only - will be created
-                        has_changes = true;
-                        all_diffs.push((
-                            resource_id,
-                            hoist_diff::DiffResult {
-                                is_equal: false,
-                                changes: vec![hoist_diff::Change {
-                                    path: ".".to_string(),
-                                    kind: hoist_diff::ChangeKind::Added,
-                                    old_value: None,
-                                    new_value: Some(local_normalized),
-                                }],
-                            },
-                        ));
-                    }
-                    Err(e) => return Err(e.into()),
-                }
+                diff_resource(
+                    &client,
+                    *kind,
+                    name,
+                    &path,
+                    &strip_fields,
+                    &mut all_diffs,
+                    &mut has_changes,
+                )
+                .await?;
             }
 
             // Check for remote-only resources (will be kept, not deleted)
             let remote_resources = client.list(*kind).await?;
+            let resource_dir = service_dir.join(kind.directory_name());
             for remote in remote_resources {
                 let name = remote
                     .get("name")
@@ -324,4 +373,102 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
     }
 
     Ok(())
+}
+
+/// Diff a local file against the remote server.
+async fn diff_resource(
+    client: &AzureSearchClient,
+    kind: ResourceKind,
+    name: &str,
+    path: &std::path::Path,
+    strip_fields: &[&str],
+    all_diffs: &mut Vec<(String, hoist_diff::DiffResult)>,
+    has_changes: &mut bool,
+) -> Result<()> {
+    let content = std::fs::read_to_string(path)?;
+    let local: serde_json::Value = serde_json::from_str(&content)?;
+    diff_resource_value(
+        client,
+        kind,
+        name,
+        &local,
+        strip_fields,
+        all_diffs,
+        has_changes,
+    )
+    .await
+}
+
+/// Diff a local JSON value against the remote server.
+async fn diff_resource_value(
+    client: &AzureSearchClient,
+    kind: ResourceKind,
+    name: &str,
+    local: &serde_json::Value,
+    strip_fields: &[&str],
+    all_diffs: &mut Vec<(String, hoist_diff::DiffResult)>,
+    has_changes: &mut bool,
+) -> Result<()> {
+    let local_normalized = normalize(local, strip_fields);
+    let resource_id = format!("{}/{}", kind.directory_name(), name);
+
+    match client.get(kind, name).await {
+        Ok(remote) => {
+            let remote_normalized = normalize(&remote, strip_fields);
+            let diff_result = diff(&local_normalized, &remote_normalized, "name");
+
+            if !diff_result.is_equal {
+                *has_changes = true;
+            }
+
+            all_diffs.push((resource_id, diff_result));
+        }
+        Err(hoist_client::ClientError::NotFound { .. }) => {
+            *has_changes = true;
+            all_diffs.push((
+                resource_id,
+                hoist_diff::DiffResult {
+                    is_equal: false,
+                    changes: vec![hoist_diff::Change {
+                        path: ".".to_string(),
+                        kind: hoist_diff::ChangeKind::Added,
+                        old_value: None,
+                        new_value: Some(local_normalized),
+                    }],
+                },
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+/// Build a managed map from local KS files on disk.
+fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
+    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+    if !ks_base.exists() {
+        return ManagedMap::new();
+    }
+
+    let mut ks_pairs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&ks_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let ks_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let ks_file = path.join(format!("{}.json", ks_name));
+            if let Ok(content) = std::fs::read_to_string(&ks_file) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                    ks_pairs.push((ks_name, value));
+                }
+            }
+        }
+    }
+
+    managed::build_managed_map(&ks_pairs)
 }

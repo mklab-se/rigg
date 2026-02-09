@@ -7,6 +7,7 @@ pub mod index;
 pub mod indexer;
 pub mod knowledge_base;
 pub mod knowledge_source;
+pub mod managed;
 pub mod skillset;
 pub mod synonym_map;
 pub mod traits;

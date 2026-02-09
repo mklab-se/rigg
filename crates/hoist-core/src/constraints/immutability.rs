@@ -5,6 +5,15 @@ use thiserror::Error;
 
 use crate::resources::ResourceKind;
 
+/// Classification of immutability violations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViolationSeverity {
+    /// Can be resolved by drop-and-recreate (e.g., field removal, type change)
+    RequiresRecreate,
+    /// Hard block — cannot be resolved automatically
+    HardBlock,
+}
+
 /// Immutability violation error
 #[derive(Debug, Error)]
 #[error("{kind} '{name}': field '{field}' cannot be modified after creation. {suggestion}")]
@@ -13,6 +22,7 @@ pub struct ImmutabilityViolation {
     pub name: String,
     pub field: String,
     pub suggestion: String,
+    pub severity: ViolationSeverity,
 }
 
 /// Check for immutability violations between existing and new resource definitions
@@ -59,7 +69,8 @@ fn check_index_immutability(
                     kind: ResourceKind::Index,
                     name: name.to_string(),
                     field: format!("fields.{}", field_name),
-                    suggestion: "Fields cannot be removed from an existing index. To remove a field, you must delete and recreate the index.".to_string(),
+                    suggestion: "Fields cannot be removed from an existing index. Drop and recreate to apply this change.".to_string(),
+                    severity: ViolationSeverity::RequiresRecreate,
                 });
             }
         }
@@ -76,9 +87,10 @@ fn check_index_immutability(
                             name: name.to_string(),
                             field: format!("fields.{}.{}", field_name, attr),
                             suggestion: format!(
-                                "The '{}' attribute of field '{}' cannot be changed. To modify this, you must delete and recreate the index.",
+                                "The '{}' attribute of field '{}' cannot be changed. Drop and recreate to apply this change.",
                                 attr, field_name
                             ),
+                            severity: ViolationSeverity::RequiresRecreate,
                         });
                     }
                 }

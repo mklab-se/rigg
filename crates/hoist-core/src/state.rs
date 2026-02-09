@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::resources::managed::ManagedMap;
 use crate::resources::ResourceKind;
 
 /// State management errors
@@ -99,6 +100,17 @@ impl LocalState {
         format!("{}/{}", kind.directory_name(), name)
     }
 
+    /// Get resource key with managed map awareness.
+    ///
+    /// Managed resources use their KS directory path as the key prefix,
+    /// knowledge sources use their own directory, and standalone resources
+    /// use the default directory.
+    pub fn resource_key_managed(kind: ResourceKind, name: &str, map: &ManagedMap) -> String {
+        use crate::resources::managed::resource_directory;
+        let dir = resource_directory(kind, name, map);
+        format!("{}/{}", dir.display(), name)
+    }
+
     /// Get resource state
     pub fn get(&self, kind: ResourceKind, name: &str) -> Option<&ResourceState> {
         let key = Self::resource_key(kind, name);
@@ -114,6 +126,35 @@ impl LocalState {
     /// Remove resource state
     pub fn remove(&mut self, kind: ResourceKind, name: &str) {
         let key = Self::resource_key(kind, name);
+        self.resources.remove(&key);
+    }
+
+    /// Get resource state using managed-aware key
+    pub fn get_managed(
+        &self,
+        kind: ResourceKind,
+        name: &str,
+        map: &ManagedMap,
+    ) -> Option<&ResourceState> {
+        let key = Self::resource_key_managed(kind, name, map);
+        self.resources.get(&key)
+    }
+
+    /// Set resource state using managed-aware key
+    pub fn set_managed(
+        &mut self,
+        kind: ResourceKind,
+        name: &str,
+        state: ResourceState,
+        map: &ManagedMap,
+    ) {
+        let key = Self::resource_key_managed(kind, name, map);
+        self.resources.insert(key, state);
+    }
+
+    /// Remove resource state using managed-aware key
+    pub fn remove_managed(&mut self, kind: ResourceKind, name: &str, map: &ManagedMap) {
+        let key = Self::resource_key_managed(kind, name, map);
         self.resources.remove(&key);
     }
 }
@@ -166,6 +207,30 @@ impl Checksums {
     /// Remove checksum for a resource
     pub fn remove(&mut self, kind: ResourceKind, name: &str) {
         let key = LocalState::resource_key(kind, name);
+        self.checksums.remove(&key);
+    }
+
+    /// Get checksum for a resource using managed-aware key
+    pub fn get_managed(&self, kind: ResourceKind, name: &str, map: &ManagedMap) -> Option<&String> {
+        let key = LocalState::resource_key_managed(kind, name, map);
+        self.checksums.get(&key)
+    }
+
+    /// Set checksum for a resource using managed-aware key
+    pub fn set_managed(
+        &mut self,
+        kind: ResourceKind,
+        name: &str,
+        checksum: String,
+        map: &ManagedMap,
+    ) {
+        let key = LocalState::resource_key_managed(kind, name, map);
+        self.checksums.insert(key, checksum);
+    }
+
+    /// Remove checksum for a resource using managed-aware key
+    pub fn remove_managed(&mut self, kind: ResourceKind, name: &str, map: &ManagedMap) {
+        let key = LocalState::resource_key_managed(kind, name, map);
         self.checksums.remove(&key);
     }
 }
@@ -333,5 +398,63 @@ mod tests {
             LocalState::checksums_file(root),
             PathBuf::from("/my/project/.hoist/checksums.json")
         );
+    }
+
+    #[test]
+    fn test_resource_key_managed_standalone() {
+        let map = ManagedMap::new();
+        let key = LocalState::resource_key_managed(ResourceKind::Index, "my-index", &map);
+        assert_eq!(key, "search-management/indexes/my-index");
+    }
+
+    #[test]
+    fn test_resource_key_managed_ks() {
+        let map = ManagedMap::new();
+        let key = LocalState::resource_key_managed(ResourceKind::KnowledgeSource, "test-ks", &map);
+        assert_eq!(key, "agentic-retrieval/knowledge-sources/test-ks/test-ks");
+    }
+
+    #[test]
+    fn test_resource_key_managed_sub_resource() {
+        let mut map = ManagedMap::new();
+        map.insert(
+            (ResourceKind::Index, "test-ks-index".to_string()),
+            "test-ks".to_string(),
+        );
+        let key = LocalState::resource_key_managed(ResourceKind::Index, "test-ks-index", &map);
+        assert_eq!(
+            key,
+            "agentic-retrieval/knowledge-sources/test-ks/test-ks-index"
+        );
+    }
+
+    #[test]
+    fn test_checksums_managed_get_set() {
+        let mut checksums = Checksums::default();
+        let mut map = ManagedMap::new();
+        map.insert(
+            (ResourceKind::Index, "ks-1-index".to_string()),
+            "ks-1".to_string(),
+        );
+
+        assert!(checksums
+            .get_managed(ResourceKind::Index, "ks-1-index", &map)
+            .is_none());
+
+        checksums.set_managed(
+            ResourceKind::Index,
+            "ks-1-index",
+            "abc123".to_string(),
+            &map,
+        );
+        assert_eq!(
+            checksums.get_managed(ResourceKind::Index, "ks-1-index", &map),
+            Some(&"abc123".to_string())
+        );
+
+        checksums.remove_managed(ResourceKind::Index, "ks-1-index", &map);
+        assert!(checksums
+            .get_managed(ResourceKind::Index, "ks-1-index", &map)
+            .is_none());
     }
 }
