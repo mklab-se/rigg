@@ -109,15 +109,20 @@ impl ClientError {
                 "Set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID environment variables"
             }
             ClientError::Forbidden { .. } => {
-                "Your identity does not have permission to access this service.\n\
-                 Assign an RBAC role on the resource, for example:\n\n\
-                 \x20 az role assignment create \\\n\
-                 \x20   --assignee <your-email-or-object-id> \\\n\
-                 \x20   --role \"Search Service Contributor\" \\\n\
-                 \x20   --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<name>\n\n\
-                 Common roles: Search Service Contributor, Search Index Data Reader, Search Index Data Contributor.\n\
-                 If using a service principal, ensure AZURE_TENANT_ID matches the service's tenant.\n\
-                 See: https://learn.microsoft.com/en-us/azure/search/search-security-rbac"
+                "Access denied. The three most common causes are:\n\n\
+                 1. RBAC is not enabled on the data plane (most likely)\n\
+                 \x20  Azure AI Search uses API keys by default. To use Entra ID\n\
+                 \x20  authentication (which hoist uses), enable RBAC:\n\
+                 \x20  Portal: Settings > Keys > select \"Both\" or \"Role-based access control\"\n\
+                 \x20  CLI:    az search service update --name <name> --resource-group <rg> --auth-options aadOrApiKey\n\n\
+                 2. Missing RBAC role assignment\n\
+                 \x20  Assign roles on the search service resource:\n\
+                 \x20  az role assignment create --assignee <you> --role \"Search Service Contributor\" --scope <resource-id>\n\
+                 \x20  az role assignment create --assignee <you> --role \"Search Index Data Contributor\" --scope <resource-id>\n\
+                 \x20  Role assignments can take up to 10 minutes to propagate.\n\n\
+                 3. IP firewall blocking your request\n\
+                 \x20  If the service has network restrictions, add your IP under Networking > Firewalls.\n\n\
+                 See: https://learn.microsoft.com/en-us/azure/search/search-security-enable-roles"
             }
             ClientError::NotFound { .. } => {
                 "Verify the resource name and that you have access to it"
@@ -255,9 +260,11 @@ mod tests {
             body: "".to_string(),
         };
         let suggestion = err.suggestion();
-        assert!(suggestion.contains("permission"));
+        assert!(suggestion.contains("RBAC is not enabled"));
         assert!(suggestion.contains("Search Service Contributor"));
-        assert!(suggestion.contains("az role assignment create"));
+        assert!(suggestion.contains("Search Index Data Contributor"));
+        assert!(suggestion.contains("aadOrApiKey"));
+        assert!(suggestion.contains("IP firewall"));
     }
 
     #[test]
