@@ -79,19 +79,11 @@ pub fn compose_agent(files: &AgentFiles) -> Value {
         );
     }
 
-    // Add tools
-    if let Value::Array(ref arr) = files.tools {
-        if !arr.is_empty() {
-            obj.insert("tools".to_string(), files.tools.clone());
-        }
-    }
+    // Add tools (always include to match API response shape)
+    obj.insert("tools".to_string(), files.tools.clone());
 
-    // Add tool_resources
-    if let Value::Object(ref map) = files.knowledge {
-        if !map.is_empty() {
-            obj.insert("tool_resources".to_string(), files.knowledge.clone());
-        }
-    }
+    // Add tool_resources (always include to match API response shape)
+    obj.insert("tool_resources".to_string(), files.knowledge.clone());
 
     Value::Object(obj)
 }
@@ -204,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compose_empty_instructions_omitted() {
+    fn test_compose_empty_fields_preserved() {
         let files = AgentFiles {
             config: json!({"id": "asst_1", "name": "test", "model": "gpt-4o"}),
             instructions: String::new(),
@@ -215,10 +207,10 @@ mod tests {
         let composed = compose_agent(&files);
         let obj = composed.as_object().unwrap();
 
-        // Empty instructions, tools, knowledge should be omitted
+        // Empty instructions omitted, but tools and tool_resources kept to match API shape
         assert!(!obj.contains_key("instructions"));
-        assert!(!obj.contains_key("tools"));
-        assert!(!obj.contains_key("tool_resources"));
+        assert_eq!(obj.get("tools").unwrap(), &json!([]));
+        assert_eq!(obj.get("tool_resources").unwrap(), &json!({}));
     }
 
     #[test]
@@ -235,7 +227,7 @@ mod tests {
 
         assert!(obj.contains_key("tools"));
         assert!(!obj.contains_key("instructions"));
-        assert!(!obj.contains_key("tool_resources"));
+        assert_eq!(obj.get("tool_resources").unwrap(), &json!({}));
     }
 
     #[test]

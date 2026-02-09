@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8] - 2026-02-09
+
+### Fixed
+
+- **False drift on agents with empty tools** — `hoist diff` no longer reports phantom changes for agents that have an empty `tools` array. The bug occurred because `compose_agent()` omitted empty `tools`/`tool_resources` fields from the local representation while the API returns them as `[]`/`{}`, causing a field-level mismatch. Both sides now consistently include these fields
+
 ## [0.2.7] - 2026-02-09
 
 ### Changed
