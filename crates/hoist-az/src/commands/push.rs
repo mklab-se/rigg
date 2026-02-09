@@ -151,8 +151,8 @@ pub async fn run(
                             .chain(read_only_fields.iter())
                             .copied()
                             .collect();
-                        let normalized_existing = normalize(&existing, &push_strip, "name");
-                        let normalized_local = normalize(&local, &push_strip, "name");
+                        let normalized_existing = normalize(&existing, &push_strip);
+                        let normalized_local = normalize(&local, &push_strip);
 
                         // Validate immutability constraints
                         let violations = check_immutability(
@@ -272,10 +272,8 @@ pub async fn run(
                 // Compare local vs remote to skip unchanged agents
                 match remote_agent_map.get(&name) {
                     Some(remote) => {
-                        let normalized_local =
-                            hoist_core::normalize::normalize(&payload, volatile, "name");
-                        let normalized_remote =
-                            hoist_core::normalize::normalize(remote, volatile, "name");
+                        let normalized_local = hoist_core::normalize::normalize(&payload, volatile);
+                        let normalized_remote = hoist_core::normalize::normalize(remote, volatile);
 
                         let local_json = hoist_core::normalize::format_json(&normalized_local);
                         let remote_json = hoist_core::normalize::format_json(&normalized_remote);
@@ -1158,8 +1156,8 @@ mod tests {
         let read_only = get_read_only_fields(ResourceKind::KnowledgeSource);
         let push_strip: Vec<&str> = volatile.iter().chain(read_only.iter()).copied().collect();
 
-        let normalized_remote = normalize(&remote, &push_strip, "name");
-        let normalized_local = normalize(&local, &push_strip, "name");
+        let normalized_remote = normalize(&remote, &push_strip);
+        let normalized_local = normalize(&local, &push_strip);
 
         // createdResources stripped from both → no false diff
         assert_eq!(
@@ -1176,7 +1174,7 @@ mod tests {
                 "createdResources": {"datasource": "ds-1"}
             }
         });
-        let normalized_modified = normalize(&local_modified, &push_strip, "name");
+        let normalized_modified = normalize(&local_modified, &push_strip);
         assert_ne!(
             format_json(&normalized_remote),
             format_json(&normalized_modified)
@@ -1200,7 +1198,7 @@ mod tests {
 
         // Pull uses only volatile_fields
         let volatile = get_volatile_fields(ResourceKind::KnowledgeBase);
-        let normalized = normalize(&remote, &volatile, "name");
+        let normalized = normalize(&remote, &volatile);
         let obj = normalized.as_object().unwrap();
 
         // Volatile fields stripped
@@ -1372,8 +1370,8 @@ mod tests {
         let read_only = get_read_only_fields(ResourceKind::KnowledgeBase);
         let push_strip: Vec<&str> = volatile.iter().chain(read_only.iter()).copied().collect();
 
-        let normalized_remote = normalize(&remote, &push_strip, "name");
-        let normalized_local = normalize(&local, &push_strip, "name");
+        let normalized_remote = normalize(&remote, &push_strip);
+        let normalized_local = normalize(&local, &push_strip);
 
         // knowledgeSources is pushable — change must be detected
         assert_ne!(

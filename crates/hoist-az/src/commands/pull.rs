@@ -493,7 +493,7 @@ fn discover_search_resources(
 
             // Normalize the JSON
             let volatile_fields = get_volatile_fields(*kind);
-            let normalized = normalize(resource, &volatile_fields, "name");
+            let normalized = normalize(resource, &volatile_fields);
             let json_content = format_json(&normalized);
 
             // Check if content changed (remote vs stored checksum) and file on disk matches
@@ -629,7 +629,7 @@ async fn discover_foundry_agents(
 
         // Strip volatile fields and create a canonical representation for checksumming
         let volatile = agent_volatile_fields();
-        let normalized = normalize(agent, volatile, "name");
+        let normalized = normalize(agent, volatile);
         let json_content = format_json(&normalized);
 
         let new_checksum = Checksums::calculate(&json_content);

@@ -7,37 +7,28 @@ use serde_json::{Map, Value};
 /// This performs:
 /// 1. Strips volatile fields (@odata.etag, @odata.context, credentials, etc.)
 /// 2. Preserves the property order from the Azure API response
-/// 3. Sorts arrays by identity key (usually "name") for stable diffs
-pub fn normalize(value: &Value, volatile_fields: &[&str], identity_key: &str) -> Value {
-    normalize_value(value, volatile_fields, identity_key)
+/// 3. Preserves array element order as returned by the API
+pub fn normalize(value: &Value, volatile_fields: &[&str]) -> Value {
+    normalize_value(value, volatile_fields)
 }
 
-fn normalize_value(value: &Value, volatile_fields: &[&str], identity_key: &str) -> Value {
+fn normalize_value(value: &Value, volatile_fields: &[&str]) -> Value {
     match value {
         Value::Object(map) => {
             // Preserve original key order, just filter out volatile fields
             let filtered: Map<String, Value> = map
                 .iter()
                 .filter(|(k, _)| !volatile_fields.contains(&k.as_str()))
-                .map(|(k, v)| (k.clone(), normalize_value(v, volatile_fields, identity_key)))
+                .map(|(k, v)| (k.clone(), normalize_value(v, volatile_fields)))
                 .collect();
 
             Value::Object(filtered)
         }
         Value::Array(arr) => {
-            let mut normalized: Vec<Value> = arr
+            let normalized: Vec<Value> = arr
                 .iter()
-                .map(|v| normalize_value(v, volatile_fields, identity_key))
+                .map(|v| normalize_value(v, volatile_fields))
                 .collect();
-
-            // Sort arrays by identity key if present (for stable diffs)
-            if !normalized.is_empty() && normalized[0].get(identity_key).is_some() {
-                normalized.sort_by(|a, b| {
-                    let a_key = a.get(identity_key).and_then(|v| v.as_str()).unwrap_or("");
-                    let b_key = b.get(identity_key).and_then(|v| v.as_str()).unwrap_or("");
-                    a_key.cmp(b_key)
-                });
-            }
 
             Value::Array(normalized)
         }
@@ -102,7 +93,7 @@ mod tests {
             "fields": []
         });
 
-        let result = normalize(&input, &["@odata.etag", "@odata.context"], "name");
+        let result = normalize(&input, &["@odata.etag", "@odata.context"]);
 
         assert!(result.get("@odata.etag").is_none());
         assert!(result.get("@odata.context").is_none());
@@ -118,7 +109,7 @@ mod tests {
         map.insert("mango".to_string(), json!(3));
         let input = Value::Object(map);
 
-        let result = normalize(&input, &[], "name");
+        let result = normalize(&input, &[]);
         let formatted = serde_json::to_string(&result).unwrap();
 
         // Keys should preserve insertion order (not alphabetical)
@@ -131,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sorts_arrays_by_identity_key() {
+    fn test_preserves_array_order() {
         let input = json!({
             "items": [
                 {"name": "charlie", "value": 3},
@@ -140,12 +131,13 @@ mod tests {
             ]
         });
 
-        let result = normalize(&input, &[], "name");
+        let result = normalize(&input, &[]);
         let items = result.get("items").unwrap().as_array().unwrap();
 
-        assert_eq!(items[0].get("name").unwrap(), "alice");
-        assert_eq!(items[1].get("name").unwrap(), "bob");
-        assert_eq!(items[2].get("name").unwrap(), "charlie");
+        // Order should be preserved as-is, not sorted
+        assert_eq!(items[0].get("name").unwrap(), "charlie");
+        assert_eq!(items[1].get("name").unwrap(), "alice");
+        assert_eq!(items[2].get("name").unwrap(), "bob");
     }
 
     #[test]
@@ -177,7 +169,7 @@ mod tests {
             }
         });
 
-        let result = normalize(&input, &["@odata.etag", "@odata.context"], "name");
+        let result = normalize(&input, &["@odata.etag", "@odata.context"]);
 
         assert!(result.get("@odata.etag").is_none());
         let nested = result.get("nested").unwrap();
@@ -189,12 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn test_arrays_without_identity_key_not_sorted() {
+    fn test_primitive_array_order_preserved() {
         let input = json!({
             "values": [3, 1, 2]
         });
 
-        let result = normalize(&input, &[], "name");
+        let result = normalize(&input, &[]);
         let values = result.get("values").unwrap().as_array().unwrap();
 
         assert_eq!(values[0], json!(3));
@@ -205,7 +197,7 @@ mod tests {
     #[test]
     fn test_empty_object_preserved() {
         let input = json!({});
-        let result = normalize(&input, &[], "name");
+        let result = normalize(&input, &[]);
         assert_eq!(result, json!({}));
     }
 
@@ -215,7 +207,7 @@ mod tests {
             "items": []
         });
 
-        let result = normalize(&input, &[], "name");
+        let result = normalize(&input, &[]);
         let items = result.get("items").unwrap().as_array().unwrap();
         assert!(items.is_empty());
     }

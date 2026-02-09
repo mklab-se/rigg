@@ -101,14 +101,14 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                 // Read local file
                 let content = std::fs::read_to_string(&path)?;
                 let local: serde_json::Value = serde_json::from_str(&content)?;
-                let local_normalized = normalize(&local, &strip_fields, "name");
+                let local_normalized = normalize(&local, &strip_fields);
 
                 // Fetch remote
                 let resource_id = format!("{}/{}", kind.directory_name(), name);
 
                 match client.get(*kind, name).await {
                     Ok(remote) => {
-                        let remote_normalized = normalize(&remote, &strip_fields, "name");
+                        let remote_normalized = normalize(&remote, &strip_fields);
                         let diff_result = diff(&local_normalized, &remote_normalized, "name");
 
                         if !diff_result.is_equal {
@@ -215,7 +215,7 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                     // Read and compose local agent
                     let agent_files = read_agent_files(&path)?;
                     let local_composed = compose_agent(&agent_files);
-                    let local_normalized = normalize(&local_composed, volatile, "name");
+                    let local_normalized = normalize(&local_composed, volatile);
 
                     let resource_id = format!("agents/{}", name);
 
@@ -226,7 +226,7 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
 
                     match remote_agent {
                         Some(remote) => {
-                            let remote_normalized = normalize(remote, volatile, "name");
+                            let remote_normalized = normalize(remote, volatile);
                             let diff_result = diff(&local_normalized, &remote_normalized, "name");
 
                             if !diff_result.is_equal {

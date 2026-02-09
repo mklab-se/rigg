@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6] - 2026-02-09
+
+### Changed
+
+- **Preserve original array order in pulled JSON** — removed automatic sorting of JSON arrays by identity key during normalization. Pulled configuration files now preserve the exact element order returned by the Azure API, making it easier to compare local files with the portal. Volatile field stripping, credential redaction, and property order preservation are unchanged
+
+### Tests
+
+- 449 tests across workspace (up from 446)
+
 ## [0.2.5] - 2026-02-09
 
 ### Added
