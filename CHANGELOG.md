@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.10] - 2026-02-09
+
+### Fixed
+
+- **Skillset push with preview skills** — all Azure Search API calls now use the preview API version (`2025-11-01-preview`), which is a superset of the stable version. This fixes `hoist push --skillsets` failing with a 400 error when a skillset contains preview-only skill types like `ChatCompletionSkill`
+
+### Changed
+
+- Removed the `api_version` field from the internal search client struct — only `preview_api_version` is needed since all requests use it
+
+### Tests
+
+- 448 tests across workspace (one redundant stable-version test removed)
+
 ## [0.2.9] - 2026-02-09
 
 ### Fixed

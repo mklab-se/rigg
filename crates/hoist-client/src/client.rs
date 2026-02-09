@@ -34,7 +34,6 @@ pub struct AzureSearchClient {
     http: Client,
     auth: Box<dyn AuthProvider>,
     base_url: String,
-    api_version: String,
     preview_api_version: String,
 }
 
@@ -50,7 +49,6 @@ impl AzureSearchClient {
             http,
             auth,
             base_url: config.service_url(),
-            api_version: config.api_version_for(false).to_string(),
             preview_api_version: config.api_version_for(true).to_string(),
         })
     }
@@ -66,7 +64,6 @@ impl AzureSearchClient {
             http,
             auth,
             base_url: format!("https://{}.search.windows.net", server_name),
-            api_version: config.api_version_for(false).to_string(),
             preview_api_version: config.api_version_for(true).to_string(),
         })
     }
@@ -74,7 +71,6 @@ impl AzureSearchClient {
     /// Create with a custom auth provider (for testing)
     pub fn with_auth(
         base_url: String,
-        api_version: String,
         preview_api_version: String,
         auth: Box<dyn AuthProvider>,
     ) -> Result<Self, ClientError> {
@@ -86,18 +82,16 @@ impl AzureSearchClient {
             http,
             auth,
             base_url,
-            api_version,
             preview_api_version,
         })
     }
 
-    /// Get the API version to use for a resource kind
-    fn api_version_for(&self, kind: ResourceKind) -> &str {
-        if kind.is_preview() {
-            &self.preview_api_version
-        } else {
-            &self.api_version
-        }
+    /// Get the API version to use for a resource kind.
+    /// Always uses the preview API version — it is a superset of the stable API
+    /// and avoids failures when stable resources contain preview-only features
+    /// (e.g. a skillset with ChatCompletionSkill).
+    fn api_version_for(&self, _kind: ResourceKind) -> &str {
+        &self.preview_api_version
     }
 
     /// Build URL for a resource collection
@@ -305,7 +299,6 @@ mod tests {
     fn make_client() -> AzureSearchClient {
         AzureSearchClient::with_auth(
             "https://test-svc.search.windows.net".to_string(),
-            "2024-07-01".to_string(),
             "2025-11-01-preview".to_string(),
             Box::new(FakeAuth),
         )
@@ -313,12 +306,12 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_url_stable_resource() {
+    fn test_collection_url_uses_preview_version() {
         let client = make_client();
         let url = client.collection_url(ResourceKind::Index);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/indexes?api-version=2024-07-01"
+            "https://test-svc.search.windows.net/indexes?api-version=2025-11-01-preview"
         );
     }
 
@@ -343,12 +336,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_url_stable() {
+    fn test_resource_url_uses_preview_version() {
         let client = make_client();
         let url = client.resource_url(ResourceKind::Index, "my-index");
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/indexes/my-index?api-version=2024-07-01"
+            "https://test-svc.search.windows.net/indexes/my-index?api-version=2025-11-01-preview"
         );
     }
 
@@ -363,26 +356,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_stable_kinds_use_stable_version() {
-        let client = make_client();
-        for kind in ResourceKind::stable() {
-            let url = client.collection_url(*kind);
-            assert!(
-                url.contains("2024-07-01"),
-                "{:?} should use stable API version, got: {}",
-                kind,
-                url
-            );
-        }
-    }
-
-    #[test]
     fn test_new_for_server_produces_correct_base_url() {
         // We can't easily test new_for_server directly since it calls get_auth_provider,
         // but we can verify the URL format through with_auth
         let client = AzureSearchClient::with_auth(
             "https://other-svc.search.windows.net".to_string(),
-            "2024-07-01".to_string(),
             "2025-11-01-preview".to_string(),
             Box::new(FakeAuth),
         )
@@ -390,23 +368,21 @@ mod tests {
         let url = client.collection_url(ResourceKind::Index);
         assert_eq!(
             url,
-            "https://other-svc.search.windows.net/indexes?api-version=2024-07-01"
+            "https://other-svc.search.windows.net/indexes?api-version=2025-11-01-preview"
         );
     }
 
     #[test]
-    fn test_all_preview_kinds_use_preview_version() {
+    fn test_all_kinds_use_preview_version() {
         let client = make_client();
         for kind in ResourceKind::all() {
-            if kind.is_preview() {
-                let url = client.collection_url(*kind);
-                assert!(
-                    url.contains("2025-11-01-preview"),
-                    "{:?} should use preview API version, got: {}",
-                    kind,
-                    url
-                );
-            }
+            let url = client.collection_url(*kind);
+            assert!(
+                url.contains("2025-11-01-preview"),
+                "{:?} should use preview API version, got: {}",
+                kind,
+                url
+            );
         }
     }
 
