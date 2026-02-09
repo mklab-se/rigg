@@ -329,6 +329,7 @@ async fn discover_foundry_service(ctx: &DiscoveryContext) -> Result<Option<Found
         name: selected_account.name.clone(),
         project: selected_project.display_name().to_string(),
         api_version: "2025-05-15-preview".to_string(),
+        endpoint: Some(selected_account.agents_endpoint()),
         subscription: Some(ctx.subscription_id.clone()),
         resource_group: None,
     }))
@@ -372,6 +373,7 @@ fn prompt_foundry_service_manual() -> Result<Option<FoundryServiceConfig>> {
         name: svc_name,
         project: proj_name,
         api_version: "2025-05-15-preview".to_string(),
+        endpoint: None,
         subscription: None,
         resource_group: None,
     }))
@@ -1235,6 +1237,7 @@ mod tests {
                     name: "my-ai-svc".to_string(),
                     project: "my-project".to_string(),
                     api_version: "2025-05-15-preview".to_string(),
+                    endpoint: None,
                     subscription: None,
                     resource_group: None,
                 }],

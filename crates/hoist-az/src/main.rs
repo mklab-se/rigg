@@ -89,6 +89,16 @@ fn write_error_log(err: &hoist_client::ClientError) {
 
     lines.push(format!("[{}] Error: {}", timestamp, err));
 
+    // Walk the error source chain for full diagnostics
+    {
+        use std::error::Error;
+        let mut source = err.source();
+        while let Some(cause) = source {
+            lines.push(format!("  Caused by: {}", cause));
+            source = cause.source();
+        }
+    }
+
     if let Some(body) = err.raw_body() {
         if !body.is_empty() {
             lines.push(format!("Response body: {}", body));

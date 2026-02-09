@@ -74,6 +74,39 @@ pub struct AiServicesAccount {
     pub kind: String,
     #[serde(default)]
     pub id: String,
+    #[serde(default)]
+    pub properties: AiServicesAccountProperties,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AiServicesAccountProperties {
+    /// Primary endpoint (e.g., "https://name.cognitiveservices.azure.com/")
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+impl AiServicesAccount {
+    /// Derive the `.services.ai.azure.com` endpoint for the agents API.
+    ///
+    /// Extracts the custom subdomain from the ARM `properties.endpoint`
+    /// (which may differ from the resource name), then constructs the
+    /// AI services endpoint. Falls back to the resource name.
+    pub fn agents_endpoint(&self) -> String {
+        if let Some(ref endpoint) = self.properties.endpoint {
+            if let Some(subdomain) = extract_subdomain(endpoint) {
+                return format!("https://{}.services.ai.azure.com", subdomain);
+            }
+        }
+        format!("https://{}.services.ai.azure.com", self.name)
+    }
+}
+
+/// Extract the subdomain from an Azure endpoint URL.
+///
+/// `"https://my-svc.cognitiveservices.azure.com/"` → `"my-svc"`
+fn extract_subdomain(endpoint: &str) -> Option<&str> {
+    let host = endpoint.strip_prefix("https://")?.split('/').next()?;
+    host.split('.').next()
 }
 
 impl std::fmt::Display for AiServicesAccount {
@@ -448,8 +481,54 @@ mod tests {
             location: "eastus".to_string(),
             kind: "AIServices".to_string(),
             id: String::new(),
+            properties: AiServicesAccountProperties::default(),
         };
         assert_eq!(format!("{}", account), "my-ai-service (eastus)");
+    }
+
+    #[test]
+    fn test_agents_endpoint_from_arm_endpoint() {
+        let account = AiServicesAccount {
+            name: "irma-prod-foundry".to_string(),
+            location: "swedencentral".to_string(),
+            kind: "AIServices".to_string(),
+            id: String::new(),
+            properties: AiServicesAccountProperties {
+                endpoint: Some("https://custom-subdomain.cognitiveservices.azure.com/".to_string()),
+            },
+        };
+        assert_eq!(
+            account.agents_endpoint(),
+            "https://custom-subdomain.services.ai.azure.com"
+        );
+    }
+
+    #[test]
+    fn test_agents_endpoint_fallback_to_name() {
+        let account = AiServicesAccount {
+            name: "irma-prod-foundry".to_string(),
+            location: "swedencentral".to_string(),
+            kind: "AIServices".to_string(),
+            id: String::new(),
+            properties: AiServicesAccountProperties::default(),
+        };
+        assert_eq!(
+            account.agents_endpoint(),
+            "https://irma-prod-foundry.services.ai.azure.com"
+        );
+    }
+
+    #[test]
+    fn test_extract_subdomain() {
+        assert_eq!(
+            extract_subdomain("https://my-svc.cognitiveservices.azure.com/"),
+            Some("my-svc")
+        );
+        assert_eq!(
+            extract_subdomain("https://custom.services.ai.azure.com"),
+            Some("custom")
+        );
+        assert_eq!(extract_subdomain("not-a-url"), None);
     }
 
     #[test]

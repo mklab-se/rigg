@@ -97,6 +97,9 @@ pub struct FoundryServiceConfig {
     /// API version to use
     #[serde(default = "default_foundry_api_version")]
     pub api_version: String,
+    /// Service endpoint URL (discovered from ARM; overrides name-based URL construction)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Azure subscription ID (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription: Option<String>,
@@ -353,8 +356,15 @@ impl SearchServiceConfig {
 }
 
 impl FoundryServiceConfig {
-    /// Get the base URL for this Foundry service
+    /// Get the base URL for this Foundry service.
+    ///
+    /// Prefers the `endpoint` field (discovered from ARM) over a URL
+    /// constructed from `name`, since the ARM custom subdomain may differ
+    /// from the resource name.
     pub fn service_url(&self) -> String {
+        if let Some(ref ep) = self.endpoint {
+            return ep.trim_end_matches('/').to_string();
+        }
         format!("https://{}.services.ai.azure.com", self.name)
     }
 }
@@ -609,12 +619,45 @@ project = ""
             name: "my-ai-service".to_string(),
             project: "proj-1".to_string(),
             api_version: "2025-05-15-preview".to_string(),
+            endpoint: None,
             subscription: None,
             resource_group: None,
         };
         assert_eq!(
             svc.service_url(),
             "https://my-ai-service.services.ai.azure.com"
+        );
+    }
+
+    #[test]
+    fn test_foundry_service_url_with_endpoint() {
+        let svc = FoundryServiceConfig {
+            name: "my-ai-service".to_string(),
+            project: "proj-1".to_string(),
+            api_version: "2025-05-15-preview".to_string(),
+            endpoint: Some("https://custom-subdomain.services.ai.azure.com".to_string()),
+            subscription: None,
+            resource_group: None,
+        };
+        assert_eq!(
+            svc.service_url(),
+            "https://custom-subdomain.services.ai.azure.com"
+        );
+    }
+
+    #[test]
+    fn test_foundry_service_url_strips_trailing_slash() {
+        let svc = FoundryServiceConfig {
+            name: "my-ai-service".to_string(),
+            project: "proj-1".to_string(),
+            api_version: "2025-05-15-preview".to_string(),
+            endpoint: Some("https://custom-subdomain.services.ai.azure.com/".to_string()),
+            subscription: None,
+            resource_group: None,
+        };
+        assert_eq!(
+            svc.service_url(),
+            "https://custom-subdomain.services.ai.azure.com"
         );
     }
 
@@ -724,6 +767,7 @@ project = "proj-1"
                     name: "test-ai".to_string(),
                     project: "test-proj".to_string(),
                     api_version: "2025-05-15-preview".to_string(),
+                    endpoint: None,
                     subscription: None,
                     resource_group: None,
                 }],

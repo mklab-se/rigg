@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-02-09
+
+### Fixed
+
+- **Foundry endpoint discovery from ARM** — `hoist init` now reads the actual endpoint URL from the AI Services account's ARM properties instead of constructing it from the resource name. This fixes connection failures when the account's custom subdomain differs from its resource name. The discovered endpoint is stored in `hoist.toml` as `endpoint` under `[[services.foundry]]`
+
+### Improved
+
+- **Connection error diagnostics** — HTTP connection failures now explain the likely cause (DNS resolution, private endpoint/VNet, firewall) and suggest re-running `hoist init` to rediscover the endpoint. The full error source chain is written to `hoist-error.log`
+
+### Tests
+
+- 439 tests across workspace (up from 434)
+
 ## [0.2.2] - 2026-02-09
 
 ### Improved

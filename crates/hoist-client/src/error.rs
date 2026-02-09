@@ -130,6 +130,19 @@ impl ClientError {
             ClientError::AlreadyExists { .. } => {
                 "Use a different name or delete the existing resource first"
             }
+            ClientError::Request(e) => {
+                if e.is_connect() {
+                    "Could not connect to the service endpoint.\n\
+                     Possible causes:\n\
+                     - The endpoint URL in hoist.toml may be incorrect (re-run 'hoist init' to rediscover)\n\
+                     - The service may be behind a private endpoint or VNet\n\
+                     - A firewall or DNS issue may be blocking the connection"
+                } else if e.is_timeout() {
+                    "The request timed out. The service may be unavailable or unreachable."
+                } else {
+                    "The HTTP request failed. Check network connectivity and the endpoint URL in hoist.toml."
+                }
+            }
             ClientError::RateLimited { .. } => "Wait and retry the operation",
             ClientError::ServiceUnavailable(_) => {
                 "The Azure Search service may be temporarily unavailable. Try again later."
