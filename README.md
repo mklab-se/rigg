@@ -77,42 +77,40 @@ After pulling, your project contains normalized, version-control-friendly repres
 hoist.toml                          # Project configuration
 .hoist/                             # Sync state (gitignored)
 
+foundry-resources/
+  my-ai-service/
+    my-project/
+      agents/
+        research-assistant.yaml     # Agent definition (model, instructions, tools, etc.)
+
 search-resources/
   my-search-service/
-    search-management/
-      indexes/
-        regulatory-index.json       # Index schema (fields, vector search, semantic config)
-      indexers/
-        regulatory-indexer.json     # Indexer schedule and mapping
-      data-sources/
-        regulatory-datasource.json  # Data source connection
-      skillsets/
-        regulatory-skillset.json    # AI enrichment pipeline
-      synonym-maps/
-        terms.json
     agentic-retrieval/
       knowledge-bases/
         regulatory-kb.json          # KB description, retrieval instructions, linked sources
       knowledge-sources/
         regulatory/
           regulatory.json           # KS definition, ingestion config, created resources
+          regulatory-datasource.json # Managed data source
           regulatory-index.json     # Managed index (auto-provisioned by Azure)
           regulatory-indexer.json   # Managed indexer
-          regulatory-datasource.json # Managed data source
           regulatory-skillset.json  # Managed skillset
-
-foundry-resources/
-  my-ai-service/
-    my-project/
-      agents/
-        research-assistant/
-          config.json               # Agent id, name, model, temperature
-          instructions.md           # Agent instructions (editable Markdown)
-          tools.json                # MCP tools, code interpreter, file search
-          knowledge.json            # Knowledge/tool resources
+    search-management/
+      aliases/
+        regulatory-alias.json       # Index alias
+      data-sources/
+        regulatory-datasource.json  # Data source connection
+      indexes/
+        regulatory-index.json       # Index schema (fields, vector search, semantic config)
+      indexers/
+        regulatory-indexer.json     # Indexer schedule and mapping
+      skillsets/
+        regulatory-skillset.json    # AI enrichment pipeline
+      synonym-maps/
+        terms.json                  # Synonym mappings
 ```
 
-Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Agent instructions are stored as Markdown for easy editing and diffing.
+Each JSON/YAML file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key.
 
 Use `hoist describe` to see how everything connects:
 
