@@ -310,7 +310,7 @@ hoist-diff  (standalone)
 
 | Crate | Purpose |
 |---|---|
-| `hoist-core` | Resource types, config, state tracking, JSON normalization, agent decomposition, copy/rename logic |
+| `hoist-core` | Resource types, config, state tracking, JSON normalization, copy/rename logic |
 | `hoist-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
 | `hoist-az` | Clap-based CLI, command implementations |
