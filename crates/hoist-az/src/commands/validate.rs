@@ -172,15 +172,16 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
             for entry in std::fs::read_dir(&agents_dir)? {
                 let entry = entry?;
                 let path = entry.path();
-                if !path.is_dir() {
+                if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
                     continue;
                 }
-                let name = match path.file_name().and_then(|n| n.to_str()) {
+                let name = match path.file_stem().and_then(|n| n.to_str()) {
                     Some(n) => n.to_string(),
                     None => continue,
                 };
 
-                if let Some(resource) = validate_agent_dir(&path, &name, &mut errors, &mut warnings)
+                if let Some(resource) =
+                    validate_agent_yaml(&path, &name, &mut errors, &mut warnings)
                 {
                     agent_resources.push(resource);
                 }
@@ -273,63 +274,47 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
     Ok(())
 }
 
-/// Validate a single agent directory. Returns the parsed config value on success,
+/// Validate a single agent YAML file. Returns the parsed value on success,
 /// pushing any issues into the errors/warnings vecs.
-fn validate_agent_dir(
-    agent_dir: &std::path::Path,
+fn validate_agent_yaml(
+    yaml_path: &std::path::Path,
     name: &str,
     errors: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> Option<(String, serde_json::Value)> {
-    let config_path = agent_dir.join("config.json");
-    if !config_path.exists() {
-        errors.push(format!("agents/{}: missing config.json", name));
-        return None;
-    }
-
-    let content = match std::fs::read_to_string(&config_path) {
+    let content = match std::fs::read_to_string(yaml_path) {
         Ok(c) => c,
         Err(e) => {
-            errors.push(format!("agents/{}/config.json: read error - {}", name, e));
+            errors.push(format!("agents/{}.yaml: read error - {}", name, e));
             return None;
         }
     };
 
-    match serde_json::from_str::<serde_json::Value>(&content) {
+    match serde_yaml::from_str::<serde_json::Value>(&content) {
         Ok(value) => {
-            // Validate name matches directory
-            if let Some(json_name) = value.get("name").and_then(|n| n.as_str()) {
-                if json_name != name {
-                    errors.push(format!(
-                        "agents/{}/config.json: name field '{}' doesn't match directory",
-                        name, json_name
-                    ));
-                }
-            } else {
-                errors.push(format!(
-                    "agents/{}/config.json: missing required 'name' field",
-                    name
-                ));
-            }
+            // Agent name is derived from filename — no name field to validate
 
             // Validate model field exists
             if value.get("model").and_then(|m| m.as_str()).is_none() {
-                warnings.push(format!(
-                    "agents/{}/config.json: missing 'model' field",
-                    name
-                ));
+                warnings.push(format!("agents/{}.yaml: missing 'model' field", name));
             }
 
-            // Validate instructions.md exists (warning, not error)
-            let instructions_path = agent_dir.join("instructions.md");
-            if !instructions_path.exists() {
-                warnings.push(format!("agents/{}: missing instructions.md", name));
+            // Validate instructions field exists (warning, not error)
+            let has_instructions = value
+                .get("instructions")
+                .and_then(|i| i.as_str())
+                .is_some_and(|s| !s.is_empty());
+            if !has_instructions {
+                warnings.push(format!(
+                    "agents/{}.yaml: missing or empty 'instructions'",
+                    name
+                ));
             }
 
             Some((name.to_string(), value))
         }
         Err(e) => {
-            errors.push(format!("agents/{}/config.json: invalid JSON - {}", name, e));
+            errors.push(format!("agents/{}.yaml: invalid YAML - {}", name, e));
             None
         }
     }
@@ -1127,25 +1112,19 @@ mod tests {
     // === Foundry agent validation tests ===
 
     #[test]
-    fn test_validate_agent_dir_full() {
+    fn test_validate_agent_yaml_full() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
 
         std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("instructions.md"),
-            "You are a helpful assistant.",
+            &yaml_path,
+            "kind: prompt\nmodel: gpt-4o\ninstructions: You are a helpful assistant.\n",
         )
         .unwrap();
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+        let result = validate_agent_yaml(&yaml_path, "my-agent", &mut errors, &mut warnings);
 
         assert!(result.is_some());
         assert!(errors.is_empty(), "Expected no errors, got: {:?}", errors);
@@ -1158,97 +1137,30 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_agent_dir_missing_config() {
+    fn test_validate_agent_yaml_invalid() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("bad-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("bad.yaml");
+        std::fs::write(&yaml_path, "{{invalid yaml").unwrap();
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let result = validate_agent_dir(&agent_dir, "bad-agent", &mut errors, &mut warnings);
+        let result = validate_agent_yaml(&yaml_path, "bad", &mut errors, &mut warnings);
 
         assert!(result.is_none());
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("missing config.json"));
+        assert!(errors[0].contains("invalid YAML"));
     }
 
     #[test]
-    fn test_validate_agent_dir_invalid_json() {
+    fn test_validate_agent_yaml_missing_model_warning() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("bad-json");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::write(agent_dir.join("config.json"), "not valid json").unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
+
+        std::fs::write(&yaml_path, "kind: prompt\ninstructions: Be helpful.\n").unwrap();
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        let result = validate_agent_dir(&agent_dir, "bad-json", &mut errors, &mut warnings);
-
-        assert!(result.is_none());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("invalid JSON"));
-    }
-
-    #[test]
-    fn test_validate_agent_dir_name_mismatch() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "wrong-name", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
-
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
-
-        assert!(result.is_some());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("doesn't match directory"));
-        assert!(errors[0].contains("wrong-name"));
-    }
-
-    #[test]
-    fn test_validate_agent_dir_missing_name_field() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
-
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-        let result = validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
-
-        assert!(result.is_some());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("missing required 'name' field"));
-    }
-
-    #[test]
-    fn test_validate_agent_dir_missing_model_warning() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "my-agent"}"#,
-        )
-        .unwrap();
-        std::fs::write(agent_dir.join("instructions.md"), "test").unwrap();
-
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+        validate_agent_yaml(&yaml_path, "my-agent", &mut errors, &mut warnings);
 
         assert!(errors.is_empty());
         assert_eq!(warnings.len(), 1);
@@ -1256,45 +1168,34 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_agent_dir_missing_instructions_warning() {
+    fn test_validate_agent_yaml_missing_instructions_warning() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
 
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        // No instructions.md file
+        std::fs::write(&yaml_path, "kind: prompt\nmodel: gpt-4o\n").unwrap();
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+        validate_agent_yaml(&yaml_path, "my-agent", &mut errors, &mut warnings);
 
         assert!(errors.is_empty());
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("missing instructions.md"));
+        assert!(warnings[0].contains("missing or empty 'instructions'"));
     }
 
     #[test]
-    fn test_validate_agent_dir_multiple_issues() {
+    fn test_validate_agent_yaml_multiple_issues() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
 
-        // Name mismatch + no model + no instructions
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "wrong-name"}"#,
-        )
-        .unwrap();
+        // No model + no instructions
+        std::fs::write(&yaml_path, "kind: prompt\n").unwrap();
 
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
-        validate_agent_dir(&agent_dir, "my-agent", &mut errors, &mut warnings);
+        validate_agent_yaml(&yaml_path, "my-agent", &mut errors, &mut warnings);
 
-        assert_eq!(errors.len(), 1); // name mismatch
+        assert!(errors.is_empty());
         assert_eq!(warnings.len(), 2); // missing model + missing instructions
     }
 }

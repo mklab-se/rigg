@@ -1,91 +1,75 @@
-//! Foundry Agent resource decomposition/composition
+//! Foundry Agent resource — YAML on-disk format
 //!
-//! Foundry agents are stored as a single JSON object in the API, but decomposed
-//! into multiple human-friendly files on disk:
-//! - `config.json` — id, name, model, temperature, top_p, metadata, response_format
-//! - `instructions.md` — agent instructions as Markdown
-//! - `tools.json` — tools array from agent definition
-//! - `knowledge.json` — tool_resources object
+//! Foundry agents are stored as a single YAML file per agent:
+//! `agents/<agent-name>.yaml`
+//!
+//! The YAML format matches the Foundry portal's YAML view. Agent name is
+//! derived from the filename (not stored in the YAML).
 
-use serde_json::{Map, Value};
-
-/// Decomposed agent files for on-disk storage
-#[derive(Debug, Clone)]
-pub struct AgentFiles {
-    /// Agent configuration (id, name, model, temperature, etc.)
-    pub config: Value,
-    /// Agent instructions as Markdown
-    pub instructions: String,
-    /// Tools array from agent definition
-    pub tools: Value,
-    /// Tool resources (knowledge/file references)
-    pub knowledge: Value,
-}
-
-/// Fields to extract into separate files (not stored in config.json)
-const DECOMPOSED_FIELDS: &[&str] = &["instructions", "tools", "tool_resources"];
+use serde_json::Value;
 
 /// Fields to strip from agent API responses (transient/server-managed)
-const VOLATILE_FIELDS: &[&str] = &["created_at", "object", "version"];
+const VOLATILE_FIELDS: &[&str] = &["id", "created_at", "object", "version"];
 
-/// Split an API response into decomposed on-disk files
-pub fn decompose_agent(api_response: &Value) -> AgentFiles {
-    let obj = api_response.as_object().cloned().unwrap_or_default();
+/// Fields excluded from YAML (volatile + identity fields managed externally)
+const YAML_EXCLUDE_FIELDS: &[&str] = &["name", "id", "created_at", "object", "version"];
 
-    // Extract instructions
-    let instructions = obj
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+/// Field order for YAML output (matches Foundry portal).
+const AGENT_YAML_FIELD_ORDER: &[&str] = &[
+    "kind",
+    "model",
+    "description",
+    "temperature",
+    "top_p",
+    "response_format",
+    "metadata",
+    "instructions",
+    "tools",
+    "tool_resources",
+];
 
-    // Extract tools
-    let tools = obj
-        .get("tools")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
+/// Convert a flattened agent JSON value to ordered YAML string.
+///
+/// Strips identity/volatile fields (`name`, `id`, `created_at`, `object`, `version`),
+/// omits empty optional fields, and orders remaining fields per `AGENT_YAML_FIELD_ORDER`.
+pub fn agent_to_yaml(agent: &Value) -> String {
+    let obj = agent.as_object().cloned().unwrap_or_default();
 
-    // Extract tool_resources (knowledge)
-    let knowledge = obj
-        .get("tool_resources")
-        .cloned()
-        .unwrap_or_else(|| Value::Object(Map::new()));
+    // Build ordered map
+    let mut ordered = serde_json::Map::new();
 
-    // Build config: everything except decomposed and volatile fields
-    let config_map: Map<String, Value> = obj
-        .into_iter()
-        .filter(|(k, _)| {
-            !DECOMPOSED_FIELDS.contains(&k.as_str()) && !VOLATILE_FIELDS.contains(&k.as_str())
-        })
-        .collect();
-
-    AgentFiles {
-        config: Value::Object(config_map),
-        instructions,
-        tools,
-        knowledge,
+    // First: known fields in display order
+    for &field in AGENT_YAML_FIELD_ORDER {
+        if let Some(value) = obj.get(field) {
+            // Skip empty/null optional fields
+            if should_omit(field, value) {
+                continue;
+            }
+            ordered.insert(field.to_string(), value.clone());
+        }
     }
+
+    // Then: any remaining fields not in the known list and not excluded
+    for (key, value) in &obj {
+        if YAML_EXCLUDE_FIELDS.contains(&key.as_str()) {
+            continue;
+        }
+        if ordered.contains_key(key) {
+            continue;
+        }
+        if should_omit(key, value) {
+            continue;
+        }
+        ordered.insert(key.clone(), value.clone());
+    }
+
+    let ordered_value = Value::Object(ordered);
+    serde_yaml::to_string(&ordered_value).unwrap_or_default()
 }
 
-/// Merge decomposed on-disk files back into an API payload for push
-pub fn compose_agent(files: &AgentFiles) -> Value {
-    let mut obj = files.config.as_object().cloned().unwrap_or_else(Map::new);
-
-    // Add instructions
-    if !files.instructions.is_empty() {
-        obj.insert(
-            "instructions".to_string(),
-            Value::String(files.instructions.clone()),
-        );
-    }
-
-    // Add tools (always include to match API response shape)
-    obj.insert("tools".to_string(), files.tools.clone());
-
-    // Add tool_resources (always include to match API response shape)
-    obj.insert("tool_resources".to_string(), files.knowledge.clone());
-
-    Value::Object(obj)
+/// Parse agent YAML back to a serde_json::Value for API operations.
+pub fn yaml_to_agent(yaml: &str) -> Result<Value, serde_yaml::Error> {
+    serde_yaml::from_str(yaml)
 }
 
 /// Returns volatile fields to strip from Foundry agent responses
@@ -93,166 +77,242 @@ pub fn agent_volatile_fields() -> &'static [&'static str] {
     VOLATILE_FIELDS
 }
 
+/// Strip empty optional fields from an agent value for consistent comparison.
+///
+/// The YAML format intentionally omits empty `description`, `metadata`, `tool_resources`,
+/// etc. The server always returns these fields (as `""` or `{}`). Call this on remote
+/// agent values before comparing to local YAML-derived values so that omitted-vs-empty
+/// differences don't appear as drift.
+pub fn strip_agent_empty_fields(value: &mut Value) {
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|key, val| !should_omit(key, val));
+    }
+}
+
+/// Whether an optional field should be omitted from YAML output.
+fn should_omit(field: &str, value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(s) if s.is_empty() => true,
+        Value::Array(arr) if arr.is_empty() && field == "tools" => false, // keep empty tools
+        Value::Array(arr) if arr.is_empty() => true,
+        Value::Object(map) if map.is_empty() && field == "tool_resources" => true,
+        Value::Object(map) if map.is_empty() && field == "metadata" => true,
+        _ => false,
+    }
+}
+
+// --- Legacy support: keep wrap/flatten for API layer (in foundry.rs) ---
+// decompose_agent / compose_agent / AgentFiles are removed.
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
-    fn test_decompose_full_agent() {
-        let api_response = json!({
+    fn test_agent_to_yaml_full() {
+        let agent = json!({
             "id": "asst_abc123",
-            "name": "my-agent",
-            "model": "gpt-4o",
+            "name": "regulus",
+            "kind": "prompt",
+            "model": "gpt-5.2-chat",
+            "description": "A regulatory compliance assistant",
             "temperature": 0.7,
-            "instructions": "You are a helpful assistant.\n\nBe concise.",
+            "top_p": 1.0,
+            "instructions": "You are Regulus.\n\n## Personality\nFriendly and calm.",
             "tools": [
-                {"type": "code_interpreter"},
-                {"type": "file_search"}
+                {"type": "mcp", "server_label": "kb_test"}
             ],
             "tool_resources": {
                 "file_search": {
-                    "vector_store_ids": ["vs_123"]
+                    "vector_store_ids": ["vs_abc123"]
                 }
             },
             "created_at": 1700000000,
-            "object": "assistant"
+            "object": "assistant",
+            "version": "1.0"
         });
 
-        let files = decompose_agent(&api_response);
+        let yaml = agent_to_yaml(&agent);
 
-        // Config should have id, name, model, temperature — not instructions/tools/volatile
-        let config = files.config.as_object().unwrap();
-        assert_eq!(config.get("id").unwrap(), "asst_abc123");
-        assert_eq!(config.get("name").unwrap(), "my-agent");
-        assert_eq!(config.get("model").unwrap(), "gpt-4o");
-        assert!(!config.contains_key("instructions"));
-        assert!(!config.contains_key("tools"));
-        assert!(!config.contains_key("tool_resources"));
-        assert!(!config.contains_key("created_at"));
-        assert!(!config.contains_key("object"));
-
-        // Instructions
-        assert_eq!(
-            files.instructions,
-            "You are a helpful assistant.\n\nBe concise."
+        // Verify field order
+        let lines: Vec<&str> = yaml.lines().collect();
+        let first_field = lines.iter().find(|l| !l.starts_with("---")).unwrap();
+        assert!(
+            first_field.starts_with("kind:"),
+            "First field should be 'kind', got: {}",
+            first_field
         );
 
-        // Tools
-        assert_eq!(files.tools.as_array().unwrap().len(), 2);
+        // Verify volatile/identity fields are excluded
+        assert!(!yaml.contains("name:"), "name should be excluded");
+        assert!(
+            !yaml.contains("id:"),
+            "id should be excluded (but 'kind' may contain 'id' substring)"
+        );
+        assert!(
+            !yaml.contains("created_at:"),
+            "created_at should be excluded"
+        );
+        assert!(!yaml.contains("object:"), "object should be excluded");
+        assert!(!yaml.contains("version:"), "version should be excluded");
 
-        // Knowledge
-        assert!(files.knowledge.get("file_search").is_some());
+        // Verify content is present
+        assert!(yaml.contains("model: gpt-5.2-chat"));
+        assert!(yaml.contains("description: A regulatory compliance assistant"));
+        assert!(yaml.contains("temperature: 0.7"));
+        assert!(yaml.contains("top_p: 1.0"));
+        assert!(yaml.contains("You are Regulus."));
+        assert!(yaml.contains("mcp"));
+        assert!(yaml.contains("vs_abc123"));
     }
 
     #[test]
-    fn test_decompose_minimal_agent() {
-        let api_response = json!({
-            "id": "asst_min",
+    fn test_agent_to_yaml_minimal() {
+        let agent = json!({
             "name": "minimal",
-            "model": "gpt-4o"
+            "model": "gpt-4o",
+            "kind": "prompt"
         });
 
-        let files = decompose_agent(&api_response);
+        let yaml = agent_to_yaml(&agent);
 
-        assert_eq!(files.instructions, "");
-        assert_eq!(files.tools, json!([]));
-        assert_eq!(files.knowledge, json!({}));
+        assert!(yaml.contains("kind: prompt"));
+        assert!(yaml.contains("model: gpt-4o"));
+        // Optional fields should be absent
+        assert!(!yaml.contains("description"));
+        assert!(!yaml.contains("temperature"));
+        assert!(!yaml.contains("top_p"));
+        assert!(!yaml.contains("instructions"));
+        assert!(!yaml.contains("tool_resources"));
     }
 
     #[test]
-    fn test_compose_roundtrip() {
-        let original = json!({
-            "id": "asst_abc123",
-            "name": "my-agent",
+    fn test_agent_to_yaml_strips_volatile() {
+        let agent = json!({
+            "name": "test",
+            "id": "asst_123",
             "model": "gpt-4o",
+            "created_at": 1700000000,
+            "object": "assistant",
+            "version": "1.0"
+        });
+
+        let yaml = agent_to_yaml(&agent);
+
+        assert!(!yaml.contains("created_at"));
+        assert!(!yaml.contains("object"));
+        assert!(!yaml.contains("version"));
+        assert!(!yaml.contains("asst_123"));
+        assert!(yaml.contains("model: gpt-4o"));
+    }
+
+    #[test]
+    fn test_agent_to_yaml_multiline_instructions() {
+        let agent = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "instructions": "Line one.\n\nLine three.\nLine four."
+        });
+
+        let yaml = agent_to_yaml(&agent);
+
+        // serde_yaml should use block scalar for multiline
+        assert!(yaml.contains("instructions:"));
+        assert!(yaml.contains("Line one."));
+        assert!(yaml.contains("Line three."));
+    }
+
+    #[test]
+    fn test_yaml_to_agent_roundtrip() {
+        let agent = json!({
+            "name": "roundtrip",
+            "id": "asst_rt",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "description": "Test agent",
             "temperature": 0.7,
-            "instructions": "You are helpful.",
+            "instructions": "Be helpful.\n\nBe concise.",
             "tools": [
                 {"type": "code_interpreter"}
             ],
             "tool_resources": {
-                "code_interpreter": {
-                    "file_ids": ["file_123"]
+                "file_search": {
+                    "vector_store_ids": ["vs_1"]
                 }
-            },
-            "created_at": 1700000000,
-            "object": "assistant"
+            }
         });
 
-        let files = decompose_agent(&original);
-        let composed = compose_agent(&files);
+        let yaml = agent_to_yaml(&agent);
+        let parsed = yaml_to_agent(&yaml).unwrap();
 
-        // Composed should have the non-volatile fields
-        let obj = composed.as_object().unwrap();
-        assert_eq!(obj.get("id").unwrap(), "asst_abc123");
-        assert_eq!(obj.get("name").unwrap(), "my-agent");
-        assert_eq!(obj.get("instructions").unwrap(), "You are helpful.");
-        assert!(obj.get("tools").unwrap().as_array().unwrap().len() == 1);
+        // All non-excluded fields should round-trip
+        assert_eq!(parsed["kind"], "prompt");
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["description"], "Test agent");
+        assert_eq!(parsed["temperature"], 0.7);
+        assert!(parsed["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Be helpful."));
+        assert_eq!(parsed["tools"].as_array().unwrap().len(), 1);
+        assert!(
+            parsed["tool_resources"]["file_search"]["vector_store_ids"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1
+        );
 
-        // Should NOT have volatile fields
-        assert!(!obj.contains_key("created_at"));
-        assert!(!obj.contains_key("object"));
+        // Excluded fields should NOT be present
+        assert!(parsed.get("name").is_none());
+        assert!(parsed.get("id").is_none());
     }
 
     #[test]
-    fn test_compose_empty_fields_preserved() {
-        let files = AgentFiles {
-            config: json!({"id": "asst_1", "name": "test", "model": "gpt-4o"}),
-            instructions: String::new(),
-            tools: json!([]),
-            knowledge: json!({}),
-        };
+    fn test_yaml_to_agent_from_portal() {
+        let portal_yaml = r#"
+kind: prompt
+model: gpt-5.2-chat
+description: A regulatory compliance assistant
+temperature: 0.7
+top_p: 1.0
+instructions: |
+  You are Regulus, a knowledgeable and reliable AI assistant.
 
-        let composed = compose_agent(&files);
-        let obj = composed.as_object().unwrap();
+  ## Personality and Tone
+  You are friendly, calm, and helpful.
+tools:
+  - type: mcp
+    server_label: kb_regulatory_kb_9kdyn
+    server_url: https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp
+    require_approval: never
+    project_connection_id: kb-regulatory-kb-9kdyn
+tool_resources:
+  file_search:
+    vector_store_ids:
+      - vs_abc123
+"#;
+        let parsed = yaml_to_agent(portal_yaml).unwrap();
 
-        // Empty instructions omitted, but tools and tool_resources kept to match API shape
-        assert!(!obj.contains_key("instructions"));
-        assert_eq!(obj.get("tools").unwrap(), &json!([]));
-        assert_eq!(obj.get("tool_resources").unwrap(), &json!({}));
-    }
-
-    #[test]
-    fn test_compose_with_tools_only() {
-        let files = AgentFiles {
-            config: json!({"id": "asst_1", "name": "test", "model": "gpt-4o"}),
-            instructions: String::new(),
-            tools: json!([{"type": "code_interpreter"}]),
-            knowledge: json!({}),
-        };
-
-        let composed = compose_agent(&files);
-        let obj = composed.as_object().unwrap();
-
-        assert!(obj.contains_key("tools"));
-        assert!(!obj.contains_key("instructions"));
-        assert_eq!(obj.get("tool_resources").unwrap(), &json!({}));
-    }
-
-    #[test]
-    fn test_decompose_preserves_extra_config_fields() {
-        let api_response = json!({
-            "id": "asst_1",
-            "name": "agent",
-            "model": "gpt-4o",
-            "top_p": 0.9,
-            "metadata": {"team": "search"},
-            "response_format": "auto",
-            "instructions": "Be helpful."
-        });
-
-        let files = decompose_agent(&api_response);
-        let config = files.config.as_object().unwrap();
-
-        assert_eq!(config.get("top_p").unwrap(), 0.9);
-        assert!(config.get("metadata").is_some());
-        assert_eq!(config.get("response_format").unwrap(), "auto");
+        assert_eq!(parsed["kind"], "prompt");
+        assert_eq!(parsed["model"], "gpt-5.2-chat");
+        assert_eq!(parsed["temperature"], 0.7);
+        assert_eq!(parsed["top_p"], 1.0);
+        assert!(parsed["instructions"].as_str().unwrap().contains("Regulus"));
+        assert_eq!(parsed["tools"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["tools"][0]["type"], "mcp");
+        assert_eq!(
+            parsed["tool_resources"]["file_search"]["vector_store_ids"][0],
+            "vs_abc123"
+        );
     }
 
     #[test]
     fn test_agent_volatile_fields() {
         let fields = agent_volatile_fields();
+        assert!(fields.contains(&"id"));
         assert!(fields.contains(&"created_at"));
         assert!(fields.contains(&"object"));
         assert!(fields.contains(&"version"));
@@ -260,11 +320,66 @@ mod tests {
     }
 
     #[test]
-    fn test_decompose_non_object_returns_defaults() {
-        let files = decompose_agent(&json!("not an object"));
-        assert_eq!(files.instructions, "");
-        assert_eq!(files.tools, json!([]));
-        assert_eq!(files.knowledge, json!({}));
-        assert_eq!(files.config, json!({}));
+    fn test_agent_to_yaml_non_object_returns_empty() {
+        let yaml = agent_to_yaml(&json!("not an object"));
+        // Should produce valid YAML (empty object)
+        assert!(yaml.trim() == "{}" || yaml.trim().is_empty());
+    }
+
+    #[test]
+    fn test_agent_to_yaml_preserves_unknown_fields() {
+        let agent = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "kind": "prompt",
+            "custom_field": "custom_value"
+        });
+
+        let yaml = agent_to_yaml(&agent);
+        assert!(yaml.contains("custom_field: custom_value"));
+    }
+
+    #[test]
+    fn test_agent_to_yaml_empty_tools_preserved() {
+        let agent = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "tools": []
+        });
+
+        let yaml = agent_to_yaml(&agent);
+        assert!(yaml.contains("tools:"));
+    }
+
+    #[test]
+    fn test_strip_agent_empty_fields() {
+        let mut value = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "description": "",
+            "metadata": {},
+            "tool_resources": {},
+            "instructions": "Be helpful."
+        });
+        strip_agent_empty_fields(&mut value);
+
+        assert_eq!(value["name"], "test");
+        assert_eq!(value["model"], "gpt-4o");
+        assert_eq!(value["instructions"], "Be helpful.");
+        assert!(value.get("description").is_none());
+        assert!(value.get("metadata").is_none());
+        assert!(value.get("tool_resources").is_none());
+    }
+
+    #[test]
+    fn test_agent_to_yaml_empty_metadata_omitted() {
+        let agent = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "metadata": {}
+        });
+
+        let yaml = agent_to_yaml(&agent);
+        assert!(!yaml.contains("metadata"));
     }
 }

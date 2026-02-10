@@ -232,7 +232,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
         }
     }
 
-    // Scan Foundry agents from decomposed directories
+    // Scan Foundry agents from YAML files
     if config.has_foundry() {
         for foundry_config in config.foundry_services() {
             let agents_dir = config
@@ -242,8 +242,8 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                 if let Ok(entries) = std::fs::read_dir(&agents_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
-                        if path.is_dir() {
-                            if let Some(agent) = parse_agent_dir(&path) {
+                        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                            if let Some(agent) = parse_agent_yaml(&path) {
                                 summary.agents.push(agent);
                             }
                         }
@@ -611,67 +611,53 @@ fn parse_knowledge_source(v: &Value) -> KnowledgeSourceSummary {
     }
 }
 
-fn parse_agent_dir(agent_dir: &Path) -> Option<AgentSummary> {
-    let name = agent_dir.file_name().and_then(|n| n.to_str())?.to_string();
+fn parse_agent_yaml(yaml_path: &Path) -> Option<AgentSummary> {
+    let name = yaml_path.file_stem().and_then(|n| n.to_str())?.to_string();
 
-    let config_path = agent_dir.join("config.json");
-    let model = if config_path.exists() {
-        std::fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<Value>(&c).ok())
-            .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let content = std::fs::read_to_string(yaml_path).ok()?;
+    let value: Value = serde_yaml::from_str(&content).ok()?;
 
-    let tools_path = agent_dir.join("tools.json");
-    let (tool_count, tools) = if tools_path.exists() {
-        std::fs::read_to_string(&tools_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<Value>(&c).ok())
-            .and_then(|v| {
-                v.as_array().map(|arr| {
-                    let tools: Vec<AgentToolSummary> = arr
-                        .iter()
-                        .map(|tool| {
-                            let tool_type = tool
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            let kb_name = if tool_type == "mcp" {
-                                extract_kb_from_mcp_url(
-                                    tool.get("server_url").and_then(|u| u.as_str()),
-                                )
-                            } else {
-                                None
-                            };
-                            AgentToolSummary {
-                                tool_type,
-                                knowledge_base_name: kb_name,
-                            }
-                        })
-                        .collect();
-                    (tools.len(), tools)
+    let model = value
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let (tool_count, tools) = value
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            let tools: Vec<AgentToolSummary> = arr
+                .iter()
+                .map(|tool| {
+                    let tool_type = tool
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let kb_name = if tool_type == "mcp" {
+                        extract_kb_from_mcp_url(tool.get("server_url").and_then(|u| u.as_str()))
+                    } else {
+                        None
+                    };
+                    AgentToolSummary {
+                        tool_type,
+                        knowledge_base_name: kb_name,
+                    }
                 })
-            })
-            .unwrap_or((0, Vec::new()))
-    } else {
-        (0, Vec::new())
-    };
+                .collect();
+            (tools.len(), tools)
+        })
+        .unwrap_or((0, Vec::new()));
 
-    let instructions_path = agent_dir.join("instructions.md");
-    let instruction_preview = if instructions_path.exists() {
-        std::fs::read_to_string(&instructions_path)
-            .unwrap_or_default()
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_string()
-    } else {
-        String::new()
-    };
+    let instruction_preview = value
+        .get("instructions")
+        .and_then(|i| i.as_str())
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
 
     Some(AgentSummary {
         name,
@@ -1575,28 +1561,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_agent_dir_full() {
+    fn test_parse_agent_yaml_full() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
 
         std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("instructions.md"),
-            "You are a helpful assistant for regulatory compliance.",
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("tools.json"),
-            r#"[{"type": "code_interpreter"}, {"type": "file_search"}]"#,
+            &yaml_path,
+            "kind: prompt\nmodel: gpt-4o\ninstructions: You are a helpful assistant for regulatory compliance.\ntools:\n  - type: code_interpreter\n  - type: file_search\n",
         )
         .unwrap();
 
-        let agent = parse_agent_dir(&agent_dir).unwrap();
+        let agent = parse_agent_yaml(&yaml_path).unwrap();
         assert_eq!(agent.name, "my-agent");
         assert_eq!(agent.model, "gpt-4o");
         assert_eq!(agent.tool_count, 2);
@@ -1609,19 +1584,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_agent_dir_minimal() {
+    fn test_parse_agent_yaml_minimal() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("minimal-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("minimal-agent.yaml");
 
-        // Only config.json, no tools or instructions
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_2", "name": "minimal-agent", "model": "gpt-4o-mini"}"#,
-        )
-        .unwrap();
+        std::fs::write(&yaml_path, "kind: prompt\nmodel: gpt-4o-mini\n").unwrap();
 
-        let agent = parse_agent_dir(&agent_dir).unwrap();
+        let agent = parse_agent_yaml(&yaml_path).unwrap();
         assert_eq!(agent.name, "minimal-agent");
         assert_eq!(agent.model, "gpt-4o-mini");
         assert_eq!(agent.tool_count, 0);
@@ -1630,20 +1599,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_agent_dir_long_instructions_not_truncated() {
+    fn test_parse_agent_yaml_long_instructions_not_truncated() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("verbose-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("verbose-agent.yaml");
 
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_3", "name": "verbose-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
         let long_line = "A".repeat(200);
-        std::fs::write(agent_dir.join("instructions.md"), &long_line).unwrap();
+        let yaml = format!("kind: prompt\nmodel: gpt-4o\ninstructions: {}\n", long_line);
+        std::fs::write(&yaml_path, &yaml).unwrap();
 
-        let agent = parse_agent_dir(&agent_dir).unwrap();
+        let agent = parse_agent_yaml(&yaml_path).unwrap();
         assert_eq!(agent.instruction_preview.len(), 200);
         assert!(!agent.instruction_preview.ends_with("..."));
     }
@@ -1688,23 +1652,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_agent_dir_with_mcp_tools() {
+    fn test_parse_agent_yaml_with_mcp_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("rag-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("rag-agent.yaml");
 
         std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "rag-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("tools.json"),
-            r#"[{"type": "mcp", "server_label": "kb_test", "server_url": "https://svc.search.windows.net/knowledgebases/my-kb/mcp?api-version=2025-11-01-Preview"}]"#,
+            &yaml_path,
+            "kind: prompt\nmodel: gpt-4o\ntools:\n  - type: mcp\n    server_label: kb_test\n    server_url: https://svc.search.windows.net/knowledgebases/my-kb/mcp?api-version=2025-11-01-Preview\n",
         )
         .unwrap();
 
-        let agent = parse_agent_dir(&agent_dir).unwrap();
+        let agent = parse_agent_yaml(&yaml_path).unwrap();
         assert_eq!(agent.tool_count, 1);
         assert_eq!(agent.tools.len(), 1);
         assert_eq!(agent.tools[0].tool_type, "mcp");

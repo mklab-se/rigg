@@ -10,11 +10,10 @@ use tracing::info;
 use hoist_client::auth::AzCliAuth;
 use hoist_client::ArmClient;
 use hoist_client::AzureSearchClient;
-use hoist_core::config::FoundryServiceConfig;
 use hoist_core::constraints::check_immutability;
 use hoist_core::constraints::ViolationSeverity;
 use hoist_core::normalize::{format_json, normalize};
-use hoist_core::resources::agent::compose_agent;
+use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
@@ -23,7 +22,7 @@ use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
 use crate::commands::common::{
-    get_read_only_fields, get_volatile_fields, order_by_dependencies, read_agent_files,
+    get_read_only_fields, get_volatile_fields, order_by_dependencies, read_agent_yaml,
     resolve_resource_selection_from_flags,
 };
 use crate::commands::confirm::prompt_yes_no;
@@ -282,16 +281,16 @@ pub async fn run(
                 })
                 .collect();
 
-            let volatile = hoist_core::resources::agent::agent_volatile_fields();
+            let volatile = agent_volatile_fields();
 
             for entry in std::fs::read_dir(&agents_dir)? {
                 let entry = entry?;
                 let path = entry.path();
-                if !path.is_dir() {
+                if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
                     continue;
                 }
 
-                let name = match path.file_name().and_then(|n| n.to_str()) {
+                let name = match path.file_stem().and_then(|n| n.to_str()) {
                     Some(n) => n.to_string(),
                     None => continue,
                 };
@@ -307,15 +306,21 @@ pub async fn run(
                     }
                 }
 
-                // Read decomposed agent files and compose into API payload
-                let agent_files = read_agent_files(&path)?;
-                let payload = compose_agent(&agent_files);
+                // Read agent YAML and inject name for API use
+                let mut payload = read_agent_yaml(&path)?;
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.insert("name".to_string(), serde_json::Value::String(name.clone()));
+                }
 
                 // Compare local vs remote to skip unchanged agents
+                strip_agent_empty_fields(&mut payload);
                 match remote_agent_map.get(&name) {
                     Some(remote) => {
+                        let mut remote_cleaned = (*remote).clone();
+                        strip_agent_empty_fields(&mut remote_cleaned);
                         let normalized_local = hoist_core::normalize::normalize(&payload, volatile);
-                        let normalized_remote = hoist_core::normalize::normalize(remote, volatile);
+                        let normalized_remote =
+                            hoist_core::normalize::normalize(&remote_cleaned, volatile);
 
                         let local_json = hoist_core::normalize::format_json(&normalized_local);
                         let remote_json = hoist_core::normalize::format_json(&normalized_remote);
@@ -584,22 +589,9 @@ pub async fn run(
                 };
 
                 match result {
-                    Ok(response) => {
+                    Ok(_response) => {
                         println!("done");
                         success_count += 1;
-
-                        // If this was a create, store the server-assigned ID in config.json
-                        if !exists {
-                            if let Some(id) = response.get("id").and_then(|v| v.as_str()) {
-                                update_agent_config_id(
-                                    &config,
-                                    &project_root,
-                                    foundry_config,
-                                    name,
-                                    id,
-                                );
-                            }
-                        }
                     }
                     Err(e) => {
                         println!("FAILED: {}", e);
@@ -724,47 +716,6 @@ async fn collect_push_resource(
             ));
         }
     }
-}
-
-/// After creating a new agent, update the local config.json with the server-assigned ID.
-fn update_agent_config_id(
-    config: &hoist_core::Config,
-    project_root: &std::path::Path,
-    foundry_config: &FoundryServiceConfig,
-    agent_name: &str,
-    agent_id: &str,
-) {
-    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
-    let config_path = agents_dir.join(agent_name).join("config.json");
-
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "id".to_string(),
-                    serde_json::Value::String(agent_id.to_string()),
-                );
-                if let Ok(formatted) = serde_json::to_string_pretty(&value) {
-                    let _ = std::fs::write(&config_path, formatted);
-                    info!(
-                        "Updated agent '{}' config with id '{}'",
-                        agent_name, agent_id
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Get the directory path for Foundry agents.
-fn foundry_agents_dir(
-    config: &hoist_core::Config,
-    project_root: &std::path::Path,
-    foundry_config: &FoundryServiceConfig,
-) -> std::path::PathBuf {
-    config
-        .foundry_service_dir(project_root, &foundry_config.name, &foundry_config.project)
-        .join("agents")
 }
 
 /// Remove volatile and read-only fields from a resource definition before sending to Azure.

@@ -6,7 +6,7 @@ use tracing::info;
 
 use hoist_client::AzureSearchClient;
 use hoist_core::normalize::normalize;
-use hoist_core::resources::agent::{agent_volatile_fields, compose_agent};
+use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
@@ -17,7 +17,7 @@ use hoist_diff::{
 
 use crate::cli::{DiffFormat, ResourceTypeFlags};
 use crate::commands::common::{
-    get_read_only_fields, get_volatile_fields, read_agent_files,
+    get_read_only_fields, get_volatile_fields, read_agent_yaml,
     resolve_resource_selection_from_flags,
 };
 use crate::commands::describe::describe_changes;
@@ -246,11 +246,11 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                 for entry in std::fs::read_dir(&agents_dir)? {
                     let entry = entry?;
                     let path = entry.path();
-                    if !path.is_dir() {
+                    if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
                         continue;
                     }
 
-                    let name = match path.file_name().and_then(|n| n.to_str()) {
+                    let name = match path.file_stem().and_then(|n| n.to_str()) {
                         Some(n) => n.to_string(),
                         None => continue,
                     };
@@ -261,10 +261,13 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
                         }
                     }
 
-                    // Read and compose local agent
-                    let agent_files = read_agent_files(&path)?;
-                    let local_composed = compose_agent(&agent_files);
-                    let local_normalized = normalize(&local_composed, volatile);
+                    // Read agent YAML and inject name for comparison
+                    let mut local_value = read_agent_yaml(&path)?;
+                    if let Some(obj) = local_value.as_object_mut() {
+                        obj.insert("name".to_string(), serde_json::Value::String(name.clone()));
+                    }
+                    strip_agent_empty_fields(&mut local_value);
+                    let local_normalized = normalize(&local_value, volatile);
 
                     let resource_id = format!("agents/{}", name);
 
@@ -275,7 +278,9 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
 
                     match remote_agent {
                         Some(remote) => {
-                            let remote_normalized = normalize(remote, volatile);
+                            let mut remote_cleaned = remote.clone();
+                            strip_agent_empty_fields(&mut remote_cleaned);
+                            let remote_normalized = normalize(&remote_cleaned, volatile);
                             let diff_result = diff(&local_normalized, &remote_normalized, "name");
 
                             if !diff_result.is_equal {
@@ -306,8 +311,8 @@ pub async fn run(flags: &ResourceTypeFlags, format: DiffFormat, exit_code: bool)
 
             // Check for remote-only agents
             for remote_name in &remote_names {
-                let local_dir = agents_dir.join(remote_name);
-                if !local_dir.exists() {
+                let local_yaml = agents_dir.join(format!("{}.yaml", remote_name));
+                if !local_yaml.exists() {
                     let resource_id = format!("agents/{}", remote_name);
                     if all_diffs.iter().any(|(id, _)| id == &resource_id) {
                         continue;

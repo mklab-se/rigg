@@ -61,17 +61,13 @@ The `Resource` trait on each struct defines volatile fields (stripped during nor
 
 ### Foundry Agents
 
-Foundry agents are decomposed into human-friendly files per agent directory:
+Foundry agents are stored as a single YAML file per agent, matching the Foundry portal's YAML view:
 
 ```
-foundry-resources/<service>/<project>/agents/<agent-name>/
-  config.json        # id, name, model, temperature, metadata
-  instructions.md    # Agent instructions as Markdown
-  tools.json         # Tools array (code_interpreter, azure_search, etc.)
-  knowledge.json     # tool_resources object
+foundry-resources/<service>/<project>/agents/<agent-name>.yaml
 ```
 
-The `compose_agent()` / `decompose_agent()` functions in `resources/agent.rs` handle reassembling/splitting the API payload.
+Agent name is derived from the filename (not stored in the YAML). The `agent_to_yaml()` / `yaml_to_agent()` functions in `resources/agent.rs` handle conversion between API JSON and on-disk YAML. The `wrap_agent_payload()` / `flatten_agent_response()` functions in `foundry.rs` handle API format conversion.
 
 ## Directory Layout on Disk
 
@@ -95,8 +91,7 @@ foundry-resources/
   <foundry-service>/
     <project>/
       agents/
-        <agent-name>/
-          config.json  instructions.md  tools.json  knowledge.json
+        <agent-name>.yaml              # Single YAML file per agent (matches portal format)
 ```
 
 Knowledge source managed sub-resources (auto-provisioned by Azure via `createdResources`) are nested under their parent KS directory. Standalone resources (not managed by a KS) remain in `search-management/`.

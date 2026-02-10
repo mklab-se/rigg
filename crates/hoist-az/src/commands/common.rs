@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 
-use hoist_core::resources::agent::AgentFiles;
 use hoist_core::resources::{Resource, ResourceKind};
 use hoist_core::service::ServiceDomain;
 
@@ -337,52 +336,14 @@ pub fn order_by_dependencies(
     ordered
 }
 
-/// Read decomposed agent files from an agent directory on disk.
+/// Read a single agent YAML file and return the parsed JSON Value.
 ///
-/// Expects at minimum a `config.json` file. Optional files (`instructions.md`,
-/// `tools.json`, `knowledge.json`) default to empty values when absent.
-pub fn read_agent_files(agent_dir: &std::path::Path) -> Result<AgentFiles> {
-    let config_path = agent_dir.join("config.json");
-    let instructions_path = agent_dir.join("instructions.md");
-    let tools_path = agent_dir.join("tools.json");
-    let knowledge_path = agent_dir.join("knowledge.json");
-
-    let config: serde_json::Value = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        anyhow::bail!(
-            "Agent directory missing config.json: {}",
-            agent_dir.display()
-        );
-    };
-
-    let instructions = if instructions_path.exists() {
-        std::fs::read_to_string(&instructions_path)?
-    } else {
-        String::new()
-    };
-
-    let tools: serde_json::Value = if tools_path.exists() {
-        let content = std::fs::read_to_string(&tools_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        serde_json::json!([])
-    };
-
-    let knowledge: serde_json::Value = if knowledge_path.exists() {
-        let content = std::fs::read_to_string(&knowledge_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        serde_json::json!({})
-    };
-
-    Ok(AgentFiles {
-        config,
-        instructions,
-        tools,
-        knowledge,
-    })
+/// The agent name is derived from the filename stem (e.g. `regulus.yaml` → `"regulus"`).
+/// The name is NOT injected here — callers add it before wrapping for API use.
+pub fn read_agent_yaml(path: &std::path::Path) -> Result<serde_json::Value> {
+    let content = std::fs::read_to_string(path)?;
+    hoist_core::resources::agent::yaml_to_agent(&content)
+        .map_err(|e| anyhow::anyhow!("Invalid YAML in {}: {}", path.display(), e))
 }
 
 #[cfg(test)]
@@ -1012,110 +973,76 @@ mod tests {
         assert_eq!(singular.indexer, None);
     }
 
-    // === read_agent_files tests ===
+    // === read_agent_yaml tests ===
 
     #[test]
-    fn test_read_agent_files_full() {
+    fn test_read_agent_yaml_full() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("my-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("my-agent.yaml");
 
         std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_1", "name": "my-agent", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("instructions.md"),
-            "You are a helpful assistant.",
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("tools.json"),
-            r#"[{"type": "code_interpreter"}]"#,
-        )
-        .unwrap();
-        std::fs::write(
-            agent_dir.join("knowledge.json"),
-            r#"{"file_search": {"vector_store_ids": ["vs_1"]}}"#,
+            &yaml_path,
+            "kind: prompt\nmodel: gpt-4o\ninstructions: You are helpful.\ntools:\n  - type: code_interpreter\ntool_resources:\n  file_search:\n    vector_store_ids:\n      - vs_1\n",
         )
         .unwrap();
 
-        let files = read_agent_files(&agent_dir).unwrap();
-        assert_eq!(files.config["name"], "my-agent");
-        assert_eq!(files.instructions, "You are a helpful assistant.");
-        assert_eq!(files.tools.as_array().unwrap().len(), 1);
-        assert!(files.knowledge.get("file_search").is_some());
+        let value = read_agent_yaml(&yaml_path).unwrap();
+        assert_eq!(value["model"], "gpt-4o");
+        assert_eq!(value["kind"], "prompt");
+        assert!(value["instructions"].as_str().unwrap().contains("helpful"));
+        assert_eq!(value["tools"].as_array().unwrap().len(), 1);
+        assert!(
+            value["tool_resources"]["file_search"]["vector_store_ids"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1
+        );
     }
 
     #[test]
-    fn test_read_agent_files_missing_optional_files() {
+    fn test_read_agent_yaml_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("minimal-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("missing.yaml");
 
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_2", "name": "minimal", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-
-        let files = read_agent_files(&agent_dir).unwrap();
-        assert_eq!(files.config["name"], "minimal");
-        assert_eq!(files.instructions, "");
-        assert_eq!(files.tools, json!([]));
-        assert_eq!(files.knowledge, json!({}));
-    }
-
-    #[test]
-    fn test_read_agent_files_missing_config_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("bad-agent");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-
-        let result = read_agent_files(&agent_dir);
+        let result = read_agent_yaml(&yaml_path);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing config.json"));
     }
 
     #[test]
-    fn test_read_agent_files_compose_roundtrip() {
-        use hoist_core::resources::agent::compose_agent;
-
+    fn test_read_agent_yaml_invalid_yaml() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("roundtrip");
-        std::fs::create_dir_all(&agent_dir).unwrap();
+        let yaml_path = dir.path().join("bad.yaml");
+        std::fs::write(&yaml_path, "{{invalid yaml").unwrap();
 
-        std::fs::write(
-            agent_dir.join("config.json"),
-            r#"{"id": "asst_rt", "name": "roundtrip", "model": "gpt-4o"}"#,
-        )
-        .unwrap();
-        std::fs::write(agent_dir.join("instructions.md"), "Be concise.").unwrap();
-        std::fs::write(agent_dir.join("tools.json"), r#"[{"type": "file_search"}]"#).unwrap();
-        std::fs::write(agent_dir.join("knowledge.json"), r#"{}"#).unwrap();
-
-        let files = read_agent_files(&agent_dir).unwrap();
-        let composed = compose_agent(&files);
-
-        assert_eq!(composed["id"], "asst_rt");
-        assert_eq!(composed["name"], "roundtrip");
-        assert_eq!(composed["instructions"], "Be concise.");
-        assert_eq!(composed["tools"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_read_agent_files_invalid_json_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("bad-json");
-        std::fs::create_dir_all(&agent_dir).unwrap();
-
-        std::fs::write(agent_dir.join("config.json"), "not valid json").unwrap();
-
-        let result = read_agent_files(&agent_dir);
+        let result = read_agent_yaml(&yaml_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_agent_yaml_roundtrip() {
+        use hoist_core::resources::agent::agent_to_yaml;
+
+        let dir = tempfile::tempdir().unwrap();
+        let yaml_path = dir.path().join("roundtrip.yaml");
+
+        let original = json!({
+            "name": "roundtrip",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "instructions": "Be concise.",
+            "tools": [{"type": "file_search"}]
+        });
+
+        // Write YAML from agent JSON
+        let yaml = agent_to_yaml(&original);
+        std::fs::write(&yaml_path, &yaml).unwrap();
+
+        // Read back
+        let parsed = read_agent_yaml(&yaml_path).unwrap();
+        assert_eq!(parsed["kind"], "prompt");
+        assert_eq!(parsed["model"], "gpt-4o");
+        assert_eq!(parsed["instructions"], "Be concise.");
+        assert_eq!(parsed["tools"].as_array().unwrap().len(), 1);
     }
 }

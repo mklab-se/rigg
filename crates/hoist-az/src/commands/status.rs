@@ -38,8 +38,8 @@ fn count_ks_dirs(dir: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
-/// Count agent directories (each subdirectory is one agent)
-fn count_agent_dirs(dir: &std::path::Path) -> usize {
+/// Count agent YAML files
+fn count_agent_files(dir: &std::path::Path) -> usize {
     if !dir.exists() {
         return 0;
     }
@@ -47,7 +47,7 @@ fn count_agent_dirs(dir: &std::path::Path) -> usize {
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
+                .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
                 .count()
         })
         .unwrap_or(0)
@@ -104,7 +104,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
             let agents_dir = config
                 .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
                 .join("agents");
-            agent_total += count_agent_dirs(&agents_dir);
+            agent_total += count_agent_files(&agents_dir);
         }
         resource_counts.insert("Agent".to_string(), json!(agent_total));
         total += agent_total;

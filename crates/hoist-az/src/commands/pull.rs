@@ -14,7 +14,7 @@ use colored::Colorize;
 use hoist_client::AzureSearchClient;
 use hoist_core::config::FoundryServiceConfig;
 use hoist_core::normalize::{format_json, normalize};
-use hoist_core::resources::agent::{agent_volatile_fields, decompose_agent};
+use hoist_core::resources::agent::{agent_to_yaml, agent_volatile_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
@@ -407,8 +407,8 @@ pub async fn execute_pull(
 
     for entry in &all_upserts {
         if entry.kind == ResourceKind::Agent {
-            // Agent: write decomposed files
-            write_agent_files(config, project_root, entry)?;
+            // Agent: write YAML file
+            write_agent_yaml(config, project_root, entry)?;
         } else {
             // Search resource: write to managed-aware path
             let service_dir = config.search_service_dir(project_root, &write_search_service_name);
@@ -454,10 +454,10 @@ pub async fn execute_pull(
     // Delete local files for resources removed on server
     for (kind, name, path) in &deleted_resources {
         if *kind == ResourceKind::Agent {
-            // Agent: remove entire directory
-            if path.is_dir() {
-                std::fs::remove_dir_all(path)?;
-                info!("Deleted agent directory {}", path.display());
+            // Agent: remove YAML file
+            if path.exists() {
+                std::fs::remove_file(path)?;
+                info!("Deleted agent file {}", path.display());
             }
         } else if *kind == ResourceKind::KnowledgeSource && path.is_dir() {
             // KS: remove entire directory (includes managed sub-resources)
@@ -741,10 +741,9 @@ async fn discover_foundry_agents(
         let is_existing = checksums.get(kind, name).is_some();
         let remote_unchanged = checksums.get(kind, name) == Some(&new_checksum);
 
-        // Check if local files match (config.json is the primary check)
-        let agent_dir = agents_dir.join(name);
-        let config_path = agent_dir.join("config.json");
-        let local_matches = config_path.exists() && remote_unchanged;
+        // Check if local YAML file matches
+        let yaml_path = agents_dir.join(format!("{}.yaml", name));
+        let local_matches = yaml_path.exists() && remote_unchanged;
 
         if remote_unchanged && local_matches {
             *total_unchanged += 1;
@@ -767,15 +766,15 @@ async fn discover_foundry_agents(
         }
     }
 
-    // Detect deleted agents
+    // Detect deleted agents (scan for .yaml files)
     if agents_dir.exists() {
         for entry in std::fs::read_dir(&agents_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if !path.is_dir() {
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
                 continue;
             }
-            let name = match path.file_name().and_then(|n| n.to_str()) {
+            let name = match path.file_stem().and_then(|n| n.to_str()) {
                 Some(n) => n.to_string(),
                 None => continue,
             };
@@ -793,14 +792,12 @@ async fn discover_foundry_agents(
     Ok(())
 }
 
-/// Write decomposed agent files to disk.
-fn write_agent_files(
+/// Write an agent YAML file to disk.
+fn write_agent_yaml(
     config: &Config,
     project_root: &Path,
     entry: &DiscoveredResource,
 ) -> Result<()> {
-    let files = decompose_agent(&entry.raw_resource);
-
     // Use the first configured Foundry service for directory path
     let foundry_config = config
         .foundry_services()
@@ -808,25 +805,20 @@ fn write_agent_files(
         .ok_or_else(|| anyhow::anyhow!("No Foundry service configured"))?;
 
     let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
-    let agent_dir = agents_dir.join(&entry.name);
-    std::fs::create_dir_all(&agent_dir)?;
+    std::fs::create_dir_all(&agents_dir)?;
 
-    // Write config.json
-    let config_content = format_json(&files.config);
-    std::fs::write(agent_dir.join("config.json"), &config_content)?;
+    let yaml_content = agent_to_yaml(&entry.raw_resource);
+    let yaml_path = agents_dir.join(format!("{}.yaml", entry.name));
+    std::fs::write(&yaml_path, &yaml_content)?;
 
-    // Write instructions.md
-    std::fs::write(agent_dir.join("instructions.md"), &files.instructions)?;
+    // Clean up old-format directory if it exists (one-time migration)
+    let old_dir = agents_dir.join(&entry.name);
+    if old_dir.is_dir() {
+        std::fs::remove_dir_all(&old_dir)?;
+        info!("Removed old agent directory {}", old_dir.display());
+    }
 
-    // Write tools.json
-    let tools_content = format_json(&files.tools);
-    std::fs::write(agent_dir.join("tools.json"), &tools_content)?;
-
-    // Write knowledge.json
-    let knowledge_content = format_json(&files.knowledge);
-    std::fs::write(agent_dir.join("knowledge.json"), &knowledge_content)?;
-
-    info!("Wrote agent {}", agent_dir.display());
+    info!("Wrote agent {}", yaml_path.display());
     Ok(())
 }
 
