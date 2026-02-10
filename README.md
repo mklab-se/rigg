@@ -62,7 +62,7 @@ See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, a
 # Initialize a project (discovers your services via Azure CLI)
 hoist init .
 
-# Pull all resources as JSON files
+# Pull all resources as local files
 hoist pull --all
 
 # Edit locally, then push changes back
