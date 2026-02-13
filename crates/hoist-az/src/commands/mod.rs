@@ -9,6 +9,7 @@ pub mod copy;
 pub mod describe;
 pub mod describe_project;
 pub mod diff;
+pub mod env;
 pub mod init;
 pub mod pull;
 pub mod pull_watch;
@@ -18,7 +19,7 @@ pub mod validate;
 
 use std::path::PathBuf;
 
-use hoist_core::config::find_project_root;
+use hoist_core::config::{find_project_root, ResolvedEnvironment};
 use hoist_core::Config;
 
 /// Find project root and load configuration
@@ -26,10 +27,19 @@ pub fn load_config() -> anyhow::Result<(PathBuf, Config)> {
     let current_dir = std::env::current_dir()?;
     let project_root = find_project_root(&current_dir).ok_or_else(|| {
         anyhow::anyhow!(
-            "Not in an hoist project. Run 'hoist init' to create one, or change to a directory containing hoist.toml"
+            "Not in an hoist project. Run 'hoist init' to create one, or change to a directory containing hoist.yaml"
         )
     })?;
 
     let config = Config::load(&project_root)?;
     Ok((project_root, config))
+}
+
+/// Find project root, load configuration, and resolve the environment
+pub fn load_config_and_env(
+    env_override: Option<&str>,
+) -> anyhow::Result<(PathBuf, Config, ResolvedEnvironment)> {
+    let (project_root, config) = load_config()?;
+    let env = config.resolve_env(env_override)?;
+    Ok((project_root, config, env))
 }

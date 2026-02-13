@@ -18,7 +18,7 @@ pub enum StateError {
     ParseError(#[from] serde_json::Error),
 }
 
-/// Local state tracking (.hoist/state.json)
+/// Local state tracking (.hoist/<env>/state.json)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LocalState {
     /// Last sync timestamp
@@ -43,7 +43,7 @@ pub struct ResourceState {
     pub synced_at: DateTime<Utc>,
 }
 
-/// Checksums for change detection (.hoist/checksums.json)
+/// Checksums for change detection (.hoist/<env>/checksums.json)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Checksums {
     /// Checksum by resource key (kind/name)
@@ -58,24 +58,24 @@ impl LocalState {
     /// Checksums file name
     pub const CHECKSUMS_FILE: &'static str = "checksums.json";
 
-    /// Get the state directory path
-    pub fn state_dir(project_root: &Path) -> PathBuf {
-        project_root.join(Self::DIR_NAME)
+    /// Get the environment-specific state directory path
+    pub fn env_dir(project_root: &Path, env_name: &str) -> PathBuf {
+        project_root.join(Self::DIR_NAME).join(env_name)
     }
 
-    /// Get the state file path
-    pub fn state_file(project_root: &Path) -> PathBuf {
-        Self::state_dir(project_root).join(Self::STATE_FILE)
+    /// Get the environment-specific state file path
+    pub fn state_file_env(project_root: &Path, env_name: &str) -> PathBuf {
+        Self::env_dir(project_root, env_name).join(Self::STATE_FILE)
     }
 
-    /// Get the checksums file path
-    pub fn checksums_file(project_root: &Path) -> PathBuf {
-        Self::state_dir(project_root).join(Self::CHECKSUMS_FILE)
+    /// Get the environment-specific checksums file path
+    pub fn checksums_file_env(project_root: &Path, env_name: &str) -> PathBuf {
+        Self::env_dir(project_root, env_name).join(Self::CHECKSUMS_FILE)
     }
 
-    /// Load state from disk
-    pub fn load(project_root: &Path) -> Result<Self, StateError> {
-        let path = Self::state_file(project_root);
+    /// Load state for an environment
+    pub fn load_env(project_root: &Path, env_name: &str) -> Result<Self, StateError> {
+        let path = Self::state_file_env(project_root, env_name);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -84,12 +84,12 @@ impl LocalState {
         Ok(state)
     }
 
-    /// Save state to disk
-    pub fn save(&self, project_root: &Path) -> Result<(), StateError> {
-        let dir = Self::state_dir(project_root);
+    /// Save state for an environment
+    pub fn save_env(&self, project_root: &Path, env_name: &str) -> Result<(), StateError> {
+        let dir = Self::env_dir(project_root, env_name);
         std::fs::create_dir_all(&dir)?;
 
-        let path = Self::state_file(project_root);
+        let path = Self::state_file_env(project_root, env_name);
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(&path, content)?;
         Ok(())
@@ -160,9 +160,9 @@ impl LocalState {
 }
 
 impl Checksums {
-    /// Load checksums from disk
-    pub fn load(project_root: &Path) -> Result<Self, StateError> {
-        let path = LocalState::checksums_file(project_root);
+    /// Load checksums for an environment
+    pub fn load_env(project_root: &Path, env_name: &str) -> Result<Self, StateError> {
+        let path = LocalState::checksums_file_env(project_root, env_name);
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -171,12 +171,12 @@ impl Checksums {
         Ok(checksums)
     }
 
-    /// Save checksums to disk
-    pub fn save(&self, project_root: &Path) -> Result<(), StateError> {
-        let dir = LocalState::state_dir(project_root);
+    /// Save checksums for an environment
+    pub fn save_env(&self, project_root: &Path, env_name: &str) -> Result<(), StateError> {
+        let dir = LocalState::env_dir(project_root, env_name);
         std::fs::create_dir_all(&dir)?;
 
-        let path = LocalState::checksums_file(project_root);
+        let path = LocalState::checksums_file_env(project_root, env_name);
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(&path, content)?;
         Ok(())
@@ -242,13 +242,13 @@ mod tests {
     #[test]
     fn test_resource_key_format() {
         let key = LocalState::resource_key(ResourceKind::Index, "my-index");
-        assert_eq!(key, "search-management/indexes/my-index");
+        assert_eq!(key, "indexes/my-index");
     }
 
     #[test]
     fn test_resource_key_datasource() {
         let key = LocalState::resource_key(ResourceKind::DataSource, "ds1");
-        assert_eq!(key, "search-management/data-sources/ds1");
+        assert_eq!(key, "data-sources/ds1");
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn test_state_save_and_load() {
+    fn test_state_save_and_load_env() {
         let dir = tempfile::tempdir().unwrap();
         let mut state = LocalState::default();
         state.last_sync = Some(chrono::Utc::now());
@@ -306,8 +306,8 @@ mod tests {
             },
         );
 
-        state.save(dir.path()).unwrap();
-        let loaded = LocalState::load(dir.path()).unwrap();
+        state.save_env(dir.path(), "prod").unwrap();
+        let loaded = LocalState::load_env(dir.path(), "prod").unwrap();
 
         assert!(loaded.last_sync.is_some());
         let got = loaded.get(ResourceKind::Indexer, "my-indexer").unwrap();
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn test_state_load_missing_returns_default() {
         let dir = tempfile::tempdir().unwrap();
-        let state = LocalState::load(dir.path()).unwrap();
+        let state = LocalState::load_env(dir.path(), "prod").unwrap();
         assert!(state.last_sync.is_none());
         assert!(state.resources.is_empty());
     }
@@ -359,13 +359,13 @@ mod tests {
     }
 
     #[test]
-    fn test_checksums_save_and_load() {
+    fn test_checksums_save_and_load_env() {
         let dir = tempfile::tempdir().unwrap();
         let mut checksums = Checksums::default();
         checksums.set(ResourceKind::Skillset, "sk1", "hash1".to_string());
 
-        checksums.save(dir.path()).unwrap();
-        let loaded = Checksums::load(dir.path()).unwrap();
+        checksums.save_env(dir.path(), "test").unwrap();
+        let loaded = Checksums::load_env(dir.path(), "test").unwrap();
 
         assert_eq!(
             loaded.get(ResourceKind::Skillset, "sk1"),
@@ -374,29 +374,29 @@ mod tests {
     }
 
     #[test]
-    fn test_state_dir_path() {
+    fn test_env_dir_path() {
         let root = Path::new("/my/project");
         assert_eq!(
-            LocalState::state_dir(root),
-            PathBuf::from("/my/project/.hoist")
+            LocalState::env_dir(root, "prod"),
+            PathBuf::from("/my/project/.hoist/prod")
         );
     }
 
     #[test]
-    fn test_state_file_path() {
+    fn test_state_file_env_path() {
         let root = Path::new("/my/project");
         assert_eq!(
-            LocalState::state_file(root),
-            PathBuf::from("/my/project/.hoist/state.json")
+            LocalState::state_file_env(root, "prod"),
+            PathBuf::from("/my/project/.hoist/prod/state.json")
         );
     }
 
     #[test]
-    fn test_checksums_file_path() {
+    fn test_checksums_file_env_path() {
         let root = Path::new("/my/project");
         assert_eq!(
-            LocalState::checksums_file(root),
-            PathBuf::from("/my/project/.hoist/checksums.json")
+            LocalState::checksums_file_env(root, "test"),
+            PathBuf::from("/my/project/.hoist/test/checksums.json")
         );
     }
 
@@ -404,14 +404,14 @@ mod tests {
     fn test_resource_key_managed_standalone() {
         let map = ManagedMap::new();
         let key = LocalState::resource_key_managed(ResourceKind::Index, "my-index", &map);
-        assert_eq!(key, "search-management/indexes/my-index");
+        assert_eq!(key, "indexes/my-index");
     }
 
     #[test]
     fn test_resource_key_managed_ks() {
         let map = ManagedMap::new();
         let key = LocalState::resource_key_managed(ResourceKind::KnowledgeSource, "test-ks", &map);
-        assert_eq!(key, "agentic-retrieval/knowledge-sources/test-ks/test-ks");
+        assert_eq!(key, "knowledge-sources/test-ks/test-ks");
     }
 
     #[test]
@@ -422,10 +422,7 @@ mod tests {
             "test-ks".to_string(),
         );
         let key = LocalState::resource_key_managed(ResourceKind::Index, "test-ks-index", &map);
-        assert_eq!(
-            key,
-            "agentic-retrieval/knowledge-sources/test-ks/test-ks-index"
-        );
+        assert_eq!(key, "knowledge-sources/test-ks/test-ks-index");
     }
 
     #[test]
@@ -456,5 +453,54 @@ mod tests {
         assert!(checksums
             .get_managed(ResourceKind::Index, "ks-1-index", &map)
             .is_none());
+    }
+
+    #[test]
+    fn test_separate_envs_dont_interfere() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut state_prod = LocalState::default();
+        state_prod.set(
+            ResourceKind::Index,
+            "idx",
+            ResourceState {
+                kind: ResourceKind::Index,
+                etag: None,
+                checksum: "prod-hash".to_string(),
+                synced_at: chrono::Utc::now(),
+            },
+        );
+        state_prod.save_env(dir.path(), "prod").unwrap();
+
+        let mut state_test = LocalState::default();
+        state_test.set(
+            ResourceKind::Index,
+            "idx",
+            ResourceState {
+                kind: ResourceKind::Index,
+                etag: None,
+                checksum: "test-hash".to_string(),
+                synced_at: chrono::Utc::now(),
+            },
+        );
+        state_test.save_env(dir.path(), "test").unwrap();
+
+        let loaded_prod = LocalState::load_env(dir.path(), "prod").unwrap();
+        let loaded_test = LocalState::load_env(dir.path(), "test").unwrap();
+
+        assert_eq!(
+            loaded_prod
+                .get(ResourceKind::Index, "idx")
+                .unwrap()
+                .checksum,
+            "prod-hash"
+        );
+        assert_eq!(
+            loaded_test
+                .get(ResourceKind::Index, "idx")
+                .unwrap()
+                .checksum,
+            "test-hash"
+        );
     }
 }

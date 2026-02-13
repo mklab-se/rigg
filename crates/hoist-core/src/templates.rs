@@ -236,12 +236,12 @@ mod tests {
             resource_counts: vec![
                 ResourceCount {
                     kind: "Index".to_string(),
-                    directory: "search-management/indexes".to_string(),
+                    directory: "indexes".to_string(),
                     count: 3,
                 },
                 ResourceCount {
                     kind: "Skillset".to_string(),
-                    directory: "search-management/skillsets".to_string(),
+                    directory: "skillsets".to_string(),
                     count: 1,
                 },
             ],
@@ -249,10 +249,10 @@ mod tests {
         };
         let output = gen.generate_project_readme(&ctx).unwrap();
         assert!(output.contains("Index"));
-        assert!(output.contains("search-management/indexes"));
+        assert!(output.contains("indexes"));
         assert!(output.contains("3"));
         assert!(output.contains("Skillset"));
-        assert!(output.contains("search-management/skillsets"));
+        assert!(output.contains("skillsets"));
         assert!(output.contains("1"));
     }
 

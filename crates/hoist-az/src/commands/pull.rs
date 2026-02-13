@@ -12,14 +12,13 @@ use tracing::info;
 use colored::Colorize;
 
 use hoist_client::AzureSearchClient;
-use hoist_core::config::FoundryServiceConfig;
+use hoist_core::config::{FoundryServiceConfig, ResolvedEnvironment};
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::agent::{agent_to_yaml, agent_volatile_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
-use hoist_core::Config;
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
@@ -28,7 +27,7 @@ use crate::commands::common::{
 };
 use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
 pub async fn run(
     flags: &ResourceTypeFlags,
@@ -36,11 +35,11 @@ pub async fn run(
     filter: Option<String>,
     dry_run: bool,
     force: bool,
-    source: Option<String>,
+    env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, config) = load_config()?;
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
-    let selection = resolve_resource_selection_from_flags(flags, config.sync.include_preview, true);
+    let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
@@ -49,19 +48,18 @@ pub async fn run(
 
     // Recursive expansion: fetch selected resources from server, expand, then pull all
     let selection = if recursive {
-        expand_pull_selection(&config, &selection, source.as_deref()).await?
+        expand_pull_selection(&env, &selection).await?
     } else {
         selection
     };
 
     execute_pull(
         &project_root,
-        &config,
+        &env,
         &selection,
         filter.as_deref(),
         dry_run,
         force,
-        source.as_deref(),
     )
     .await
 }
@@ -70,15 +68,13 @@ pub async fn run(
 /// discovering their dependencies and children, then building a new selection
 /// that includes everything.
 async fn expand_pull_selection(
-    config: &Config,
+    env: &ResolvedEnvironment,
     selection: &ResourceSelection,
-    source: Option<&str>,
 ) -> Result<ResourceSelection> {
-    let client = if let Some(server) = source {
-        AzureSearchClient::new_for_server(config, server)?
-    } else {
-        AzureSearchClient::new(config)?
-    };
+    let search_svc = env
+        .primary_search_service()
+        .ok_or_else(|| anyhow::anyhow!("No search service configured"))?;
+    let client = AzureSearchClient::from_service_config(search_svc)?;
 
     // Fetch all resources from all selected kinds concurrently (max 5 in-flight)
     let mut fetched: Vec<(ResourceKind, String, Value)> = Vec::new();
@@ -127,7 +123,7 @@ async fn expand_pull_selection(
     }
 
     // Also fetch all resources from kinds not in the selection (needed for expansion)
-    let all_kinds = if config.sync.include_preview {
+    let all_kinds = if env.sync.include_preview {
         ResourceKind::all().to_vec()
     } else {
         ResourceKind::stable().to_vec()
@@ -184,12 +180,11 @@ async fn expand_pull_selection(
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_pull(
     project_root: &Path,
-    config: &Config,
+    env: &ResolvedEnvironment,
     selection: &ResourceSelection,
     filter: Option<&str>,
     dry_run: bool,
     force: bool,
-    source: Option<&str>,
 ) -> Result<()> {
     let kinds = selection.kinds();
     if dry_run {
@@ -210,7 +205,7 @@ pub async fn execute_pull(
         .collect();
 
     // Load existing state
-    let checksums = Checksums::load(project_root)?;
+    let checksums = Checksums::load_env(project_root, &env.name)?;
 
     // === Discovery phase: fetch and classify all resources ===
     let mut new_resources = Vec::new();
@@ -221,20 +216,14 @@ pub async fn execute_pull(
 
     // --- Search resources ---
     if !search_kinds.is_empty() {
-        let client = if let Some(server) = source {
-            AzureSearchClient::new_for_server(config, server)?
-        } else {
-            AzureSearchClient::new(config)?
-        };
-
-        let default_name = config
+        let search_svc = env
             .primary_search_service()
-            .map(|s| s.name)
-            .unwrap_or_default();
-        let search_service_name = source.unwrap_or(&default_name).to_string();
+            .ok_or_else(|| anyhow::anyhow!("No search service in environment '{}'", env.name))?;
+        let client = AzureSearchClient::from_service_config(search_svc)?;
+
         info!(
             "Connected to {} using {}",
-            search_service_name,
+            search_svc.name,
             client.auth_method()
         );
 
@@ -300,10 +289,10 @@ pub async fn execute_pull(
             fetched_results.push((ResourceKind::KnowledgeSource, ks_result));
         }
 
+        let service_dir = env.search_service_dir(project_root, search_svc);
+
         discover_search_resources(
-            config,
-            project_root,
-            &search_service_name,
+            &service_dir,
             &fetched_results,
             selection,
             filter,
@@ -317,11 +306,11 @@ pub async fn execute_pull(
     }
 
     // --- Foundry agents ---
-    if !foundry_kinds.is_empty() && config.has_foundry() {
-        for foundry_config in config.foundry_services() {
+    if !foundry_kinds.is_empty() && env.has_foundry() {
+        for foundry_config in &env.foundry {
+            let agents_dir = foundry_agents_dir(env, project_root, foundry_config);
             discover_foundry_agents(
-                config,
-                project_root,
+                &agents_dir,
                 foundry_config,
                 selection,
                 filter,
@@ -394,24 +383,25 @@ pub async fn execute_pull(
     }
 
     // === Write phase ===
-    let mut state = LocalState::load(project_root)?;
-    let mut checksums = Checksums::load(project_root)?;
+    let mut state = LocalState::load_env(project_root, &env.name)?;
+    let mut checksums = Checksums::load_env(project_root, &env.name)?;
 
     let all_upserts: Vec<_> = new_resources.into_iter().chain(updated_resources).collect();
 
-    // Determine search service name for writing files
-    let write_search_service_name = config
+    // Determine search service dir for writing files
+    let write_service_dir = env
         .primary_search_service()
-        .map(|s| s.name)
-        .unwrap_or_default();
+        .map(|svc| env.search_service_dir(project_root, svc));
 
     for entry in &all_upserts {
         if entry.kind == ResourceKind::Agent {
             // Agent: write YAML file
-            write_agent_yaml(config, project_root, entry)?;
+            write_agent_yaml(env, project_root, entry)?;
         } else {
             // Search resource: write to managed-aware path
-            let service_dir = config.search_service_dir(project_root, &write_search_service_name);
+            let service_dir = write_service_dir
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("No search service configured"))?;
             let resource_dir = service_dir.join(managed::resource_directory(
                 entry.kind,
                 &entry.name,
@@ -473,8 +463,8 @@ pub async fn execute_pull(
 
     // Save state
     state.last_sync = Some(chrono::Utc::now());
-    state.save(project_root)?;
-    checksums.save(project_root)?;
+    state.save_env(project_root, &env.name)?;
+    checksums.save_env(project_root, &env.name)?;
 
     println!();
     let upsert_count = all_upserts.len();
@@ -502,9 +492,7 @@ pub async fn execute_pull(
 /// Discover search resources from fetched API results.
 #[allow(clippy::too_many_arguments)]
 fn discover_search_resources(
-    config: &Config,
-    project_root: &Path,
-    service_name: &str,
+    service_dir: &Path,
     fetched_results: &[(ResourceKind, Result<Vec<Value>, hoist_client::ClientError>)],
     selection: &ResourceSelection,
     filter: Option<&str>,
@@ -515,8 +503,6 @@ fn discover_search_resources(
     deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
     total_unchanged: &mut usize,
 ) -> Result<()> {
-    let service_dir = config.search_service_dir(project_root, service_name);
-
     for (kind, result) in fetched_results {
         let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -609,7 +595,7 @@ fn discover_search_resources(
         // Detect local files whose resources were deleted on the server
         // For knowledge sources, scan subdirectories
         if *kind == ResourceKind::KnowledgeSource {
-            let ks_base_dir = service_dir.join("agentic-retrieval/knowledge-sources");
+            let ks_base_dir = service_dir.join("knowledge-sources");
             if ks_base_dir.exists() {
                 for entry in std::fs::read_dir(&ks_base_dir)? {
                     let entry = entry?;
@@ -678,8 +664,7 @@ fn discover_search_resources(
 /// Discover Foundry agents from the API and prepare them for writing.
 #[allow(clippy::too_many_arguments)]
 async fn discover_foundry_agents(
-    config: &Config,
-    project_root: &Path,
+    agents_dir: &Path,
     foundry_config: &FoundryServiceConfig,
     selection: &ResourceSelection,
     filter: Option<&str>,
@@ -724,8 +709,6 @@ async fn discover_foundry_agents(
         })
         .collect();
 
-    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
-
     for agent in &agents {
         let name = agent
             .get("name")
@@ -768,7 +751,7 @@ async fn discover_foundry_agents(
 
     // Detect deleted agents (scan for .yaml files)
     if agents_dir.exists() {
-        for entry in std::fs::read_dir(&agents_dir)? {
+        for entry in std::fs::read_dir(agents_dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
@@ -794,17 +777,17 @@ async fn discover_foundry_agents(
 
 /// Write an agent YAML file to disk.
 fn write_agent_yaml(
-    config: &Config,
+    env: &ResolvedEnvironment,
     project_root: &Path,
     entry: &DiscoveredResource,
 ) -> Result<()> {
     // Use the first configured Foundry service for directory path
-    let foundry_config = config
-        .foundry_services()
+    let foundry_config = env
+        .foundry
         .first()
         .ok_or_else(|| anyhow::anyhow!("No Foundry service configured"))?;
 
-    let agents_dir = foundry_agents_dir(config, project_root, foundry_config);
+    let agents_dir = foundry_agents_dir(env, project_root, foundry_config);
     std::fs::create_dir_all(&agents_dir)?;
 
     let yaml_content = agent_to_yaml(&entry.raw_resource);
@@ -824,12 +807,11 @@ fn write_agent_yaml(
 
 /// Get the directory path for Foundry agents.
 fn foundry_agents_dir(
-    config: &Config,
+    env: &ResolvedEnvironment,
     project_root: &Path,
     foundry_config: &FoundryServiceConfig,
 ) -> std::path::PathBuf {
-    config
-        .foundry_service_dir(project_root, &foundry_config.name, &foundry_config.project)
+    env.foundry_service_dir(project_root, foundry_config)
         .join("agents")
 }
 

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                          # Build all crates
-cargo test                           # Run all tests (403 tests across 4 crates)
+cargo test                           # Run all tests (483 tests across 4 crates)
 cargo test -p hoist-core             # Test a specific crate
 cargo test test_name                 # Run a single test by name
 cargo clippy                         # Lint
@@ -41,20 +41,20 @@ hoist-client ───┘
 hoist-diff  (standalone)
 ```
 
-**hoist-core** — Resource type system (`ResourceKind`, `ServiceDomain`), config (`hoist.toml`), state tracking (`.hoist/`), JSON normalization, constraints (immutability/dependency validation), agent file decomposition.
+**hoist-core** — Resource type system (`ResourceKind`, `ServiceDomain`), config (`hoist.yaml`), environment resolution (`ResolvedEnvironment`), state tracking (`.hoist/<env>/`), JSON normalization, constraints (immutability/dependency validation).
 
 **hoist-client** — Azure Search REST API client (`client.rs`), Microsoft Foundry client (`foundry.rs`), Azure Resource Manager discovery (`arm.rs`), authentication via Azure CLI or service principal (`auth.rs`) with per-domain scoping.
 
 **hoist-diff** — Semantic JSON diffing with identity-key-based array matching. Standalone, no Azure dependencies.
 
-**hoist-az** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → create client → perform operation → update state.
+**hoist-az** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → resolve environment → create client → perform operation → update state.
 
 ## Resource Type System
 
 `ResourceKind` enum (in `resources/traits.rs`) is central to everything. Each resource type has:
 - A `ServiceDomain` — `Search` or `Foundry`
-- An API path (e.g., `indexes`, `assistants`)
-- A directory path under the user's project (e.g., `search-management/indexes`, `agents`)
+- An API path (e.g., `indexes`, `agents`)
+- A flat directory name (e.g., `indexes`, `knowledge-sources`, `agents`)
 - Stable vs preview classification — preview resources (KnowledgeBase, KnowledgeSource) use `preview_api_version` (`2025-11-01-preview`); stable resources use `api_version` (`2024-07-01`)
 
 The `Resource` trait on each struct defines volatile fields (stripped during normalization), dependencies (for push ordering and validation), and immutable fields (for change detection).
@@ -64,7 +64,7 @@ The `Resource` trait on each struct defines volatile fields (stripped during nor
 Foundry agents are stored as a single YAML file per agent, matching the Foundry portal's YAML view:
 
 ```
-foundry-resources/<service>/<project>/agents/<agent-name>.yaml
+foundry/agents/<agent-name>.yaml
 ```
 
 Agent name is derived from the filename (not stored in the YAML). The `agent_to_yaml()` / `yaml_to_agent()` functions in `resources/agent.rs` handle conversion between API JSON and on-disk YAML. The `wrap_agent_payload()` / `flatten_agent_response()` functions in `foundry.rs` handle API format conversion.
@@ -72,56 +72,83 @@ Agent name is derived from the filename (not stored in the YAML). The `agent_to_
 ## Directory Layout on Disk
 
 ```
-hoist.toml
-.hoist/          # state.json, checksums.json (gitignored)
-search-resources/
-  <search-service>/
-    search-management/           # Standalone (non-managed) resources only
-      indexes/  indexers/  data-sources/  skillsets/  synonym-maps/  aliases/
-    agentic-retrieval/
-      knowledge-bases/           # Flat JSON files
-      knowledge-sources/         # Each KS is a directory with managed sub-resources
-        <ks-name>/
-          <ks-name>.json           # The KS definition
-          <ks-name>-index.json     # Managed index (from createdResources)
-          <ks-name>-indexer.json   # Managed indexer
-          <ks-name>-datasource.json # Managed data source
-          <ks-name>-skillset.json  # Managed skillset
-foundry-resources/
-  <foundry-service>/
-    <project>/
-      agents/
-        <agent-name>.yaml              # Single YAML file per agent (matches portal format)
+hoist.yaml
+.hoist/
+  <env>/state.json, checksums.json    # Per-environment state (gitignored)
+search/                                # Single search service
+  indexes/  indexers/  data-sources/  skillsets/  synonym-maps/  aliases/
+  knowledge-bases/                     # Flat JSON files
+  knowledge-sources/                   # Each KS is a directory with managed sub-resources
+    <ks-name>/
+      <ks-name>.json                   # The KS definition
+      <ks-name>-index.json             # Managed index (from createdResources)
+      <ks-name>-indexer.json           # Managed indexer
+      <ks-name>-datasource.json        # Managed data source
+      <ks-name>-skillset.json          # Managed skillset
+foundry/                               # Single foundry service
+  agents/
+    <agent-name>.yaml                  # Single YAML file per agent (matches portal format)
 ```
 
-Knowledge source managed sub-resources (auto-provisioned by Azure via `createdResources`) are nested under their parent KS directory. Standalone resources (not managed by a KS) remain in `search-management/`.
+Multi-service layout (when environment has multiple services per domain, labels create subdirs):
 
-Legacy projects using `[service]` config and a custom path (e.g., `search/`) continue to work unchanged.
-
-## Configuration
-
-Multi-service config (`hoist.toml`):
-
-```toml
-[project]
-name = "My RAG System"
-
-[[services.search]]
-name = "my-search-service"
-api_version = "2024-07-01"
-preview_api_version = "2025-11-01-preview"
-
-[[services.foundry]]
-name = "my-ai-service"
-project = "my-project"
-api_version = "2025-05-15-preview"
-
-[sync]
-include_preview = true
-generate_docs = true
+```
+search/
+  primary/indexes/...
+  analytics/indexes/...
+foundry/
+  rag/agents/...
+  chat/agents/...
 ```
 
-Legacy `[service]` format auto-migrates to `services.search[0]` on load.
+Knowledge source managed sub-resources (auto-provisioned by Azure via `createdResources`) are nested under their parent KS directory. Standalone resources (not managed by a KS) remain in top-level directories.
+
+## Deployment Environments
+
+Named environments are first-class config concepts. Config uses YAML (`hoist.yaml`):
+
+```yaml
+project:
+  name: My RAG System
+
+sync:
+  include_preview: true
+
+environments:
+  prod:
+    default: true
+    search:
+      - name: search-prod
+        subscription: "11111111-1111-1111-1111-111111111111"
+    foundry:
+      - name: ai-services-prod
+        project: my-project
+
+  test:
+    search:
+      - name: search-test
+    foundry:
+      - name: ai-services-test
+        project: my-project-test
+```
+
+### Environment resolution
+
+- `--env <name>` flag (or `HOIST_ENV` env var) on any command to target a specific environment
+- If omitted, uses the environment marked `default: true`, or the only environment if there's just one
+- `ResolvedEnvironment` is the central abstraction all commands work through
+- `Config::resolve_env(name)` resolves an environment by name or default
+- `load_config_and_env()` in `commands/mod.rs` is the standard entry point
+
+### Environment management
+
+- `hoist env list` — list all environments
+- `hoist env show [name]` — show environment details
+- `hoist env set-default <name>` — set default environment
+
+### Per-environment state
+
+State files live in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`. Methods: `LocalState::load_env()` / `save_env()`, `Checksums::load_env()` / `save_env()`.
 
 ## Key Patterns
 
@@ -132,6 +159,7 @@ Legacy `[service]` format auto-migrates to `services.search[0]` on load.
 - **Auth chain**: Environment variables (service principal) take priority, then Azure CLI. Auth is scoped per service domain (`search.azure.com` for Search, `ai.azure.com` for Foundry). ARM discovery uses a separate token scoped to `management.azure.com`.
 - **Fallback behavior**: `init` tries ARM discovery first; falls back to manual service name entry if not logged in. `pull` without flags pulls all Search resource types respecting the `include_preview` config. Foundry agents require explicit `--agents` or `--all` flag.
 - **CLI flags**: Resource type flags (`--indexes`, `--agents`, etc.) are defined once in `ResourceTypeFlags` struct and shared via `clap(flatten)` across pull, push, diff, and pull-watch commands.
+- **Client construction**: `AzureSearchClient::from_service_config(&SearchServiceConfig)` creates clients from resolved environment service configs. `FoundryClient::new(&FoundryServiceConfig)` for Foundry.
 
 ## Test Projects
 

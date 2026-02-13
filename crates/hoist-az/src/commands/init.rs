@@ -9,26 +9,20 @@ use tracing::info;
 use hoist_client::arm::{AiServicesAccount, ArmClient, SearchService};
 use hoist_client::auth::AzCliAuth;
 use hoist_core::config::{
-    Config, FoundryServiceConfig, ProjectConfig, SearchServiceConfig, ServicesConfig, SyncConfig,
+    Config, EnvironmentConfig, FoundryServiceConfig, ProjectConfig, SearchServiceConfig, SyncConfig,
 };
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
-use hoist_core::state::LocalState;
 
 use crate::cli::InitTemplate;
 
 /// Authenticated ARM context for discovery
-struct DiscoveryContext {
-    arm: ArmClient,
-    subscription_id: String,
+pub(crate) struct DiscoveryContext {
+    pub(crate) arm: ArmClient,
+    pub(crate) subscription_id: String,
 }
 
-pub async fn run(
-    dir: Option<PathBuf>,
-    path: Option<PathBuf>,
-    template: InitTemplate,
-    service_override: Option<String>,
-) -> Result<()> {
+pub async fn run(dir: Option<PathBuf>, template: InitTemplate) -> Result<()> {
     let project_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap());
     let config_path = project_dir.join(Config::FILENAME);
 
@@ -37,61 +31,41 @@ pub async fn run(
         run_additive(&project_dir).await
     } else {
         // Fresh init: full setup from scratch
-        run_fresh(project_dir, path, template, service_override).await
+        run_fresh(project_dir, template).await
     }
 }
 
 /// Fresh initialization of a new hoist project
-async fn run_fresh(
-    project_dir: PathBuf,
-    path: Option<PathBuf>,
-    template: InitTemplate,
-    service_override: Option<String>,
-) -> Result<()> {
+async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
     crate::banner::print_banner();
     println!();
     println!("Initializing hoist project in {}", project_dir.display());
     println!();
 
-    // Resolve service configurations symmetrically
-    let (search_configs, foundry_configs) = if let Some(name) = service_override {
-        // --service flag: search is pre-selected, still ask about foundry
-        let search = vec![SearchServiceConfig {
-            name,
-            subscription: None,
-            resource_group: None,
-            api_version: "2024-07-01".to_string(),
-            preview_api_version: "2025-11-01-preview".to_string(),
-        }];
-        let foundry = match try_authenticate().await {
-            Ok(ctx) => discover_foundry_service(&ctx).await?.into_iter().collect(),
-            Err(_) => prompt_foundry_service_manual()?.into_iter().collect(),
-        };
-        (search, foundry)
-    } else {
-        match try_authenticate().await {
-            Ok(ctx) => {
-                let search = discover_search_services_fresh(&ctx).await?;
-                let foundry: Vec<FoundryServiceConfig> =
-                    discover_foundry_service(&ctx).await?.into_iter().collect();
-                (search, foundry)
-            }
-            Err(_) => {
-                let search: Vec<SearchServiceConfig> = prompt_search_service_manual()?
-                    .map(|(name, _)| {
-                        vec![SearchServiceConfig {
-                            name,
-                            subscription: None,
-                            resource_group: None,
-                            api_version: "2024-07-01".to_string(),
-                            preview_api_version: "2025-11-01-preview".to_string(),
-                        }]
-                    })
-                    .unwrap_or_default();
-                let foundry: Vec<FoundryServiceConfig> =
-                    prompt_foundry_service_manual()?.into_iter().collect();
-                (search, foundry)
-            }
+    // Resolve service configurations
+    let (search_configs, foundry_configs) = match try_authenticate().await {
+        Ok(ctx) => {
+            let search = discover_search_services_fresh(&ctx).await?;
+            let foundry: Vec<FoundryServiceConfig> =
+                discover_foundry_service(&ctx).await?.into_iter().collect();
+            (search, foundry)
+        }
+        Err(_) => {
+            let search: Vec<SearchServiceConfig> = prompt_search_service_manual()?
+                .map(|(name, _)| {
+                    vec![SearchServiceConfig {
+                        name,
+                        label: None,
+                        subscription: None,
+                        resource_group: None,
+                        api_version: "2024-07-01".to_string(),
+                        preview_api_version: "2025-11-01-preview".to_string(),
+                    }]
+                })
+                .unwrap_or_default();
+            let foundry: Vec<FoundryServiceConfig> =
+                prompt_foundry_service_manual()?.into_iter().collect();
+            (search, foundry)
         }
     };
 
@@ -99,15 +73,9 @@ async fn run_fresh(
         anyhow::bail!("At least one service type must be selected.");
     }
 
-    let primary_search_name = search_configs.first().map(|s| s.name.clone());
-
     // Create configuration
+    let env_name = "prod".to_string();
     let config = Config {
-        service: None,
-        services: ServicesConfig {
-            search: search_configs,
-            foundry: foundry_configs,
-        },
         project: ProjectConfig {
             name: Some(
                 project_dir
@@ -117,13 +85,24 @@ async fn run_fresh(
                     .to_string(),
             ),
             description: None,
-            path: path.as_ref().map(|f| f.to_string_lossy().to_string()),
         },
         sync: SyncConfig {
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
             resources: Vec::new(),
         },
+        environments: std::collections::BTreeMap::from([(
+            env_name.clone(),
+            EnvironmentConfig {
+                default: true,
+                description: None,
+                search: search_configs,
+                foundry: foundry_configs,
+            },
+        )]),
     };
+    let env = config
+        .resolve_env(None)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // Create directory structure
     std::fs::create_dir_all(&project_dir)?;
@@ -132,12 +111,14 @@ async fn run_fresh(
     config.save(&project_dir)?;
     info!("Created {}", Config::FILENAME);
 
-    // Create .hoist state directory
-    let state_dir = LocalState::state_dir(&project_dir);
+    // Create .hoist state directory (per-environment)
+    let state_dir = project_dir.join(".hoist").join(&env_name);
     std::fs::create_dir_all(&state_dir)?;
 
-    // Create .gitignore for state directory
-    let gitignore_path = state_dir.join(".gitignore");
+    // Create .gitignore for .hoist directory
+    let hoist_dir = project_dir.join(".hoist");
+    std::fs::create_dir_all(&hoist_dir)?;
+    let gitignore_path = hoist_dir.join(".gitignore");
     std::fs::write(&gitignore_path, "# Ignore local state\n*\n!.gitignore\n")?;
 
     // Create resource directories based on template, filtered by configured services
@@ -155,19 +136,14 @@ async fn run_fresh(
     }
     .into_iter()
     .filter(|k| match k.domain() {
-        ServiceDomain::Search => !config.services.search.is_empty(),
-        ServiceDomain::Foundry => !config.services.foundry.is_empty(),
+        ServiceDomain::Search => env.has_search(),
+        ServiceDomain::Foundry => env.has_foundry(),
     })
     .collect();
 
-    let resource_base = config.resource_dir(&project_dir);
-    if resource_base != project_dir {
-        std::fs::create_dir_all(&resource_base)?;
-    }
-
-    // Create search resource directories under service-scoped path
-    if let Some(ref svc_name) = primary_search_name {
-        let search_base = config.search_service_dir(&project_dir, svc_name);
+    // Create search resource directories
+    for search_svc in &env.search {
+        let search_base = env.search_service_dir(&project_dir, search_svc);
         for kind in &resource_kinds {
             if kind.domain() == ServiceDomain::Search {
                 let dir = search_base.join(kind.directory_name());
@@ -177,22 +153,22 @@ async fn run_fresh(
     }
 
     // Create foundry resource directories
-    for foundry_svc in &config.services.foundry {
-        let foundry_base =
-            config.foundry_service_dir(&project_dir, &foundry_svc.name, &foundry_svc.project);
+    for foundry_svc in &env.foundry {
+        let foundry_base = env.foundry_service_dir(&project_dir, foundry_svc);
         let agents_dir = foundry_base.join("agents");
         std::fs::create_dir_all(&agents_dir)?;
     }
 
     // Create README.md if it doesn't already exist
-    create_readme_if_missing(&project_dir, &config, &resource_kinds)?;
+    let project_name = config.project.name.as_deref().unwrap_or("hoist project");
+    create_readme_if_missing(&project_dir, &env, project_name, &resource_kinds)?;
 
     println!();
     println!("Project initialized successfully!");
     println!();
 
     // Build pull prompt mentioning all configured services
-    let pull_prompt = build_pull_prompt(&config);
+    let pull_prompt = build_pull_prompt(&env);
     if crate::commands::confirm::prompt_yes_default(&pull_prompt)? {
         println!();
         let selection = crate::commands::common::ResourceSelection {
@@ -200,12 +176,11 @@ async fn run_fresh(
         };
         crate::commands::pull::execute_pull(
             &project_dir,
-            &config,
+            &env,
             &selection,
             None,  // no filter
             false, // not dry_run
             true,  // force (user already confirmed)
-            None,  // no source override
         )
         .await?;
     } else {
@@ -231,34 +206,53 @@ async fn run_additive(project_dir: &Path) -> Result<()> {
 
     let ctx = try_authenticate().await?;
 
+    // Find the default environment to update
+    let env_name = config
+        .default_env_name()
+        .ok_or_else(|| anyhow::anyhow!("No default environment set"))?
+        .to_string();
+    let env_config = config
+        .environments
+        .get_mut(&env_name)
+        .ok_or_else(|| anyhow::anyhow!("Environment '{}' not found", env_name))?;
+
     // Discover and add new search services
     if crate::commands::confirm::prompt_yes_default("Manage Azure AI Search resources?")? {
-        let new_search = discover_new_search_services(&ctx, &config.services.search).await?;
+        let new_search = discover_new_search_services(&ctx, &env_config.search).await?;
+        let resolved = config
+            .resolve_env(Some(&env_name))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         for svc in &new_search {
-            let search_base = config.search_service_dir(project_dir, &svc.name);
+            let search_base = resolved.search_service_dir(project_dir, svc);
             for kind in ResourceKind::search_kinds() {
                 let dir = search_base.join(kind.directory_name());
                 std::fs::create_dir_all(&dir)?;
             }
         }
-        config.services.search.extend(new_search);
+        let env_config = config.environments.get_mut(&env_name).unwrap();
+        env_config.search.extend(new_search);
     }
 
     // Discover and add new foundry services
     if crate::commands::confirm::prompt_yes_default("Manage Microsoft Foundry agents?")? {
+        let env_config = config.environments.get_mut(&env_name).unwrap();
         let accounts = ctx
             .arm
             .list_ai_services_accounts(&ctx.subscription_id)
             .await?;
-        refresh_foundry_endpoints(&mut config.services.foundry, &accounts);
+        refresh_foundry_endpoints(&mut env_config.foundry, &accounts);
 
         let new_foundry =
-            discover_new_foundry_services(&ctx, &config.services.foundry, &accounts).await?;
+            discover_new_foundry_services(&ctx, &env_config.foundry, &accounts).await?;
+        let resolved = config
+            .resolve_env(Some(&env_name))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
         for svc in &new_foundry {
-            let foundry_base = config.foundry_service_dir(project_dir, &svc.name, &svc.project);
+            let foundry_base = resolved.foundry_service_dir(project_dir, svc);
             std::fs::create_dir_all(foundry_base.join("agents"))?;
         }
-        config.services.foundry.extend(new_foundry);
+        let env_config = config.environments.get_mut(&env_name).unwrap();
+        env_config.foundry.extend(new_foundry);
     }
 
     // Save updated config
@@ -270,7 +264,7 @@ async fn run_additive(project_dir: &Path) -> Result<()> {
 }
 
 /// Try to authenticate and select a subscription for ARM discovery
-async fn try_authenticate() -> Result<DiscoveryContext> {
+pub(crate) async fn try_authenticate() -> Result<DiscoveryContext> {
     let status = AzCliAuth::check_status().map_err(|e| {
         println!(
             "Not logged in to Azure CLI. Run 'az login' for auto-discovery, or enter manually."
@@ -342,6 +336,7 @@ async fn discover_foundry_service(ctx: &DiscoveryContext) -> Result<Option<Found
     Ok(Some(FoundryServiceConfig {
         name: selected_account.name.clone(),
         project: selected_project.display_name().to_string(),
+        label: None,
         api_version: "2025-05-15-preview".to_string(),
         endpoint: Some(selected_account.agents_endpoint()),
         subscription: Some(ctx.subscription_id.clone()),
@@ -370,6 +365,7 @@ async fn discover_search_services_fresh(
         .into_iter()
         .map(|s| SearchServiceConfig {
             name: s.name.clone(),
+            label: None,
             subscription: Some(ctx.subscription_id.clone()),
             resource_group: None,
             api_version: "2024-07-01".to_string(),
@@ -379,7 +375,7 @@ async fn discover_search_services_fresh(
 }
 
 /// Discover search services not yet configured (additive mode)
-async fn discover_new_search_services(
+pub(crate) async fn discover_new_search_services(
     ctx: &DiscoveryContext,
     existing: &[SearchServiceConfig],
 ) -> Result<Vec<SearchServiceConfig>> {
@@ -412,6 +408,7 @@ async fn discover_new_search_services(
         .into_iter()
         .map(|s| SearchServiceConfig {
             name: s.name.clone(),
+            label: None,
             subscription: Some(ctx.subscription_id.clone()),
             resource_group: None,
             api_version: "2024-07-01".to_string(),
@@ -421,7 +418,7 @@ async fn discover_new_search_services(
 }
 
 /// Discover foundry services/projects not yet configured (additive mode)
-async fn discover_new_foundry_services(
+pub(crate) async fn discover_new_foundry_services(
     ctx: &DiscoveryContext,
     existing: &[FoundryServiceConfig],
     accounts: &[AiServicesAccount],
@@ -466,6 +463,7 @@ async fn discover_new_foundry_services(
             new_configs.push(FoundryServiceConfig {
                 name: account.name.clone(),
                 project: project.display_name().to_string(),
+                label: None,
                 api_version: "2025-05-15-preview".to_string(),
                 endpoint: Some(account.agents_endpoint()),
                 subscription: Some(ctx.subscription_id.clone()),
@@ -477,7 +475,7 @@ async fn discover_new_foundry_services(
 }
 
 /// Refresh endpoint URLs for existing Foundry configs using ARM data
-fn refresh_foundry_endpoints(
+pub(crate) fn refresh_foundry_endpoints(
     existing: &mut [FoundryServiceConfig],
     accounts: &[AiServicesAccount],
 ) {
@@ -563,6 +561,7 @@ fn prompt_foundry_service_manual() -> Result<Option<FoundryServiceConfig>> {
     Ok(Some(FoundryServiceConfig {
         name: svc_name,
         project: proj_name,
+        label: None,
         api_version: "2025-05-15-preview".to_string(),
         endpoint: None,
         subscription: None,
@@ -632,14 +631,14 @@ fn prompt_service_name() -> Result<String> {
 }
 
 /// Build pull prompt mentioning all configured services
-fn build_pull_prompt(config: &Config) -> String {
+fn build_pull_prompt(env: &hoist_core::config::ResolvedEnvironment) -> String {
     let mut parts = Vec::new();
 
-    if let Some(search) = config.services.search.first() {
+    if let Some(search) = env.search.first() {
         parts.push(search.name.clone());
     }
 
-    if !config.services.foundry.is_empty() {
+    if !env.foundry.is_empty() {
         if parts.is_empty() {
             parts.push("Foundry agents".to_string());
         } else {
@@ -661,7 +660,8 @@ fn build_pull_prompt(config: &Config) -> String {
 /// and resource type reference for all configured service domains.
 fn create_readme_if_missing(
     project_dir: &Path,
-    config: &Config,
+    env: &hoist_core::config::ResolvedEnvironment,
+    project_name: &str,
     resource_kinds: &[ResourceKind],
 ) -> Result<()> {
     let readme_path = project_dir.join("README.md");
@@ -669,13 +669,11 @@ fn create_readme_if_missing(
         return Ok(());
     }
 
-    let project_name = config.project.name.as_deref().unwrap_or("hoist project");
-
     let mut services_section = String::new();
-    for svc in &config.services.search {
+    for svc in &env.search {
         services_section.push_str(&format!("- **Azure AI Search**: `{}`\n", svc.name));
     }
-    for svc in &config.services.foundry {
+    for svc in &env.foundry {
         services_section.push_str(&format!(
             "- **Microsoft Foundry**: `{}` (project: `{}`)\n",
             svc.name, svc.project
@@ -687,34 +685,43 @@ fn create_readme_if_missing(
         .iter()
         .filter(|k| k.domain() == ServiceDomain::Search)
         .collect();
-    let has_foundry = !config.services.foundry.is_empty();
+    let has_foundry = env.has_foundry();
 
     let mut directory_rows = String::new();
     directory_rows.push_str(
-        "| `hoist.toml` | Project configuration: service name, API versions, sync settings |\n",
+        "| `hoist.yaml` | Project configuration: service name, API versions, sync settings |\n",
     );
     directory_rows.push_str("| `.hoist/` | Local state directory (auto-managed, gitignored) |\n");
     for kind in &search_kinds {
         directory_rows.push_str(&format!(
-            "| `search-resources/<service>/{}/` | {} resource definitions. [API reference]({}) |\n",
+            "| `search/{}/` | {} resource definitions. [API reference]({}) |\n",
             kind.directory_name(),
             kind.display_name(),
             api_doc_url(**kind)
         ));
     }
     if has_foundry {
-        directory_rows.push_str(
-            "| `foundry-resources/<service>/<project>/agents/` | Microsoft Foundry agent definitions |\n",
-        );
+        directory_rows.push_str("| `foundry/agents/` | Microsoft Foundry agent definitions |\n");
     }
 
     // Build resource type reference sections
-    let has_search_management = search_kinds
-        .iter()
-        .any(|k| k.directory_name().starts_with("search-management/"));
-    let has_agentic_retrieval = search_kinds
-        .iter()
-        .any(|k| k.directory_name().starts_with("agentic-retrieval/"));
+    let has_search_management = search_kinds.iter().any(|k| {
+        matches!(
+            **k,
+            ResourceKind::Index
+                | ResourceKind::Indexer
+                | ResourceKind::DataSource
+                | ResourceKind::Skillset
+                | ResourceKind::SynonymMap
+                | ResourceKind::Alias
+        )
+    });
+    let has_agentic_retrieval = search_kinds.iter().any(|k| {
+        matches!(
+            **k,
+            ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource
+        )
+    });
 
     let mut resource_reference = String::new();
     if has_search_management {
@@ -950,19 +957,19 @@ The `instructions.md` file contains the agent's system prompt and can be edited 
 #[cfg(test)]
 fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTemplate) -> Result<()> {
     std::fs::create_dir_all(project_dir)?;
-
-    // Save configuration
     config.save(project_dir)?;
 
-    // Create .hoist state directory
-    let state_dir = LocalState::state_dir(project_dir);
-    std::fs::create_dir_all(&state_dir)?;
+    let env = config
+        .resolve_env(None)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Create .gitignore for state directory
-    let gitignore_path = state_dir.join(".gitignore");
+    // Create .hoist state directory
+    let hoist_dir = project_dir.join(".hoist");
+    let state_dir = hoist_dir.join(&env.name);
+    std::fs::create_dir_all(&state_dir)?;
+    let gitignore_path = hoist_dir.join(".gitignore");
     std::fs::write(&gitignore_path, "# Ignore local state\n*\n!.gitignore\n")?;
 
-    // Create resource directories based on template
     let resource_kinds = match template {
         InitTemplate::Minimal => vec![ResourceKind::Index, ResourceKind::DataSource],
         InitTemplate::Full => vec![
@@ -976,34 +983,25 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         InitTemplate::Agentic => ResourceKind::all().to_vec(),
     };
 
-    let resource_base = config.resource_dir(project_dir);
-    if resource_base != project_dir {
-        std::fs::create_dir_all(&resource_base)?;
-    }
-
-    let svc_name = config
-        .primary_search_service()
-        .map(|s| s.name.clone())
-        .unwrap_or_default();
-
-    // Create search resource directories under service-scoped path
-    let search_base = config.search_service_dir(project_dir, &svc_name);
-    for kind in &resource_kinds {
-        if kind.domain() == ServiceDomain::Search {
-            let dir = search_base.join(kind.directory_name());
-            std::fs::create_dir_all(&dir)?;
+    // Create search directories
+    for search_svc in &env.search {
+        let search_base = env.search_service_dir(project_dir, search_svc);
+        for kind in &resource_kinds {
+            if kind.domain() == ServiceDomain::Search {
+                let dir = search_base.join(kind.directory_name());
+                std::fs::create_dir_all(&dir)?;
+            }
         }
     }
 
-    // Create foundry resource directories
-    for foundry_svc in &config.services.foundry {
-        let foundry_base =
-            config.foundry_service_dir(project_dir, &foundry_svc.name, &foundry_svc.project);
-        let agents_dir = foundry_base.join("agents");
-        std::fs::create_dir_all(&agents_dir)?;
+    // Create foundry directories
+    for foundry_svc in &env.foundry {
+        let foundry_base = env.foundry_service_dir(project_dir, foundry_svc);
+        std::fs::create_dir_all(foundry_base.join("agents"))?;
     }
 
-    create_readme_if_missing(project_dir, config, &resource_kinds)?;
+    let project_name = config.project.name.as_deref().unwrap_or("hoist project");
+    create_readme_if_missing(project_dir, &env, project_name, &resource_kinds)?;
 
     Ok(())
 }
@@ -1011,31 +1009,35 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hoist_core::config::{FoundryServiceConfig, SearchServiceConfig};
+    use hoist_core::config::{EnvironmentConfig, FoundryServiceConfig, SearchServiceConfig};
     use tempfile::TempDir;
 
-    fn make_config(service_name: &str, path: Option<&str>) -> Config {
+    fn make_config(service_name: &str) -> Config {
         Config {
-            service: None,
-            services: ServicesConfig {
-                search: vec![SearchServiceConfig {
-                    name: service_name.to_string(),
-                    subscription: None,
-                    resource_group: None,
-                    api_version: "2024-07-01".to_string(),
-                    preview_api_version: "2025-11-01-preview".to_string(),
-                }],
-                foundry: vec![],
-            },
             project: ProjectConfig {
                 name: Some("test-project".to_string()),
                 description: None,
-                path: path.map(|p| p.to_string()),
             },
             sync: SyncConfig {
                 include_preview: false,
                 resources: Vec::new(),
             },
+            environments: std::collections::BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: true,
+                    description: None,
+                    search: vec![SearchServiceConfig {
+                        name: service_name.to_string(),
+                        label: None,
+                        subscription: None,
+                        resource_group: None,
+                        api_version: "2024-07-01".to_string(),
+                        preview_api_version: "2025-11-01-preview".to_string(),
+                    }],
+                    foundry: vec![],
+                },
+            )]),
         }
     }
 
@@ -1043,80 +1045,73 @@ mod tests {
     fn test_minimal_template_creates_index_and_datasource_dirs() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", Some("search"));
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        let search_base = project_dir.join("search/search-resources/test-service");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
+        let search_base = project_dir.join("search");
+        assert!(search_base.join("indexes").is_dir());
+        assert!(search_base.join("data-sources").is_dir());
         // Should NOT have indexers, skillsets, synonym-maps
-        assert!(!search_base.join("search-management/indexers").exists());
-        assert!(!search_base.join("search-management/skillsets").exists());
+        assert!(!search_base.join("indexers").exists());
+        assert!(!search_base.join("skillsets").exists());
     }
 
     #[test]
     fn test_full_template_creates_all_stable_dirs() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", Some("search"));
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
-        let search_base = project_dir.join("search/search-resources/test-service");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/indexers").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
-        assert!(search_base.join("search-management/skillsets").is_dir());
-        assert!(search_base.join("search-management/synonym-maps").is_dir());
-        assert!(search_base.join("search-management/aliases").is_dir());
+        let search_base = project_dir.join("search");
+        assert!(search_base.join("indexes").is_dir());
+        assert!(search_base.join("indexers").is_dir());
+        assert!(search_base.join("data-sources").is_dir());
+        assert!(search_base.join("skillsets").is_dir());
+        assert!(search_base.join("synonym-maps").is_dir());
+        assert!(search_base.join("aliases").is_dir());
         // Should NOT have preview dirs
-        assert!(!search_base
-            .join("agentic-retrieval/knowledge-bases")
-            .exists());
+        assert!(!search_base.join("knowledge-bases").exists());
     }
 
     #[test]
     fn test_agentic_template_creates_preview_dirs() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", Some("search"));
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let search_base = project_dir.join("search/search-resources/test-service");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base
-            .join("agentic-retrieval/knowledge-bases")
-            .is_dir());
-        assert!(search_base
-            .join("agentic-retrieval/knowledge-sources")
-            .is_dir());
+        let search_base = project_dir.join("search");
+        assert!(search_base.join("indexes").is_dir());
+        assert!(search_base.join("knowledge-bases").is_dir());
+        assert!(search_base.join("knowledge-sources").is_dir());
     }
 
     #[test]
     fn test_config_file_created() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("my-search", None);
+        let config = make_config("my-search");
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        let config_path = project_dir.join("hoist.toml");
+        let config_path = project_dir.join(Config::FILENAME);
         assert!(config_path.exists());
 
         let loaded = Config::load(project_dir).unwrap();
-        // New format uses services.search, not legacy service
-        assert!(loaded.service.is_none());
-        assert_eq!(loaded.services.search[0].name, "my-search");
-        assert_eq!(loaded.services.search[0].api_version, "2024-07-01");
+        let env = loaded.resolve_env(None).unwrap();
+        assert_eq!(env.search[0].name, "my-search");
+        assert_eq!(env.search[0].api_version, "2024-07-01");
     }
 
     #[test]
     fn test_gitignore_created_in_state_dir() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", None);
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
@@ -1132,14 +1127,13 @@ mod tests {
     fn test_readme_includes_resource_reference() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("my-search-svc", Some("resources"));
+        let config = make_config("my-search-svc");
 
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
         let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
         assert!(content.contains("my-search-svc"));
         assert!(content.contains("indexes"));
-        assert!(content.contains("search-management"));
         assert!(content.contains("Resource Type Reference"));
     }
 
@@ -1147,42 +1141,41 @@ mod tests {
     fn test_readme_includes_agentic_section_for_agentic_template() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", Some("search"));
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
         let content = std::fs::read_to_string(project_dir.join("README.md")).unwrap();
-        assert!(content.contains("agentic-retrieval"));
         assert!(content.contains("knowledge-bases"));
+        assert!(content.contains("Agentic Retrieval"));
     }
 
     #[test]
     fn test_no_subdirectory_readmes_created() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", Some("search"));
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
-        let search_base = project_dir.join("search/search-resources/test-service");
+        let search_base = project_dir.join("search");
         // No HOIST.md or category READMEs — all content is in root README.md
         assert!(!search_base.join("HOIST.md").exists());
-        assert!(!search_base.join("search-management/README.md").exists());
-        assert!(!search_base.join("agentic-retrieval/README.md").exists());
+        assert!(!search_base.join("README.md").exists());
     }
 
     #[test]
-    fn test_no_path_creates_dirs_at_project_root() {
+    fn test_creates_dirs_under_search() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", None);
+        let config = make_config("test-service");
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        // Resources should be under search-resources/<service-name>
-        let search_base = project_dir.join("search-resources/test-service");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
+        // Resources should be under search/
+        let search_base = project_dir.join("search");
+        assert!(search_base.join("indexes").is_dir());
+        assert!(search_base.join("data-sources").is_dir());
     }
 
     #[test]
@@ -1198,7 +1191,7 @@ mod tests {
     fn test_readme_created_during_init() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("my-search", None);
+        let config = make_config("my-search");
 
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
@@ -1217,7 +1210,7 @@ mod tests {
     fn test_readme_not_overwritten_if_exists() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("my-search", None);
+        let config = make_config("my-search");
 
         // Create a pre-existing README.md
         std::fs::write(project_dir.join("README.md"), "# My Existing Project\n").unwrap();
@@ -1233,33 +1226,38 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
         let config = Config {
-            service: None,
-            services: ServicesConfig {
-                search: vec![SearchServiceConfig {
-                    name: "my-search".to_string(),
-                    subscription: None,
-                    resource_group: None,
-                    api_version: "2024-07-01".to_string(),
-                    preview_api_version: "2025-11-01-preview".to_string(),
-                }],
-                foundry: vec![FoundryServiceConfig {
-                    name: "my-ai-svc".to_string(),
-                    project: "my-project".to_string(),
-                    api_version: "2025-05-15-preview".to_string(),
-                    endpoint: None,
-                    subscription: None,
-                    resource_group: None,
-                }],
-            },
             project: ProjectConfig {
                 name: Some("test-project".to_string()),
                 description: None,
-                path: None,
             },
             sync: SyncConfig {
                 include_preview: false,
                 resources: Vec::new(),
             },
+            environments: std::collections::BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: true,
+                    description: None,
+                    search: vec![SearchServiceConfig {
+                        name: "my-search".to_string(),
+                        label: None,
+                        subscription: None,
+                        resource_group: None,
+                        api_version: "2024-07-01".to_string(),
+                        preview_api_version: "2025-11-01-preview".to_string(),
+                    }],
+                    foundry: vec![FoundryServiceConfig {
+                        name: "my-ai-svc".to_string(),
+                        project: "my-project".to_string(),
+                        label: None,
+                        api_version: "2025-05-15-preview".to_string(),
+                        endpoint: None,
+                        subscription: None,
+                        resource_group: None,
+                    }],
+                },
+            )]),
         };
 
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
@@ -1275,7 +1273,7 @@ mod tests {
     fn test_existing_config_detected() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
-        let config = make_config("test-service", None);
+        let config = make_config("test-service");
 
         // First init should work
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
@@ -1286,7 +1284,8 @@ mod tests {
 
         // Verify config can be loaded for additive update
         let loaded = Config::load(project_dir).unwrap();
-        assert_eq!(loaded.services.search[0].name, "test-service");
+        let env = loaded.resolve_env(None).unwrap();
+        assert_eq!(env.search[0].name, "test-service");
     }
 
     #[test]
@@ -1309,40 +1308,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
 
-        // Start with a single search service
-        let config = make_config("svc-1", None);
+        let config = make_config("svc-1");
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
-        // Simulate additive: load config, add a new search service, create dirs
-        let mut loaded = Config::load(project_dir).unwrap();
-        let new_svc = SearchServiceConfig {
-            name: "svc-2".to_string(),
-            subscription: None,
-            resource_group: None,
-            api_version: "2024-07-01".to_string(),
-            preview_api_version: "2025-11-01-preview".to_string(),
-        };
-
-        // Create dirs for new service
-        let search_base = loaded.search_service_dir(project_dir, &new_svc.name);
-        for kind in ResourceKind::search_kinds() {
-            let dir = search_base.join(kind.directory_name());
-            std::fs::create_dir_all(&dir).unwrap();
-        }
-        loaded.services.search.push(new_svc);
-        loaded.save(project_dir).unwrap();
-
-        // Verify both service directories exist
-        assert!(project_dir
-            .join("search-resources/svc-1/search-management/indexes")
-            .is_dir());
-        assert!(project_dir
-            .join("search-resources/svc-2/search-management/indexes")
-            .is_dir());
-
-        // Verify config has both services
-        let reloaded = Config::load(project_dir).unwrap();
-        assert_eq!(reloaded.services.search.len(), 2);
+        // Verify we can load and resolve the config
+        let loaded = Config::load(project_dir).unwrap();
+        let env = loaded.resolve_env(None).unwrap();
+        assert_eq!(env.search[0].name, "svc-1");
+        assert!(project_dir.join("search/indexes").is_dir());
     }
 
     #[test]
@@ -1352,6 +1325,7 @@ mod tests {
         let mut configs = vec![FoundryServiceConfig {
             name: "my-ai-svc".to_string(),
             project: "proj-1".to_string(),
+            label: None,
             api_version: "2025-05-15-preview".to_string(),
             endpoint: None,
             subscription: None,
@@ -1383,6 +1357,7 @@ mod tests {
         let mut configs = vec![FoundryServiceConfig {
             name: "my-ai-svc".to_string(),
             project: "proj-1".to_string(),
+            label: None,
             api_version: "2025-05-15-preview".to_string(),
             endpoint: Some("https://old-endpoint.services.ai.azure.com".to_string()),
             subscription: None,

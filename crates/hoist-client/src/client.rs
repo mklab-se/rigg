@@ -6,8 +6,8 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
+use hoist_core::config::SearchServiceConfig;
 use hoist_core::resources::ResourceKind;
-use hoist_core::Config;
 
 use crate::auth::{get_auth_provider, AuthProvider};
 use crate::error::ClientError;
@@ -38,33 +38,16 @@ pub struct AzureSearchClient {
 }
 
 impl AzureSearchClient {
-    /// Create a new client from configuration
-    pub fn new(config: &Config) -> Result<Self, ClientError> {
+    /// Create client from a specific search service config
+    pub fn from_service_config(service: &SearchServiceConfig) -> Result<Self, ClientError> {
         let auth = get_auth_provider()?;
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
+        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
         Ok(Self {
             http,
             auth,
-            base_url: config.service_url(),
-            preview_api_version: config.api_version_for(true).to_string(),
-        })
-    }
-
-    /// Create a client pointing to a different server, using the same auth and API versions
-    pub fn new_for_server(config: &Config, server_name: &str) -> Result<Self, ClientError> {
-        let auth = get_auth_provider()?;
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-
-        Ok(Self {
-            http,
-            auth,
-            base_url: format!("https://{}.search.windows.net", server_name),
-            preview_api_version: config.api_version_for(true).to_string(),
+            base_url: service.service_url(),
+            preview_api_version: service.preview_api_version.clone(),
         })
     }
 

@@ -1,10 +1,9 @@
 //! Configuration management for hoist
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-
-use crate::service::ServiceDomain;
 
 /// Configuration errors
 #[derive(Debug, Error)]
@@ -14,65 +13,42 @@ pub enum ConfigError {
     #[error("Failed to read configuration: {0}")]
     ReadError(#[from] std::io::Error),
     #[error("Failed to parse configuration: {0}")]
-    ParseError(#[from] toml::de::Error),
-    #[error("Failed to serialize configuration: {0}")]
-    SerializeError(#[from] toml::ser::Error),
+    ParseError(#[from] serde_yaml::Error),
     #[error("Invalid configuration: {0}")]
     Invalid(String),
 }
 
-/// Main configuration file (hoist.toml)
+/// Main configuration file (hoist.yaml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Legacy Azure Search service configuration (auto-migrated to services.search)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service: Option<ServiceConfig>,
-    /// Multi-service configuration (v0.2.0+)
-    #[serde(default)]
-    pub services: ServicesConfig,
-    /// Project settings
     #[serde(default)]
     pub project: ProjectConfig,
-    /// Pull/push settings
     #[serde(default)]
     pub sync: SyncConfig,
+    pub environments: BTreeMap<String, EnvironmentConfig>,
 }
 
-/// Multi-service configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ServicesConfig {
-    /// Azure AI Search services
+/// Environment configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentConfig {
+    #[serde(default)]
+    pub default: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search: Vec<SearchServiceConfig>,
-    /// Microsoft Foundry services
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foundry: Vec<FoundryServiceConfig>,
 }
 
-/// Azure Search service connection settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceConfig {
-    /// Search service name (e.g., "my-search-service")
-    pub name: String,
-    /// Azure subscription ID (optional, can use default)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subscription: Option<String>,
-    /// Resource group (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_group: Option<String>,
-    /// API version to use
-    #[serde(default = "default_api_version")]
-    pub api_version: String,
-    /// Preview API version for agentic search
-    #[serde(default = "default_preview_api_version")]
-    pub preview_api_version: String,
-}
-
-/// Search service configuration (v0.2.0+ format)
+/// Search service configuration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchServiceConfig {
     /// Search service name
     pub name: String,
+    /// Label for multi-service environments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Azure subscription ID (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription: Option<String>,
@@ -94,6 +70,9 @@ pub struct FoundryServiceConfig {
     pub name: String,
     /// Foundry project name
     pub project: String,
+    /// Label for multi-service environments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// API version to use
     #[serde(default = "default_foundry_api_version")]
     pub api_version: String,
@@ -129,9 +108,6 @@ pub struct ProjectConfig {
     /// Project description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Subdirectory for resource files (relative to project root)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
 }
 
 /// Sync behavior settings
@@ -158,9 +134,53 @@ impl Default for SyncConfig {
     }
 }
 
+/// Resolved environment for command execution.
+///
+/// Central abstraction all commands work through. Created by `Config::resolve_env()`.
+pub struct ResolvedEnvironment {
+    pub name: String,
+    pub search: Vec<SearchServiceConfig>,
+    pub foundry: Vec<FoundryServiceConfig>,
+    pub sync: SyncConfig,
+}
+
+impl ResolvedEnvironment {
+    /// Base dir for a search service: search/ (single) or search/<label>/ (multi)
+    pub fn search_service_dir(&self, root: &Path, service: &SearchServiceConfig) -> PathBuf {
+        let base = root.join("search");
+        if self.search.len() <= 1 {
+            base
+        } else {
+            base.join(service.label.as_deref().unwrap_or(&service.name))
+        }
+    }
+
+    /// Base dir for a foundry service: foundry/ (single) or foundry/<label>/ (multi)
+    pub fn foundry_service_dir(&self, root: &Path, service: &FoundryServiceConfig) -> PathBuf {
+        let base = root.join("foundry");
+        if self.foundry.len() <= 1 {
+            base
+        } else {
+            base.join(service.label.as_deref().unwrap_or(&service.name))
+        }
+    }
+
+    pub fn primary_search_service(&self) -> Option<&SearchServiceConfig> {
+        self.search.first()
+    }
+
+    pub fn has_foundry(&self) -> bool {
+        !self.foundry.is_empty()
+    }
+
+    pub fn has_search(&self) -> bool {
+        !self.search.is_empty()
+    }
+}
+
 impl Config {
     /// Default configuration filename
-    pub const FILENAME: &'static str = "hoist.toml";
+    pub const FILENAME: &'static str = "hoist.yaml";
 
     /// Load configuration from a directory
     pub fn load(dir: &Path) -> Result<Self, ConfigError> {
@@ -174,7 +194,7 @@ impl Config {
             return Err(ConfigError::NotFound(path.to_path_buf()));
         }
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let config: Config = serde_yaml::from_str(&content)?;
         config.validate()?;
         Ok(config)
     }
@@ -187,164 +207,106 @@ impl Config {
 
     /// Save configuration to a specific file path
     pub fn save_to(&self, path: &Path) -> Result<(), ConfigError> {
-        let content = toml::to_string_pretty(self)?;
+        let content = serde_yaml::to_string(self)?;
         std::fs::write(path, content)?;
         Ok(())
     }
 
     /// Validate configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Must have at least one search or foundry service
-        let has_legacy = self.service.as_ref().is_some_and(|s| !s.name.is_empty());
-        let has_search = !self.services.search.is_empty();
-        let has_foundry = !self.services.foundry.is_empty();
-
-        if !has_legacy && !has_search && !has_foundry {
+        if self.environments.is_empty() {
             return Err(ConfigError::Invalid(
-                "At least one service must be configured (service, services.search, or services.foundry)".to_string(),
+                "At least one environment must be configured".to_string(),
             ));
         }
 
-        // Validate legacy service name
-        if let Some(ref svc) = self.service {
-            if svc.name.is_empty() && !has_search && !has_foundry {
-                return Err(ConfigError::Invalid("service.name is required".to_string()));
+        for (name, env) in &self.environments {
+            if env.search.is_empty() && env.foundry.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "Environment '{}' has no services configured",
+                    name
+                )));
+            }
+            // If multi-service, require labels
+            if env.search.len() > 1 && env.search.iter().any(|s| s.label.is_none()) {
+                return Err(ConfigError::Invalid(format!(
+                    "Environment '{}' has multiple search services — all must have a 'label'",
+                    name
+                )));
+            }
+            if env.foundry.len() > 1 && env.foundry.iter().any(|s| s.label.is_none()) {
+                return Err(ConfigError::Invalid(format!(
+                    "Environment '{}' has multiple foundry services — all must have a 'label'",
+                    name
+                )));
+            }
+            // Validate service names
+            for (i, svc) in env.search.iter().enumerate() {
+                if svc.name.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "environments.{}.search[{}].name is required",
+                        name, i
+                    )));
+                }
+            }
+            for (i, svc) in env.foundry.iter().enumerate() {
+                if svc.name.is_empty() || svc.project.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "environments.{}.foundry[{}] requires name and project",
+                        name, i
+                    )));
+                }
             }
         }
 
-        // Validate search services
-        for (i, svc) in self.services.search.iter().enumerate() {
-            if svc.name.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "services.search[{}].name is required",
-                    i
-                )));
-            }
-        }
-
-        // Validate foundry services
-        for (i, svc) in self.services.foundry.iter().enumerate() {
-            if svc.name.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "services.foundry[{}].name is required",
-                    i
-                )));
-            }
-            if svc.project.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "services.foundry[{}].project is required",
-                    i
-                )));
-            }
+        // At most one default
+        let defaults = self.environments.values().filter(|e| e.default).count();
+        if defaults > 1 {
+            return Err(ConfigError::Invalid(
+                "Only one environment can be set as default".to_string(),
+            ));
         }
 
         Ok(())
     }
 
-    /// Get all search service configs (including legacy auto-migrated)
-    pub fn search_services(&self) -> Vec<SearchServiceConfig> {
-        let mut result = self.services.search.clone();
+    /// Resolve an environment by name (or default)
+    pub fn resolve_env(&self, name: Option<&str>) -> Result<ResolvedEnvironment, ConfigError> {
+        let env_name = name.or_else(|| self.default_env_name()).ok_or_else(|| {
+            ConfigError::Invalid("No environment specified and no default set".to_string())
+        })?;
+        let env_config = self
+            .environments
+            .get(env_name)
+            .ok_or_else(|| ConfigError::Invalid(format!("Environment '{}' not found", env_name)))?;
+        Ok(ResolvedEnvironment {
+            name: env_name.to_string(),
+            search: env_config.search.clone(),
+            foundry: env_config.foundry.clone(),
+            sync: self.sync.clone(),
+        })
+    }
 
-        // Auto-migrate legacy [service] to search config
-        if let Some(ref legacy) = self.service {
-            if !legacy.name.is_empty() {
-                // Only auto-migrate if no services.search already has this name
-                let already_present = result.iter().any(|s| s.name == legacy.name);
-                if !already_present {
-                    result.insert(
-                        0,
-                        SearchServiceConfig {
-                            name: legacy.name.clone(),
-                            subscription: legacy.subscription.clone(),
-                            resource_group: legacy.resource_group.clone(),
-                            api_version: legacy.api_version.clone(),
-                            preview_api_version: legacy.preview_api_version.clone(),
-                        },
-                    );
+    /// Find the default environment name
+    pub fn default_env_name(&self) -> Option<&str> {
+        // 1. Env with default: true
+        self.environments
+            .iter()
+            .find(|(_, e)| e.default)
+            .map(|(n, _)| n.as_str())
+            // 2. Only one env → use it
+            .or_else(|| {
+                if self.environments.len() == 1 {
+                    self.environments.keys().next().map(|s| s.as_str())
+                } else {
+                    None
                 }
-            }
-        }
-
-        result
+            })
     }
 
-    /// Get all foundry service configs
-    pub fn foundry_services(&self) -> &[FoundryServiceConfig] {
-        &self.services.foundry
-    }
-
-    /// Quick check if any foundry services are configured
-    pub fn has_foundry(&self) -> bool {
-        !self.services.foundry.is_empty()
-    }
-
-    /// Get the primary search service config (first one, for backward compat)
-    pub fn primary_search_service(&self) -> Option<SearchServiceConfig> {
-        self.search_services().into_iter().next()
-    }
-
-    /// Get the base URL for the Azure Search service (backward compat helper)
-    pub fn service_url(&self) -> String {
-        if let Some(ref svc) = self.service {
-            return format!("https://{}.search.windows.net", svc.name);
-        }
-        if let Some(svc) = self.services.search.first() {
-            return format!("https://{}.search.windows.net", svc.name);
-        }
-        String::new()
-    }
-
-    /// Get the base directory for resource files (project_root or project_root/path)
-    pub fn resource_dir(&self, project_root: &Path) -> PathBuf {
-        match &self.project.path {
-            Some(path) => project_root.join(path),
-            None => project_root.to_path_buf(),
-        }
-    }
-
-    /// Base directory for a specific search service's resources
-    /// Returns: resource_dir / "search-resources" / service_name
-    pub fn search_service_dir(&self, project_root: &Path, service_name: &str) -> PathBuf {
-        self.resource_dir(project_root)
-            .join(ServiceDomain::Search.directory_prefix())
-            .join(service_name)
-    }
-
-    /// Base directory for a specific foundry service/project's resources
-    /// Returns: resource_dir / "foundry-resources" / service_name / project_name
-    pub fn foundry_service_dir(
-        &self,
-        project_root: &Path,
-        service_name: &str,
-        project: &str,
-    ) -> PathBuf {
-        self.resource_dir(project_root)
-            .join(ServiceDomain::Foundry.directory_prefix())
-            .join(service_name)
-            .join(project)
-    }
-
-    /// Get the API version to use for a resource (backward compat helper)
-    pub fn api_version_for(&self, preview: bool) -> &str {
-        if let Some(ref svc) = self.service {
-            if preview {
-                return &svc.preview_api_version;
-            } else {
-                return &svc.api_version;
-            }
-        }
-        if let Some(svc) = self.services.search.first() {
-            if preview {
-                return &svc.preview_api_version;
-            } else {
-                return &svc.api_version;
-            }
-        }
-        if preview {
-            "2025-11-01-preview"
-        } else {
-            "2024-07-01"
-        }
+    /// Get all environment names
+    pub fn environment_names(&self) -> Vec<&str> {
+        self.environments.keys().map(|s| s.as_str()).collect()
     }
 }
 
@@ -369,19 +331,16 @@ impl FoundryServiceConfig {
     }
 }
 
-/// Create a Config with legacy [service] format (backward compat helper)
-pub fn make_legacy_config(name: &str) -> Config {
-    Config {
-        service: Some(ServiceConfig {
-            name: name.to_string(),
-            subscription: None,
-            resource_group: None,
-            api_version: default_api_version(),
-            preview_api_version: default_preview_api_version(),
-        }),
-        services: ServicesConfig::default(),
-        project: ProjectConfig::default(),
-        sync: SyncConfig::default(),
+/// Find the project root by looking for hoist.yaml
+pub fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    loop {
+        if current.join(Config::FILENAME).exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
     }
 }
 
@@ -390,89 +349,242 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn make_config(name: &str) -> Config {
-        make_legacy_config(name)
+    fn make_search_service(name: &str) -> SearchServiceConfig {
+        SearchServiceConfig {
+            name: name.to_string(),
+            label: None,
+            subscription: None,
+            resource_group: None,
+            api_version: default_api_version(),
+            preview_api_version: default_preview_api_version(),
+        }
+    }
+
+    fn make_foundry_service(name: &str, project: &str) -> FoundryServiceConfig {
+        FoundryServiceConfig {
+            name: name.to_string(),
+            project: project.to_string(),
+            label: None,
+            api_version: default_foundry_api_version(),
+            endpoint: None,
+            subscription: None,
+            resource_group: None,
+        }
+    }
+
+    fn make_config_search(name: &str) -> Config {
+        Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: true,
+                    description: None,
+                    search: vec![make_search_service(name)],
+                    foundry: vec![],
+                },
+            )]),
+        }
+    }
+
+    fn make_config_both() -> Config {
+        Config {
+            project: ProjectConfig {
+                name: Some("Test".to_string()),
+                description: None,
+            },
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: true,
+                    description: None,
+                    search: vec![make_search_service("test-search")],
+                    foundry: vec![make_foundry_service("test-ai", "test-proj")],
+                },
+            )]),
+        }
     }
 
     #[test]
-    fn test_validate_empty_name() {
-        let config = make_config("");
+    fn test_validate_no_environments() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::new(),
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
-    fn test_validate_valid_name() {
-        let config = make_config("my-search");
+    fn test_validate_empty_env() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: false,
+                    description: None,
+                    search: vec![],
+                    foundry: vec![],
+                },
+            )]),
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_valid_search_only() {
+        let config = make_config_search("my-search");
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_service_url() {
-        let config = make_config("my-search");
-        assert_eq!(config.service_url(), "https://my-search.search.windows.net");
+    fn test_validate_empty_search_name() {
+        let mut config = make_config_search("");
+        // Empty name in search service should fail
+        let result = config.validate();
+        assert!(result.is_err());
+        // Fix it to verify the error was about the name
+        config.environments.get_mut("prod").unwrap().search[0].name = "valid".to_string();
+        assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_api_version_for_stable() {
-        let config = make_config("my-search");
-        assert_eq!(config.api_version_for(false), "2024-07-01");
+    fn test_validate_foundry_requires_project() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: false,
+                    description: None,
+                    search: vec![],
+                    foundry: vec![FoundryServiceConfig {
+                        name: "my-ai".to_string(),
+                        project: "".to_string(),
+                        label: None,
+                        api_version: default_foundry_api_version(),
+                        endpoint: None,
+                        subscription: None,
+                        resource_group: None,
+                    }],
+                },
+            )]),
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]
-    fn test_api_version_for_preview() {
-        let config = make_config("my-search");
-        assert_eq!(config.api_version_for(true), "2025-11-01-preview");
+    fn test_validate_multi_search_requires_labels() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: false,
+                    description: None,
+                    search: vec![make_search_service("svc-1"), make_search_service("svc-2")],
+                    foundry: vec![],
+                },
+            )]),
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]
-    fn test_resource_dir_without_path() {
-        let config = make_config("my-search");
-        let root = Path::new("/projects/search");
-        assert_eq!(config.resource_dir(root), PathBuf::from("/projects/search"));
+    fn test_validate_multi_search_with_labels() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: false,
+                    description: None,
+                    search: vec![
+                        SearchServiceConfig {
+                            label: Some("primary".to_string()),
+                            ..make_search_service("svc-1")
+                        },
+                        SearchServiceConfig {
+                            label: Some("analytics".to_string()),
+                            ..make_search_service("svc-2")
+                        },
+                    ],
+                    foundry: vec![],
+                },
+            )]),
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_resource_dir_with_path() {
-        let mut config = make_config("my-search");
-        config.project.path = Some("search".to_string());
-        let root = Path::new("/projects/myapp");
+    fn test_validate_multiple_defaults() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([
+                (
+                    "prod".to_string(),
+                    EnvironmentConfig {
+                        default: true,
+                        description: None,
+                        search: vec![make_search_service("svc-1")],
+                        foundry: vec![],
+                    },
+                ),
+                (
+                    "test".to_string(),
+                    EnvironmentConfig {
+                        default: true,
+                        description: None,
+                        search: vec![make_search_service("svc-2")],
+                        foundry: vec![],
+                    },
+                ),
+            ]),
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_search_service_url() {
+        let svc = make_search_service("my-search");
+        assert_eq!(svc.service_url(), "https://my-search.search.windows.net");
+    }
+
+    #[test]
+    fn test_foundry_service_url() {
+        let svc = make_foundry_service("my-ai-service", "proj-1");
         assert_eq!(
-            config.resource_dir(root),
-            PathBuf::from("/projects/myapp/search")
+            svc.service_url(),
+            "https://my-ai-service.services.ai.azure.com"
         );
     }
 
     #[test]
-    fn test_save_and_load_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = make_config("test-service");
-        config.save(dir.path()).unwrap();
-
-        let loaded = Config::load(dir.path()).unwrap();
-        assert_eq!(loaded.service.as_ref().unwrap().name, "test-service");
-        assert_eq!(loaded.service.as_ref().unwrap().api_version, "2024-07-01");
+    fn test_foundry_service_url_with_endpoint() {
+        let mut svc = make_foundry_service("my-ai-service", "proj-1");
+        svc.endpoint = Some("https://custom-subdomain.services.ai.azure.com".to_string());
+        assert_eq!(
+            svc.service_url(),
+            "https://custom-subdomain.services.ai.azure.com"
+        );
     }
 
     #[test]
-    fn test_load_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = Config::load(dir.path());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_load_from_toml_string_legacy() {
-        let toml = r#"
-[service]
-name = "my-svc"
-
-[sync]
-include_preview = false
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.service.as_ref().unwrap().name, "my-svc");
-        assert!(!config.sync.include_preview);
-        assert_eq!(config.service.as_ref().unwrap().api_version, "2024-07-01");
+    fn test_foundry_service_url_strips_trailing_slash() {
+        let mut svc = make_foundry_service("my-ai-service", "proj-1");
+        svc.endpoint = Some("https://custom-subdomain.services.ai.azure.com/".to_string());
+        assert_eq!(
+            svc.service_url(),
+            "https://custom-subdomain.services.ai.azure.com"
+        );
     }
 
     #[test]
@@ -483,13 +595,360 @@ include_preview = false
     }
 
     #[test]
+    fn test_resolve_env_default() {
+        let config = make_config_search("my-search");
+        let env = config.resolve_env(None).unwrap();
+        assert_eq!(env.name, "prod");
+        assert_eq!(env.search.len(), 1);
+        assert_eq!(env.search[0].name, "my-search");
+    }
+
+    #[test]
+    fn test_resolve_env_by_name() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([
+                (
+                    "prod".to_string(),
+                    EnvironmentConfig {
+                        default: true,
+                        description: None,
+                        search: vec![make_search_service("search-prod")],
+                        foundry: vec![],
+                    },
+                ),
+                (
+                    "test".to_string(),
+                    EnvironmentConfig {
+                        default: false,
+                        description: None,
+                        search: vec![make_search_service("search-test")],
+                        foundry: vec![],
+                    },
+                ),
+            ]),
+        };
+        let env = config.resolve_env(Some("test")).unwrap();
+        assert_eq!(env.name, "test");
+        assert_eq!(env.search[0].name, "search-test");
+    }
+
+    #[test]
+    fn test_resolve_env_not_found() {
+        let config = make_config_search("svc");
+        assert!(config.resolve_env(Some("missing")).is_err());
+    }
+
+    #[test]
+    fn test_resolve_env_single_env_is_default() {
+        // Single env without default: true should still resolve
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([(
+                "staging".to_string(),
+                EnvironmentConfig {
+                    default: false,
+                    description: None,
+                    search: vec![make_search_service("svc")],
+                    foundry: vec![],
+                },
+            )]),
+        };
+        let env = config.resolve_env(None).unwrap();
+        assert_eq!(env.name, "staging");
+    }
+
+    #[test]
+    fn test_resolve_env_multiple_envs_no_default() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([
+                (
+                    "prod".to_string(),
+                    EnvironmentConfig {
+                        default: false,
+                        description: None,
+                        search: vec![make_search_service("svc-1")],
+                        foundry: vec![],
+                    },
+                ),
+                (
+                    "test".to_string(),
+                    EnvironmentConfig {
+                        default: false,
+                        description: None,
+                        search: vec![make_search_service("svc-2")],
+                        foundry: vec![],
+                    },
+                ),
+            ]),
+        };
+        assert!(config.resolve_env(None).is_err());
+    }
+
+    #[test]
+    fn test_default_env_name_with_default() {
+        let config = make_config_search("svc");
+        assert_eq!(config.default_env_name(), Some("prod"));
+    }
+
+    #[test]
+    fn test_environment_names() {
+        let config = Config {
+            project: ProjectConfig::default(),
+            sync: SyncConfig::default(),
+            environments: BTreeMap::from([
+                (
+                    "prod".to_string(),
+                    EnvironmentConfig {
+                        default: true,
+                        description: None,
+                        search: vec![make_search_service("svc-1")],
+                        foundry: vec![],
+                    },
+                ),
+                (
+                    "test".to_string(),
+                    EnvironmentConfig {
+                        default: false,
+                        description: None,
+                        search: vec![make_search_service("svc-2")],
+                        foundry: vec![],
+                    },
+                ),
+            ]),
+        };
+        let names = config.environment_names();
+        assert_eq!(names, vec!["prod", "test"]);
+    }
+
+    #[test]
+    fn test_resolved_env_search_service_dir_single() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![make_search_service("my-search")],
+            foundry: vec![],
+            sync: SyncConfig::default(),
+        };
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            env.search_service_dir(root, &env.search[0]),
+            PathBuf::from("/projects/myapp/search")
+        );
+    }
+
+    #[test]
+    fn test_resolved_env_search_service_dir_multi_with_labels() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![
+                SearchServiceConfig {
+                    label: Some("primary".to_string()),
+                    ..make_search_service("svc-1")
+                },
+                SearchServiceConfig {
+                    label: Some("analytics".to_string()),
+                    ..make_search_service("svc-2")
+                },
+            ],
+            foundry: vec![],
+            sync: SyncConfig::default(),
+        };
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            env.search_service_dir(root, &env.search[0]),
+            PathBuf::from("/projects/myapp/search/primary")
+        );
+        assert_eq!(
+            env.search_service_dir(root, &env.search[1]),
+            PathBuf::from("/projects/myapp/search/analytics")
+        );
+    }
+
+    #[test]
+    fn test_resolved_env_foundry_service_dir_single() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![],
+            foundry: vec![make_foundry_service("my-ai", "proj-1")],
+            sync: SyncConfig::default(),
+        };
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            env.foundry_service_dir(root, &env.foundry[0]),
+            PathBuf::from("/projects/myapp/foundry")
+        );
+    }
+
+    #[test]
+    fn test_resolved_env_foundry_service_dir_multi() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![],
+            foundry: vec![
+                FoundryServiceConfig {
+                    label: Some("rag".to_string()),
+                    ..make_foundry_service("ai-svc", "rag-proj")
+                },
+                FoundryServiceConfig {
+                    label: Some("chat".to_string()),
+                    ..make_foundry_service("ai-svc", "chat-proj")
+                },
+            ],
+            sync: SyncConfig::default(),
+        };
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            env.foundry_service_dir(root, &env.foundry[0]),
+            PathBuf::from("/projects/myapp/foundry/rag")
+        );
+        assert_eq!(
+            env.foundry_service_dir(root, &env.foundry[1]),
+            PathBuf::from("/projects/myapp/foundry/chat")
+        );
+    }
+
+    #[test]
+    fn test_resolved_env_has_foundry() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![],
+            foundry: vec![make_foundry_service("ai", "proj")],
+            sync: SyncConfig::default(),
+        };
+        assert!(env.has_foundry());
+        assert!(!env.has_search());
+    }
+
+    #[test]
+    fn test_resolved_env_primary_search_service() {
+        let env = ResolvedEnvironment {
+            name: "prod".to_string(),
+            search: vec![make_search_service("svc")],
+            foundry: vec![],
+            sync: SyncConfig::default(),
+        };
+        assert_eq!(env.primary_search_service().unwrap().name, "svc");
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = make_config_both();
+        config.save(dir.path()).unwrap();
+
+        let loaded = Config::load(dir.path()).unwrap();
+        let env = loaded.resolve_env(None).unwrap();
+        assert_eq!(env.search[0].name, "test-search");
+        assert_eq!(env.foundry[0].name, "test-ai");
+        assert_eq!(env.foundry[0].project, "test-proj");
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = Config::load(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_from_yaml_string() {
+        let yaml = r#"
+environments:
+  prod:
+    default: true
+    search:
+      - name: my-search-service
+        api_version: "2024-07-01"
+
+project:
+  name: My Project
+
+sync:
+  include_preview: false
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.environments.len(), 1);
+        let env = config.resolve_env(None).unwrap();
+        assert_eq!(env.search[0].name, "my-search-service");
+        assert!(!env.sync.include_preview);
+    }
+
+    #[test]
+    fn test_load_foundry_only() {
+        let yaml = r#"
+environments:
+  prod:
+    foundry:
+      - name: my-ai-service
+        project: my-project
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.validate().is_ok());
+        let env = config.resolve_env(None).unwrap();
+        assert!(env.has_foundry());
+        assert_eq!(env.foundry[0].name, "my-ai-service");
+        assert_eq!(env.foundry[0].project, "my-project");
+        assert_eq!(env.foundry[0].api_version, "2025-05-15-preview");
+    }
+
+    #[test]
+    fn test_load_both_services() {
+        let yaml = r#"
+environments:
+  prod:
+    default: true
+    search:
+      - name: my-search
+    foundry:
+      - name: my-ai
+        project: proj-1
+
+project:
+  name: RAG System
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.validate().is_ok());
+        let env = config.resolve_env(None).unwrap();
+        assert_eq!(env.search.len(), 1);
+        assert!(env.has_foundry());
+    }
+
+    #[test]
+    fn test_load_multi_environment() {
+        let yaml = r#"
+environments:
+  prod:
+    default: true
+    search:
+      - name: search-prod
+  test:
+    search:
+      - name: search-test
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.environment_names(), vec!["prod", "test"]);
+
+        let prod = config.resolve_env(Some("prod")).unwrap();
+        assert_eq!(prod.search[0].name, "search-prod");
+
+        let test = config.resolve_env(Some("test")).unwrap();
+        assert_eq!(test.search[0].name, "search-test");
+    }
+
+    #[test]
     fn test_find_project_root_found() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("a/b/c");
         fs::create_dir_all(&sub).unwrap();
         fs::write(
             dir.path().join(Config::FILENAME),
-            "[service]\nname = \"x\"\n",
+            "environments:\n  prod:\n    search:\n      - name: x\n",
         )
         .unwrap();
 
@@ -505,298 +964,21 @@ include_preview = false
     }
 
     #[test]
-    fn test_path_serialized_in_toml() {
-        let mut config = make_config("svc");
-        config.project.path = Some("search".to_string());
-        let toml_str = toml::to_string_pretty(&config).unwrap();
-        assert!(toml_str.contains("path = \"search\""));
-    }
-
-    #[test]
-    fn test_path_not_serialized_when_none() {
-        let config = make_config("svc");
-        let toml_str = toml::to_string_pretty(&config).unwrap();
-        assert!(!toml_str.contains("path"));
-    }
-
-    // === New multi-service config tests ===
-
-    #[test]
-    fn test_new_format_search_only() {
-        let toml = r#"
-[[services.search]]
-name = "my-search-service"
-api_version = "2024-07-01"
-
-[project]
-name = "My Project"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.validate().is_ok());
-        assert!(config.service.is_none());
-        assert_eq!(config.services.search.len(), 1);
-        assert_eq!(config.services.search[0].name, "my-search-service");
-    }
-
-    #[test]
-    fn test_new_format_foundry_only() {
-        let toml = r#"
-[[services.foundry]]
-name = "my-ai-service"
-project = "my-project"
-
-[project]
-name = "My Project"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.validate().is_ok());
-        assert!(config.has_foundry());
-        assert_eq!(config.services.foundry[0].name, "my-ai-service");
-        assert_eq!(config.services.foundry[0].project, "my-project");
-        assert_eq!(config.services.foundry[0].api_version, "2025-05-15-preview");
-    }
-
-    #[test]
-    fn test_new_format_both_services() {
-        let toml = r#"
-[[services.search]]
-name = "my-search"
-
-[[services.foundry]]
-name = "my-ai"
-project = "proj-1"
-
-[project]
-name = "RAG System"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.validate().is_ok());
-        assert_eq!(config.search_services().len(), 1);
-        assert!(config.has_foundry());
-    }
-
-    #[test]
-    fn test_legacy_auto_migration() {
-        let toml = r#"
-[service]
-name = "legacy-svc"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let search = config.search_services();
-        assert_eq!(search.len(), 1);
-        assert_eq!(search[0].name, "legacy-svc");
-    }
-
-    #[test]
-    fn test_legacy_not_duplicated_in_search_services() {
-        let toml = r#"
-[service]
-name = "my-svc"
-
-[[services.search]]
-name = "my-svc"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let search = config.search_services();
-        // Should not duplicate — same name in both legacy and services.search
-        assert_eq!(search.len(), 1);
-    }
-
-    #[test]
-    fn test_foundry_validation_requires_project() {
-        let toml = r#"
-[[services.foundry]]
-name = "my-ai"
-project = ""
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_foundry_service_url() {
-        let svc = FoundryServiceConfig {
-            name: "my-ai-service".to_string(),
-            project: "proj-1".to_string(),
-            api_version: "2025-05-15-preview".to_string(),
-            endpoint: None,
-            subscription: None,
-            resource_group: None,
-        };
-        assert_eq!(
-            svc.service_url(),
-            "https://my-ai-service.services.ai.azure.com"
-        );
-    }
-
-    #[test]
-    fn test_foundry_service_url_with_endpoint() {
-        let svc = FoundryServiceConfig {
-            name: "my-ai-service".to_string(),
-            project: "proj-1".to_string(),
-            api_version: "2025-05-15-preview".to_string(),
-            endpoint: Some("https://custom-subdomain.services.ai.azure.com".to_string()),
-            subscription: None,
-            resource_group: None,
-        };
-        assert_eq!(
-            svc.service_url(),
-            "https://custom-subdomain.services.ai.azure.com"
-        );
-    }
-
-    #[test]
-    fn test_foundry_service_url_strips_trailing_slash() {
-        let svc = FoundryServiceConfig {
-            name: "my-ai-service".to_string(),
-            project: "proj-1".to_string(),
-            api_version: "2025-05-15-preview".to_string(),
-            endpoint: Some("https://custom-subdomain.services.ai.azure.com/".to_string()),
-            subscription: None,
-            resource_group: None,
-        };
-        assert_eq!(
-            svc.service_url(),
-            "https://custom-subdomain.services.ai.azure.com"
-        );
-    }
-
-    #[test]
-    fn test_search_service_url() {
-        let svc = SearchServiceConfig {
-            name: "my-search".to_string(),
-            subscription: None,
-            resource_group: None,
-            api_version: "2024-07-01".to_string(),
-            preview_api_version: "2025-11-01-preview".to_string(),
-        };
-        assert_eq!(svc.service_url(), "https://my-search.search.windows.net");
-    }
-
-    #[test]
-    fn test_primary_search_service() {
-        let config = make_config("primary-svc");
-        let primary = config.primary_search_service().unwrap();
-        assert_eq!(primary.name, "primary-svc");
-    }
-
-    #[test]
-    fn test_has_foundry_false_when_empty() {
-        let config = make_config("svc");
-        assert!(!config.has_foundry());
-    }
-
-    #[test]
-    fn test_no_services_validation_fails() {
-        let config = Config {
-            service: None,
-            services: ServicesConfig::default(),
-            project: ProjectConfig::default(),
-            sync: SyncConfig::default(),
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_search_service_dir_without_path() {
-        let config = make_config("my-search");
-        let root = Path::new("/projects/search");
-        assert_eq!(
-            config.search_service_dir(root, "my-search"),
-            PathBuf::from("/projects/search/search-resources/my-search")
-        );
-    }
-
-    #[test]
-    fn test_search_service_dir_with_path() {
-        let mut config = make_config("my-search");
-        config.project.path = Some("resources".to_string());
-        let root = Path::new("/projects/myapp");
-        assert_eq!(
-            config.search_service_dir(root, "my-search"),
-            PathBuf::from("/projects/myapp/resources/search-resources/my-search")
-        );
-    }
-
-    #[test]
-    fn test_foundry_service_dir_without_path() {
-        let config = make_config("svc");
-        let root = Path::new("/projects/ai");
-        assert_eq!(
-            config.foundry_service_dir(root, "my-ai-service", "my-project"),
-            PathBuf::from("/projects/ai/foundry-resources/my-ai-service/my-project")
-        );
-    }
-
-    #[test]
-    fn test_foundry_service_dir_with_path() {
-        let mut config = make_config("svc");
-        config.project.path = Some("resources".to_string());
-        let root = Path::new("/projects/ai");
-        assert_eq!(
-            config.foundry_service_dir(root, "my-ai-service", "my-project"),
-            PathBuf::from("/projects/ai/resources/foundry-resources/my-ai-service/my-project")
-        );
-    }
-
-    #[test]
     fn test_foundry_default_api_version() {
-        let toml = r#"
-[[services.foundry]]
-name = "my-ai"
-project = "proj-1"
+        let yaml = r#"
+environments:
+  prod:
+    foundry:
+      - name: my-ai
+        project: proj-1
 "#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.services.foundry[0].api_version, "2025-05-15-preview");
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let env = config.resolve_env(None).unwrap();
+        assert_eq!(env.foundry[0].api_version, "2025-05-15-preview");
     }
 
     #[test]
-    fn test_save_load_roundtrip_new_format() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Config {
-            service: None,
-            services: ServicesConfig {
-                search: vec![SearchServiceConfig {
-                    name: "test-search".to_string(),
-                    subscription: None,
-                    resource_group: None,
-                    api_version: "2024-07-01".to_string(),
-                    preview_api_version: "2025-11-01-preview".to_string(),
-                }],
-                foundry: vec![FoundryServiceConfig {
-                    name: "test-ai".to_string(),
-                    project: "test-proj".to_string(),
-                    api_version: "2025-05-15-preview".to_string(),
-                    endpoint: None,
-                    subscription: None,
-                    resource_group: None,
-                }],
-            },
-            project: ProjectConfig {
-                name: Some("Test".to_string()),
-                description: None,
-                path: None,
-            },
-            sync: SyncConfig::default(),
-        };
-        config.save(dir.path()).unwrap();
-
-        let loaded = Config::load(dir.path()).unwrap();
-        assert_eq!(loaded.services.search[0].name, "test-search");
-        assert_eq!(loaded.services.foundry[0].name, "test-ai");
-        assert_eq!(loaded.services.foundry[0].project, "test-proj");
-    }
-}
-
-/// Find the project root by looking for hoist.toml
-pub fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let mut current = start.to_path_buf();
-    loop {
-        if current.join(Config::FILENAME).exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
+    fn test_config_filename_is_yaml() {
+        assert_eq!(Config::FILENAME, "hoist.yaml");
     }
 }

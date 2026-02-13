@@ -7,7 +7,7 @@ use hoist_core::resources::ResourceKind;
 use hoist_core::state::LocalState;
 
 use crate::cli::OutputFormat;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
 fn count_resources(dir: &std::path::Path) -> usize {
     if !dir.exists() {
@@ -53,18 +53,18 @@ fn count_agent_files(dir: &std::path::Path) -> usize {
         .unwrap_or(0)
 }
 
-pub async fn run(output: OutputFormat) -> Result<()> {
-    let (project_root, config) = load_config()?;
+pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()> {
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
     // Load state
-    let state = LocalState::load(&project_root)?;
+    let state = LocalState::load_env(&project_root, &env.name)?;
 
     // Count resources by type (across all search services)
     let mut resource_counts = serde_json::Map::new();
     let mut total = 0;
 
-    for search_svc in config.search_services() {
-        let search_base = config.search_service_dir(&project_root, &search_svc.name);
+    for search_svc in &env.search {
+        let search_base = env.search_service_dir(&project_root, search_svc);
 
         for kind in ResourceKind::stable() {
             let dir = search_base.join(kind.directory_name());
@@ -76,7 +76,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
             total += count;
         }
 
-        if config.sync.include_preview {
+        if env.sync.include_preview {
             // Knowledge bases are flat JSON files
             let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
             let kb_count = count_resources(&kb_dir);
@@ -98,11 +98,11 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     }
 
     // Count Foundry agents
-    if config.has_foundry() {
+    if env.has_foundry() {
         let mut agent_total = 0;
-        for foundry_config in config.foundry_services() {
-            let agents_dir = config
-                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+        for foundry_config in &env.foundry {
+            let agents_dir = env
+                .foundry_service_dir(&project_root, foundry_config)
                 .join("agents");
             agent_total += count_agent_files(&agents_dir);
         }
@@ -123,26 +123,26 @@ pub async fn run(output: OutputFormat) -> Result<()> {
         .last_sync
         .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string());
 
-    let primary = config.primary_search_service();
-    let service_name = primary
-        .as_ref()
-        .map(|s| s.name.as_str())
-        .unwrap_or("(none)");
+    let primary = env.primary_search_service();
+    let service_name = primary.map(|s| s.name.as_str()).unwrap_or("(none)");
 
     match output {
         OutputFormat::Json => {
-            let status = json!({
+            let mut status = json!({
                 "project_root": project_root.display().to_string(),
+                "environment": env.name,
                 "service_name": service_name,
-                "service_url": config.service_url(),
-                "api_version": config.api_version_for(false),
-                "preview_api_version": config.api_version_for(true),
-                "include_preview": config.sync.include_preview,
+                "include_preview": env.sync.include_preview,
                 "last_sync": last_sync,
                 "resources": resource_counts,
                 "total_resources": total,
                 "authentication": auth_status,
             });
+            if let Some(svc) = primary {
+                status["service_url"] = json!(svc.service_url());
+                status["api_version"] = json!(&svc.api_version);
+                status["preview_api_version"] = json!(&svc.preview_api_version);
+            }
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
         OutputFormat::Text => {
@@ -150,11 +150,14 @@ pub async fn run(output: OutputFormat) -> Result<()> {
             println!("==============");
             println!();
             println!("Project root: {}", project_root.display());
-            println!("Service: {}", service_name);
-            println!("Service URL: {}", config.service_url());
-            println!("API version: {}", config.api_version_for(false));
-            if config.sync.include_preview {
-                println!("Preview API: {} (enabled)", config.api_version_for(true));
+            println!("Environment: {}", env.name);
+            if let Some(svc) = primary {
+                println!("Service: {}", svc.name);
+                println!("Service URL: {}", svc.service_url());
+                println!("API version: {}", svc.api_version);
+                if env.sync.include_preview {
+                    println!("Preview API: {} (enabled)", svc.preview_api_version);
+                }
             }
             println!();
 
@@ -168,8 +171,8 @@ pub async fn run(output: OutputFormat) -> Result<()> {
             println!("Local Resources:");
             println!("----------------");
 
-            for search_svc in config.search_services() {
-                let search_base = config.search_service_dir(&project_root, &search_svc.name);
+            for search_svc in &env.search {
+                let search_base = env.search_service_dir(&project_root, search_svc);
                 println!("  Search service: {}", search_svc.name);
 
                 for kind in ResourceKind::stable() {
@@ -182,7 +185,7 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                     }
                 }
 
-                if config.sync.include_preview {
+                if env.sync.include_preview {
                     println!();
                     println!("  Preview Resources:");
 
@@ -220,10 +223,10 @@ pub async fn run(output: OutputFormat) -> Result<()> {
                 }
             }
 
-            if config.has_foundry() {
+            if env.has_foundry() {
                 println!();
                 println!("Foundry Resources:");
-                for foundry_config in config.foundry_services() {
+                for foundry_config in &env.foundry {
                     println!(
                         "  Service: {}/{}",
                         foundry_config.name, foundry_config.project

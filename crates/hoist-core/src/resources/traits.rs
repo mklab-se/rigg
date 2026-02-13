@@ -46,17 +46,17 @@ impl ResourceKind {
         }
     }
 
-    /// Returns the directory path for local storage (relative to resource root)
+    /// Returns the directory path for local storage (relative to service root)
     pub fn directory_name(&self) -> &'static str {
         match self {
-            ResourceKind::Index => "search-management/indexes",
-            ResourceKind::Indexer => "search-management/indexers",
-            ResourceKind::DataSource => "search-management/data-sources",
-            ResourceKind::Skillset => "search-management/skillsets",
-            ResourceKind::SynonymMap => "search-management/synonym-maps",
-            ResourceKind::Alias => "search-management/aliases",
-            ResourceKind::KnowledgeBase => "agentic-retrieval/knowledge-bases",
-            ResourceKind::KnowledgeSource => "agentic-retrieval/knowledge-sources",
+            ResourceKind::Index => "indexes",
+            ResourceKind::Indexer => "indexers",
+            ResourceKind::DataSource => "data-sources",
+            ResourceKind::Skillset => "skillsets",
+            ResourceKind::SynonymMap => "synonym-maps",
+            ResourceKind::Alias => "aliases",
+            ResourceKind::KnowledgeBase => "knowledge-bases",
+            ResourceKind::KnowledgeSource => "knowledge-sources",
             ResourceKind::Agent => "agents",
         }
     }
@@ -218,54 +218,33 @@ mod tests {
 
     #[test]
     fn test_directory_names() {
-        assert_eq!(
-            ResourceKind::Index.directory_name(),
-            "search-management/indexes"
-        );
-        assert_eq!(
-            ResourceKind::DataSource.directory_name(),
-            "search-management/data-sources"
-        );
-        assert_eq!(
-            ResourceKind::SynonymMap.directory_name(),
-            "search-management/synonym-maps"
-        );
-        assert_eq!(
-            ResourceKind::Alias.directory_name(),
-            "search-management/aliases"
-        );
+        assert_eq!(ResourceKind::Index.directory_name(), "indexes");
+        assert_eq!(ResourceKind::Indexer.directory_name(), "indexers");
+        assert_eq!(ResourceKind::DataSource.directory_name(), "data-sources");
+        assert_eq!(ResourceKind::Skillset.directory_name(), "skillsets");
+        assert_eq!(ResourceKind::SynonymMap.directory_name(), "synonym-maps");
+        assert_eq!(ResourceKind::Alias.directory_name(), "aliases");
         assert_eq!(
             ResourceKind::KnowledgeBase.directory_name(),
-            "agentic-retrieval/knowledge-bases"
+            "knowledge-bases"
         );
         assert_eq!(
             ResourceKind::KnowledgeSource.directory_name(),
-            "agentic-retrieval/knowledge-sources"
+            "knowledge-sources"
         );
         assert_eq!(ResourceKind::Agent.directory_name(), "agents");
     }
 
     #[test]
-    fn test_stable_kinds_under_search_management() {
-        for kind in ResourceKind::stable() {
-            assert!(
-                kind.directory_name().starts_with("search-management/"),
-                "{:?} should be under search-management/",
-                kind
-            );
-        }
-    }
-
-    #[test]
-    fn test_agentic_retrieval_kinds_are_preview() {
+    fn test_directory_names_are_flat() {
+        // v0.5.0: directory names are flat (no nested prefixes)
         for kind in ResourceKind::all() {
-            if kind.directory_name().starts_with("agentic-retrieval/") {
-                assert!(
-                    kind.is_preview(),
-                    "{:?} under agentic-retrieval/ should be preview",
-                    kind
-                );
-            }
+            assert!(
+                !kind.directory_name().contains('/'),
+                "{:?} directory_name should be flat, got: {}",
+                kind,
+                kind.directory_name()
+            );
         }
     }
 

@@ -11,7 +11,7 @@ use hoist_core::normalize::format_json;
 use hoist_core::resources::managed;
 use hoist_core::resources::ResourceKind;
 
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -25,13 +25,14 @@ pub fn run(
     skillset: bool,
     synonymmap: bool,
     alias: bool,
+    env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, config) = load_config()?;
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
-    let search_svc = config
+    let search_svc = env
         .primary_search_service()
         .ok_or_else(|| anyhow::anyhow!("No search service configured"))?;
-    let service_dir = config.search_service_dir(&project_root, &search_svc.name);
+    let service_dir = env.search_service_dir(&project_root, search_svc);
 
     if knowledgesource {
         copy_knowledge_source(&service_dir, source, target)
@@ -59,7 +60,7 @@ pub fn run(
 
 /// Copy a knowledge source and all its managed sub-resources under new names.
 fn copy_knowledge_source(service_dir: &std::path::Path, source: &str, target: &str) -> Result<()> {
-    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+    let ks_base = service_dir.join("knowledge-sources");
     let source_dir = ks_base.join(source);
     let target_dir = ks_base.join(target);
 
@@ -464,7 +465,7 @@ mod tests {
     fn test_copy_knowledge_source_filesystem() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().to_path_buf();
-        let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+        let ks_base = service_dir.join("knowledge-sources");
 
         // Create source KS directory with definition and managed sub-resources
         let source_dir = ks_base.join("my-ks");
@@ -598,7 +599,7 @@ mod tests {
     fn test_copy_standalone_resource_filesystem() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().to_path_buf();
-        let index_dir = service_dir.join("search-management/indexes");
+        let index_dir = service_dir.join("indexes");
         std::fs::create_dir_all(&index_dir).unwrap();
 
         std::fs::write(
@@ -630,7 +631,7 @@ mod tests {
     fn test_copy_standalone_resource_target_exists() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().to_path_buf();
-        let index_dir = service_dir.join("search-management/indexes");
+        let index_dir = service_dir.join("indexes");
         std::fs::create_dir_all(&index_dir).unwrap();
 
         std::fs::write(index_dir.join("src.json"), r#"{"name":"src","fields":[]}"#).unwrap();
@@ -645,7 +646,7 @@ mod tests {
     fn test_copy_knowledge_source_target_exists() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().to_path_buf();
-        let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+        let ks_base = service_dir.join("knowledge-sources");
 
         // Create source
         let source_dir = ks_base.join("src-ks");
@@ -669,7 +670,7 @@ mod tests {
     fn test_copy_knowledge_source_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().to_path_buf();
-        let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+        let ks_base = service_dir.join("knowledge-sources");
         std::fs::create_dir_all(&ks_base).unwrap();
 
         let result = copy_knowledge_source(&service_dir, "nonexistent", "target");

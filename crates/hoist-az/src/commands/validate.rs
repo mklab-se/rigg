@@ -7,10 +7,15 @@ use std::collections::{HashMap, HashSet};
 use hoist_core::resources::ResourceKind;
 
 use crate::cli::OutputFormat;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
-pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> Result<()> {
-    let (project_root, config) = load_config()?;
+pub async fn run(
+    strict: bool,
+    check_references: bool,
+    output: OutputFormat,
+    env_override: Option<&str>,
+) -> Result<()> {
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
     if matches!(output, OutputFormat::Text) {
         println!("Validating project at {}", project_root.display());
@@ -23,25 +28,25 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
     // Collect all resources
     let mut resources: HashMap<ResourceKind, Vec<(String, serde_json::Value)>> = HashMap::new();
 
-    let kinds = if config.sync.include_preview {
+    let kinds = if env.sync.include_preview {
         ResourceKind::all()
     } else {
         ResourceKind::stable()
     };
 
-    let primary_search_name = config
-        .primary_search_service()
-        .map(|s| s.name)
-        .unwrap_or_default();
+    let primary_search = env.primary_search_service();
 
     for kind in kinds {
         if kind.domain() == hoist_core::service::ServiceDomain::Foundry {
             continue; // Agent validation is handled below
         }
 
-        let resource_dir = config
-            .search_service_dir(&project_root, &primary_search_name)
-            .join(kind.directory_name());
+        let resource_dir = match primary_search {
+            Some(svc) => env
+                .search_service_dir(&project_root, svc)
+                .join(kind.directory_name()),
+            None => continue,
+        };
         if !resource_dir.exists() {
             continue;
         }
@@ -160,11 +165,11 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
     }
 
     // Validate Foundry agents
-    if config.has_foundry() {
+    if env.has_foundry() {
         let mut agent_resources = Vec::new();
-        for foundry_config in config.foundry_services() {
-            let agents_dir = config
-                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+        for foundry_config in &env.foundry {
+            let agents_dir = env
+                .foundry_service_dir(&project_root, foundry_config)
                 .join("agents");
             if !agents_dir.exists() {
                 continue;
@@ -218,7 +223,7 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
                 "warnings": warnings,
                 "warning_count": warnings.len(),
                 "passed": passed,
-                "include_preview": config.sync.include_preview,
+                "include_preview": env.sync.include_preview,
             });
             println!("{}", serde_json::to_string_pretty(&result)?);
             if !passed {
@@ -249,7 +254,7 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
             println!();
             println!("Validation passed!");
 
-            if config.sync.include_preview {
+            if env.sync.include_preview {
                 println!("Note: Includes preview resources (knowledge bases, knowledge sources).");
             } else {
                 println!();
@@ -259,7 +264,7 @@ pub async fn run(strict: bool, check_references: bool, output: OutputFormat) -> 
                 println!("      Set sync.include_preview = true to include them.");
             }
 
-            if config.has_foundry() {
+            if env.has_foundry() {
                 let agent_count = resources
                     .get(&ResourceKind::Agent)
                     .map(|v| v.len())
@@ -980,14 +985,6 @@ mod tests {
     #[test]
     fn test_lint_index_at_threshold_no_warning() {
         let mut fields = Vec::new();
-        for i in 0..50 {
-            fields.push(json!({"name": format!("field_{}", i), "type": "Edm.String"}));
-        }
-        // Add a key field so we don't get the no-key warning
-        fields.push(json!({"name": "id", "type": "Edm.String", "key": true}));
-        // Total is 51 which is > 50, let's use exactly 50 non-key + 1 key = 51
-        // We want exactly at threshold (50), so adjust:
-        fields.clear();
         for i in 0..49 {
             fields.push(json!({"name": format!("field_{}", i), "type": "Edm.String"}));
         }

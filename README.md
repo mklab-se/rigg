@@ -69,48 +69,41 @@ hoist pull --all
 hoist push --all
 ```
 
-During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. When there's only one option, it auto-selects. If you're not logged in to Azure CLI, you can enter service names manually.
+During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
 
 After pulling, your project contains normalized, version-control-friendly representations of every resource:
 
 ```
-hoist.toml                          # Project configuration
-.hoist/                             # Sync state (gitignored)
+hoist.yaml                          # Project configuration
+.hoist/                             # Per-environment sync state (gitignored)
 
-foundry-resources/
-  my-ai-service/
-    my-project/
-      agents/
-        research-assistant.yaml     # Agent definition (model, instructions, tools, etc.)
+search/
+  indexes/
+    regulatory-index.json           # Index schema (fields, vector search, semantic config)
+  indexers/
+    regulatory-indexer.json         # Indexer schedule and mapping
+  data-sources/
+    regulatory-datasource.json      # Data source connection
+  skillsets/
+    regulatory-skillset.json        # AI enrichment pipeline
+  synonym-maps/
+    terms.json
+  knowledge-bases/
+    regulatory-kb.json              # KB description, retrieval instructions, linked sources
+  knowledge-sources/
+    regulatory/
+      regulatory.json               # KS definition, ingestion config, created resources
+      regulatory-index.json         # Managed index (auto-provisioned by Azure)
+      regulatory-indexer.json       # Managed indexer
+      regulatory-datasource.json    # Managed data source
+      regulatory-skillset.json      # Managed skillset
 
-search-resources/
-  my-search-service/
-    agentic-retrieval/
-      knowledge-bases/
-        regulatory-kb.json          # KB description, retrieval instructions, linked sources
-      knowledge-sources/
-        regulatory/
-          regulatory.json           # KS definition, ingestion config, created resources
-          regulatory-datasource.json # Managed data source
-          regulatory-index.json     # Managed index (auto-provisioned by Azure)
-          regulatory-indexer.json   # Managed indexer
-          regulatory-skillset.json  # Managed skillset
-    search-management/
-      aliases/
-        regulatory-alias.json       # Index alias
-      data-sources/
-        regulatory-datasource.json  # Data source connection
-      indexes/
-        regulatory-index.json       # Index schema (fields, vector search, semantic config)
-      indexers/
-        regulatory-indexer.json     # Indexer schedule and mapping
-      skillsets/
-        regulatory-skillset.json    # AI enrichment pipeline
-      synonym-maps/
-        terms.json                  # Synonym mappings
+foundry/
+  agents/
+    research-assistant.yaml         # Agent definition (single YAML file, matches portal)
 ```
 
-Each JSON/YAML file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key.
+Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Foundry agents are stored as single YAML files matching the Foundry portal format.
 
 Use `hoist describe` to see how everything connects:
 
@@ -119,6 +112,7 @@ My RAG System
 =============
 
 Services:
+  Environment: prod (default)
   Azure AI Search: my-search-service
   Microsoft Foundry: my-ai-service/my-project
 
@@ -265,37 +259,67 @@ hoist pull --all
 
 ## Configuration
 
-Project settings live in `hoist.toml`:
+Project settings live in `hoist.yaml`:
 
-```toml
-[project]
-name = "My RAG System"
+```yaml
+project:
+  name: My RAG System
 
-# Search service (at least one service type required)
-[[services.search]]
-name = "my-search-service"
-api_version = "2024-07-01"                    # default
-preview_api_version = "2025-11-01-preview"    # default
+sync:
+  include_preview: true
 
-# Foundry service (at least one service type required)
-[[services.foundry]]
-name = "my-ai-service"
-project = "my-project"
-api_version = "2025-05-15-preview"              # default
+environments:
+  prod:
+    default: true
+    search:
+      - name: my-search-service
+        api_version: "2024-07-01"                    # default
+        preview_api_version: "2025-11-01-preview"    # default
+    foundry:
+      - name: my-ai-service
+        project: my-project
+        api_version: "2025-05-15-preview"            # default
 
-[sync]
-include_preview = true
-generate_docs = true
+  test:
+    search:
+      - name: my-search-test
+    foundry:
+      - name: my-ai-service-test
+        project: my-project-test
 ```
-
-The legacy `[service]` format from v0.1.x is still supported and auto-migrates on load.
 
 View and modify settings with the `config` command:
 
 ```bash
-hoist config get service.name
+hoist config show
 hoist config set sync.include_preview false
 ```
+
+### Deployment Environments
+
+Manage the same resource definitions across multiple Azure targets:
+
+```bash
+# Add a new environment
+hoist env add test
+
+# List environments
+hoist env list
+
+# Pull from a specific environment
+hoist pull --all --env test
+
+# Push to a specific environment
+hoist push --all --env prod
+
+# Compare two environments
+hoist diff --all --env test --compare-env prod
+
+# Set the default environment
+hoist env set-default prod
+```
+
+The `--env` flag (or `HOIST_ENV` environment variable) works with all commands. When omitted, hoist uses the environment marked `default: true` in the config.
 
 ## Architecture
 
@@ -310,7 +334,7 @@ hoist-diff  (standalone)
 
 | Crate | Purpose |
 |---|---|
-| `hoist-core` | Resource types, config, state tracking, JSON normalization, copy/rename logic |
+| `hoist-core` | Resource types, config, environment resolution, state tracking, JSON normalization, copy/rename logic |
 | `hoist-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
 | `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
 | `hoist-az` | Clap-based CLI, command implementations |

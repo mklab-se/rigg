@@ -25,8 +25,8 @@ impl ServiceDomain {
     /// Top-level directory prefix for resources of this domain
     pub fn directory_prefix(&self) -> &'static str {
         match self {
-            ServiceDomain::Search => "search-resources",
-            ServiceDomain::Foundry => "foundry-resources",
+            ServiceDomain::Search => "search",
+            ServiceDomain::Foundry => "foundry",
         }
     }
 }
@@ -49,11 +49,8 @@ mod tests {
 
     #[test]
     fn test_directory_prefixes() {
-        assert_eq!(ServiceDomain::Search.directory_prefix(), "search-resources");
-        assert_eq!(
-            ServiceDomain::Foundry.directory_prefix(),
-            "foundry-resources"
-        );
+        assert_eq!(ServiceDomain::Search.directory_prefix(), "search");
+        assert_eq!(ServiceDomain::Foundry.directory_prefix(), "foundry");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::path::Path;
 use hoist_core::resources::ResourceKind;
 
 use crate::cli::OutputFormat;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
 /// Summary of an index field
 #[derive(Debug, Clone)]
@@ -135,10 +135,10 @@ struct ProjectSummary {
     dependencies: Vec<Dependency>,
 }
 
-pub async fn run(output: OutputFormat) -> Result<()> {
-    let (project_root, config) = load_config()?;
+pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()> {
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
-    let include_preview = config.sync.include_preview;
+    let include_preview = env.sync.include_preview;
 
     let kinds: Vec<ResourceKind> = if include_preview {
         ResourceKind::all().to_vec()
@@ -147,18 +147,14 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     };
 
     let mut summary = ProjectSummary {
-        project_name: config
+        project_name: _config
             .project
             .name
             .clone()
             .unwrap_or_else(|| "hoist project".to_string()),
-        search_services: config
-            .search_services()
-            .iter()
-            .map(|s| s.name.clone())
-            .collect(),
-        foundry_services: config
-            .foundry_services()
+        search_services: env.search.iter().map(|s| s.name.clone()).collect(),
+        foundry_services: env
+            .foundry
             .iter()
             .map(|f| format!("{}/{}", f.name, f.project))
             .collect(),
@@ -166,8 +162,8 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     };
 
     // Scan search resources from each configured search service
-    for search_svc in config.search_services() {
-        let search_base = config.search_service_dir(&project_root, &search_svc.name);
+    for search_svc in &env.search {
+        let search_base = env.search_service_dir(&project_root, search_svc);
 
         for kind in &kinds {
             if kind.domain() != hoist_core::service::ServiceDomain::Search {
@@ -233,10 +229,10 @@ pub async fn run(output: OutputFormat) -> Result<()> {
     }
 
     // Scan Foundry agents from YAML files
-    if config.has_foundry() {
-        for foundry_config in config.foundry_services() {
-            let agents_dir = config
-                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+    if env.has_foundry() {
+        for foundry_config in &env.foundry {
+            let agents_dir = env
+                .foundry_service_dir(&project_root, foundry_config)
                 .join("agents");
             if agents_dir.exists() {
                 if let Ok(entries) = std::fs::read_dir(&agents_dir) {

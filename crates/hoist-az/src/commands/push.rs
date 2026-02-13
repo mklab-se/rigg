@@ -17,7 +17,6 @@ use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fiel
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
-use hoist_core::Config;
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
@@ -27,7 +26,7 @@ use crate::commands::common::{
 };
 use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 
 pub async fn run(
     flags: &ResourceTypeFlags,
@@ -35,13 +34,12 @@ pub async fn run(
     filter: Option<String>,
     dry_run: bool,
     force: bool,
-    target: Option<String>,
+    env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, config) = load_config()?;
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
     // Push has no default fallback — user must specify resource types
-    let selection =
-        resolve_resource_selection_from_flags(flags, config.sync.include_preview, false);
+    let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, false);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
@@ -58,11 +56,10 @@ pub async fn run(
         .collect();
     let has_foundry_kinds = kinds.iter().any(|k| k.domain() == ServiceDomain::Foundry);
 
-    let default_name = config
-        .primary_search_service()
-        .map(|s| s.name)
-        .unwrap_or_default();
-    let server_name = target.as_deref().unwrap_or(&default_name);
+    let primary_search_svc = env.primary_search_service();
+    let server_name = primary_search_svc
+        .map(|s| s.name.as_str())
+        .unwrap_or("(none)");
 
     // Collect resources to push
     let mut resources_to_push = Vec::new();
@@ -73,11 +70,9 @@ pub async fn run(
 
     // --- Search resources ---
     if !search_kinds.is_empty() {
-        let client = if let Some(ref server) = target {
-            AzureSearchClient::new_for_server(&config, server)?
-        } else {
-            AzureSearchClient::new(&config)?
-        };
+        let search_svc = primary_search_svc
+            .ok_or_else(|| anyhow::anyhow!("No search service in environment '{}'", env.name))?;
+        let client = AzureSearchClient::from_service_config(search_svc)?;
 
         info!(
             "Connected to {} using {}",
@@ -85,8 +80,7 @@ pub async fn run(
             client.auth_method()
         );
 
-        let push_search_svc = config.primary_search_service().unwrap();
-        let service_dir = config.search_service_dir(&project_root, &push_search_svc.name);
+        let service_dir = env.search_service_dir(&project_root, search_svc);
 
         // Build managed map from local KS files
         let managed_map = build_local_managed_map(&service_dir);
@@ -99,7 +93,7 @@ pub async fn run(
             // but skip managed resources (they'll be pushed via KS cascade)
             if *kind == ResourceKind::KnowledgeSource {
                 // Read KS definitions from their subdirectories
-                let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+                let ks_base = service_dir.join("knowledge-sources");
                 if !ks_base.exists() {
                     continue;
                 }
@@ -251,8 +245,8 @@ pub async fn run(
     }
 
     // --- Foundry agents ---
-    if has_foundry_kinds && config.has_foundry() {
-        for foundry_config in config.foundry_services() {
+    if has_foundry_kinds && env.has_foundry() {
+        for foundry_config in &env.foundry {
             let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
             info!(
                 "Connected to Foundry {}/{} using {}",
@@ -261,8 +255,8 @@ pub async fn run(
                 foundry_client.auth_method()
             );
 
-            let agents_dir = config
-                .foundry_service_dir(&project_root, &foundry_config.name, &foundry_config.project)
+            let agents_dir = env
+                .foundry_service_dir(&project_root, foundry_config)
                 .join("agents");
 
             if !agents_dir.exists() {
@@ -352,22 +346,22 @@ pub async fn run(
             .collect();
 
         // Load all local resources across all kinds for expansion
-        let all_kinds = if config.sync.include_preview {
+        let all_kinds = if env.sync.include_preview {
             ResourceKind::all().to_vec()
         } else {
             ResourceKind::stable().to_vec()
         };
 
         let mut all_local = Vec::new();
-        let recurse_search_name = config
-            .primary_search_service()
-            .map(|s| s.name)
-            .unwrap_or_default();
+        let recurse_search_svc = env.primary_search_service();
         for k in &all_kinds {
             let dir = if k.domain() == ServiceDomain::Search {
-                config
-                    .search_service_dir(&project_root, &recurse_search_name)
-                    .join(k.directory_name())
+                if let Some(svc) = recurse_search_svc {
+                    env.search_service_dir(&project_root, svc)
+                        .join(k.directory_name())
+                } else {
+                    continue;
+                }
             } else {
                 // For Foundry kinds, skip here — agents are loaded separately
                 continue;
@@ -505,11 +499,10 @@ pub async fn run(
 
     // Push search resources
     if !search_resources.is_empty() {
-        let client = if let Some(ref server) = target {
-            AzureSearchClient::new_for_server(&config, server)?
-        } else {
-            AzureSearchClient::new(&config)?
-        };
+        let search_svc = env
+            .primary_search_service()
+            .ok_or_else(|| anyhow::anyhow!("No search service in environment"))?;
+        let client = AzureSearchClient::from_service_config(search_svc)?;
 
         for (kind, name, definition, exists) in &search_resources {
             let needs_recreate = recreate_candidates.contains(&(*kind, name.clone()));
@@ -546,7 +539,7 @@ pub async fn run(
                         *kind,
                         &clean_definition,
                         name,
-                        &config,
+                        &env,
                         &mut cached_connection_string,
                     )
                     .await?
@@ -571,8 +564,8 @@ pub async fn run(
     }
 
     // Push Foundry agents
-    if !foundry_resources.is_empty() && config.has_foundry() {
-        for foundry_config in config.foundry_services() {
+    if !foundry_resources.is_empty() && env.has_foundry() {
+        for foundry_config in &env.foundry {
             let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
 
             for (kind, name, definition, exists) in &foundry_resources {
@@ -617,7 +610,7 @@ pub async fn run(
 
 /// Build a managed map from local KS files on disk.
 fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
-    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
+    let ks_base = service_dir.join("knowledge-sources");
     if !ks_base.exists() {
         return ManagedMap::new();
     }
@@ -781,7 +774,7 @@ fn needs_credentials(
 /// Falls back gracefully — returns None on any failure (not logged in,
 /// no storage accounts found, etc.).
 async fn discover_storage_credentials(
-    config: &Config,
+    env: &hoist_core::config::ResolvedEnvironment,
     cached: &mut Option<String>,
 ) -> Option<String> {
     // Return cached value if available
@@ -792,7 +785,7 @@ async fn discover_storage_credentials(
     let arm = ArmClient::new().ok()?;
 
     // Get subscription ID: config first, then az cli
-    let subscription_id = config
+    let subscription_id = env
         .primary_search_service()
         .and_then(|s| s.subscription.clone())
         .or_else(|| {
@@ -802,7 +795,7 @@ async fn discover_storage_credentials(
         })?;
 
     // Get resource group: config first, then ARM discovery
-    let search_svc = config.primary_search_service()?;
+    let search_svc = env.primary_search_service()?;
     let resource_group = if let Some(rg) = search_svc.resource_group.clone() {
         rg
     } else {
@@ -866,11 +859,11 @@ async fn inject_credentials(
     kind: ResourceKind,
     definition: &serde_json::Value,
     name: &str,
-    config: &Config,
+    env: &hoist_core::config::ResolvedEnvironment,
     cached: &mut Option<String>,
 ) -> Result<serde_json::Value> {
     // Try auto-discovery first
-    let conn_string = match discover_storage_credentials(config, cached).await {
+    let conn_string = match discover_storage_credentials(env, cached).await {
         Some(c) => c,
         None => {
             // Fall back to manual prompt
@@ -1327,12 +1320,20 @@ mod tests {
         assert!(!needs_credentials(ResourceKind::Index, &def, false, false));
     }
 
-    fn test_config() -> hoist_core::Config {
-        let toml_str = r#"
-            [[services.search]]
-            name = "test-search"
-        "#;
-        toml::from_str(toml_str).unwrap()
+    fn test_env() -> hoist_core::config::ResolvedEnvironment {
+        hoist_core::config::ResolvedEnvironment {
+            name: "test".to_string(),
+            search: vec![hoist_core::SearchServiceConfig {
+                name: "test-search".to_string(),
+                label: None,
+                subscription: None,
+                resource_group: None,
+                api_version: "2024-07-01".to_string(),
+                preview_api_version: "2025-11-01-preview".to_string(),
+            }],
+            foundry: vec![],
+            sync: hoist_core::config::SyncConfig::default(),
+        }
     }
 
     #[tokio::test]
@@ -1344,12 +1345,11 @@ mod tests {
         });
         let conn = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=abc";
         let mut cached = Some(conn.to_string());
-        let config = test_config();
+        let env = test_env();
 
-        let result =
-            inject_credentials(ResourceKind::DataSource, &def, "ds-1", &config, &mut cached)
-                .await
-                .unwrap();
+        let result = inject_credentials(ResourceKind::DataSource, &def, "ds-1", &env, &mut cached)
+            .await
+            .unwrap();
 
         assert_eq!(
             result
@@ -1377,13 +1377,13 @@ mod tests {
         });
         let conn = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=abc";
         let mut cached = Some(conn.to_string());
-        let config = test_config();
+        let env = test_env();
 
         let result = inject_credentials(
             ResourceKind::KnowledgeSource,
             &def,
             "ks-1",
-            &config,
+            &env,
             &mut cached,
         )
         .await

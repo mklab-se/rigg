@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-13
+
+### Added
+
+- **Deployment environments** — named environments (prod, test, staging, etc.) are now first-class config concepts. Each environment has its own set of search and foundry services, enabling multi-target management from a single project
+- **`hoist env` subcommand** — `hoist env list`, `hoist env show [name]`, `hoist env set-default <name>`, `hoist env add <name>`, `hoist env remove <name>` for managing environments
+- **`--env` global flag** — target a specific environment on any command (also available via `HOIST_ENV` environment variable). When omitted, uses the environment marked `default: true`
+- **Cross-environment diff** — `hoist diff --env test --compare-env prod` fetches resources from both environments' remote servers and diffs them in memory, without involving local files
+- **Per-environment state** — state and checksum files are now stored per environment in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`
+- **Service labels** — when an environment has multiple services in the same domain, each must have a `label` that creates a subdirectory (e.g., `search/primary/indexes/`, `search/analytics/indexes/`)
+
+### Changed
+
+- **Breaking: config format switched to YAML** — `hoist.toml` replaced by `hoist.yaml`. The new format uses an `environments:` map instead of flat `[[services.search]]` arrays. No migration from v0.4.0 — delete old config and re-init
+- **Breaking: flat directory structure** — resource directories simplified from `search-resources/<service>/search-management/indexes/` to `search/indexes/`. Foundry from `foundry-resources/<service>/<project>/agents/` to `foundry/agents/`. Re-pull after upgrading
+- **Breaking: state directory restructured** — `.hoist/state.json` replaced by `.hoist/<env>/state.json`. State is now per-environment
+- **`ResolvedEnvironment` abstraction** — all commands now work through `ResolvedEnvironment` instead of accessing config directly, providing consistent environment resolution across the codebase
+- **Client construction** — `AzureSearchClient::from_service_config()` replaces the old `new(&Config)` constructor, enabling per-environment client creation
+- Removed legacy `[service]` config format migration (was auto-migrating since v0.2.0)
+- Removed `toml` dependency from hoist-core, replaced by `serde_yaml`
+
+### Tests
+
+- 483 tests across workspace (up from 481)
+
+## [0.4.0] - 2026-02-10
+
+### Changed
+
+- **Agent YAML format** — Foundry agents are now stored as a single `.yaml` file per agent (e.g., `agents/research-assistant.yaml`), matching the Foundry portal's YAML view. The previous 4-file decomposition (`config.json`, `instructions.md`, `tools.json`, `knowledge.json`) is removed
+- Added `serde_yaml` dependency for agent YAML serialization
+- `strip_agent_empty_fields()` normalizes empty optional fields for consistent diff/push behavior
+
+### Tests
+
+- 481 tests across workspace (up from 470)
+
 ## [0.3.0] - 2026-02-09
 
 ### Added

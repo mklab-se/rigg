@@ -27,13 +27,13 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Path to hoist.toml configuration file
+    /// Path to hoist.yaml configuration file
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 
-    /// Azure AI Search service name (overrides config)
-    #[arg(long, global = true)]
-    pub service: Option<String>,
+    /// Deployment environment (overrides default from config)
+    #[arg(long, short = 'e', global = true, env = "HOIST_ENV")]
+    pub env: Option<String>,
 
     /// Azure subscription ID (overrides config)
     #[arg(long, global = true)]
@@ -172,18 +172,18 @@ pub enum Commands {
         /// Directory to initialize (defaults to current directory)
         dir: Option<PathBuf>,
 
-        /// Subdirectory for resource files (e.g., --path search)
-        #[arg(long, value_name = "SUBDIR")]
-        path: Option<PathBuf>,
-
         /// Project template determining which resource types to include
         #[arg(long, value_enum, default_value = "agentic")]
         template: InitTemplate,
     },
 
-    /// View and modify project configuration (hoist.toml)
+    /// View and modify project configuration (hoist.yaml)
     #[command(subcommand)]
     Config(ConfigCommands),
+
+    /// Manage deployment environments
+    #[command(subcommand)]
+    Env(EnvCommands),
 
     /// Manage Azure authentication
     #[command(subcommand)]
@@ -209,10 +209,6 @@ pub enum Commands {
         /// Skip confirmation prompt
         #[arg(long)]
         force: bool,
-
-        /// Pull from a different server instead of the configured one
-        #[arg(long)]
-        source: Option<String>,
     },
 
     /// Upload local JSON files to Azure, creating or updating resources
@@ -239,10 +235,6 @@ pub enum Commands {
         /// Skip confirmation prompt (alias for --force)
         #[arg(long, short, hide = true)]
         yes: bool,
-
-        /// Push to a different server instead of the configured one
-        #[arg(long)]
-        target: Option<String>,
     },
 
     /// Copy a resource locally under a new name (no network calls)
@@ -298,6 +290,10 @@ pub enum Commands {
         /// Exit with code 5 if differences are detected (useful in CI)
         #[arg(long)]
         exit_code: bool,
+
+        /// Compare against a second environment (instead of local files)
+        #[arg(long)]
+        compare_env: Option<String>,
     },
 
     /// Validate local JSON files for structural and referential integrity
@@ -323,10 +319,6 @@ pub enum Commands {
         /// Automatically write changes without confirmation
         #[arg(long)]
         force: bool,
-
-        /// Pull from a different server instead of the configured one
-        #[arg(long)]
-        source: Option<String>,
 
         /// Polling interval in seconds
         #[arg(long, default_value = "20")]
@@ -356,12 +348,12 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
-    /// Display current configuration from hoist.toml
+    /// Display current configuration from hoist.yaml
     Show,
 
-    /// Set a configuration value (e.g., hoist config set service.name my-svc)
+    /// Set a configuration value
     Set {
-        /// Configuration key (e.g., service.name, sync.include_preview)
+        /// Configuration key (e.g., project.name, sync.include_preview)
         key: String,
 
         /// Value to set
@@ -370,6 +362,36 @@ pub enum ConfigCommands {
 
     /// Interactive configuration setup
     Init,
+}
+
+#[derive(Subcommand)]
+pub enum EnvCommands {
+    /// List all configured environments
+    List,
+
+    /// Show details for an environment
+    Show {
+        /// Environment name (uses default if omitted)
+        name: Option<String>,
+    },
+
+    /// Set the default environment
+    SetDefault {
+        /// Environment name to set as default
+        name: String,
+    },
+
+    /// Add a new environment (interactive ARM discovery)
+    Add {
+        /// Name for the new environment
+        name: String,
+    },
+
+    /// Remove an environment
+    Remove {
+        /// Environment name to remove
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -424,13 +446,12 @@ pub enum Shell {
 
 impl Cli {
     pub async fn run(self) -> Result<()> {
+        let env_override = self.env.as_deref();
+
         match self.command {
-            Commands::Init {
-                dir,
-                path,
-                template,
-            } => commands::init::run(dir, path, template, self.service).await,
+            Commands::Init { dir, template } => commands::init::run(dir, template).await,
             Commands::Config(cmd) => commands::config::run(cmd).await,
+            Commands::Env(cmd) => commands::env::run(cmd).await,
             Commands::Auth(cmd) => commands::auth::run(cmd).await,
             Commands::Pull {
                 resources,
@@ -438,8 +459,10 @@ impl Cli {
                 filter,
                 dry_run,
                 force,
-                source,
-            } => commands::pull::run(&resources, recursive, filter, dry_run, force, source).await,
+            } => {
+                commands::pull::run(&resources, recursive, filter, dry_run, force, env_override)
+                    .await
+            }
             Commands::Push {
                 resources,
                 recursive,
@@ -447,10 +470,16 @@ impl Cli {
                 dry_run,
                 force,
                 yes,
-                target,
             } => {
-                commands::push::run(&resources, recursive, filter, dry_run, force || yes, target)
-                    .await
+                commands::push::run(
+                    &resources,
+                    recursive,
+                    filter,
+                    dry_run,
+                    force || yes,
+                    env_override,
+                )
+                .await
             }
             Commands::Copy {
                 source,
@@ -474,25 +503,35 @@ impl Cli {
                 skillset,
                 synonymmap,
                 alias,
+                env_override,
             ),
             Commands::Diff {
                 resources,
                 format,
                 exit_code,
-            } => commands::diff::run(&resources, format, exit_code).await,
+                compare_env,
+            } => {
+                commands::diff::run(
+                    &resources,
+                    format,
+                    exit_code,
+                    env_override,
+                    compare_env.as_deref(),
+                )
+                .await
+            }
             Commands::Validate {
                 strict,
                 check_references,
-            } => commands::validate::run(strict, check_references, self.output).await,
+            } => commands::validate::run(strict, check_references, self.output, env_override).await,
             Commands::PullWatch {
                 resources,
                 filter,
                 force,
-                source,
                 interval,
-            } => commands::pull_watch::run(&resources, filter, force, source, interval).await,
-            Commands::Describe => commands::describe_project::run(self.output).await,
-            Commands::Status => commands::status::run(self.output).await,
+            } => commands::pull_watch::run(&resources, filter, force, interval, env_override).await,
+            Commands::Describe => commands::describe_project::run(self.output, env_override).await,
+            Commands::Status => commands::status::run(self.output, env_override).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {
                 crate::banner::print_banner_with_version();

@@ -7,32 +7,26 @@ use tokio::time::sleep;
 
 use crate::cli::ResourceTypeFlags;
 use crate::commands::common::resolve_resource_selection_from_flags;
-use crate::commands::load_config;
+use crate::commands::load_config_and_env;
 use crate::commands::pull::execute_pull;
 
 pub async fn run(
     flags: &ResourceTypeFlags,
     filter: Option<String>,
     force: bool,
-    source: Option<String>,
     interval: u64,
+    env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, config) = load_config()?;
+    let (project_root, _config, env) = load_config_and_env(env_override)?;
 
-    let selection = resolve_resource_selection_from_flags(flags, config.sync.include_preview, true);
+    let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
     if selection.is_empty() {
         println!("No resource types specified. Use --all or specify types (e.g., --indexes)");
         return Ok(());
     }
 
-    let default_name = config
-        .primary_search_service()
-        .map(|s| s.name)
-        .unwrap_or_default();
-    let server_name = source.as_deref().unwrap_or(&default_name);
-
-    println!("Watching for changes on {}...", server_name);
+    println!("Watching for changes (env: {})...", env.name);
     println!("  Interval: {}s", interval);
     if force {
         println!("  Auto-update: enabled (--force)");
@@ -48,12 +42,11 @@ pub async fn run(
 
         match execute_pull(
             &project_root,
-            &config,
+            &env,
             &selection,
             filter.as_deref(),
             false, // not dry_run
             force,
-            source.as_deref(),
         )
         .await
         {
