@@ -458,6 +458,76 @@ mod tests {
             .is_none());
     }
 
+    /// Verifies the local modification detection pattern used by pull.
+    /// When a file is modified locally after pull, its disk checksum differs
+    /// from the stored checksum.
+    #[test]
+    fn test_local_modification_detection() {
+        let original_content = r#"{"name": "my-index", "fields": []}"#;
+        let stored_checksum = Checksums::calculate(original_content);
+
+        // User modifies the file locally
+        let modified_content = r#"{"name": "my-index", "fields": [{"name": "id"}]}"#;
+        let disk_checksum = Checksums::calculate(modified_content);
+
+        assert_ne!(
+            stored_checksum, disk_checksum,
+            "Modified file should have different checksum"
+        );
+    }
+
+    /// Verifies that unmodified files match their stored checksum.
+    #[test]
+    fn test_no_local_modification_when_unchanged() {
+        let content = r#"{"name": "my-index", "fields": []}"#;
+        let stored_checksum = Checksums::calculate(content);
+        let disk_checksum = Checksums::calculate(content);
+
+        assert_eq!(
+            stored_checksum, disk_checksum,
+            "Unmodified file should match stored checksum"
+        );
+    }
+
+    /// Verifies the full pull workflow: store checksum, write file, read back.
+    #[test]
+    fn test_checksums_roundtrip_with_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = r#"{"name": "test", "fields": []}"#;
+        let checksum = Checksums::calculate(content);
+
+        // Write file and store checksum (simulates pull)
+        let file_path = dir.path().join("test.json");
+        std::fs::write(&file_path, content).unwrap();
+
+        let mut checksums = Checksums::default();
+        checksums.set(ResourceKind::Index, "test", checksum.clone());
+        checksums.save_env(dir.path(), "prod").unwrap();
+
+        // Read back and verify
+        let loaded = Checksums::load_env(dir.path(), "prod").unwrap();
+        let stored = loaded.get(ResourceKind::Index, "test").unwrap();
+
+        let disk_content = std::fs::read_to_string(&file_path).unwrap();
+        let disk_checksum = Checksums::calculate(&disk_content);
+
+        assert_eq!(*stored, disk_checksum, "Stored checksum should match disk");
+
+        // Now modify the file
+        std::fs::write(
+            &file_path,
+            r#"{"name": "test", "fields": [{"name": "id"}]}"#,
+        )
+        .unwrap();
+        let modified_disk = std::fs::read_to_string(&file_path).unwrap();
+        let modified_checksum = Checksums::calculate(&modified_disk);
+
+        assert_ne!(
+            *stored, modified_checksum,
+            "Modified file should differ from stored checksum"
+        );
+    }
+
     #[test]
     fn test_separate_envs_dont_interfere() {
         let dir = tempfile::tempdir().unwrap();

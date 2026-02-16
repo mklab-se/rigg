@@ -283,6 +283,17 @@ pub enum Commands {
         alias: bool,
     },
 
+    /// Delete a resource from Azure and remove local files
+    Delete {
+        /// Resource type and name to delete
+        #[command(flatten)]
+        resource: DeleteResource,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Compare local resource files against the live Azure service
     Diff {
         #[command(flatten)]
@@ -419,6 +430,81 @@ pub enum AuthCommands {
     Logout,
 }
 
+/// Resource type and name for deletion (exactly one must be specified)
+#[derive(Args, Clone)]
+pub struct DeleteResource {
+    /// Delete an index by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub index: Option<String>,
+
+    /// Delete an indexer by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub indexer: Option<String>,
+
+    /// Delete a data source by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub datasource: Option<String>,
+
+    /// Delete a skillset by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub skillset: Option<String>,
+
+    /// Delete a synonym map by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub synonymmap: Option<String>,
+
+    /// Delete an alias by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub alias: Option<String>,
+
+    /// Delete a knowledge base by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub knowledgebase: Option<String>,
+
+    /// Delete a knowledge source by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub knowledgesource: Option<String>,
+
+    /// Delete a Foundry agent by name
+    #[arg(long, value_name = "NAME", group = "delete_target")]
+    pub agent: Option<String>,
+}
+
+impl DeleteResource {
+    /// Extract the resource kind and name, if any was specified
+    pub fn resolve(&self) -> Option<(hoist_core::resources::ResourceKind, String)> {
+        use hoist_core::resources::ResourceKind;
+        if let Some(ref n) = self.index {
+            return Some((ResourceKind::Index, n.clone()));
+        }
+        if let Some(ref n) = self.indexer {
+            return Some((ResourceKind::Indexer, n.clone()));
+        }
+        if let Some(ref n) = self.datasource {
+            return Some((ResourceKind::DataSource, n.clone()));
+        }
+        if let Some(ref n) = self.skillset {
+            return Some((ResourceKind::Skillset, n.clone()));
+        }
+        if let Some(ref n) = self.synonymmap {
+            return Some((ResourceKind::SynonymMap, n.clone()));
+        }
+        if let Some(ref n) = self.alias {
+            return Some((ResourceKind::Alias, n.clone()));
+        }
+        if let Some(ref n) = self.knowledgebase {
+            return Some((ResourceKind::KnowledgeBase, n.clone()));
+        }
+        if let Some(ref n) = self.knowledgesource {
+            return Some((ResourceKind::KnowledgeSource, n.clone()));
+        }
+        if let Some(ref n) = self.agent {
+            return Some((ResourceKind::Agent, n.clone()));
+        }
+        None
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -447,6 +533,221 @@ pub enum Shell {
     Zsh,
     Fish,
     Powershell,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hoist_core::resources::ResourceKind;
+
+    #[test]
+    fn test_delete_resource_resolve_index() {
+        let r = DeleteResource {
+            index: Some("my-index".to_string()),
+            indexer: None,
+            datasource: None,
+            skillset: None,
+            synonymmap: None,
+            alias: None,
+            knowledgebase: None,
+            knowledgesource: None,
+            agent: None,
+        };
+        let (kind, name) = r.resolve().unwrap();
+        assert_eq!(kind, ResourceKind::Index);
+        assert_eq!(name, "my-index");
+    }
+
+    #[test]
+    fn test_delete_resource_resolve_agent() {
+        let r = DeleteResource {
+            index: None,
+            indexer: None,
+            datasource: None,
+            skillset: None,
+            synonymmap: None,
+            alias: None,
+            knowledgebase: None,
+            knowledgesource: None,
+            agent: Some("my-agent".to_string()),
+        };
+        let (kind, name) = r.resolve().unwrap();
+        assert_eq!(kind, ResourceKind::Agent);
+        assert_eq!(name, "my-agent");
+    }
+
+    #[test]
+    fn test_delete_resource_resolve_knowledge_source() {
+        let r = DeleteResource {
+            index: None,
+            indexer: None,
+            datasource: None,
+            skillset: None,
+            synonymmap: None,
+            alias: None,
+            knowledgebase: None,
+            knowledgesource: Some("ks-1".to_string()),
+            agent: None,
+        };
+        let (kind, name) = r.resolve().unwrap();
+        assert_eq!(kind, ResourceKind::KnowledgeSource);
+        assert_eq!(name, "ks-1");
+    }
+
+    #[test]
+    fn test_delete_resource_resolve_all_kinds() {
+        // Test each resource kind maps correctly
+        let cases: Vec<(DeleteResource, ResourceKind)> = vec![
+            (
+                DeleteResource {
+                    index: Some("x".into()),
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::Index,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: Some("x".into()),
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::Indexer,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: Some("x".into()),
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::DataSource,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: Some("x".into()),
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::Skillset,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: Some("x".into()),
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::SynonymMap,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: Some("x".into()),
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::Alias,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: Some("x".into()),
+                    knowledgesource: None,
+                    agent: None,
+                },
+                ResourceKind::KnowledgeBase,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: Some("x".into()),
+                    agent: None,
+                },
+                ResourceKind::KnowledgeSource,
+            ),
+            (
+                DeleteResource {
+                    index: None,
+                    indexer: None,
+                    datasource: None,
+                    skillset: None,
+                    synonymmap: None,
+                    alias: None,
+                    knowledgebase: None,
+                    knowledgesource: None,
+                    agent: Some("x".into()),
+                },
+                ResourceKind::Agent,
+            ),
+        ];
+
+        for (resource, expected_kind) in cases {
+            let (kind, name) = resource.resolve().unwrap();
+            assert_eq!(kind, expected_kind, "Expected {:?}", expected_kind);
+            assert_eq!(name, "x");
+        }
+    }
+
+    #[test]
+    fn test_delete_resource_resolve_none() {
+        let r = DeleteResource {
+            index: None,
+            indexer: None,
+            datasource: None,
+            skillset: None,
+            synonymmap: None,
+            alias: None,
+            knowledgebase: None,
+            knowledgesource: None,
+            agent: None,
+        };
+        assert!(r.resolve().is_none());
+    }
 }
 
 impl Cli {
@@ -489,6 +790,12 @@ impl Cli {
                     env_override,
                 )
                 .await
+            }
+            Commands::Delete { resource, force } => {
+                let (kind, name) = resource.resolve().ok_or_else(|| {
+                    anyhow::anyhow!("Specify a resource to delete (e.g., --index <name>)")
+                })?;
+                commands::delete::run(kind, &name, force, env_override).await
             }
             Commands::Copy {
                 source,

@@ -377,6 +377,26 @@ pub async fn execute_pull(
     }
     println!();
 
+    // Warn about locally modified files that will be overwritten
+    let locally_modified: Vec<_> = updated_resources
+        .iter()
+        .filter(|r| r.locally_modified)
+        .collect();
+    if !locally_modified.is_empty() {
+        println!(
+            "{} {} resource(s) have been modified locally since last pull:",
+            "WARNING:".yellow().bold(),
+            locally_modified.len()
+        );
+        for r in &locally_modified {
+            println!("  {} {} '{}'", "!".yellow(), r.kind.display_name(), r.name);
+        }
+        println!(
+            "  Pulling will overwrite your local changes. Commit or stash them first if needed."
+        );
+        println!();
+    }
+
     if dry_run {
         println!("Dry run - no changes made");
         return Ok(());
@@ -561,9 +581,9 @@ fn discover_search_resources(
             // Check if content changed (remote vs stored checksum) and file on disk matches
             let new_checksum = Checksums::calculate(&json_content);
             let file_path = resource_dir.join(&filename);
-            let is_existing = checksums.get_managed(*kind, name, managed_map).is_some();
-            let remote_unchanged =
-                checksums.get_managed(*kind, name, managed_map) == Some(&new_checksum);
+            let stored_checksum = checksums.get_managed(*kind, name, managed_map);
+            let is_existing = stored_checksum.is_some();
+            let remote_unchanged = stored_checksum == Some(&new_checksum);
             let local_matches = file_path.exists()
                 && std::fs::read_to_string(&file_path).ok().as_deref()
                     == Some(json_content.as_str());
@@ -572,6 +592,18 @@ fn discover_search_resources(
                 *total_unchanged += 1;
                 continue;
             }
+
+            // Check if local file was modified since last pull
+            let locally_modified = if let Some(stored) = stored_checksum {
+                if let Ok(disk_content) = std::fs::read_to_string(&file_path) {
+                    let disk_checksum = Checksums::calculate(&disk_content);
+                    disk_checksum != *stored
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
 
             // Compute diff for updated resources (compare current local vs incoming server)
             let changes = if file_path.exists() {
@@ -591,6 +623,7 @@ fn discover_search_resources(
                 new_checksum,
                 raw_resource: (*resource).clone(),
                 changes,
+                locally_modified,
             };
 
             if is_existing {
@@ -731,8 +764,9 @@ async fn discover_foundry_agents(
         let json_content = format_json(&normalized);
 
         let new_checksum = Checksums::calculate(&json_content);
-        let is_existing = checksums.get(kind, name).is_some();
-        let remote_unchanged = checksums.get(kind, name) == Some(&new_checksum);
+        let stored_checksum = checksums.get(kind, name);
+        let is_existing = stored_checksum.is_some();
+        let remote_unchanged = stored_checksum == Some(&new_checksum);
 
         // Check if local YAML file matches
         let yaml_path = agents_dir.join(format!("{}.yaml", name));
@@ -743,6 +777,18 @@ async fn discover_foundry_agents(
             continue;
         }
 
+        // Check if local YAML was modified since last pull
+        let locally_modified = if let Some(stored) = stored_checksum {
+            if let Ok(disk_content) = std::fs::read_to_string(&yaml_path) {
+                let disk_checksum = Checksums::calculate(&disk_content);
+                disk_checksum != *stored
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let entry = DiscoveredResource {
             kind,
             name: name.to_string(),
@@ -750,6 +796,7 @@ async fn discover_foundry_agents(
             new_checksum,
             raw_resource: (*agent).clone(),
             changes: vec![],
+            locally_modified,
         };
 
         if is_existing {
@@ -833,4 +880,6 @@ struct DiscoveredResource {
     new_checksum: String,
     raw_resource: Value,
     changes: Vec<Change>,
+    /// True if the local file has been modified since last pull
+    locally_modified: bool,
 }

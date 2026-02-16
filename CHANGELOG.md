@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3] - 2026-02-16
+
+### Added
+
+- **`hoist delete` command** — delete a resource from Azure and remove the corresponding local file in one step. Supports all resource types (`--index <name>`, `--agent <name>`, etc.). Knowledge source deletion warns about managed sub-resources and cleans up the entire KS directory. Includes confirmation prompt (skippable with `--force`)
+- **Push conflict detection** — `hoist push` now detects when a resource has been modified on the server since your last pull (by comparing the remote checksum against the stored pull baseline). Shows a clear warning listing conflicting resources and suggests running `hoist pull` first to review remote changes before overwriting
+- **Pull overwrite warning** — `hoist pull` now detects when local files have been modified since the last pull (by comparing the on-disk checksum against the stored pull baseline). Shows a warning listing locally modified resources before overwriting, so you can commit or stash local changes first
+
+### Fixed
+
+- **Release workflow Windows build** — GitHub Actions release builds now work on Windows. The build and package steps explicitly use `shell: bash` to avoid PowerShell environment variable expansion issues (`$TARGET` vs `$env:TARGET`)
+- **README directory structure** — the directory layout example now matches the actual categorized directory structure (`search-management/`, `agentic-retrieval/`) instead of the old flat layout
+
+### Changed
+
+- GitHub repository now has a description and topic tags for discoverability
+
+### Tests
+
+- 516 tests across workspace (up from 505)
+
+## [0.5.2] - 2026-02-15
+
+### Fixed
+
+- **Foundry client API version** — updated to `2025-05-15-preview` (was `2025-05-01`)
+- **Resource files path** — `files_path` config option now correctly resolves the files root relative to the project root
+- **Init categorized directories** — `hoist init` now creates the correct categorized directory structure (`search-management/indexes/`, `agentic-retrieval/knowledge-sources/`) matching pull output
+
+### Changed
+
+- Minor improvements to init messaging and error handling
+
+## [0.5.1] - 2026-02-14
+
+### Added
+
+- **`--files-path` on `hoist init`** — separate config location (`hoist.yaml`, `.hoist/`) from resource files (`search/`, `foundry/`). Useful for monorepos where search config lives in a subdirectory
+
+### Changed
+
+- **Categorized directory structure** — resource directories restored to categorized layout: `search-management/indexes/`, `agentic-retrieval/knowledge-sources/` etc. The v0.5.0 flat layout (`search/indexes/`) was too shallow for clarity
+- `ResourceKind::directory_name()` now returns categorized paths
+
 ## [0.5.0] - 2026-02-13
 
 ### Added

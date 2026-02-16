@@ -17,6 +17,7 @@ use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fiel
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
+use hoist_core::state::Checksums;
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
@@ -62,12 +63,16 @@ pub async fn run(
         .map(|s| s.name.as_str())
         .unwrap_or("(none)");
 
+    // Load checksums from last pull for conflict detection
+    let checksums = Checksums::load_env(&project_root, &env.name).unwrap_or_default();
+
     // Collect resources to push
     let mut resources_to_push = Vec::new();
     let mut validation_errors = Vec::new();
     let mut recreate_candidates: Vec<(ResourceKind, String)> = Vec::new();
     let mut total_unchanged = 0;
     let mut change_details: HashMap<(ResourceKind, String), Vec<Change>> = HashMap::new();
+    let mut remote_conflicts: Vec<(ResourceKind, String)> = Vec::new();
 
     // --- Search resources ---
     if !search_kinds.is_empty() {
@@ -135,6 +140,8 @@ pub async fn run(
                         &mut recreate_candidates,
                         &mut total_unchanged,
                         &mut change_details,
+                        &checksums,
+                        &mut remote_conflicts,
                     )
                     .await;
 
@@ -152,6 +159,8 @@ pub async fn run(
                                 &mut recreate_candidates,
                                 &mut total_unchanged,
                                 &mut change_details,
+                                &checksums,
+                                &mut remote_conflicts,
                             )
                             .await;
                         }
@@ -208,6 +217,8 @@ pub async fn run(
                     &mut recreate_candidates,
                     &mut total_unchanged,
                     &mut change_details,
+                    &checksums,
+                    &mut remote_conflicts,
                 )
                 .await;
             }
@@ -316,6 +327,15 @@ pub async fn run(
                         let normalized_local = hoist_core::normalize::normalize(&payload, volatile);
                         let normalized_remote =
                             hoist_core::normalize::normalize(&remote_cleaned, volatile);
+
+                        // Check for remote conflict on agents
+                        let remote_agent_json = format_json(&normalized_remote);
+                        let remote_agent_checksum = Checksums::calculate(&remote_agent_json);
+                        if let Some(stored) = checksums.get(ResourceKind::Agent, &name) {
+                            if *stored != remote_agent_checksum {
+                                remote_conflicts.push((ResourceKind::Agent, name.clone()));
+                            }
+                        }
 
                         if normalized_local == normalized_remote {
                             total_unchanged += 1;
@@ -464,6 +484,34 @@ pub async fn run(
         );
     }
     println!();
+
+    // Show remote conflict warnings
+    if !remote_conflicts.is_empty() {
+        // Filter to only conflicts that are actually being pushed
+        let push_set: std::collections::HashSet<(ResourceKind, String)> = resources_to_push
+            .iter()
+            .map(|(k, n, _, _)| (*k, n.clone()))
+            .collect();
+        let active_conflicts: Vec<_> = remote_conflicts
+            .iter()
+            .filter(|(k, n)| push_set.contains(&(*k, n.clone())))
+            .collect();
+        if !active_conflicts.is_empty() {
+            println!(
+                "{} {} resource(s) changed on the server since your last pull:",
+                "WARNING:".yellow().bold(),
+                active_conflicts.len()
+            );
+            for (kind, name) in &active_conflicts {
+                println!("  {} {} '{}'", "!".yellow(), kind.display_name(), name);
+            }
+            println!(
+                "  Pushing will overwrite those remote changes. Run {} first to review.",
+                "hoist pull".bold()
+            );
+            println!();
+        }
+    }
 
     if dry_run {
         println!("Dry run - no changes made");
@@ -636,7 +684,8 @@ fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
     managed::build_managed_map(&ks_pairs)
 }
 
-/// Collect a single resource for push, checking immutability and diffing.
+/// Collect a single resource for push, checking immutability, diffing,
+/// and detecting remote conflicts (changes since last pull).
 #[allow(clippy::too_many_arguments)]
 async fn collect_push_resource(
     client: &AzureSearchClient,
@@ -648,14 +697,26 @@ async fn collect_push_resource(
     recreate_candidates: &mut Vec<(ResourceKind, String)>,
     total_unchanged: &mut usize,
     change_details: &mut HashMap<(ResourceKind, String), Vec<Change>>,
+    checksums: &Checksums,
+    remote_conflicts: &mut Vec<(ResourceKind, String)>,
 ) {
     let remote = client.get(kind, name).await;
 
     match remote {
         Ok(existing) => {
-            let volatile_fields = get_volatile_fields(kind);
+            // Check for remote conflict: has remote changed since last pull?
+            let pull_volatile = get_volatile_fields(kind);
+            let remote_for_pull = normalize(&existing, &pull_volatile);
+            let remote_pull_json = format_json(&remote_for_pull);
+            let remote_checksum = Checksums::calculate(&remote_pull_json);
+            if let Some(stored) = checksums.get(kind, name) {
+                if *stored != remote_checksum {
+                    remote_conflicts.push((kind, name.to_string()));
+                }
+            }
+
             let read_only_fields = get_read_only_fields(kind);
-            let push_strip: Vec<&str> = volatile_fields
+            let push_strip: Vec<&str> = pull_volatile
                 .iter()
                 .chain(read_only_fields.iter())
                 .copied()
@@ -1316,6 +1377,94 @@ mod tests {
         let def = json!({"name": "idx-1", "fields": []});
         // Indexes don't need credentials
         assert!(!needs_credentials(ResourceKind::Index, &def, false, false));
+    }
+
+    // --- Conflict detection tests ---
+
+    /// Verifies that checksum comparison detects remote changes since last pull.
+    #[test]
+    fn test_conflict_detection_remote_changed() {
+        use hoist_core::normalize::{format_json, normalize};
+        use hoist_core::state::Checksums;
+
+        // Simulate a pull that stored a checksum
+        let pulled_resource = json!({
+            "name": "my-index",
+            "fields": [{"name": "id", "type": "Edm.String", "key": true}]
+        });
+        let volatile = get_volatile_fields(ResourceKind::Index);
+        let normalized = normalize(&pulled_resource, &volatile);
+        let pull_json = format_json(&normalized);
+        let pull_checksum = Checksums::calculate(&pull_json);
+
+        let mut checksums = Checksums::default();
+        checksums.set(ResourceKind::Index, "my-index", pull_checksum);
+
+        // Remote has changed (new field added)
+        let remote_resource = json!({
+            "name": "my-index",
+            "fields": [
+                {"name": "id", "type": "Edm.String", "key": true},
+                {"name": "title", "type": "Edm.String"}
+            ]
+        });
+        let remote_normalized = normalize(&remote_resource, &volatile);
+        let remote_json = format_json(&remote_normalized);
+        let remote_checksum = Checksums::calculate(&remote_json);
+
+        // Stored checksum != remote checksum → conflict
+        let stored = checksums.get(ResourceKind::Index, "my-index").unwrap();
+        assert_ne!(
+            *stored, remote_checksum,
+            "Should detect remote change as conflict"
+        );
+    }
+
+    /// Verifies that unchanged remote resource matches stored checksum (no conflict).
+    #[test]
+    fn test_no_conflict_when_remote_unchanged() {
+        use hoist_core::normalize::{format_json, normalize};
+        use hoist_core::state::Checksums;
+
+        let resource = json!({
+            "name": "my-index",
+            "fields": [{"name": "id", "type": "Edm.String", "key": true}]
+        });
+        let volatile = get_volatile_fields(ResourceKind::Index);
+        let normalized = normalize(&resource, &volatile);
+        let json = format_json(&normalized);
+        let checksum = Checksums::calculate(&json);
+
+        let mut checksums = Checksums::default();
+        checksums.set(ResourceKind::Index, "my-index", checksum.clone());
+
+        // Remote returns same resource (with volatile fields)
+        let remote_with_volatile = json!({
+            "name": "my-index",
+            "fields": [{"name": "id", "type": "Edm.String", "key": true}],
+            "@odata.etag": "W/\"new-etag\"",
+            "@odata.context": "https://svc.search.windows.net/$metadata"
+        });
+        let remote_normalized = normalize(&remote_with_volatile, &volatile);
+        let remote_json = format_json(&remote_normalized);
+        let remote_checksum = Checksums::calculate(&remote_json);
+
+        let stored = checksums.get(ResourceKind::Index, "my-index").unwrap();
+        assert_eq!(
+            *stored, remote_checksum,
+            "Volatile fields should not cause false conflict"
+        );
+    }
+
+    /// Verifies that conflict detection works for resources not yet tracked (no stored checksum).
+    #[test]
+    fn test_no_conflict_when_no_stored_checksum() {
+        let checksums = Checksums::default();
+        // No stored checksum means we haven't pulled this resource yet —
+        // no conflict to detect (it's a new resource from our perspective)
+        assert!(checksums
+            .get(ResourceKind::Index, "unknown-index")
+            .is_none());
     }
 
     fn test_env() -> hoist_core::config::ResolvedEnvironment {

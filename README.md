@@ -74,33 +74,35 @@ During `init`, hoist discovers your Azure AI Search services and Microsoft Found
 After pulling, your project contains normalized, version-control-friendly representations of every resource:
 
 ```
-hoist.yaml                          # Project configuration
-.hoist/                             # Per-environment sync state (gitignored)
+hoist.yaml                                    # Project configuration
+.hoist/                                       # Per-environment sync state (gitignored)
 
 search/
-  indexes/
-    regulatory-index.json           # Index schema (fields, vector search, semantic config)
-  indexers/
-    regulatory-indexer.json         # Indexer schedule and mapping
-  data-sources/
-    regulatory-datasource.json      # Data source connection
-  skillsets/
-    regulatory-skillset.json        # AI enrichment pipeline
-  synonym-maps/
-    terms.json
-  knowledge-bases/
-    regulatory-kb.json              # KB description, retrieval instructions, linked sources
-  knowledge-sources/
-    regulatory/
-      regulatory.json               # KS definition, ingestion config, created resources
-      regulatory-index.json         # Managed index (auto-provisioned by Azure)
-      regulatory-indexer.json       # Managed indexer
-      regulatory-datasource.json    # Managed data source
-      regulatory-skillset.json      # Managed skillset
+  search-management/                          # Stable search resources
+    indexes/
+      regulatory-index.json                   # Index schema (fields, vector search, semantic config)
+    indexers/
+      regulatory-indexer.json                 # Indexer schedule and mapping
+    data-sources/
+      regulatory-datasource.json              # Data source connection
+    skillsets/
+      regulatory-skillset.json                # AI enrichment pipeline
+    synonym-maps/
+      terms.json
+  agentic-retrieval/                          # Preview agentic retrieval resources
+    knowledge-bases/
+      regulatory-kb.json                      # KB description, retrieval instructions, linked sources
+    knowledge-sources/
+      regulatory/
+        regulatory.json                       # KS definition, ingestion config, created resources
+        regulatory-index.json                 # Managed index (auto-provisioned by Azure)
+        regulatory-indexer.json               # Managed indexer
+        regulatory-datasource.json            # Managed data source
+        regulatory-skillset.json              # Managed skillset
 
 foundry/
   agents/
-    research-assistant.yaml         # Agent definition (single YAML file, matches portal)
+    research-assistant.yaml                   # Agent definition (single YAML file, matches portal)
 ```
 
 Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Foundry agents are stored as single YAML files matching the Foundry portal format.
