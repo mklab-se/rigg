@@ -110,16 +110,16 @@ pub fn managing_ks<'a>(map: &'a ManagedMap, kind: ResourceKind, name: &str) -> O
 
 /// Directory path relative to service root for a resource.
 ///
-/// - Managed resources go under `knowledge-sources/<ks-name>/`
-/// - Knowledge sources themselves go under `knowledge-sources/<ks-name>/`
-/// - Standalone resources use their default directory (e.g., `indexes`)
+/// - Managed resources go under `agentic-retrieval/knowledge-sources/<ks-name>/`
+/// - Knowledge sources themselves go under `agentic-retrieval/knowledge-sources/<ks-name>/`
+/// - Standalone resources use their default directory (e.g., `search-management/indexes`)
 pub fn resource_directory(kind: ResourceKind, name: &str, map: &ManagedMap) -> PathBuf {
     if kind == ResourceKind::KnowledgeSource {
         // KS itself goes in its own directory
-        PathBuf::from("knowledge-sources").join(name)
+        PathBuf::from("agentic-retrieval/knowledge-sources").join(name)
     } else if let Some(ks_name) = managing_ks(map, kind, name) {
         // Managed sub-resource goes in the parent KS directory
-        PathBuf::from("knowledge-sources").join(ks_name)
+        PathBuf::from("agentic-retrieval/knowledge-sources").join(ks_name)
     } else {
         // Standalone resource
         PathBuf::from(kind.directory_name())
@@ -350,7 +350,7 @@ mod tests {
 
         assert_eq!(
             resource_directory(ResourceKind::Index, "ks-1-index", &map),
-            PathBuf::from("knowledge-sources/ks-1")
+            PathBuf::from("agentic-retrieval/knowledge-sources/ks-1")
         );
     }
 
@@ -359,7 +359,7 @@ mod tests {
         let map = ManagedMap::new();
         assert_eq!(
             resource_directory(ResourceKind::Index, "my-index", &map),
-            PathBuf::from("indexes")
+            PathBuf::from("search-management/indexes")
         );
     }
 
@@ -368,7 +368,7 @@ mod tests {
         let map = ManagedMap::new();
         assert_eq!(
             resource_directory(ResourceKind::KnowledgeSource, "test-ks", &map),
-            PathBuf::from("knowledge-sources/test-ks")
+            PathBuf::from("agentic-retrieval/knowledge-sources/test-ks")
         );
     }
 

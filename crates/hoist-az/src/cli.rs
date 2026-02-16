@@ -175,6 +175,11 @@ pub enum Commands {
         /// Project template determining which resource types to include
         #[arg(long, value_enum, default_value = "agentic")]
         template: InitTemplate,
+
+        /// Subdirectory for resource files (search/, foundry/ dirs).
+        /// Config (hoist.yaml) and state (.hoist/) remain at the init directory.
+        #[arg(long)]
+        files_path: Option<String>,
     },
 
     /// View and modify project configuration (hoist.yaml)
@@ -449,7 +454,11 @@ impl Cli {
         let env_override = self.env.as_deref();
 
         match self.command {
-            Commands::Init { dir, template } => commands::init::run(dir, template).await,
+            Commands::Init {
+                dir,
+                template,
+                files_path,
+            } => commands::init::run(dir, template, files_path).await,
             Commands::Config(cmd) => commands::config::run(cmd).await,
             Commands::Env(cmd) => commands::env::run(cmd).await,
             Commands::Auth(cmd) => commands::auth::run(cmd).await,

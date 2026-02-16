@@ -36,7 +36,8 @@ pub async fn run(
     force: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     // Push has no default fallback — user must specify resource types
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, false);
@@ -80,7 +81,7 @@ pub async fn run(
             client.auth_method()
         );
 
-        let service_dir = env.search_service_dir(&project_root, search_svc);
+        let service_dir = env.search_service_dir(&files_root, search_svc);
 
         // Build managed map from local KS files
         let managed_map = build_local_managed_map(&service_dir);
@@ -93,7 +94,7 @@ pub async fn run(
             // but skip managed resources (they'll be pushed via KS cascade)
             if *kind == ResourceKind::KnowledgeSource {
                 // Read KS definitions from their subdirectories
-                let ks_base = service_dir.join("knowledge-sources");
+                let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
                 if !ks_base.exists() {
                     continue;
                 }
@@ -256,7 +257,7 @@ pub async fn run(
             );
 
             let agents_dir = env
-                .foundry_service_dir(&project_root, foundry_config)
+                .foundry_service_dir(&files_root, foundry_config)
                 .join("agents");
 
             if !agents_dir.exists() {
@@ -357,7 +358,7 @@ pub async fn run(
         for k in &all_kinds {
             let dir = if k.domain() == ServiceDomain::Search {
                 if let Some(svc) = recurse_search_svc {
-                    env.search_service_dir(&project_root, svc)
+                    env.search_service_dir(&files_root, svc)
                         .join(k.directory_name())
                 } else {
                     continue;
@@ -610,7 +611,7 @@ pub async fn run(
 
 /// Build a managed map from local KS files on disk.
 fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
-    let ks_base = service_dir.join("knowledge-sources");
+    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
     if !ks_base.exists() {
         return ManagedMap::new();
     }

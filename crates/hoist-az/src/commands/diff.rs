@@ -31,6 +31,7 @@ pub async fn run(
     compare_env: Option<&str>,
 ) -> Result<()> {
     let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     // Cross-environment diff: compare two remotes directly
     if let Some(right_env_name) = compare_env {
@@ -71,7 +72,7 @@ pub async fn run(
     if let (false, Some(search_svc)) = (search_kinds.is_empty(), primary_search_svc) {
         let client = AzureSearchClient::from_service_config(search_svc)?;
 
-        let service_dir = env.search_service_dir(&project_root, search_svc);
+        let service_dir = env.search_service_dir(&files_root, search_svc);
 
         // Build managed map from local KS files
         let managed_map = build_local_managed_map(&service_dir);
@@ -91,7 +92,7 @@ pub async fn run(
 
             if *kind == ResourceKind::KnowledgeSource {
                 // Read KS definitions from their subdirectories
-                let ks_base = service_dir.join("knowledge-sources");
+                let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
                 if !ks_base.exists() {
                     continue;
                 }
@@ -242,7 +243,7 @@ pub async fn run(
             );
 
             let agents_dir = env
-                .foundry_service_dir(&project_root, foundry_config)
+                .foundry_service_dir(&files_root, foundry_config)
                 .join("agents");
 
             // Fetch all remote agents for remote-only detection
@@ -761,7 +762,7 @@ async fn run_cross_env_diff(
 
 /// Build a managed map from local KS files on disk.
 fn build_local_managed_map(service_dir: &std::path::Path) -> ManagedMap {
-    let ks_base = service_dir.join("knowledge-sources");
+    let ks_base = service_dir.join("agentic-retrieval/knowledge-sources");
     if !ks_base.exists() {
         return ManagedMap::new();
     }

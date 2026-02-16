@@ -37,7 +37,8 @@ pub async fn run(
     force: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
@@ -55,6 +56,7 @@ pub async fn run(
 
     execute_pull(
         &project_root,
+        &files_root,
         &env,
         &selection,
         filter.as_deref(),
@@ -177,9 +179,13 @@ async fn expand_pull_selection(
 }
 
 /// Core pull logic, callable from both `pull` and `init` commands.
+///
+/// `project_root` is where state files (.hoist/) live.
+/// `files_root` is where resource files (search/, foundry/) live.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_pull(
     project_root: &Path,
+    files_root: &Path,
     env: &ResolvedEnvironment,
     selection: &ResourceSelection,
     filter: Option<&str>,
@@ -289,7 +295,7 @@ pub async fn execute_pull(
             fetched_results.push((ResourceKind::KnowledgeSource, ks_result));
         }
 
-        let service_dir = env.search_service_dir(project_root, search_svc);
+        let service_dir = env.search_service_dir(files_root, search_svc);
 
         discover_search_resources(
             &service_dir,
@@ -308,7 +314,7 @@ pub async fn execute_pull(
     // --- Foundry agents ---
     if !foundry_kinds.is_empty() && env.has_foundry() {
         for foundry_config in &env.foundry {
-            let agents_dir = foundry_agents_dir(env, project_root, foundry_config);
+            let agents_dir = foundry_agents_dir(env, files_root, foundry_config);
             discover_foundry_agents(
                 &agents_dir,
                 foundry_config,
@@ -391,12 +397,12 @@ pub async fn execute_pull(
     // Determine search service dir for writing files
     let write_service_dir = env
         .primary_search_service()
-        .map(|svc| env.search_service_dir(project_root, svc));
+        .map(|svc| env.search_service_dir(files_root, svc));
 
     for entry in &all_upserts {
         if entry.kind == ResourceKind::Agent {
             // Agent: write YAML file
-            write_agent_yaml(env, project_root, entry)?;
+            write_agent_yaml(env, files_root, entry)?;
         } else {
             // Search resource: write to managed-aware path
             let service_dir = write_service_dir
@@ -595,7 +601,7 @@ fn discover_search_resources(
         // Detect local files whose resources were deleted on the server
         // For knowledge sources, scan subdirectories
         if *kind == ResourceKind::KnowledgeSource {
-            let ks_base_dir = service_dir.join("knowledge-sources");
+            let ks_base_dir = service_dir.join("agentic-retrieval/knowledge-sources");
             if ks_base_dir.exists() {
                 for entry in std::fs::read_dir(&ks_base_dir)? {
                     let entry = entry?;
@@ -778,7 +784,7 @@ async fn discover_foundry_agents(
 /// Write an agent YAML file to disk.
 fn write_agent_yaml(
     env: &ResolvedEnvironment,
-    project_root: &Path,
+    files_root: &Path,
     entry: &DiscoveredResource,
 ) -> Result<()> {
     // Use the first configured Foundry service for directory path
@@ -787,7 +793,7 @@ fn write_agent_yaml(
         .first()
         .ok_or_else(|| anyhow::anyhow!("No Foundry service configured"))?;
 
-    let agents_dir = foundry_agents_dir(env, project_root, foundry_config);
+    let agents_dir = foundry_agents_dir(env, files_root, foundry_config);
     std::fs::create_dir_all(&agents_dir)?;
 
     let yaml_content = agent_to_yaml(&entry.raw_resource);
@@ -808,10 +814,10 @@ fn write_agent_yaml(
 /// Get the directory path for Foundry agents.
 fn foundry_agents_dir(
     env: &ResolvedEnvironment,
-    project_root: &Path,
+    files_root: &Path,
     foundry_config: &FoundryServiceConfig,
 ) -> std::path::PathBuf {
-    env.foundry_service_dir(project_root, foundry_config)
+    env.foundry_service_dir(files_root, foundry_config)
         .join("agents")
 }
 

@@ -108,6 +108,11 @@ pub struct ProjectConfig {
     /// Project description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Relative path for resource files (search/, foundry/ dirs).
+    /// When set, resource directories are created under project_root/files_path/
+    /// instead of directly under project_root/.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_path: Option<String>,
 }
 
 /// Sync behavior settings
@@ -181,6 +186,17 @@ impl ResolvedEnvironment {
 impl Config {
     /// Default configuration filename
     pub const FILENAME: &'static str = "hoist.yaml";
+
+    /// Root directory for resource files (search/, foundry/).
+    ///
+    /// When `project.files_path` is set, returns `project_root/files_path`.
+    /// Otherwise returns `project_root` itself.
+    pub fn files_root(&self, project_root: &Path) -> PathBuf {
+        match &self.project.files_path {
+            Some(p) => project_root.join(p),
+            None => project_root.to_path_buf(),
+        }
+    }
 
     /// Load configuration from a directory
     pub fn load(dir: &Path) -> Result<Self, ConfigError> {
@@ -393,6 +409,7 @@ mod tests {
             project: ProjectConfig {
                 name: Some("Test".to_string()),
                 description: None,
+                files_path: None,
             },
             sync: SyncConfig::default(),
             environments: BTreeMap::from([(
@@ -980,5 +997,52 @@ environments:
     #[test]
     fn test_config_filename_is_yaml() {
         assert_eq!(Config::FILENAME, "hoist.yaml");
+    }
+
+    #[test]
+    fn test_files_root_without_files_path() {
+        let config = make_config_search("svc");
+        let root = Path::new("/projects/myapp");
+        assert_eq!(config.files_root(root), PathBuf::from("/projects/myapp"));
+    }
+
+    #[test]
+    fn test_files_root_with_files_path() {
+        let mut config = make_config_search("svc");
+        config.project.files_path = Some("hoist".to_string());
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            config.files_root(root),
+            PathBuf::from("/projects/myapp/hoist")
+        );
+    }
+
+    #[test]
+    fn test_files_root_nested_path() {
+        let mut config = make_config_search("svc");
+        config.project.files_path = Some("infra/hoist".to_string());
+        let root = Path::new("/projects/myapp");
+        assert_eq!(
+            config.files_root(root),
+            PathBuf::from("/projects/myapp/infra/hoist")
+        );
+    }
+
+    #[test]
+    fn test_files_path_yaml_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = make_config_search("svc");
+        config.project.files_path = Some("hoist".to_string());
+        config.save(dir.path()).unwrap();
+
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.project.files_path, Some("hoist".to_string()));
+    }
+
+    #[test]
+    fn test_files_path_omitted_when_none() {
+        let config = make_config_search("svc");
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(!yaml.contains("files_path"));
     }
 }

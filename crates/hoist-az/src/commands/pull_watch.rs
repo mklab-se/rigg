@@ -17,7 +17,8 @@ pub async fn run(
     interval: u64,
     env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
@@ -42,6 +43,7 @@ pub async fn run(
 
         match execute_pull(
             &project_root,
+            &files_root,
             &env,
             &selection,
             filter.as_deref(),

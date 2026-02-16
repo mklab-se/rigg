@@ -15,7 +15,8 @@ pub async fn run(
     output: OutputFormat,
     env_override: Option<&str>,
 ) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     if matches!(output, OutputFormat::Text) {
         println!("Validating project at {}", project_root.display());
@@ -43,7 +44,7 @@ pub async fn run(
 
         let resource_dir = match primary_search {
             Some(svc) => env
-                .search_service_dir(&project_root, svc)
+                .search_service_dir(&files_root, svc)
                 .join(kind.directory_name()),
             None => continue,
         };
@@ -169,7 +170,7 @@ pub async fn run(
         let mut agent_resources = Vec::new();
         for foundry_config in &env.foundry {
             let agents_dir = env
-                .foundry_service_dir(&project_root, foundry_config)
+                .foundry_service_dir(&files_root, foundry_config)
                 .join("agents");
             if !agents_dir.exists() {
                 continue;

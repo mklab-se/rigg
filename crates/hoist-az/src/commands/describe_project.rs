@@ -136,7 +136,8 @@ struct ProjectSummary {
 }
 
 pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     let include_preview = env.sync.include_preview;
 
@@ -147,7 +148,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
     };
 
     let mut summary = ProjectSummary {
-        project_name: _config
+        project_name: config
             .project
             .name
             .clone()
@@ -163,7 +164,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
 
     // Scan search resources from each configured search service
     for search_svc in &env.search {
-        let search_base = env.search_service_dir(&project_root, search_svc);
+        let search_base = env.search_service_dir(&files_root, search_svc);
 
         for kind in &kinds {
             if kind.domain() != hoist_core::service::ServiceDomain::Search {
@@ -232,7 +233,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
     if env.has_foundry() {
         for foundry_config in &env.foundry {
             let agents_dir = env
-                .foundry_service_dir(&project_root, foundry_config)
+                .foundry_service_dir(&files_root, foundry_config)
                 .join("agents");
             if agents_dir.exists() {
                 if let Ok(entries) = std::fs::read_dir(&agents_dir) {

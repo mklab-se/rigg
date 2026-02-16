@@ -22,7 +22,11 @@ pub(crate) struct DiscoveryContext {
     pub(crate) subscription_id: String,
 }
 
-pub async fn run(dir: Option<PathBuf>, template: InitTemplate) -> Result<()> {
+pub async fn run(
+    dir: Option<PathBuf>,
+    template: InitTemplate,
+    files_path: Option<String>,
+) -> Result<()> {
     let project_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap());
     let config_path = project_dir.join(Config::FILENAME);
 
@@ -31,12 +35,16 @@ pub async fn run(dir: Option<PathBuf>, template: InitTemplate) -> Result<()> {
         run_additive(&project_dir).await
     } else {
         // Fresh init: full setup from scratch
-        run_fresh(project_dir, template).await
+        run_fresh(project_dir, template, files_path).await
     }
 }
 
 /// Fresh initialization of a new hoist project
-async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
+async fn run_fresh(
+    project_dir: PathBuf,
+    template: InitTemplate,
+    files_path: Option<String>,
+) -> Result<()> {
     crate::banner::print_banner();
     println!();
     println!("Initializing hoist project in {}", project_dir.display());
@@ -85,6 +93,7 @@ async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
                     .to_string(),
             ),
             description: None,
+            files_path: files_path.clone(),
         },
         sync: SyncConfig {
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
@@ -107,11 +116,17 @@ async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
     // Create directory structure
     std::fs::create_dir_all(&project_dir)?;
 
-    // Save configuration
+    // Compute files root (where resource dirs go)
+    let files_dir = config.files_root(&project_dir);
+    if files_dir != project_dir {
+        std::fs::create_dir_all(&files_dir)?;
+    }
+
+    // Save configuration (always in project_dir)
     config.save(&project_dir)?;
     info!("Created {}", Config::FILENAME);
 
-    // Create .hoist state directory (per-environment)
+    // Create .hoist state directory (per-environment, always in project_dir)
     let state_dir = project_dir.join(".hoist").join(&env_name);
     std::fs::create_dir_all(&state_dir)?;
 
@@ -141,9 +156,9 @@ async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
     })
     .collect();
 
-    // Create search resource directories
+    // Create search resource directories (under files_dir)
     for search_svc in &env.search {
-        let search_base = env.search_service_dir(&project_dir, search_svc);
+        let search_base = env.search_service_dir(&files_dir, search_svc);
         for kind in &resource_kinds {
             if kind.domain() == ServiceDomain::Search {
                 let dir = search_base.join(kind.directory_name());
@@ -152,14 +167,14 @@ async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
         }
     }
 
-    // Create foundry resource directories
+    // Create foundry resource directories (under files_dir)
     for foundry_svc in &env.foundry {
-        let foundry_base = env.foundry_service_dir(&project_dir, foundry_svc);
+        let foundry_base = env.foundry_service_dir(&files_dir, foundry_svc);
         let agents_dir = foundry_base.join("agents");
         std::fs::create_dir_all(&agents_dir)?;
     }
 
-    // Create README.md if it doesn't already exist
+    // Create README.md if it doesn't already exist (in project_dir)
     let project_name = config.project.name.as_deref().unwrap_or("hoist project");
     create_readme_if_missing(&project_dir, &env, project_name, &resource_kinds)?;
 
@@ -176,6 +191,7 @@ async fn run_fresh(project_dir: PathBuf, template: InitTemplate) -> Result<()> {
         };
         crate::commands::pull::execute_pull(
             &project_dir,
+            &files_dir,
             &env,
             &selection,
             None,  // no filter
@@ -211,6 +227,7 @@ async fn run_additive(project_dir: &Path) -> Result<()> {
         .default_env_name()
         .ok_or_else(|| anyhow::anyhow!("No default environment set"))?
         .to_string();
+    let files_dir = config.files_root(project_dir);
     let env_config = config
         .environments
         .get_mut(&env_name)
@@ -223,7 +240,7 @@ async fn run_additive(project_dir: &Path) -> Result<()> {
             .resolve_env(Some(&env_name))
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         for svc in &new_search {
-            let search_base = resolved.search_service_dir(project_dir, svc);
+            let search_base = resolved.search_service_dir(&files_dir, svc);
             for kind in ResourceKind::search_kinds() {
                 let dir = search_base.join(kind.directory_name());
                 std::fs::create_dir_all(&dir)?;
@@ -248,7 +265,7 @@ async fn run_additive(project_dir: &Path) -> Result<()> {
             .resolve_env(Some(&env_name))
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         for svc in &new_foundry {
-            let foundry_base = resolved.foundry_service_dir(project_dir, svc);
+            let foundry_base = resolved.foundry_service_dir(&files_dir, svc);
             std::fs::create_dir_all(foundry_base.join("agents"))?;
         }
         let env_config = config.environments.get_mut(&env_name).unwrap();
@@ -963,7 +980,13 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         .resolve_env(None)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Create .hoist state directory
+    // Compute files root (where resource dirs go)
+    let files_dir = config.files_root(project_dir);
+    if files_dir != project_dir.to_path_buf() {
+        std::fs::create_dir_all(&files_dir)?;
+    }
+
+    // Create .hoist state directory (always in project_dir)
     let hoist_dir = project_dir.join(".hoist");
     let state_dir = hoist_dir.join(&env.name);
     std::fs::create_dir_all(&state_dir)?;
@@ -983,9 +1006,9 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         InitTemplate::Agentic => ResourceKind::all().to_vec(),
     };
 
-    // Create search directories
+    // Create search directories (under files_dir)
     for search_svc in &env.search {
-        let search_base = env.search_service_dir(project_dir, search_svc);
+        let search_base = env.search_service_dir(&files_dir, search_svc);
         for kind in &resource_kinds {
             if kind.domain() == ServiceDomain::Search {
                 let dir = search_base.join(kind.directory_name());
@@ -994,9 +1017,9 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
         }
     }
 
-    // Create foundry directories
+    // Create foundry directories (under files_dir)
     for foundry_svc in &env.foundry {
-        let foundry_base = env.foundry_service_dir(project_dir, foundry_svc);
+        let foundry_base = env.foundry_service_dir(&files_dir, foundry_svc);
         std::fs::create_dir_all(foundry_base.join("agents"))?;
     }
 
@@ -1017,6 +1040,7 @@ mod tests {
             project: ProjectConfig {
                 name: Some("test-project".to_string()),
                 description: None,
+                files_path: None,
             },
             sync: SyncConfig {
                 include_preview: false,
@@ -1050,11 +1074,11 @@ mod tests {
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
         let search_base = project_dir.join("search");
-        assert!(search_base.join("indexes").is_dir());
-        assert!(search_base.join("data-sources").is_dir());
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
         // Should NOT have indexers, skillsets, synonym-maps
-        assert!(!search_base.join("indexers").exists());
-        assert!(!search_base.join("skillsets").exists());
+        assert!(!search_base.join("search-management/indexers").exists());
+        assert!(!search_base.join("search-management/skillsets").exists());
     }
 
     #[test]
@@ -1066,14 +1090,16 @@ mod tests {
         create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
 
         let search_base = project_dir.join("search");
-        assert!(search_base.join("indexes").is_dir());
-        assert!(search_base.join("indexers").is_dir());
-        assert!(search_base.join("data-sources").is_dir());
-        assert!(search_base.join("skillsets").is_dir());
-        assert!(search_base.join("synonym-maps").is_dir());
-        assert!(search_base.join("aliases").is_dir());
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/indexers").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
+        assert!(search_base.join("search-management/skillsets").is_dir());
+        assert!(search_base.join("search-management/synonym-maps").is_dir());
+        assert!(search_base.join("search-management/aliases").is_dir());
         // Should NOT have preview dirs
-        assert!(!search_base.join("knowledge-bases").exists());
+        assert!(!search_base
+            .join("agentic-retrieval/knowledge-bases")
+            .exists());
     }
 
     #[test]
@@ -1085,9 +1111,13 @@ mod tests {
         create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
 
         let search_base = project_dir.join("search");
-        assert!(search_base.join("indexes").is_dir());
-        assert!(search_base.join("knowledge-bases").is_dir());
-        assert!(search_base.join("knowledge-sources").is_dir());
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base
+            .join("agentic-retrieval/knowledge-bases")
+            .is_dir());
+        assert!(search_base
+            .join("agentic-retrieval/knowledge-sources")
+            .is_dir());
     }
 
     #[test]
@@ -1174,8 +1204,8 @@ mod tests {
 
         // Resources should be under search/
         let search_base = project_dir.join("search");
-        assert!(search_base.join("indexes").is_dir());
-        assert!(search_base.join("data-sources").is_dir());
+        assert!(search_base.join("search-management/indexes").is_dir());
+        assert!(search_base.join("search-management/data-sources").is_dir());
     }
 
     #[test]
@@ -1229,6 +1259,7 @@ mod tests {
             project: ProjectConfig {
                 name: Some("test-project".to_string()),
                 description: None,
+                files_path: None,
             },
             sync: SyncConfig {
                 include_preview: false,
@@ -1315,7 +1346,9 @@ mod tests {
         let loaded = Config::load(project_dir).unwrap();
         let env = loaded.resolve_env(None).unwrap();
         assert_eq!(env.search[0].name, "svc-1");
-        assert!(project_dir.join("search/indexes").is_dir());
+        assert!(project_dir
+            .join("search/search-management/indexes")
+            .is_dir());
     }
 
     #[test]
@@ -1379,5 +1412,97 @@ mod tests {
             configs[0].endpoint.as_deref(),
             Some("https://old-endpoint.services.ai.azure.com")
         );
+    }
+
+    #[test]
+    fn test_files_path_creates_dirs_under_subdir() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let mut config = make_config("test-service");
+        config.project.files_path = Some("hoist".to_string());
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Config should be at project root
+        assert!(project_dir.join(Config::FILENAME).exists());
+        // State should be at project root
+        assert!(project_dir.join(".hoist/.gitignore").exists());
+        // Resource dirs should be under hoist/
+        assert!(project_dir
+            .join("hoist/search/search-management/indexes")
+            .is_dir());
+        assert!(project_dir
+            .join("hoist/search/search-management/data-sources")
+            .is_dir());
+        // Resource dirs should NOT be at project root
+        assert!(!project_dir.join("search").exists());
+    }
+
+    #[test]
+    fn test_files_path_config_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let mut config = make_config("test-service");
+        config.project.files_path = Some("hoist".to_string());
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let loaded = Config::load(project_dir).unwrap();
+        assert_eq!(loaded.project.files_path, Some("hoist".to_string()));
+    }
+
+    #[test]
+    fn test_files_path_none_uses_project_dir() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service");
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Resource dirs should be at project root (no files_path)
+        assert!(project_dir
+            .join("search/search-management/indexes")
+            .is_dir());
+    }
+
+    #[test]
+    fn test_files_path_with_foundry() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = Config {
+            project: ProjectConfig {
+                name: Some("test-project".to_string()),
+                description: None,
+                files_path: Some("resources".to_string()),
+            },
+            sync: SyncConfig {
+                include_preview: false,
+                resources: Vec::new(),
+            },
+            environments: std::collections::BTreeMap::from([(
+                "prod".to_string(),
+                EnvironmentConfig {
+                    default: true,
+                    description: None,
+                    search: vec![],
+                    foundry: vec![FoundryServiceConfig {
+                        name: "my-ai-svc".to_string(),
+                        project: "my-project".to_string(),
+                        label: None,
+                        api_version: "2025-05-15-preview".to_string(),
+                        endpoint: None,
+                        subscription: None,
+                        resource_group: None,
+                    }],
+                },
+            )]),
+        };
+
+        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
+
+        // Foundry agents dir should be under resources/
+        assert!(project_dir.join("resources/foundry/agents").is_dir());
+        // Should NOT be at project root
+        assert!(!project_dir.join("foundry").exists());
     }
 }

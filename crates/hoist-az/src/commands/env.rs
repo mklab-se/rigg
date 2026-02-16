@@ -184,10 +184,11 @@ async fn add(name: &str) -> Result<()> {
     let env = config
         .resolve_env(Some(name))
         .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let files_root = config.files_root(&project_root);
 
-    // Create search directories
+    // Create search directories (under files_root)
     for search_svc in &env.search {
-        let search_base = env.search_service_dir(&project_root, search_svc);
+        let search_base = env.search_service_dir(&files_root, search_svc);
         for kind in ResourceKind::search_kinds() {
             if kind.domain() == ServiceDomain::Search {
                 let dir = search_base.join(kind.directory_name());
@@ -196,13 +197,13 @@ async fn add(name: &str) -> Result<()> {
         }
     }
 
-    // Create foundry directories
+    // Create foundry directories (under files_root)
     for foundry_svc in &env.foundry {
-        let foundry_base = env.foundry_service_dir(&project_root, foundry_svc);
+        let foundry_base = env.foundry_service_dir(&files_root, foundry_svc);
         std::fs::create_dir_all(foundry_base.join("agents"))?;
     }
 
-    // Create per-env state directory
+    // Create per-env state directory (always in project_root)
     let state_dir = project_root.join(".hoist").join(name);
     std::fs::create_dir_all(&state_dir)?;
 

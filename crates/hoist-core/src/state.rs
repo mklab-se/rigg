@@ -242,13 +242,13 @@ mod tests {
     #[test]
     fn test_resource_key_format() {
         let key = LocalState::resource_key(ResourceKind::Index, "my-index");
-        assert_eq!(key, "indexes/my-index");
+        assert_eq!(key, "search-management/indexes/my-index");
     }
 
     #[test]
     fn test_resource_key_datasource() {
         let key = LocalState::resource_key(ResourceKind::DataSource, "ds1");
-        assert_eq!(key, "data-sources/ds1");
+        assert_eq!(key, "search-management/data-sources/ds1");
     }
 
     #[test]
@@ -404,14 +404,14 @@ mod tests {
     fn test_resource_key_managed_standalone() {
         let map = ManagedMap::new();
         let key = LocalState::resource_key_managed(ResourceKind::Index, "my-index", &map);
-        assert_eq!(key, "indexes/my-index");
+        assert_eq!(key, "search-management/indexes/my-index");
     }
 
     #[test]
     fn test_resource_key_managed_ks() {
         let map = ManagedMap::new();
         let key = LocalState::resource_key_managed(ResourceKind::KnowledgeSource, "test-ks", &map);
-        assert_eq!(key, "knowledge-sources/test-ks/test-ks");
+        assert_eq!(key, "agentic-retrieval/knowledge-sources/test-ks/test-ks");
     }
 
     #[test]
@@ -422,7 +422,10 @@ mod tests {
             "test-ks".to_string(),
         );
         let key = LocalState::resource_key_managed(ResourceKind::Index, "test-ks-index", &map);
-        assert_eq!(key, "knowledge-sources/test-ks/test-ks-index");
+        assert_eq!(
+            key,
+            "agentic-retrieval/knowledge-sources/test-ks/test-ks-index"
+        );
     }
 
     #[test]

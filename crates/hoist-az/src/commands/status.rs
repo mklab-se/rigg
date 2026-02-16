@@ -54,7 +54,8 @@ fn count_agent_files(dir: &std::path::Path) -> usize {
 }
 
 pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()> {
-    let (project_root, _config, env) = load_config_and_env(env_override)?;
+    let (project_root, config, env) = load_config_and_env(env_override)?;
+    let files_root = config.files_root(&project_root);
 
     // Load state
     let state = LocalState::load_env(&project_root, &env.name)?;
@@ -64,7 +65,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
     let mut total = 0;
 
     for search_svc in &env.search {
-        let search_base = env.search_service_dir(&project_root, search_svc);
+        let search_base = env.search_service_dir(&files_root, search_svc);
 
         for kind in ResourceKind::stable() {
             let dir = search_base.join(kind.directory_name());
@@ -102,7 +103,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
         let mut agent_total = 0;
         for foundry_config in &env.foundry {
             let agents_dir = env
-                .foundry_service_dir(&project_root, foundry_config)
+                .foundry_service_dir(&files_root, foundry_config)
                 .join("agents");
             agent_total += count_agent_files(&agents_dir);
         }
@@ -172,7 +173,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
             println!("----------------");
 
             for search_svc in &env.search {
-                let search_base = env.search_service_dir(&project_root, search_svc);
+                let search_base = env.search_service_dir(&files_root, search_svc);
                 println!("  Search service: {}", search_svc.name);
 
                 for kind in ResourceKind::stable() {
