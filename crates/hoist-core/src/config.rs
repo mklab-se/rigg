@@ -223,7 +223,11 @@ impl Config {
 
     /// Save configuration to a specific file path
     pub fn save_to(&self, path: &Path) -> Result<(), ConfigError> {
-        let content = serde_yaml::to_string(self)?;
+        let yaml = serde_yaml::to_string(self)?;
+        let content = format!(
+            "# Hoist configuration — https://github.com/mklab-se/hoist\n{}",
+            yaml
+        );
         std::fs::write(path, content)?;
         Ok(())
     }

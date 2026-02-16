@@ -37,6 +37,7 @@ pub async fn run(
     println!();
 
     let interval_duration = Duration::from_secs(interval);
+    let mut consecutive_failures: u32 = 0;
 
     loop {
         let timestamp = chrono::Local::now().format("%H:%M:%S");
@@ -52,9 +53,18 @@ pub async fn run(
         )
         .await
         {
-            Ok(()) => {}
+            Ok(()) => {
+                consecutive_failures = 0;
+            }
             Err(e) => {
-                println!("[{}] Error: {}", timestamp, e);
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                let backoff_secs = std::cmp::min(interval * 2u64.pow(consecutive_failures), 300);
+                println!(
+                    "[{}] Error: {}. Backing off for {}s ({} consecutive failure(s))",
+                    timestamp, e, backoff_secs, consecutive_failures
+                );
+                sleep(Duration::from_secs(backoff_secs)).await;
+                continue;
             }
         }
 

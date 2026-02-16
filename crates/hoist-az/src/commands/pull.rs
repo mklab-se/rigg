@@ -16,7 +16,7 @@ use hoist_core::config::{FoundryServiceConfig, ResolvedEnvironment};
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::agent::{agent_to_yaml, agent_volatile_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
-use hoist_core::resources::ResourceKind;
+use hoist_core::resources::{validate_resource_name, ResourceKind};
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
 use hoist_diff::Change;
@@ -546,6 +546,8 @@ fn discover_search_resources(
                 .and_then(|n| n.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Resource missing name field"))?;
 
+            validate_resource_name(name)?;
+
             // Route file to correct directory based on managed map
             let resource_dir =
                 service_dir.join(managed::resource_directory(*kind, name, managed_map));
@@ -720,6 +722,8 @@ async fn discover_foundry_agents(
             .get("name")
             .and_then(|n| n.as_str())
             .ok_or_else(|| anyhow::anyhow!("Agent missing name field"))?;
+
+        validate_resource_name(name)?;
 
         // Strip volatile fields and create a canonical representation for checksumming
         let volatile = agent_volatile_fields();

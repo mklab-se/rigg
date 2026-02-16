@@ -176,6 +176,35 @@ pub trait Resource: Serialize + for<'de> Deserialize<'de> + Clone {
     }
 }
 
+/// Validate a resource name returned from Azure API responses.
+///
+/// Rejects:
+/// - Empty names
+/// - Names longer than 260 characters
+/// - Names containing `/`, `\`, or null bytes
+/// - Names that are exactly `.` or `..`
+pub fn validate_resource_name(name: &str) -> Result<(), anyhow::Error> {
+    if name.is_empty() {
+        anyhow::bail!("Resource name must not be empty");
+    }
+    if name.len() > 260 {
+        anyhow::bail!(
+            "Resource name must not exceed 260 characters (got {})",
+            name.len()
+        );
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        anyhow::bail!(
+            "Resource name must not contain '/', '\\', or null bytes: '{}'",
+            name
+        );
+    }
+    if name == "." || name == ".." {
+        anyhow::bail!("Resource name must not be '.' or '..'");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +413,63 @@ mod tests {
         for kind in ResourceKind::all() {
             assert!(combined.contains(kind));
         }
+    }
+
+    #[test]
+    fn test_validate_resource_name_valid() {
+        assert!(validate_resource_name("my-index").is_ok());
+        assert!(validate_resource_name("my_index_123").is_ok());
+        assert!(validate_resource_name("a").is_ok());
+        assert!(validate_resource_name("index.v2").is_ok());
+        assert!(validate_resource_name("...").is_ok());
+    }
+
+    #[test]
+    fn test_validate_resource_name_empty() {
+        let err = validate_resource_name("").unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_too_long() {
+        let long_name = "a".repeat(261);
+        let err = validate_resource_name(&long_name).unwrap_err();
+        assert!(err.to_string().contains("260"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_exactly_260_ok() {
+        let name = "a".repeat(260);
+        assert!(validate_resource_name(&name).is_ok());
+    }
+
+    #[test]
+    fn test_validate_resource_name_forward_slash() {
+        let err = validate_resource_name("foo/bar").unwrap_err();
+        assert!(err.to_string().contains("/"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_backslash() {
+        let err = validate_resource_name("foo\\bar").unwrap_err();
+        assert!(err.to_string().contains("\\"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_null_byte() {
+        let err = validate_resource_name("foo\0bar").unwrap_err();
+        assert!(err.to_string().contains("null"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_dot() {
+        let err = validate_resource_name(".").unwrap_err();
+        assert!(err.to_string().contains("'.'"));
+    }
+
+    #[test]
+    fn test_validate_resource_name_dotdot() {
+        let err = validate_resource_name("..").unwrap_err();
+        assert!(err.to_string().contains("'..'"));
     }
 }

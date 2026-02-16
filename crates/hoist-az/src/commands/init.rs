@@ -178,16 +178,60 @@ async fn run_fresh(
     let project_name = config.project.name.as_deref().unwrap_or("hoist project");
     create_readme_if_missing(&project_dir, &env, project_name, &resource_kinds)?;
 
+    // Create README.md in files-path directory if separate from project root
+    if files_dir != project_dir {
+        create_files_path_readme_if_missing(&files_dir)?;
+    }
+
     println!();
     println!("Project initialized successfully!");
     println!();
 
-    // Build pull prompt mentioning all configured services
-    let pull_prompt = build_pull_prompt(&env);
-    if crate::commands::confirm::prompt_yes_default(&pull_prompt)? {
+    // Ask separately for each service type
+    let mut pull_kinds: Vec<ResourceKind> = Vec::new();
+
+    if env.has_search() {
+        let search_name = env
+            .search
+            .first()
+            .map(|s| s.name.as_str())
+            .unwrap_or("search");
+        let prompt = format!(
+            "Pull existing resources from Azure AI Search service '{}'?",
+            search_name
+        );
+        if crate::commands::confirm::prompt_yes_default(&prompt)? {
+            pull_kinds.extend(
+                resource_kinds
+                    .iter()
+                    .filter(|k| k.domain() == ServiceDomain::Search),
+            );
+        }
+    }
+
+    if env.has_foundry() {
+        let foundry_name = env
+            .foundry
+            .first()
+            .map(|s| format!("{}/{}", s.name, s.project))
+            .unwrap_or_else(|| "foundry".to_string());
+        let prompt = format!(
+            "Pull existing resources from Microsoft Foundry project '{}'?",
+            foundry_name
+        );
+        if crate::commands::confirm::prompt_yes_default(&prompt)? {
+            pull_kinds.extend(
+                resource_kinds
+                    .iter()
+                    .filter(|k| k.domain() == ServiceDomain::Foundry),
+            );
+        }
+    }
+
+    if !pull_kinds.is_empty() {
         println!();
         let selection = crate::commands::common::ResourceSelection {
-            selections: resource_kinds.iter().map(|k| (*k, None)).collect(),
+            selections: pull_kinds.iter().map(|k| (*k, None)).collect(),
         };
         crate::commands::pull::execute_pull(
             &project_dir,
@@ -647,31 +691,6 @@ fn prompt_service_name() -> Result<String> {
     Ok(name)
 }
 
-/// Build pull prompt mentioning all configured services
-fn build_pull_prompt(env: &hoist_core::config::ResolvedEnvironment) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(search) = env.search.first() {
-        parts.push(search.name.clone());
-    }
-
-    if !env.foundry.is_empty() {
-        if parts.is_empty() {
-            parts.push("Foundry agents".to_string());
-        } else {
-            parts.push("Foundry agents".to_string());
-            let search_part = parts.remove(0);
-            return format!(
-                "Pull existing resources from {} (and {})?",
-                search_part,
-                parts.join(", ")
-            );
-        }
-    }
-
-    format!("Pull existing resources from {}?", parts.join(", "))
-}
-
 /// Create a README.md in the project root if one doesn't already exist.
 /// Includes project overview, CLI quick start, directory layout, JSON conventions,
 /// and resource type reference for all configured service domains.
@@ -824,6 +843,43 @@ Each `.json` file represents one resource. The files follow these conventions:
 
     std::fs::write(&readme_path, readme)?;
     info!("Created README.md");
+
+    Ok(())
+}
+
+/// Create a README.md in the files-path directory explaining what the files are.
+/// Only created if one doesn't already exist.
+fn create_files_path_readme_if_missing(files_dir: &Path) -> Result<()> {
+    let readme_path = files_dir.join("README.md");
+    if readme_path.exists() {
+        return Ok(());
+    }
+
+    let readme = r#"# Hoist Resource Configuration
+
+This directory contains Azure AI Search and Microsoft Foundry resource definitions managed by [Hoist](https://github.com/mklab-se/hoist).
+
+These files are pulled from and pushed to Azure services using the `hoist` CLI tool. They enable version-controlled, configuration-as-code management of search indexes, indexers, skillsets, and other resources.
+
+## Directory Structure
+
+- `search/` — Azure AI Search resources (indexes, indexers, data sources, skillsets, etc.)
+- `foundry/` — Microsoft Foundry resources (agents)
+
+## Getting Started
+
+```sh
+hoist pull   # Pull latest resource definitions from Azure
+hoist push   # Push local changes to Azure
+hoist diff   # Compare local vs remote
+hoist status # Show sync status
+```
+
+For more information, see the [Hoist documentation](https://github.com/mklab-se/hoist).
+"#;
+
+    std::fs::write(&readme_path, readme)?;
+    info!("Created README.md in files directory");
 
     Ok(())
 }
@@ -1025,6 +1081,11 @@ fn create_project_dirs(project_dir: &Path, config: &Config, template: InitTempla
 
     let project_name = config.project.name.as_deref().unwrap_or("hoist project");
     create_readme_if_missing(project_dir, &env, project_name, &resource_kinds)?;
+
+    // Create README.md in files-path directory if separate from project root
+    if files_dir != project_dir.to_path_buf() {
+        create_files_path_readme_if_missing(&files_dir)?;
+    }
 
     Ok(())
 }
@@ -1504,5 +1565,68 @@ mod tests {
         assert!(project_dir.join("resources/foundry/agents").is_dir());
         // Should NOT be at project root
         assert!(!project_dir.join("foundry").exists());
+    }
+
+    #[test]
+    fn test_files_path_readme_created() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let mut config = make_config("test-service");
+        config.project.files_path = Some("resources".to_string());
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let readme = project_dir.join("resources/README.md");
+        assert!(readme.exists());
+
+        let content = std::fs::read_to_string(&readme).unwrap();
+        assert!(content.contains("Hoist Resource Configuration"));
+        assert!(content.contains("hoist pull"));
+        assert!(content.contains("github.com/mklab-se/hoist"));
+    }
+
+    #[test]
+    fn test_files_path_readme_not_created_when_no_files_path() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service");
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        // Only the project-root README should exist, not a separate files-path README
+        assert!(project_dir.join("README.md").exists());
+    }
+
+    #[test]
+    fn test_files_path_readme_not_overwritten() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let mut config = make_config("test-service");
+        config.project.files_path = Some("resources".to_string());
+
+        // Create the files dir and an existing README
+        std::fs::create_dir_all(project_dir.join("resources")).unwrap();
+        std::fs::write(
+            project_dir.join("resources/README.md"),
+            "# My Custom README\n",
+        )
+        .unwrap();
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let content = std::fs::read_to_string(project_dir.join("resources/README.md")).unwrap();
+        assert_eq!(content, "# My Custom README\n");
+    }
+
+    #[test]
+    fn test_hoist_yaml_contains_repo_url() {
+        let tmp = TempDir::new().unwrap();
+        let project_dir = tmp.path();
+        let config = make_config("test-service");
+
+        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
+
+        let content = std::fs::read_to_string(project_dir.join(Config::FILENAME)).unwrap();
+        assert!(content.contains("https://github.com/mklab-se/hoist"));
     }
 }

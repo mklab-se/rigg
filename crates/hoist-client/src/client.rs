@@ -93,7 +93,7 @@ impl AzureSearchClient {
             "{}/{}/{}?api-version={}",
             self.base_url,
             kind.api_path(),
-            name,
+            urlencoding::encode(name),
             self.api_version_for(kind)
         )
     }

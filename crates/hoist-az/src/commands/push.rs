@@ -317,10 +317,7 @@ pub async fn run(
                         let normalized_remote =
                             hoist_core::normalize::normalize(&remote_cleaned, volatile);
 
-                        let local_json = hoist_core::normalize::format_json(&normalized_local);
-                        let remote_json = hoist_core::normalize::format_json(&normalized_remote);
-
-                        if local_json == remote_json {
+                        if normalized_local == normalized_remote {
                             total_unchanged += 1;
                         } else {
                             let diff_result =

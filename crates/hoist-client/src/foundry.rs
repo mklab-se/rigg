@@ -74,7 +74,10 @@ impl FoundryClient {
     fn agent_url(&self, id: &str) -> String {
         format!(
             "{}/api/projects/{}/agents/{}?api-version={}",
-            self.base_url, self.project, id, self.api_version
+            self.base_url,
+            self.project,
+            urlencoding::encode(id),
+            self.api_version
         )
     }
 
@@ -82,7 +85,10 @@ impl FoundryClient {
     fn agent_versions_url(&self, name: &str) -> String {
         format!(
             "{}/api/projects/{}/agents/{}/versions?api-version={}",
-            self.base_url, self.project, name, self.api_version
+            self.base_url,
+            self.project,
+            urlencoding::encode(name),
+            self.api_version
         )
     }
 
