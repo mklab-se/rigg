@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                          # Build all crates
-cargo test                           # Run all tests (483 tests across 4 crates)
+cargo test                           # Run all tests (516 tests across 4 crates)
 cargo test -p hoist-core             # Test a specific crate
 cargo test test_name                 # Run a single test by name
 cargo clippy                         # Lint
@@ -54,7 +54,7 @@ hoist-diff  (standalone)
 `ResourceKind` enum (in `resources/traits.rs`) is central to everything. Each resource type has:
 - A `ServiceDomain` — `Search` or `Foundry`
 - An API path (e.g., `indexes`, `agents`)
-- A flat directory name (e.g., `indexes`, `knowledge-sources`, `agents`)
+- A categorized directory name (e.g., `search-management/indexes`, `agentic-retrieval/knowledge-sources`, `agents`)
 - Stable vs preview classification — preview resources (KnowledgeBase, KnowledgeSource) use `preview_api_version` (`2025-11-01-preview`); stable resources use `api_version` (`2024-07-01`)
 
 The `Resource` trait on each struct defines volatile fields (stripped during normalization), dependencies (for push ordering and validation), and immutable fields (for change detection).
@@ -76,15 +76,17 @@ hoist.yaml
 .hoist/
   <env>/state.json, checksums.json    # Per-environment state (gitignored)
 search/                                # Single search service
-  indexes/  indexers/  data-sources/  skillsets/  synonym-maps/  aliases/
-  knowledge-bases/                     # Flat JSON files
-  knowledge-sources/                   # Each KS is a directory with managed sub-resources
-    <ks-name>/
-      <ks-name>.json                   # The KS definition
-      <ks-name>-index.json             # Managed index (from createdResources)
-      <ks-name>-indexer.json           # Managed indexer
-      <ks-name>-datasource.json        # Managed data source
-      <ks-name>-skillset.json          # Managed skillset
+  search-management/                   # Stable search resources
+    indexes/  indexers/  data-sources/  skillsets/  synonym-maps/  aliases/
+  agentic-retrieval/                   # Preview agentic retrieval resources
+    knowledge-bases/                   # Flat JSON files
+    knowledge-sources/                 # Each KS is a directory with managed sub-resources
+      <ks-name>/
+        <ks-name>.json                 # The KS definition
+        <ks-name>-index.json           # Managed index (from createdResources)
+        <ks-name>-indexer.json         # Managed indexer
+        <ks-name>-datasource.json      # Managed data source
+        <ks-name>-skillset.json        # Managed skillset
 foundry/                               # Single foundry service
   agents/
     <agent-name>.yaml                  # Single YAML file per agent (matches portal format)
@@ -94,8 +96,8 @@ Multi-service layout (when environment has multiple services per domain, labels 
 
 ```
 search/
-  primary/indexes/...
-  analytics/indexes/...
+  primary/search-management/indexes/...
+  analytics/search-management/indexes/...
 foundry/
   rag/agents/...
   chat/agents/...
@@ -160,6 +162,9 @@ State files live in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`.
 - **Fallback behavior**: `init` tries ARM discovery first; falls back to manual service name entry if not logged in. `pull` without flags pulls all Search resource types respecting the `include_preview` config. Foundry agents require explicit `--agents` or `--all` flag.
 - **CLI flags**: Resource type flags (`--indexes`, `--agents`, etc.) are defined once in `ResourceTypeFlags` struct and shared via `clap(flatten)` across pull, push, diff, and pull-watch commands.
 - **Client construction**: `AzureSearchClient::from_service_config(&SearchServiceConfig)` creates clients from resolved environment service configs. `FoundryClient::new(&FoundryServiceConfig)` for Foundry.
+- **Push conflict detection**: Before pushing, compares the remote resource checksum against the stored pull baseline. If the server has changed since last pull, shows a warning listing conflicting resources. Uses the same `Checksums::calculate()` / volatile field normalization as pull.
+- **Pull overwrite warning**: Before overwriting local files, compares disk content checksum against stored pull baseline. If local files were modified since last pull, warns before overwriting.
+- **Delete command**: `hoist delete --<kind> <name>` deletes from Azure and removes local files. Knowledge source deletion removes the entire KS directory including managed sub-resources. Updates state and checksums. `DeleteResource` struct in `cli.rs` with `resolve()` method.
 
 ## Test Projects
 
@@ -174,4 +179,9 @@ Releases are automated via `.github/workflows/release.yml`. To publish a new ver
 3. Commit and push to `main`
 4. Tag and push: `git tag v0.X.Y && git push origin v0.X.Y`
 
-The workflow runs CI, builds release binaries for Linux/macOS/Windows, creates a GitHub Release, and publishes all four crates to crates.io in dependency order. Do NOT run `cargo publish` manually.
+The workflow runs CI, builds release binaries for Linux/macOS/Windows, creates a GitHub Release, publishes all four crates to crates.io in dependency order, and updates the Homebrew tap formula with new SHA256 hashes. Do NOT run `cargo publish` manually.
+
+### Required secrets
+
+- `CARGO_REGISTRY_TOKEN` — crates.io publish token (in the `crates-io` environment)
+- `HOMEBREW_TAP_TOKEN` — GitHub PAT with `repo` scope for pushing to `mklab-se/homebrew-tap`. Without this, the Homebrew update step is silently skipped and the formula must be updated manually
