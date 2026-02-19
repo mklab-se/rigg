@@ -303,4 +303,53 @@ mod tests {
         let output = format_json(&input);
         assert_eq!(output, "{}\n");
     }
+
+    #[test]
+    fn test_normalize_preserves_tool_permission_fields() {
+        use crate::resources::agent::agent_volatile_fields;
+
+        let input = json!({
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "id": "should-be-stripped",
+            "created_at": 1234567890,
+            "tools": [
+                {
+                    "type": "mcp",
+                    "server_label": "kb_test",
+                    "require_approval": "never",
+                    "allowed_tools": ["tool_a", "tool_b"]
+                },
+                {
+                    "type": "mcp",
+                    "server_label": "kb_other",
+                    "require_approval": {
+                        "never": {"tool_names": ["safe"]},
+                        "always": {"tool_names": ["risky"]}
+                    }
+                }
+            ]
+        });
+
+        let result = normalize(&input, agent_volatile_fields());
+
+        // Volatile fields stripped at top level
+        assert!(result.get("id").is_none());
+        assert!(result.get("created_at").is_none());
+
+        // Non-volatile fields preserved
+        assert_eq!(result["kind"], "prompt");
+        assert_eq!(result["model"], "gpt-4o");
+
+        // Tool permission fields preserved (no name collision with volatile fields)
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["require_approval"], "never");
+        assert_eq!(tools[0]["allowed_tools"][0], "tool_a");
+        assert_eq!(tools[0]["allowed_tools"][1], "tool_b");
+
+        // Object-form require_approval preserved
+        let ra = &tools[1]["require_approval"];
+        assert_eq!(ra["never"]["tool_names"][0], "safe");
+        assert_eq!(ra["always"]["tool_names"][0], "risky");
+    }
 }

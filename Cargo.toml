@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 authors = ["hoist contributors"]
 license = "MIT"
@@ -69,6 +69,6 @@ urlencoding = "2"
 tempfile = "3.10"
 
 # Internal crates
-hoist-core = { version = "0.5.3", path = "crates/hoist-core" }
-hoist-client = { version = "0.5.3", path = "crates/hoist-client" }
-hoist-diff = { version = "0.5.3", path = "crates/hoist-diff" }
+hoist-core = { version = "0.5.4", path = "crates/hoist-core" }
+hoist-client = { version = "0.5.4", path = "crates/hoist-client" }
+hoist-diff = { version = "0.5.4", path = "crates/hoist-diff" }

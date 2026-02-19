@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 cargo build                          # Build all crates
-cargo test                           # Run all tests (516 tests across 4 crates)
+cargo test                           # Run all tests (522 tests across 4 crates)
 cargo test -p hoist-core             # Test a specific crate
 cargo test test_name                 # Run a single test by name
 cargo clippy                         # Lint

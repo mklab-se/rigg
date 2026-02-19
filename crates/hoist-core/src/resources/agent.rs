@@ -382,4 +382,111 @@ tool_resources:
         let yaml = agent_to_yaml(&agent);
         assert!(!yaml.contains("metadata"));
     }
+
+    #[test]
+    fn test_agent_yaml_roundtrip_preserves_require_approval() {
+        // Test string form: "never"
+        let agent_never = json!({
+            "name": "test",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "require_approval": "never"
+            }]
+        });
+
+        let yaml = agent_to_yaml(&agent_never);
+        let parsed = yaml_to_agent(&yaml).unwrap();
+        assert_eq!(parsed["tools"][0]["require_approval"], "never");
+
+        // Test string form: "always"
+        let agent_always = json!({
+            "name": "test",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "require_approval": "always"
+            }]
+        });
+
+        let yaml = agent_to_yaml(&agent_always);
+        let parsed = yaml_to_agent(&yaml).unwrap();
+        assert_eq!(parsed["tools"][0]["require_approval"], "always");
+
+        // Test object form with granular per-tool control
+        let agent_object = json!({
+            "name": "test",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "require_approval": {
+                    "never": {"tool_names": ["safe_tool"]},
+                    "always": {"tool_names": ["dangerous_tool"]}
+                }
+            }]
+        });
+
+        let yaml = agent_to_yaml(&agent_object);
+        let parsed = yaml_to_agent(&yaml).unwrap();
+        let ra = &parsed["tools"][0]["require_approval"];
+        assert_eq!(ra["never"]["tool_names"][0], "safe_tool");
+        assert_eq!(ra["always"]["tool_names"][0], "dangerous_tool");
+    }
+
+    #[test]
+    fn test_agent_yaml_roundtrip_preserves_allowed_tools() {
+        let agent = json!({
+            "name": "test",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "allowed_tools": ["tool_a", "tool_b"]
+            }]
+        });
+
+        let yaml = agent_to_yaml(&agent);
+        let parsed = yaml_to_agent(&yaml).unwrap();
+        let allowed = parsed["tools"][0]["allowed_tools"].as_array().unwrap();
+        assert_eq!(allowed.len(), 2);
+        assert_eq!(allowed[0], "tool_a");
+        assert_eq!(allowed[1], "tool_b");
+    }
+
+    #[test]
+    fn test_strip_agent_empty_fields_preserves_tool_permissions() {
+        let mut value = json!({
+            "name": "test",
+            "model": "gpt-4o",
+            "description": "",
+            "metadata": {},
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "require_approval": "never",
+                "allowed_tools": ["tool_a", "tool_b"]
+            }]
+        });
+
+        strip_agent_empty_fields(&mut value);
+
+        // Empty top-level fields should be stripped
+        assert!(value.get("description").is_none());
+        assert!(value.get("metadata").is_none());
+
+        // Tool permission fields inside tool objects must be untouched
+        let tool = &value["tools"][0];
+        assert_eq!(tool["require_approval"], "never");
+        let allowed = tool["allowed_tools"].as_array().unwrap();
+        assert_eq!(allowed.len(), 2);
+        assert_eq!(allowed[0], "tool_a");
+        assert_eq!(allowed[1], "tool_b");
+    }
 }

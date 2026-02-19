@@ -625,4 +625,93 @@ mod tests {
         let flat = flatten_agent_response(&json!("not an object"));
         assert_eq!(flat, json!("not an object"));
     }
+
+    #[test]
+    fn test_wrap_flatten_roundtrip_preserves_tool_permissions() {
+        let flat = json!({
+            "name": "test-agent",
+            "kind": "prompt",
+            "model": "gpt-4o",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_test",
+                "require_approval": "never",
+                "allowed_tools": ["tool_a", "tool_b"]
+            }]
+        });
+
+        // Wrap for API submission
+        let wrapped = wrap_agent_payload(&flat);
+        let def_tools = wrapped["definition"]["tools"].as_array().unwrap();
+        assert_eq!(def_tools[0]["require_approval"], "never");
+        assert_eq!(def_tools[0]["allowed_tools"][0], "tool_a");
+        assert_eq!(def_tools[0]["allowed_tools"][1], "tool_b");
+
+        // Simulate API response containing the same tools
+        let api_response = json!({
+            "object": "agent",
+            "id": "test-agent",
+            "name": "test-agent",
+            "versions": {
+                "latest": {
+                    "version": "1",
+                    "definition": {
+                        "kind": "prompt",
+                        "model": "gpt-4o",
+                        "tools": [{
+                            "type": "mcp",
+                            "server_label": "kb_test",
+                            "require_approval": "never",
+                            "allowed_tools": ["tool_a", "tool_b"]
+                        }]
+                    }
+                }
+            }
+        });
+
+        let flattened = flatten_agent_response(&api_response);
+        let tools = flattened["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["require_approval"], "never");
+        let allowed = tools[0]["allowed_tools"].as_array().unwrap();
+        assert_eq!(allowed.len(), 2);
+        assert_eq!(allowed[0], "tool_a");
+        assert_eq!(allowed[1], "tool_b");
+    }
+
+    #[test]
+    fn test_flatten_preserves_require_approval_object_form() {
+        let api_response = json!({
+            "object": "agent",
+            "id": "granular-agent",
+            "name": "granular-agent",
+            "versions": {
+                "latest": {
+                    "version": "1",
+                    "definition": {
+                        "kind": "prompt",
+                        "model": "gpt-4o",
+                        "tools": [{
+                            "type": "mcp",
+                            "server_label": "kb_test",
+                            "require_approval": {
+                                "never": {"tool_names": ["safe_tool"]},
+                                "always": {"tool_names": ["dangerous_tool"]}
+                            }
+                        }]
+                    }
+                }
+            }
+        });
+
+        let flat = flatten_agent_response(&api_response);
+        let ra = &flat["tools"][0]["require_approval"];
+        assert_eq!(ra["never"]["tool_names"][0], "safe_tool");
+        assert_eq!(ra["always"]["tool_names"][0], "dangerous_tool");
+
+        // Round-trip: flatten → wrap → verify definition still has structured form
+        let re_wrapped = wrap_agent_payload(&flat);
+        let def_ra = &re_wrapped["definition"]["tools"][0]["require_approval"];
+        assert_eq!(def_ra["never"]["tool_names"][0], "safe_tool");
+        assert_eq!(def_ra["always"]["tool_names"][0], "dangerous_tool");
+    }
 }
