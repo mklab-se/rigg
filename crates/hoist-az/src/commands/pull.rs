@@ -212,6 +212,7 @@ pub async fn execute_pull(
     let mut deleted_resources: Vec<(ResourceKind, String, std::path::PathBuf)> = Vec::new();
     let mut total_unchanged: usize = 0;
     let mut managed_map = ManagedMap::new();
+    let mut checksum_backfill: Vec<(ResourceKind, String, String)> = Vec::new();
 
     // --- Search resources ---
     if !search_kinds.is_empty() {
@@ -301,6 +302,7 @@ pub async fn execute_pull(
             &mut updated_resources,
             &mut deleted_resources,
             &mut total_unchanged,
+            &mut checksum_backfill,
         )?;
     }
 
@@ -318,9 +320,48 @@ pub async fn execute_pull(
                 &mut updated_resources,
                 &mut deleted_resources,
                 &mut total_unchanged,
+                &mut checksum_backfill,
             )
             .await?;
         }
+    }
+
+    // Backfill checksums for files that match Azure but had no stored checksum.
+    // This happens when resource files come from git but .hoist/ state is gitignored.
+    if !checksum_backfill.is_empty() {
+        let mut bf_state = LocalState::load_env(project_root, &env.name)?;
+        let mut bf_checksums = Checksums::load_env(project_root, &env.name)?;
+        for (kind, name, checksum) in &checksum_backfill {
+            if kind.domain() == ServiceDomain::Foundry {
+                bf_state.set(
+                    *kind,
+                    name,
+                    ResourceState {
+                        kind: *kind,
+                        etag: None,
+                        checksum: checksum.clone(),
+                        synced_at: chrono::Utc::now(),
+                    },
+                );
+                bf_checksums.set(*kind, name, checksum.clone());
+            } else {
+                bf_state.set_managed(
+                    *kind,
+                    name,
+                    ResourceState {
+                        kind: *kind,
+                        etag: None,
+                        checksum: checksum.clone(),
+                        synced_at: chrono::Utc::now(),
+                    },
+                    &managed_map,
+                );
+                bf_checksums.set_managed(*kind, name, checksum.clone(), &managed_map);
+            }
+        }
+        bf_state.last_sync = Some(chrono::Utc::now());
+        bf_state.save_env(project_root, &env.name)?;
+        bf_checksums.save_env(project_root, &env.name)?;
     }
 
     let total_changes = new_resources.len() + updated_resources.len() + deleted_resources.len();
@@ -516,6 +557,7 @@ fn discover_search_resources(
     updated_resources: &mut Vec<DiscoveredResource>,
     deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
     total_unchanged: &mut usize,
+    checksum_backfill: &mut Vec<(ResourceKind, String, String)>,
 ) -> Result<()> {
     for (kind, result) in fetched_results {
         let resources = result.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -570,14 +612,16 @@ fn discover_search_resources(
             let new_checksum = Checksums::calculate(&json_content);
             let file_path = resource_dir.join(&filename);
             let stored_checksum = checksums.get_managed(*kind, name, managed_map);
-            let is_existing = stored_checksum.is_some();
-            let remote_unchanged = stored_checksum == Some(&new_checksum);
+            let is_existing = stored_checksum.is_some() || file_path.exists();
             let local_matches = file_path.exists()
                 && std::fs::read_to_string(&file_path).ok().as_deref()
                     == Some(json_content.as_str());
 
-            if remote_unchanged && local_matches {
+            if local_matches {
                 *total_unchanged += 1;
+                if stored_checksum.is_none() {
+                    checksum_backfill.push((*kind, name.to_string(), new_checksum));
+                }
                 continue;
             }
 
@@ -702,6 +746,7 @@ async fn discover_foundry_agents(
     updated_resources: &mut Vec<DiscoveredResource>,
     deleted_resources: &mut Vec<(ResourceKind, String, std::path::PathBuf)>,
     total_unchanged: &mut usize,
+    checksum_backfill: &mut Vec<(ResourceKind, String, String)>,
 ) -> Result<()> {
     let client = hoist_client::FoundryClient::new(foundry_config)?;
     info!(
@@ -753,15 +798,19 @@ async fn discover_foundry_agents(
 
         let new_checksum = Checksums::calculate(&json_content);
         let stored_checksum = checksums.get(kind, name);
-        let is_existing = stored_checksum.is_some();
-        let remote_unchanged = stored_checksum == Some(&new_checksum);
 
-        // Check if local YAML file matches
+        // Check if local YAML file matches what Azure would produce
         let yaml_path = agents_dir.join(format!("{}.yaml", name));
-        let local_matches = yaml_path.exists() && remote_unchanged;
+        let yaml_for_disk = agent_to_yaml(agent);
+        let is_existing = stored_checksum.is_some() || yaml_path.exists();
+        let local_matches = yaml_path.exists()
+            && std::fs::read_to_string(&yaml_path).ok().as_deref() == Some(yaml_for_disk.as_str());
 
-        if remote_unchanged && local_matches {
+        if local_matches {
             *total_unchanged += 1;
+            if stored_checksum.is_none() {
+                checksum_backfill.push((kind, name.to_string(), new_checksum));
+            }
             continue;
         }
 
