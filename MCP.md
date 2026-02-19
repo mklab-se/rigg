@@ -1,8 +1,28 @@
-# AI Agent Integration
+# MCP Server
 
-hoist includes a built-in [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that lets AI coding tools interact with your Azure AI Search and Microsoft Foundry configuration directly — no shell commands needed. The AI can pull, push, diff, validate, and explore your resources through structured tool calls.
+hoist includes a built-in [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that gives AI coding tools structured access to your Azure AI Search and Microsoft Foundry configuration — pull, push, diff, validate, and explore through tool calls instead of shell commands.
 
-## Supported Tools
+## Why Connect Your AI Tool to Hoist?
+
+Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets and data sources. Understanding one piece in isolation isn't enough to make meaningful improvements — but that's all your AI coding tool can do when configuration lives behind Azure portals and REST APIs.
+
+hoist changes this in two ways:
+
+1. **Every resource as a local file.** After `hoist pull`, your entire configuration is on disk — agent YAML, index schemas, skillset pipelines, knowledge base rules. Your AI tool can already read these directly. But files alone don't capture how everything connects.
+
+2. **A structured API for the complete picture.** The MCP server's `hoist_describe` tool returns the full project graph in a single call — every resource, dependency chain, agent instruction (untruncated), and file path. The AI doesn't need to discover your project structure by reading files one at a time; it gets the complete system map instantly.
+
+With this context, your AI tool can help you:
+
+- **Optimize agent instructions** with knowledge of what indexes, fields, and retrieval strategies are actually available
+- **Debug retrieval quality** by understanding the full chain from agent query to knowledge source to index schema
+- **Plan schema changes** knowing which knowledge sources, skillsets, and indexers depend on an index
+- **Deploy across environments** using hoist's environment model and push/pull tools
+- **Detect configuration drift** by diffing local files against live services
+
+This is what makes hoist different from manually reading JSON files — the AI understands the *system*, not just individual resources.
+
+## Compatible Tools
 
 Any MCP-compatible AI tool works with hoist, including:
 
@@ -109,29 +129,6 @@ This means the AI always shows you what will happen before making changes.
 | `resource_type` | string | Filter by type (same values as above) |
 | `source` | string | Where to list from: `local` (disk), `remote` (Azure), or `both` |
 
-## Agent Skills
-
-hoist ships with [agent skills](https://agentskills.io/) — cross-platform workflow instructions that work with Claude Code, GitHub Copilot, Codex, Cursor, and Gemini CLI. Skills teach the AI *when* and *how* to use hoist tools.
-
-### Slash commands
-
-| Command | What it does |
-|---------|--------------|
-| `/hoist-status` | Show environment info, auth state, and full resource inventory |
-| `/hoist-pull` | Pull resources from Azure with preview and confirmation |
-| `/hoist-push` | Safe push: validate, diff, show preview, confirm before pushing |
-
-Skills accept an optional environment name as an argument:
-
-```
-/hoist-pull test
-/hoist-push prod
-```
-
-### Auto-loaded guide
-
-The `hoist-guide` skill loads automatically when the AI detects hoist context (e.g., working with `hoist.yaml`, search indexes, or Foundry agents). It provides the AI with background knowledge about hoist's file structure, workflows, and safety rules without any user action.
-
 ## Example Workflows
 
 ### "What does my project look like?"
@@ -203,3 +200,8 @@ When an AI tool calls an MCP tool, hoist:
 4. Returns structured JSON that the AI can reason about
 
 The `hoist_describe` tool is particularly important for AI agents — it returns the complete project graph in a single call, including file paths for every resource. This lets the AI understand your entire Agentic RAG stack without reading individual files.
+
+## See Also
+
+- [SKILLS.md](SKILLS.md) — Agent skills and slash commands (work independently of MCP)
+- [INSTALL.md](INSTALL.md) — Installation and setup

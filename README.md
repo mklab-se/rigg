@@ -6,7 +6,7 @@
 
 <p align="center">
   Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a> and <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/">Microsoft Foundry</a>.<br>
-  Manage your entire Agentic RAG stack — from agent definitions to knowledge bases to search indexes — as version-controlled files.
+  Version control your entire Agentic RAG stack — and give AI tools like Claude Code and Copilot the context to help you build it.
 </p>
 
 <p align="center">
@@ -25,22 +25,32 @@ None of this configuration is managed by traditional IaC tools. ARM, Bicep, and 
 
 For relational databases, this gap was solved long ago with migration tools like Flyway, Liquibase, and Alembic. Azure AI Search and Microsoft Foundry have no equivalent. In practice, this means:
 
+- **Fragmented view** — The full picture of how your agents, knowledge bases, knowledge sources, indexes, skillsets, and data sources connect is spread across two services, multiple portal blades, and REST endpoints. No one can reason about the system as a whole — and neither can your AI coding tools. Ask Claude Code or Copilot to help optimize your agent's retrieval pipeline, and they can't see any of it. Your RAG configuration is trapped behind APIs and portal blades that AI tools have no access to.
 - **No change history** — Azure doesn't track who changed an index schema, agent instruction, or knowledge base configuration. When something breaks, there's no way to see what happened or roll back.
 - **Portal drift** — The portal makes ad-hoc changes frictionless. In team environments, configurations silently diverge between services and between what's deployed and what anyone remembers deploying.
 - **No review process** — Agent instructions, scoring profiles, skillset configurations, and knowledge base retrieval rules go live without review, even though they fundamentally shape how your AI system responds.
-- **Fragmented view** — The full picture of how your agents, knowledge bases, knowledge sources, indexes, skillsets, and data sources connect is spread across two services, multiple portal blades, and REST endpoints. No one — human or AI — can easily reason about the system as a whole.
+- **No CI/CD pipeline** — There's no way to validate configuration in a pull request, auto-deploy on merge, or detect drift on a schedule. Every deployment is manual.
 - **Manual environment promotion** — Copying configurations from dev to staging to production means manually exporting JSON across both services, updating cross-resource references, and hoping nothing was missed.
 
 ## What Hoist Does
 
-`hoist` treats your entire Agentic RAG infrastructure as code. It pulls resource definitions from Azure AI Search and Microsoft Foundry as local files, versions them in Git, and pushes changes back. Whether you use both services together for a full RAG stack, or either one independently, hoist gives you:
+`hoist` makes your entire Agentic RAG infrastructure visible, reviewable, and AI-accessible. It pulls resource definitions from Azure AI Search and Microsoft Foundry as local files, versions them in Git, and pushes changes back. The same `hoist pull` that gives you Git history also gives Claude Code the context to help you optimize your agent.
+
+Whether you use both services together for a full RAG stack, or either one independently, hoist serves two audiences at once:
+
+**For you and your team:**
 
 - **Version control** — track who changed what, when, and why via Git history across both your retrieval and agent layers
 - **Code review** — review agent instructions, knowledge base retrieval rules, index schema changes, and skillset updates in pull requests before they go live
-- **Unified project view** — `hoist describe` shows the full dependency chain from agents through knowledge bases to indexes, so humans and AI tools can reason about the complete system
 - **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
 - **Environment promotion** — copy resources between services (dev to staging to prod) with automatic reference rewriting
-- **AI-assisted development** — a built-in [MCP server](#ai-agent-integration) lets AI tools like Claude Code and GitHub Copilot pull, push, diff, and explore your resources directly. With every definition as a local file, AI can reason about your entire stack — no portal access required
+- **CI/CD** — validate configuration in pull requests, push on merge, detect drift on a schedule, all with service principal auth
+
+**For your AI coding tools:**
+
+- **Full project understanding** — `hoist describe` gives AI tools the complete dependency graph from agents through knowledge bases to indexes in a single call
+- **Direct access** — a built-in [MCP server](#ai-agent-integration) lets Claude Code, GitHub Copilot, and other AI tools pull, push, diff, and explore your resources through structured tool calls
+- **File-level context** — with every definition as a local file, AI can read and reason about your entire stack. No portal access, no REST API calls, no blind spots
 
 You can use hoist for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
 
@@ -71,6 +81,18 @@ hoist push --all
 ```
 
 During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
+
+**Connect your AI tool** (optional but recommended):
+
+```bash
+# Register hoist's MCP server with Claude Code
+hoist mcp install claude-code
+
+# Or VS Code (GitHub Copilot)
+hoist mcp install vs-code
+```
+
+Now your AI tool can see your entire RAG stack — run `/hoist-status` to try it. See [MCP.md](MCP.md) for the full reference.
 
 After pulling, your project contains normalized, version-control-friendly representations of every resource:
 
@@ -224,6 +246,29 @@ Check local files for structural issues and referential integrity before pushing
 hoist validate
 ```
 
+### CI/CD
+
+Use hoist in your CI/CD pipeline to validate, deploy, and detect drift:
+
+```yaml
+# GitHub Actions example
+- name: Validate
+  run: hoist validate --strict
+  env:
+    AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+- name: Push
+  if: github.ref == 'refs/heads/main'
+  run: hoist push --all --force
+```
+
+- **PR gate** — `hoist validate --strict` in CI catches schema errors and broken references before merge
+- **Auto-deploy** — `hoist push --all --force` on merge to `main` deploys changes automatically
+- **Drift detection** — schedule `hoist diff --all` to catch portal changes between deployments
+- **Service principal auth** — set `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_TENANT_ID` environment variables
+
 ## Resource Types
 
 ### Azure AI Search
@@ -329,7 +374,11 @@ The `--env` flag (or `HOIST_ENV` environment variable) works with all commands. 
 
 ## AI Agent Integration
 
-hoist includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding tools (Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI) interact with your resources directly — pull, push, diff, validate, and explore through structured tool calls instead of shell commands.
+Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
+
+hoist solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server that gives AI coding tools the complete picture. `hoist describe` returns the full project graph — every resource, dependency, agent instruction, and file path — in a single call. With this context, your AI tool can help you optimize agent instructions, debug retrieval pipelines, plan schema changes, and deploy across environments.
+
+Any MCP-compatible AI tool works: Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI.
 
 ```bash
 # Register with Claude Code
@@ -349,7 +398,7 @@ Once connected, use slash commands for common workflows:
 | `/hoist-pull` | Pull from Azure with preview and confirmation |
 | `/hoist-push` | Safe push: validate, diff, confirm, then push |
 
-See [MCP.md](MCP.md) for the full tool reference, setup instructions, and example workflows.
+See [MCP.md](MCP.md) for the MCP tool reference, and [SKILLS.md](SKILLS.md) for the full list of agent skills and slash commands.
 
 ## Architecture
 

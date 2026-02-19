@@ -88,3 +88,19 @@ hoist completion powershell >> $PROFILE
 ```bash
 hoist --version
 ```
+
+## Connect to Your AI Coding Tool
+
+hoist includes a built-in MCP server that gives AI coding tools direct access to understand and manage your Agentic RAG stack — pull, push, diff, and explore resources through structured tool calls instead of shell commands.
+
+```bash
+# Claude Code
+hoist mcp install claude-code
+
+# VS Code (GitHub Copilot)
+hoist mcp install vs-code
+```
+
+Projects that include `.mcp.json` in the repo root are auto-discovered automatically — the AI tool picks up hoist when you open the project, no install step needed.
+
+See [MCP.md](MCP.md) for the full tool reference and [SKILLS.md](SKILLS.md) for agent skills and slash commands.
