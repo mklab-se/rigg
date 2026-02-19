@@ -185,3 +185,45 @@ The workflow runs CI, builds release binaries for Linux/macOS/Windows, creates a
 
 - `CARGO_REGISTRY_TOKEN` — crates.io publish token (in the `crates-io` environment)
 - `HOMEBREW_TAP_TOKEN` — GitHub PAT with `repo` scope for pushing to `mklab-se/homebrew-tap`. Without this, the Homebrew update step is silently skipped and the formula must be updated manually
+
+## AI Agent Integration
+
+hoist exposes an MCP (Model Context Protocol) server and agent skills for AI-assisted workflows.
+
+### MCP Server (`hoist mcp serve`)
+
+Starts a stdio-based MCP server with 8 tools. Any MCP-compatible client (Claude Code, VS Code Copilot, Claude Desktop) can call these tools directly.
+
+| Tool | Description |
+|------|-------------|
+| `hoist_status` | Project status, auth state, resource counts |
+| `hoist_describe` | Full project description with all resources, dependencies, agent configs |
+| `hoist_env_list` | List configured environments |
+| `hoist_validate` | Validate local resource files |
+| `hoist_list` | List resource names by type (local/remote/both) |
+| `hoist_diff` | Compare local vs remote (JSON diff) |
+| `hoist_pull` | Pull from Azure (preview without `force`, execute with `force: true`) |
+| `hoist_push` | Push to Azure (preview without `force`, execute with `force: true`) |
+
+**Code location:** `crates/hoist-az/src/mcp/` — `mod.rs` (server lifecycle, install commands), `tools.rs` (all 8 tool implementations).
+
+**Auto-discovery:** `.mcp.json` in the repo root auto-registers the MCP server with Claude Code and VS Code when the project is opened.
+
+**Manual install:** `hoist mcp install [claude-code|vs-code]` registers hoist as an MCP server at the user level.
+
+### Agent Skills (`.claude/skills/`)
+
+Skills are cross-platform (Claude Code, GitHub Copilot, Codex, Cursor, Gemini CLI). They reference MCP tools for structured execution.
+
+| Skill | Type | Description |
+|-------|------|-------------|
+| `hoist-guide` | Auto-loaded | Reference guide, loaded when hoist context is detected |
+| `hoist-pull` | User-invoked (`/hoist-pull`) | Pull workflow with preview → confirm → execute |
+| `hoist-push` | User-invoked (`/hoist-push`) | Safe push: validate → diff → confirm → push |
+| `hoist-status` | User-invoked (`/hoist-status`) | Environment inspection |
+
+### Key design decisions
+
+- **`force` flag pattern:** Mutating MCP tools (pull/push) without `force` return a preview. With `force: true` they execute. Same semantics as CLI `--force`.
+- **Subprocess isolation:** Tools that produce stdout (describe, validate, diff, pull, push) spawn a subprocess `hoist --output json` to avoid stdout contamination (MCP uses stdout for JSON-RPC).
+- **`hoist_describe` precision:** JSON output includes `file_path` for every resource and full `instructions` for agents (not truncated). AI agents can `Read` any file path for complete content.

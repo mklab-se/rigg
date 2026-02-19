@@ -33,7 +33,6 @@ pub async fn run(
     flags: &ResourceTypeFlags,
     recursive: bool,
     filter: Option<String>,
-    dry_run: bool,
     force: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
@@ -511,11 +510,6 @@ pub async fn run(
             );
             println!();
         }
-    }
-
-    if dry_run {
-        println!("Dry run - no changes made");
-        return Ok(());
     }
 
     // Confirm unless --force

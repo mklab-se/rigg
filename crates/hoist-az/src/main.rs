@@ -7,6 +7,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 mod banner;
 mod cli;
 mod commands;
+mod mcp;
 mod update;
 
 use cli::Cli;
@@ -38,8 +39,12 @@ async fn main() -> Result<()> {
         colored::control::set_override(false);
     }
 
-    // Spawn background update check (skipped in quiet mode or when opted out)
-    let check_update = if cli.quiet || std::env::var_os("HOIST_NO_UPDATE_CHECK").is_some() {
+    // Skip update check in MCP mode (stdout is JSON-RPC)
+    let is_mcp = matches!(cli.command, cli::Commands::Mcp(_));
+
+    // Spawn background update check (skipped in quiet mode, MCP mode, or when opted out)
+    let check_update = if cli.quiet || is_mcp || std::env::var_os("HOIST_NO_UPDATE_CHECK").is_some()
+    {
         None
     } else {
         Some(tokio::spawn(update::check_for_update()))

@@ -48,7 +48,6 @@ pub async fn run(
             &env,
             &selection,
             filter.as_deref(),
-            false, // not dry_run
             force,
         )
         .await

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hoist": {
+      "command": "hoist",
+      "args": ["mcp", "serve"]
+    }
+  }
+}

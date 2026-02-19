@@ -207,11 +207,7 @@ pub enum Commands {
         #[arg(long, short)]
         filter: Option<String>,
 
-        /// Preview changes without writing files
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip confirmation prompt
+        /// Execute immediately without preview or confirmation
         #[arg(long)]
         force: bool,
     },
@@ -229,15 +225,11 @@ pub enum Commands {
         #[arg(long, short)]
         filter: Option<String>,
 
-        /// Preview changes without modifying Azure
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip confirmation prompt
+        /// Execute immediately without preview or confirmation
         #[arg(long)]
         force: bool,
 
-        /// Skip confirmation prompt (alias for --force)
+        /// Execute immediately without preview or confirmation (alias for --force)
         #[arg(long, short, hide = true)]
         yes: bool,
     },
@@ -357,9 +349,32 @@ pub enum Commands {
     /// Show version information
     Version,
 
+    /// MCP (Model Context Protocol) server for AI agent integration
+    #[command(subcommand)]
+    Mcp(McpCommands),
+
     /// 🏗️
     #[command(hide = true)]
     Logo,
+}
+
+#[derive(Subcommand)]
+pub enum McpCommands {
+    /// Start the MCP server (stdio transport)
+    Serve,
+    /// Register hoist as an MCP server with AI tools
+    Install {
+        #[arg(value_enum, default_value = "claude-code")]
+        target: McpInstallTarget,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum McpInstallTarget {
+    /// Register with Claude Code
+    ClaudeCode,
+    /// Register with VS Code
+    VsCode,
 }
 
 #[derive(Subcommand)]
@@ -767,29 +782,16 @@ impl Cli {
                 resources,
                 recursive,
                 filter,
-                dry_run,
                 force,
-            } => {
-                commands::pull::run(&resources, recursive, filter, dry_run, force, env_override)
-                    .await
-            }
+            } => commands::pull::run(&resources, recursive, filter, force, env_override).await,
             Commands::Push {
                 resources,
                 recursive,
                 filter,
-                dry_run,
                 force,
                 yes,
             } => {
-                commands::push::run(
-                    &resources,
-                    recursive,
-                    filter,
-                    dry_run,
-                    force || yes,
-                    env_override,
-                )
-                .await
+                commands::push::run(&resources, recursive, filter, force || yes, env_override).await
             }
             Commands::Delete { resource, force } => {
                 let (kind, name) = resource.resolve().ok_or_else(|| {
@@ -853,6 +855,7 @@ impl Cli {
                 crate::banner::print_banner_with_version();
                 Ok(())
             }
+            Commands::Mcp(cmd) => crate::mcp::run(cmd).await,
             Commands::Logo => {
                 crate::banner::print_banner_with_version();
                 Ok(())

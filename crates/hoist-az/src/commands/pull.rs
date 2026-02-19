@@ -33,7 +33,6 @@ pub async fn run(
     flags: &ResourceTypeFlags,
     recursive: bool,
     filter: Option<String>,
-    dry_run: bool,
     force: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
@@ -60,7 +59,6 @@ pub async fn run(
         &env,
         &selection,
         filter.as_deref(),
-        dry_run,
         force,
     )
     .await
@@ -189,14 +187,9 @@ pub async fn execute_pull(
     env: &ResolvedEnvironment,
     selection: &ResourceSelection,
     filter: Option<&str>,
-    dry_run: bool,
     force: bool,
 ) -> Result<()> {
     let kinds = selection.kinds();
-    if dry_run {
-        println!("Dry run - no changes will be made");
-        println!();
-    }
 
     // Split kinds by service domain
     let search_kinds: Vec<ResourceKind> = kinds
@@ -395,11 +388,6 @@ pub async fn execute_pull(
             "  Pulling will overwrite your local changes. Commit or stash them first if needed."
         );
         println!();
-    }
-
-    if dry_run {
-        println!("Dry run - no changes made");
-        return Ok(());
     }
 
     // === Confirm ===

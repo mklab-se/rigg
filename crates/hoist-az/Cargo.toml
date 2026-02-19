@@ -34,6 +34,9 @@ colored.workspace = true
 reqwest.workspace = true
 semver.workspace = true
 
+rmcp.workspace = true
+schemars.workspace = true
+
 hoist-core.workspace = true
 hoist-client.workspace = true
 hoist-diff.workspace = true

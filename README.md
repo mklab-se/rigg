@@ -40,7 +40,7 @@ For relational databases, this gap was solved long ago with migration tools like
 - **Unified project view** — `hoist describe` shows the full dependency chain from agents through knowledge bases to indexes, so humans and AI tools can reason about the complete system
 - **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
 - **Environment promotion** — copy resources between services (dev to staging to prod) with automatic reference rewriting
-- **AI-assisted development** — with every resource definition available as a local file, AI coding tools like Claude Code, GitHub Copilot, and others can read your entire search and agent configuration in context, understand how resources relate, and help you develop and troubleshoot — no portal access required
+- **AI-assisted development** — a built-in [MCP server](#ai-agent-integration) lets AI tools like Claude Code and GitHub Copilot pull, push, diff, and explore your resources directly. With every definition as a local file, AI can reason about your entire stack — no portal access required
 
 You can use hoist for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
 
@@ -166,8 +166,11 @@ hoist pull --agent research-assistant
 hoist pull --search-only
 hoist pull --foundry-only
 
-# Push with dry-run preview
-hoist push --all --dry-run
+# Push (shows preview, asks for confirmation)
+hoist push --all
+
+# Push without confirmation
+hoist push --all --force
 
 # Push a single resource
 hoist push --indexer hotels-indexer
@@ -323,6 +326,30 @@ hoist env set-default prod
 ```
 
 The `--env` flag (or `HOIST_ENV` environment variable) works with all commands. When omitted, hoist uses the environment marked `default: true` in the config.
+
+## AI Agent Integration
+
+hoist includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI coding tools (Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI) interact with your resources directly — pull, push, diff, validate, and explore through structured tool calls instead of shell commands.
+
+```bash
+# Register with Claude Code
+hoist mcp install claude-code
+
+# Or VS Code (GitHub Copilot)
+hoist mcp install vs-code
+```
+
+Projects with a `.mcp.json` file in the repo root are auto-discovered — no manual setup needed.
+
+Once connected, use slash commands for common workflows:
+
+| Command | What it does |
+|---------|--------------|
+| `/hoist-status` | Show environment info, auth state, and resource inventory |
+| `/hoist-pull` | Pull from Azure with preview and confirmation |
+| `/hoist-push` | Safe push: validate, diff, confirm, then push |
+
+See [MCP.md](MCP.md) for the full tool reference, setup instructions, and example workflows.
 
 ## Architecture
 

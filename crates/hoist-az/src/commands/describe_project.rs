@@ -22,6 +22,7 @@ struct FieldSummary {
 #[derive(Debug, Clone)]
 struct IndexSummary {
     name: String,
+    file_path: String,
     fields: Vec<FieldSummary>,
     vector_profile_count: usize,
     has_semantic_config: bool,
@@ -31,6 +32,7 @@ struct IndexSummary {
 #[derive(Debug, Clone)]
 struct DataSourceSummary {
     name: String,
+    file_path: String,
     source_type: String,
     container: String,
 }
@@ -39,6 +41,7 @@ struct DataSourceSummary {
 #[derive(Debug, Clone)]
 struct IndexerSummary {
     name: String,
+    file_path: String,
     target_index: String,
     data_source: String,
     skillset: Option<String>,
@@ -55,6 +58,7 @@ struct SkillEntry {
 #[derive(Debug, Clone)]
 struct SkillsetSummary {
     name: String,
+    file_path: String,
     skills: Vec<SkillEntry>,
 }
 
@@ -62,6 +66,7 @@ struct SkillsetSummary {
 #[derive(Debug, Clone)]
 struct SynonymMapSummary {
     name: String,
+    file_path: String,
     format: String,
 }
 
@@ -69,6 +74,7 @@ struct SynonymMapSummary {
 #[derive(Debug, Clone)]
 struct AliasSummary {
     name: String,
+    file_path: String,
     indexes: Vec<String>,
 }
 
@@ -76,6 +82,7 @@ struct AliasSummary {
 #[derive(Debug, Clone)]
 struct KnowledgeBaseSummary {
     name: String,
+    file_path: String,
     description: Option<String>,
     retrieval_instructions: Option<String>,
     output_mode: Option<String>,
@@ -86,6 +93,7 @@ struct KnowledgeBaseSummary {
 #[derive(Debug, Clone)]
 struct KnowledgeSourceSummary {
     name: String,
+    file_path: String,
     description: Option<String>,
     kind: Option<String>,
     index_name: Option<String>,
@@ -111,10 +119,11 @@ struct AgentToolSummary {
 #[derive(Debug, Clone)]
 struct AgentSummary {
     name: String,
+    file_path: String,
     model: String,
     tool_count: usize,
     tools: Vec<AgentToolSummary>,
-    instruction_preview: String,
+    instructions: String,
 }
 
 /// All project resource summaries collected together
@@ -179,47 +188,47 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
 
             match kind {
                 ResourceKind::Index => {
-                    for v in &values {
-                        summary.indexes.push(parse_index(v));
+                    for (path, v) in &values {
+                        summary.indexes.push(parse_index(path, v));
                     }
                 }
                 ResourceKind::DataSource => {
-                    for v in &values {
-                        summary.data_sources.push(parse_data_source(v));
+                    for (path, v) in &values {
+                        summary.data_sources.push(parse_data_source(path, v));
                     }
                 }
                 ResourceKind::Indexer => {
-                    for v in &values {
-                        let indexer = parse_indexer(v);
+                    for (path, v) in &values {
+                        let indexer = parse_indexer(path, v);
                         add_indexer_dependencies(&indexer, &mut summary.dependencies);
                         summary.indexers.push(indexer);
                     }
                 }
                 ResourceKind::Skillset => {
-                    for v in &values {
-                        summary.skillsets.push(parse_skillset(v));
+                    for (path, v) in &values {
+                        summary.skillsets.push(parse_skillset(path, v));
                     }
                 }
                 ResourceKind::SynonymMap => {
-                    for v in &values {
-                        summary.synonym_maps.push(parse_synonym_map(v));
+                    for (path, v) in &values {
+                        summary.synonym_maps.push(parse_synonym_map(path, v));
                     }
                 }
                 ResourceKind::Alias => {
-                    for v in &values {
-                        summary.aliases.push(parse_alias(v));
+                    for (path, v) in &values {
+                        summary.aliases.push(parse_alias(path, v));
                     }
                 }
                 ResourceKind::KnowledgeBase => {
-                    for v in &values {
-                        summary.knowledge_bases.push(parse_knowledge_base(v));
+                    for (path, v) in &values {
+                        summary.knowledge_bases.push(parse_knowledge_base(path, v));
                     }
                 }
                 ResourceKind::KnowledgeSource => {
                     // KS are now stored as subdirectories; read from each subdir
                     let ks_values = read_ks_from_dirs(&resource_dir);
-                    for v in &ks_values {
-                        let ks = parse_knowledge_source(v);
+                    for (path, v) in &ks_values {
+                        let ks = parse_knowledge_source(path, v);
                         add_knowledge_source_dependencies(&ks, &mut summary.dependencies);
                         summary.knowledge_sources.push(ks);
                     }
@@ -302,7 +311,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
 }
 
 /// Read all JSON files from a directory and parse them as serde_json::Value
-fn read_json_files(dir: &Path) -> Result<Vec<Value>> {
+fn read_json_files(dir: &Path) -> Result<Vec<(std::path::PathBuf, Value)>> {
     let mut values = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -312,14 +321,14 @@ fn read_json_files(dir: &Path) -> Result<Vec<Value>> {
         }
         let content = std::fs::read_to_string(&path)?;
         let value: Value = serde_json::from_str(&content)?;
-        values.push(value);
+        values.push((path, value));
     }
     Ok(values)
 }
 
 /// Read knowledge source definitions from subdirectories.
 /// Each KS is stored as `<ks-name>/<ks-name>.json` within the knowledge-sources dir.
-fn read_ks_from_dirs(ks_base: &Path) -> Vec<Value> {
+fn read_ks_from_dirs(ks_base: &Path) -> Vec<(std::path::PathBuf, Value)> {
     let mut values = Vec::new();
     let entries = match std::fs::read_dir(ks_base) {
         Ok(e) => e,
@@ -337,7 +346,7 @@ fn read_ks_from_dirs(ks_base: &Path) -> Vec<Value> {
         let ks_file = path.join(format!("{}.json", ks_name));
         if let Ok(content) = std::fs::read_to_string(&ks_file) {
             if let Ok(value) = serde_json::from_str::<Value>(&content) {
-                values.push(value);
+                values.push((ks_file, value));
             }
         }
     }
@@ -355,7 +364,7 @@ fn get_name(v: &Value) -> String {
         .to_string()
 }
 
-fn parse_index(v: &Value) -> IndexSummary {
+fn parse_index(file_path: &Path, v: &Value) -> IndexSummary {
     let name = get_name(v);
 
     let fields: Vec<FieldSummary> = v
@@ -380,6 +389,7 @@ fn parse_index(v: &Value) -> IndexSummary {
 
     IndexSummary {
         name,
+        file_path: file_path.display().to_string(),
         fields,
         vector_profile_count,
         has_semantic_config,
@@ -407,7 +417,7 @@ fn parse_field(v: &Value) -> FieldSummary {
     }
 }
 
-fn parse_data_source(v: &Value) -> DataSourceSummary {
+fn parse_data_source(file_path: &Path, v: &Value) -> DataSourceSummary {
     let name = get_name(v);
     let source_type = v
         .get("type")
@@ -423,12 +433,13 @@ fn parse_data_source(v: &Value) -> DataSourceSummary {
 
     DataSourceSummary {
         name,
+        file_path: file_path.display().to_string(),
         source_type,
         container,
     }
 }
 
-fn parse_indexer(v: &Value) -> IndexerSummary {
+fn parse_indexer(file_path: &Path, v: &Value) -> IndexerSummary {
     let name = get_name(v);
     let target_index = v
         .get("targetIndexName")
@@ -447,6 +458,7 @@ fn parse_indexer(v: &Value) -> IndexerSummary {
 
     IndexerSummary {
         name,
+        file_path: file_path.display().to_string(),
         target_index,
         data_source,
         skillset,
@@ -477,7 +489,7 @@ fn add_indexer_dependencies(indexer: &IndexerSummary, deps: &mut Vec<Dependency>
     }
 }
 
-fn parse_skillset(v: &Value) -> SkillsetSummary {
+fn parse_skillset(file_path: &Path, v: &Value) -> SkillsetSummary {
     let name = get_name(v);
     let skills: Vec<SkillEntry> = v
         .get("skills")
@@ -503,20 +515,28 @@ fn parse_skillset(v: &Value) -> SkillsetSummary {
         })
         .unwrap_or_default();
 
-    SkillsetSummary { name, skills }
+    SkillsetSummary {
+        name,
+        file_path: file_path.display().to_string(),
+        skills,
+    }
 }
 
-fn parse_synonym_map(v: &Value) -> SynonymMapSummary {
+fn parse_synonym_map(file_path: &Path, v: &Value) -> SynonymMapSummary {
     let name = get_name(v);
     let format = v
         .get("format")
         .and_then(|f| f.as_str())
         .unwrap_or("solr")
         .to_string();
-    SynonymMapSummary { name, format }
+    SynonymMapSummary {
+        name,
+        file_path: file_path.display().to_string(),
+        format,
+    }
 }
 
-fn parse_alias(v: &Value) -> AliasSummary {
+fn parse_alias(file_path: &Path, v: &Value) -> AliasSummary {
     let name = get_name(v);
     let indexes = v
         .get("indexes")
@@ -528,10 +548,14 @@ fn parse_alias(v: &Value) -> AliasSummary {
         })
         .unwrap_or_default();
 
-    AliasSummary { name, indexes }
+    AliasSummary {
+        name,
+        file_path: file_path.display().to_string(),
+        indexes,
+    }
 }
 
-fn parse_knowledge_base(v: &Value) -> KnowledgeBaseSummary {
+fn parse_knowledge_base(file_path: &Path, v: &Value) -> KnowledgeBaseSummary {
     let name = get_name(v);
 
     let description = v
@@ -563,6 +587,7 @@ fn parse_knowledge_base(v: &Value) -> KnowledgeBaseSummary {
 
     KnowledgeBaseSummary {
         name,
+        file_path: file_path.display().to_string(),
         description,
         retrieval_instructions,
         output_mode,
@@ -570,7 +595,7 @@ fn parse_knowledge_base(v: &Value) -> KnowledgeBaseSummary {
     }
 }
 
-fn parse_knowledge_source(v: &Value) -> KnowledgeSourceSummary {
+fn parse_knowledge_source(file_path: &Path, v: &Value) -> KnowledgeSourceSummary {
     let name = get_name(v);
 
     let description = v
@@ -601,6 +626,7 @@ fn parse_knowledge_source(v: &Value) -> KnowledgeSourceSummary {
 
     KnowledgeSourceSummary {
         name,
+        file_path: file_path.display().to_string(),
         description,
         kind,
         index_name,
@@ -647,21 +673,19 @@ fn parse_agent_yaml(yaml_path: &Path) -> Option<AgentSummary> {
         })
         .unwrap_or((0, Vec::new()));
 
-    let instruction_preview = value
+    let instructions = value
         .get("instructions")
         .and_then(|i| i.as_str())
-        .unwrap_or("")
-        .lines()
-        .next()
         .unwrap_or("")
         .to_string();
 
     Some(AgentSummary {
         name,
+        file_path: yaml_path.display().to_string(),
         model,
         tool_count,
         tools,
-        instruction_preview,
+        instructions,
     })
 }
 
@@ -750,8 +774,9 @@ fn print_text(summary: &ProjectSummary) {
                 println!("    Tools: {}", tool_labels.join(", "));
             }
 
-            if !agent.instruction_preview.is_empty() {
-                println!("    Instructions: {}", agent.instruction_preview);
+            if !agent.instructions.is_empty() {
+                let preview = agent.instructions.lines().next().unwrap_or("");
+                println!("    Instructions: {}", preview);
             }
             println!();
         }
@@ -1109,6 +1134,7 @@ fn print_json(summary: &ProjectSummary) {
                 .collect();
             json!({
                 "name": idx.name,
+                "file_path": idx.file_path,
                 "field_count": idx.fields.len(),
                 "key_field": idx.fields.iter().find(|f| f.is_key).map(|f| &f.name),
                 "fields": fields,
@@ -1124,6 +1150,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|ds| {
             json!({
                 "name": ds.name,
+                "file_path": ds.file_path,
                 "type": ds.source_type,
                 "container": ds.container,
             })
@@ -1136,6 +1163,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|idxr| {
             json!({
                 "name": idxr.name,
+                "file_path": idxr.file_path,
                 "target_index": idxr.target_index,
                 "data_source": idxr.data_source,
                 "skillset": idxr.skillset,
@@ -1159,6 +1187,7 @@ fn print_json(summary: &ProjectSummary) {
                 .collect();
             json!({
                 "name": ss.name,
+                "file_path": ss.file_path,
                 "skill_count": ss.skills.len(),
                 "skills": skills,
             })
@@ -1171,6 +1200,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|sm| {
             json!({
                 "name": sm.name,
+                "file_path": sm.file_path,
                 "format": sm.format,
             })
         })
@@ -1182,6 +1212,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|a| {
             json!({
                 "name": a.name,
+                "file_path": a.file_path,
                 "indexes": a.indexes,
             })
         })
@@ -1193,6 +1224,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|kb| {
             json!({
                 "name": kb.name,
+                "file_path": kb.file_path,
                 "description": kb.description,
                 "retrieval_instructions": kb.retrieval_instructions,
                 "output_mode": kb.output_mode,
@@ -1207,6 +1239,7 @@ fn print_json(summary: &ProjectSummary) {
         .map(|ks| {
             json!({
                 "name": ks.name,
+                "file_path": ks.file_path,
                 "description": ks.description,
                 "kind": ks.kind,
                 "index_name": ks.index_name,
@@ -1231,10 +1264,11 @@ fn print_json(summary: &ProjectSummary) {
                 .collect();
             json!({
                 "name": a.name,
+                "file_path": a.file_path,
                 "model": a.model,
                 "tool_count": a.tool_count,
                 "tools": tools,
-                "instruction_preview": a.instruction_preview,
+                "instructions": a.instructions,
             })
         })
         .collect();
@@ -1274,6 +1308,11 @@ fn print_json(summary: &ProjectSummary) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::PathBuf;
+
+    fn test_path(name: &str) -> PathBuf {
+        PathBuf::from(format!("/test/{}", name))
+    }
 
     #[test]
     fn test_parse_index_basic() {
@@ -1285,8 +1324,10 @@ mod tests {
                 {"name": "rating", "type": "Edm.Int32"}
             ]
         });
-        let idx = parse_index(&v);
+        let p = test_path("hotels.json");
+        let idx = parse_index(&p, &v);
         assert_eq!(idx.name, "hotels");
+        assert_eq!(idx.file_path, "/test/hotels.json");
         assert_eq!(idx.fields.len(), 3);
         assert!(idx.fields[0].is_key);
         assert_eq!(idx.fields[0].name, "hotelId");
@@ -1313,7 +1354,8 @@ mod tests {
                 ]
             }
         });
-        let idx = parse_index(&v);
+        let p = test_path("docs.json");
+        let idx = parse_index(&p, &v);
         assert_eq!(idx.name, "docs");
         assert_eq!(idx.vector_profile_count, 1);
         assert!(idx.has_semantic_config);
@@ -1341,7 +1383,8 @@ mod tests {
             "type": "azureblob",
             "container": {"name": "docs"}
         });
-        let ds = parse_data_source(&v);
+        let p = test_path("cosmos-hotels.json");
+        let ds = parse_data_source(&p, &v);
         assert_eq!(ds.name, "cosmos-hotels");
         assert_eq!(ds.source_type, "azureblob");
         assert_eq!(ds.container, "docs");
@@ -1353,7 +1396,8 @@ mod tests {
             "name": "my-source",
             "type": "cosmosdb"
         });
-        let ds = parse_data_source(&v);
+        let p = test_path("my-source.json");
+        let ds = parse_data_source(&p, &v);
         assert_eq!(ds.name, "my-source");
         assert_eq!(ds.source_type, "cosmosdb");
         assert_eq!(ds.container, "");
@@ -1367,7 +1411,8 @@ mod tests {
             "dataSourceName": "cosmos-hotels",
             "skillsetName": "enrichment"
         });
-        let idxr = parse_indexer(&v);
+        let p = test_path("hotels-indexer.json");
+        let idxr = parse_indexer(&p, &v);
         assert_eq!(idxr.name, "hotels-indexer");
         assert_eq!(idxr.target_index, "hotels");
         assert_eq!(idxr.data_source, "cosmos-hotels");
@@ -1381,7 +1426,8 @@ mod tests {
             "targetIndexName": "items",
             "dataSourceName": "items-ds"
         });
-        let idxr = parse_indexer(&v);
+        let p = test_path("simple-indexer.json");
+        let idxr = parse_indexer(&p, &v);
         assert_eq!(idxr.name, "simple-indexer");
         assert!(idxr.skillset.is_none());
     }
@@ -1390,6 +1436,7 @@ mod tests {
     fn test_add_indexer_dependencies() {
         let idxr = IndexerSummary {
             name: "hotels-indexer".to_string(),
+            file_path: String::new(),
             target_index: "hotels".to_string(),
             data_source: "cosmos-hotels".to_string(),
             skillset: Some("enrichment".to_string()),
@@ -1412,6 +1459,7 @@ mod tests {
     fn test_add_indexer_dependencies_no_skillset() {
         let idxr = IndexerSummary {
             name: "simple-indexer".to_string(),
+            file_path: String::new(),
             target_index: "items".to_string(),
             data_source: "items-ds".to_string(),
             skillset: None,
@@ -1439,7 +1487,8 @@ mod tests {
                 }
             ]
         });
-        let ss = parse_skillset(&v);
+        let p = test_path("enrichment.json");
+        let ss = parse_skillset(&p, &v);
         assert_eq!(ss.name, "enrichment");
         assert_eq!(ss.skills.len(), 3);
         assert_eq!(ss.skills[0].odata_type, "#Microsoft.Skills.Text.SplitSkill");
@@ -1453,7 +1502,8 @@ mod tests {
             "name": "hotel-synonyms",
             "format": "solr"
         });
-        let sm = parse_synonym_map(&v);
+        let p = test_path("hotel-synonyms.json");
+        let sm = parse_synonym_map(&p, &v);
         assert_eq!(sm.name, "hotel-synonyms");
         assert_eq!(sm.format, "solr");
     }
@@ -1463,7 +1513,8 @@ mod tests {
         let v = json!({
             "name": "my-synonyms"
         });
-        let sm = parse_synonym_map(&v);
+        let p = test_path("my-synonyms.json");
+        let sm = parse_synonym_map(&p, &v);
         assert_eq!(sm.format, "solr");
     }
 
@@ -1476,7 +1527,8 @@ mod tests {
             "outputMode": "extractiveData",
             "knowledgeSources": [{"name": "regulatory"}]
         });
-        let kb = parse_knowledge_base(&v);
+        let p = test_path("regulatory-kb.json");
+        let kb = parse_knowledge_base(&p, &v);
         assert_eq!(kb.name, "regulatory-kb");
         assert_eq!(
             kb.description.as_deref(),
@@ -1495,7 +1547,8 @@ mod tests {
     #[test]
     fn test_parse_knowledge_base_minimal() {
         let v = json!({"name": "empty-kb"});
-        let kb = parse_knowledge_base(&v);
+        let p = test_path("empty-kb.json");
+        let kb = parse_knowledge_base(&p, &v);
         assert_eq!(kb.name, "empty-kb");
         assert!(kb.description.is_none());
         assert!(kb.retrieval_instructions.is_none());
@@ -1512,7 +1565,8 @@ mod tests {
             "indexName": "regulatory-index",
             "knowledgeBaseName": "regulatory-kb"
         });
-        let ks = parse_knowledge_source(&v);
+        let p = test_path("regulatory-docs.json");
+        let ks = parse_knowledge_source(&p, &v);
         assert_eq!(ks.name, "regulatory-docs");
         assert_eq!(
             ks.description.as_deref(),
@@ -1535,7 +1589,8 @@ mod tests {
                 }
             }
         });
-        let ks = parse_knowledge_source(&v);
+        let p = test_path("regulatory.json");
+        let ks = parse_knowledge_source(&p, &v);
         assert_eq!(ks.name, "regulatory");
         assert_eq!(ks.index_name.as_deref(), Some("regulatory-index"));
     }
@@ -1544,6 +1599,7 @@ mod tests {
     fn test_add_knowledge_source_dependencies() {
         let ks = KnowledgeSourceSummary {
             name: "regulatory-docs".to_string(),
+            file_path: String::new(),
             description: None,
             kind: None,
             index_name: Some("regulatory-index".to_string()),
@@ -1582,7 +1638,7 @@ mod tests {
         assert!(agent.tools[0].knowledge_base_name.is_none());
         assert!(
             agent
-                .instruction_preview
+                .instructions
                 .contains("helpful assistant for regulatory")
         );
     }
@@ -1599,21 +1655,21 @@ mod tests {
         assert_eq!(agent.model, "gpt-4o-mini");
         assert_eq!(agent.tool_count, 0);
         assert!(agent.tools.is_empty());
-        assert_eq!(agent.instruction_preview, "");
+        assert_eq!(agent.instructions, "");
     }
 
     #[test]
-    fn test_parse_agent_yaml_long_instructions_not_truncated() {
+    fn test_parse_agent_yaml_long_instructions_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let yaml_path = dir.path().join("verbose-agent.yaml");
 
-        let long_line = "A".repeat(200);
-        let yaml = format!("kind: prompt\nmodel: gpt-4o\ninstructions: {}\n", long_line);
+        let long_text = "A".repeat(500);
+        let yaml = format!("kind: prompt\nmodel: gpt-4o\ninstructions: {}\n", long_text);
         std::fs::write(&yaml_path, &yaml).unwrap();
 
         let agent = parse_agent_yaml(&yaml_path).unwrap();
-        assert_eq!(agent.instruction_preview.len(), 200);
-        assert!(!agent.instruction_preview.ends_with("..."));
+        assert_eq!(agent.instructions.len(), 500);
+        assert_eq!(agent.instructions, long_text);
     }
 
     #[test]
@@ -1675,7 +1731,8 @@ mod tests {
     #[test]
     fn test_parse_index_no_fields() {
         let v = json!({"name": "empty-index"});
-        let idx = parse_index(&v);
+        let p = test_path("empty-index.json");
+        let idx = parse_index(&p, &v);
         assert_eq!(idx.name, "empty-index");
         assert!(idx.fields.is_empty());
         assert_eq!(idx.vector_profile_count, 0);

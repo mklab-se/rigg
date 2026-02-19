@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-02-19
+
+### Added
+
+- **MCP server (`hoist mcp serve`)** — built-in [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI coding tools (Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI) interact with hoist directly through structured tool calls. Exposes 8 tools: `hoist_status`, `hoist_describe`, `hoist_env_list`, `hoist_validate`, `hoist_list`, `hoist_diff`, `hoist_pull`, `hoist_push`. Communicates over stdio using JSON-RPC
+- **`hoist mcp install` command** — register hoist as an MCP server with `claude-code` or `vs-code` targets. Creates user-level MCP configuration so hoist is available across all projects
+- **`.mcp.json` auto-discovery** — projects with `.mcp.json` in the repo root are automatically discovered by Claude Code and VS Code. No manual setup needed
+- **`hoist list` command** — list resource names by type from local disk, remote Azure, or both. Useful for quick enumeration and drift detection without the full detail of `hoist describe`
+- **Agent skills (`.claude/skills/`)** — cross-platform [agent skills](https://agentskills.io/) that work with Claude Code, GitHub Copilot, Codex, Cursor, and Gemini CLI. Three user-invocable workflows (`/hoist-pull`, `/hoist-push`, `/hoist-status`) plus an auto-loaded reference guide
+- **`hoist describe` precision for AI** — JSON output now includes `file_path` for every resource and full `instructions` for agents (previously truncated to first line). AI agents can read any file path for complete content
+- **[MCP.md](MCP.md)** — comprehensive documentation for AI agent integration: setup, tool reference, parameters, example workflows
+
+### Changed
+
+- **Breaking: `--dry-run` removed** — mutating commands (`pull`, `push`) now use a unified `--force` pattern. Without `--force`, the command shows a preview and asks for confirmation. With `--force`, it executes immediately. This replaces the confusing three-mode system (`--dry-run`, default, `--force`)
+
+### Tests
+
+- 522 tests across workspace (up from 516)
+
 ## [0.5.3] - 2026-02-16
 
 ### Added

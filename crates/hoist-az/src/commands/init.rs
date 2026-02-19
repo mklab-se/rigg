@@ -238,9 +238,8 @@ async fn run_fresh(
             &files_dir,
             &env,
             &selection,
-            None,  // no filter
-            false, // not dry_run
-            true,  // force (user already confirmed)
+            None, // no filter
+            true, // force (user already confirmed)
         )
         .await?;
     } else {
