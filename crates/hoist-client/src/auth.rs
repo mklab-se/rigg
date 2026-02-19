@@ -6,7 +6,9 @@ use thiserror::Error;
 /// Authentication errors
 #[derive(Debug, Error)]
 pub enum AuthError {
-    #[error("Azure CLI not found. Please install it: https://docs.microsoft.com/cli/azure/install-azure-cli")]
+    #[error(
+        "Azure CLI not found. Please install it: https://docs.microsoft.com/cli/azure/install-azure-cli"
+    )]
     AzCliNotFound,
     #[error("Not logged in to Azure CLI. Run: az login")]
     NotLoggedIn,
@@ -294,22 +296,30 @@ mod tests {
     // Env var tests must run serially since they share process-wide state.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-    fn clear_azure_env_vars() {
-        std::env::remove_var("AZURE_CLIENT_ID");
-        std::env::remove_var("AZURE_CLIENT_SECRET");
-        std::env::remove_var("AZURE_TENANT_ID");
+    /// # Safety
+    /// Must be called while holding ENV_MUTEX to avoid data races.
+    unsafe fn clear_azure_env_vars() {
+        unsafe {
+            std::env::remove_var("AZURE_CLIENT_ID");
+            std::env::remove_var("AZURE_CLIENT_SECRET");
+            std::env::remove_var("AZURE_TENANT_ID");
+        }
     }
 
-    fn set_azure_env_vars() {
-        std::env::set_var("AZURE_CLIENT_ID", "test-client-id");
-        std::env::set_var("AZURE_CLIENT_SECRET", "test-client-secret");
-        std::env::set_var("AZURE_TENANT_ID", "test-tenant-id");
+    /// # Safety
+    /// Must be called while holding ENV_MUTEX to avoid data races.
+    unsafe fn set_azure_env_vars() {
+        unsafe {
+            std::env::set_var("AZURE_CLIENT_ID", "test-client-id");
+            std::env::set_var("AZURE_CLIENT_SECRET", "test-client-secret");
+            std::env::set_var("AZURE_TENANT_ID", "test-tenant-id");
+        }
     }
 
     #[test]
     fn test_env_auth_from_env_success() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        set_azure_env_vars();
+        unsafe { set_azure_env_vars() };
 
         let result = EnvAuth::from_env();
         assert!(result.is_ok());
@@ -318,68 +328,74 @@ mod tests {
         assert_eq!(auth.client_secret, "test-client-secret");
         assert_eq!(auth.tenant_id, "test-tenant-id");
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_from_env_missing_client_id() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        clear_azure_env_vars();
-        std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
-        std::env::set_var("AZURE_TENANT_ID", "test-tenant");
+        unsafe {
+            clear_azure_env_vars();
+            std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
+            std::env::set_var("AZURE_TENANT_ID", "test-tenant");
+        }
 
         let result = EnvAuth::from_env();
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, AuthError::MissingEnvVar(ref v) if v == "AZURE_CLIENT_ID"));
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_from_env_missing_client_secret() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        clear_azure_env_vars();
-        std::env::set_var("AZURE_CLIENT_ID", "test-id");
-        std::env::set_var("AZURE_TENANT_ID", "test-tenant");
+        unsafe {
+            clear_azure_env_vars();
+            std::env::set_var("AZURE_CLIENT_ID", "test-id");
+            std::env::set_var("AZURE_TENANT_ID", "test-tenant");
+        }
 
         let result = EnvAuth::from_env();
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, AuthError::MissingEnvVar(ref v) if v == "AZURE_CLIENT_SECRET"));
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_from_env_missing_tenant_id() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        clear_azure_env_vars();
-        std::env::set_var("AZURE_CLIENT_ID", "test-id");
-        std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
+        unsafe {
+            clear_azure_env_vars();
+            std::env::set_var("AZURE_CLIENT_ID", "test-id");
+            std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
+        }
 
         let result = EnvAuth::from_env();
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, AuthError::MissingEnvVar(ref v) if v == "AZURE_TENANT_ID"));
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_is_configured_all_set() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        set_azure_env_vars();
+        unsafe { set_azure_env_vars() };
 
         assert!(EnvAuth::is_configured());
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_is_configured_none_set() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
 
         assert!(!EnvAuth::is_configured());
     }
@@ -387,20 +403,22 @@ mod tests {
     #[test]
     fn test_env_auth_is_configured_partial() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        clear_azure_env_vars();
-        std::env::set_var("AZURE_CLIENT_ID", "test-id");
-        std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
+        unsafe {
+            clear_azure_env_vars();
+            std::env::set_var("AZURE_CLIENT_ID", "test-id");
+            std::env::set_var("AZURE_CLIENT_SECRET", "test-secret");
+        }
         // AZURE_TENANT_ID intentionally missing
 
         assert!(!EnvAuth::is_configured());
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_method_name() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        set_azure_env_vars();
+        unsafe { set_azure_env_vars() };
 
         let auth = EnvAuth::from_env().unwrap();
         assert_eq!(
@@ -408,7 +426,7 @@ mod tests {
             "Environment Variables (Service Principal)"
         );
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
@@ -438,25 +456,25 @@ mod tests {
     #[test]
     fn test_env_auth_from_env_scope_foundry() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        set_azure_env_vars();
+        unsafe { set_azure_env_vars() };
 
         let result = EnvAuth::from_env_for_scope("https://ai.azure.com");
         assert!(result.is_ok());
         let auth = result.unwrap();
         assert_eq!(auth.resource_scope, "https://ai.azure.com");
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]
     fn test_env_auth_from_env_default_scope_is_search() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        set_azure_env_vars();
+        unsafe { set_azure_env_vars() };
 
         let auth = EnvAuth::from_env().unwrap();
         assert_eq!(auth.resource_scope, "https://search.azure.com");
 
-        clear_azure_env_vars();
+        unsafe { clear_azure_env_vars() };
     }
 
     #[test]

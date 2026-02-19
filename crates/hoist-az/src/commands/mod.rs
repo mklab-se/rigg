@@ -20,8 +20,8 @@ pub mod validate;
 
 use std::path::PathBuf;
 
-use hoist_core::config::{find_project_root, ResolvedEnvironment};
 use hoist_core::Config;
+use hoist_core::config::{ResolvedEnvironment, find_project_root};
 
 /// Find project root and load configuration
 pub fn load_config() -> anyhow::Result<(PathBuf, Config)> {

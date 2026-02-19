@@ -11,7 +11,7 @@ use tracing::{debug, instrument, warn};
 
 use hoist_core::config::FoundryServiceConfig;
 
-use crate::auth::{get_auth_provider_for, AuthProvider};
+use crate::auth::{AuthProvider, get_auth_provider_for};
 use crate::error::ClientError;
 
 /// Maximum number of retry attempts for retryable errors

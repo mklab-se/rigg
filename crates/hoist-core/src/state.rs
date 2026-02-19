@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::resources::managed::ManagedMap;
 use crate::resources::ResourceKind;
+use crate::resources::managed::ManagedMap;
 
 /// State management errors
 #[derive(Debug, Error)]
@@ -437,9 +437,11 @@ mod tests {
             "ks-1".to_string(),
         );
 
-        assert!(checksums
-            .get_managed(ResourceKind::Index, "ks-1-index", &map)
-            .is_none());
+        assert!(
+            checksums
+                .get_managed(ResourceKind::Index, "ks-1-index", &map)
+                .is_none()
+        );
 
         checksums.set_managed(
             ResourceKind::Index,
@@ -453,9 +455,11 @@ mod tests {
         );
 
         checksums.remove_managed(ResourceKind::Index, "ks-1-index", &map);
-        assert!(checksums
-            .get_managed(ResourceKind::Index, "ks-1-index", &map)
-            .is_none());
+        assert!(
+            checksums
+                .get_managed(ResourceKind::Index, "ks-1-index", &map)
+                .is_none()
+        );
     }
 
     /// Verifies the local modification detection pattern used by pull.

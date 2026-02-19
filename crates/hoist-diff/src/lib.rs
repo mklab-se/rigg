@@ -9,4 +9,4 @@ pub mod output;
 pub mod semantic;
 
 pub use output::{format_json, format_text};
-pub use semantic::{diff, Change, ChangeKind, DiffResult};
+pub use semantic::{Change, ChangeKind, DiffResult, diff};

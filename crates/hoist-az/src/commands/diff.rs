@@ -6,13 +6,13 @@ use tracing::info;
 
 use hoist_client::AzureSearchClient;
 use hoist_core::normalize::normalize;
+use hoist_core::resources::ResourceKind;
 use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
-use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_diff::{
     diff,
-    output::{format_report, OutputFormat},
+    output::{OutputFormat, format_report},
 };
 
 use crate::cli::{DiffFormat, ResourceTypeFlags};

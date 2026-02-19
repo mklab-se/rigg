@@ -16,14 +16,14 @@ use hoist_core::config::{FoundryServiceConfig, ResolvedEnvironment};
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::agent::{agent_to_yaml, agent_volatile_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
-use hoist_core::resources::{validate_resource_name, ResourceKind};
+use hoist_core::resources::{ResourceKind, validate_resource_name};
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState, ResourceState};
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
 use crate::commands::common::{
-    get_volatile_fields, resolve_resource_selection_from_flags, ResourceSelection,
+    ResourceSelection, get_volatile_fields, resolve_resource_selection_from_flags,
 };
 use crate::commands::confirm::prompt_yes_no;
 use crate::commands::describe::describe_changes;

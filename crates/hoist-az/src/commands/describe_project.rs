@@ -1,7 +1,7 @@
 //! Unified summary of all local resource definitions
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 use hoist_core::resources::ResourceKind;
@@ -1397,13 +1397,15 @@ mod tests {
         let mut deps = Vec::new();
         add_indexer_dependencies(&idxr, &mut deps);
         assert_eq!(deps.len(), 3);
-        assert!(deps
-            .iter()
-            .any(|d| d.to == "cosmos-hotels" && d.kind == "Data Source"));
+        assert!(
+            deps.iter()
+                .any(|d| d.to == "cosmos-hotels" && d.kind == "Data Source")
+        );
         assert!(deps.iter().any(|d| d.to == "hotels" && d.kind == "Index"));
-        assert!(deps
-            .iter()
-            .any(|d| d.to == "enrichment" && d.kind == "Skillset"));
+        assert!(
+            deps.iter()
+                .any(|d| d.to == "enrichment" && d.kind == "Skillset")
+        );
     }
 
     #[test]
@@ -1480,11 +1482,12 @@ mod tests {
             kb.description.as_deref(),
             Some("Official regulatory and legal texts")
         );
-        assert!(kb
-            .retrieval_instructions
-            .as_ref()
-            .unwrap()
-            .contains("legal evidence"));
+        assert!(
+            kb.retrieval_instructions
+                .as_ref()
+                .unwrap()
+                .contains("legal evidence")
+        );
         assert_eq!(kb.output_mode.as_deref(), Some("extractiveData"));
         assert_eq!(kb.knowledge_sources, vec!["regulatory"]);
     }
@@ -1549,12 +1552,14 @@ mod tests {
         let mut deps = Vec::new();
         add_knowledge_source_dependencies(&ks, &mut deps);
         assert_eq!(deps.len(), 2);
-        assert!(deps
-            .iter()
-            .any(|d| d.to == "regulatory-index" && d.kind == "Index"));
-        assert!(deps
-            .iter()
-            .any(|d| d.to == "regulatory-kb" && d.kind == "Knowledge Base"));
+        assert!(
+            deps.iter()
+                .any(|d| d.to == "regulatory-index" && d.kind == "Index")
+        );
+        assert!(
+            deps.iter()
+                .any(|d| d.to == "regulatory-kb" && d.kind == "Knowledge Base")
+        );
     }
 
     #[test]
@@ -1575,9 +1580,11 @@ mod tests {
         assert_eq!(agent.tools.len(), 2);
         assert_eq!(agent.tools[0].tool_type, "code_interpreter");
         assert!(agent.tools[0].knowledge_base_name.is_none());
-        assert!(agent
-            .instruction_preview
-            .contains("helpful assistant for regulatory"));
+        assert!(
+            agent
+                .instruction_preview
+                .contains("helpful assistant for regulatory")
+        );
     }
 
     #[test]
@@ -1623,8 +1630,7 @@ mod tests {
 
     #[test]
     fn test_extract_kb_from_mcp_url() {
-        let url =
-            "https://svc.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2025-11-01-Preview";
+        let url = "https://svc.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2025-11-01-Preview";
         assert_eq!(
             extract_kb_from_mcp_url(Some(url)),
             Some("regulatory-kb".to_string())

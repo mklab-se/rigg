@@ -9,7 +9,7 @@ use tracing::{debug, instrument, warn};
 use hoist_core::config::SearchServiceConfig;
 use hoist_core::resources::ResourceKind;
 
-use crate::auth::{get_auth_provider, AuthProvider};
+use crate::auth::{AuthProvider, get_auth_provider};
 use crate::error::ClientError;
 
 /// Maximum number of retry attempts for retryable errors

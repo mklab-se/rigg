@@ -6,8 +6,8 @@ use anyhow::Result;
 use colored::Colorize;
 
 use hoist_client::AzureSearchClient;
-use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::resources::ResourceKind;
+use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::{Checksums, LocalState};
 

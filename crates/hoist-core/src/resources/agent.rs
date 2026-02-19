@@ -252,10 +252,12 @@ mod tests {
         assert_eq!(parsed["model"], "gpt-4o");
         assert_eq!(parsed["description"], "Test agent");
         assert_eq!(parsed["temperature"], 0.7);
-        assert!(parsed["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("Be helpful."));
+        assert!(
+            parsed["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Be helpful.")
+        );
         assert_eq!(parsed["tools"].as_array().unwrap().len(), 1);
         assert!(
             parsed["tool_resources"]["file_search"]["vector_store_ids"]

@@ -886,14 +886,30 @@ For more information, see the [Hoist documentation](https://github.com/mklab-se/
 
 fn api_doc_url(kind: ResourceKind) -> &'static str {
     match kind {
-        ResourceKind::Index => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update",
-        ResourceKind::Indexer => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexers/create-or-update",
-        ResourceKind::DataSource => "https://learn.microsoft.com/en-us/rest/api/searchservice/data-sources/create-or-update",
-        ResourceKind::Skillset => "https://learn.microsoft.com/en-us/rest/api/searchservice/skillsets/create-or-update",
-        ResourceKind::SynonymMap => "https://learn.microsoft.com/en-us/rest/api/searchservice/synonym-maps/create-or-update",
-        ResourceKind::Alias => "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update",
-        ResourceKind::KnowledgeBase => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-bases/create-or-update?view=rest-searchservice-2025-05-01-preview",
-        ResourceKind::KnowledgeSource => "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview",
+        ResourceKind::Index => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update"
+        }
+        ResourceKind::Indexer => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/indexers/create-or-update"
+        }
+        ResourceKind::DataSource => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/data-sources/create-or-update"
+        }
+        ResourceKind::Skillset => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/skillsets/create-or-update"
+        }
+        ResourceKind::SynonymMap => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/synonym-maps/create-or-update"
+        }
+        ResourceKind::Alias => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/indexes/create-or-update"
+        }
+        ResourceKind::KnowledgeBase => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-bases/create-or-update?view=rest-searchservice-2025-05-01-preview"
+        }
+        ResourceKind::KnowledgeSource => {
+            "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview"
+        }
         ResourceKind::Agent => "https://learn.microsoft.com/en-us/azure/ai-services/agents/",
     }
 }
@@ -1158,9 +1174,11 @@ mod tests {
         assert!(search_base.join("search-management/synonym-maps").is_dir());
         assert!(search_base.join("search-management/aliases").is_dir());
         // Should NOT have preview dirs
-        assert!(!search_base
-            .join("agentic-retrieval/knowledge-bases")
-            .exists());
+        assert!(
+            !search_base
+                .join("agentic-retrieval/knowledge-bases")
+                .exists()
+        );
     }
 
     #[test]
@@ -1173,12 +1191,16 @@ mod tests {
 
         let search_base = project_dir.join("search");
         assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base
-            .join("agentic-retrieval/knowledge-bases")
-            .is_dir());
-        assert!(search_base
-            .join("agentic-retrieval/knowledge-sources")
-            .is_dir());
+        assert!(
+            search_base
+                .join("agentic-retrieval/knowledge-bases")
+                .is_dir()
+        );
+        assert!(
+            search_base
+                .join("agentic-retrieval/knowledge-sources")
+                .is_dir()
+        );
     }
 
     #[test]
@@ -1407,9 +1429,11 @@ mod tests {
         let loaded = Config::load(project_dir).unwrap();
         let env = loaded.resolve_env(None).unwrap();
         assert_eq!(env.search[0].name, "svc-1");
-        assert!(project_dir
-            .join("search/search-management/indexes")
-            .is_dir());
+        assert!(
+            project_dir
+                .join("search/search-management/indexes")
+                .is_dir()
+        );
     }
 
     #[test]
@@ -1489,12 +1513,16 @@ mod tests {
         // State should be at project root
         assert!(project_dir.join(".hoist/.gitignore").exists());
         // Resource dirs should be under hoist/
-        assert!(project_dir
-            .join("hoist/search/search-management/indexes")
-            .is_dir());
-        assert!(project_dir
-            .join("hoist/search/search-management/data-sources")
-            .is_dir());
+        assert!(
+            project_dir
+                .join("hoist/search/search-management/indexes")
+                .is_dir()
+        );
+        assert!(
+            project_dir
+                .join("hoist/search/search-management/data-sources")
+                .is_dir()
+        );
         // Resource dirs should NOT be at project root
         assert!(!project_dir.join("search").exists());
     }
@@ -1521,9 +1549,11 @@ mod tests {
         create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
 
         // Resource dirs should be at project root (no files_path)
-        assert!(project_dir
-            .join("search/search-management/indexes")
-            .is_dir());
+        assert!(
+            project_dir
+                .join("search/search-management/indexes")
+                .is_dir()
+        );
     }
 
     #[test]

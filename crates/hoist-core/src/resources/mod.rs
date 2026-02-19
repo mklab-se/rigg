@@ -20,4 +20,4 @@ pub use knowledge_base::KnowledgeBase;
 pub use knowledge_source::KnowledgeSource;
 pub use skillset::Skillset;
 pub use synonym_map::SynonymMap;
-pub use traits::{validate_resource_name, Resource, ResourceKind};
+pub use traits::{Resource, ResourceKind, validate_resource_name};

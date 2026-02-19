@@ -191,13 +191,13 @@ mod tests {
 
     #[test]
     fn test_readme_generator_creation() {
-        let gen = ReadmeGenerator::new();
-        assert!(gen.is_ok());
+        let generator = ReadmeGenerator::new();
+        assert!(generator.is_ok());
     }
 
     #[test]
     fn test_project_readme_with_description() {
-        let gen = ReadmeGenerator::new().unwrap();
+        let generator = ReadmeGenerator::new().unwrap();
         let ctx = ProjectContext {
             name: "my-search".to_string(),
             description: Some("A search project for testing".to_string()),
@@ -205,7 +205,7 @@ mod tests {
             resource_counts: vec![],
             generated_at: "2025-01-01".to_string(),
         };
-        let output = gen.generate_project_readme(&ctx).unwrap();
+        let output = generator.generate_project_readme(&ctx).unwrap();
         assert!(output.contains("my-search"));
         assert!(output.contains("A search project for testing"));
         assert!(output.contains("my-search-svc"));
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_project_readme_without_description() {
-        let gen = ReadmeGenerator::new().unwrap();
+        let generator = ReadmeGenerator::new().unwrap();
         let ctx = ProjectContext {
             name: "my-search".to_string(),
             description: None,
@@ -221,14 +221,14 @@ mod tests {
             resource_counts: vec![],
             generated_at: "2025-01-01".to_string(),
         };
-        let output = gen.generate_project_readme(&ctx).unwrap();
+        let output = generator.generate_project_readme(&ctx).unwrap();
         assert!(output.contains("my-search"));
         assert!(output.contains("my-search-svc"));
     }
 
     #[test]
     fn test_project_readme_resource_counts() {
-        let gen = ReadmeGenerator::new().unwrap();
+        let generator = ReadmeGenerator::new().unwrap();
         let ctx = ProjectContext {
             name: "my-search".to_string(),
             description: None,
@@ -247,7 +247,7 @@ mod tests {
             ],
             generated_at: "2025-01-01".to_string(),
         };
-        let output = gen.generate_project_readme(&ctx).unwrap();
+        let output = generator.generate_project_readme(&ctx).unwrap();
         assert!(output.contains("Index"));
         assert!(output.contains("indexes"));
         assert!(output.contains("3"));
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_resource_readme_with_dependencies() {
-        let gen = ReadmeGenerator::new().unwrap();
+        let generator = ReadmeGenerator::new().unwrap();
         let ctx = ResourceTypeContext {
             kind: "Indexer".to_string(),
             kind_plural: "Indexers".to_string(),
@@ -272,7 +272,7 @@ mod tests {
             }],
             description: "Indexers automate data ingestion.".to_string(),
         };
-        let output = gen.generate_resource_readme(&ctx).unwrap();
+        let output = generator.generate_resource_readme(&ctx).unwrap();
         assert!(output.contains("Indexers"));
         assert!(output.contains("my-indexer"));
         assert!(output.contains("Indexes documents"));
@@ -283,14 +283,14 @@ mod tests {
 
     #[test]
     fn test_resource_readme_empty_resources() {
-        let gen = ReadmeGenerator::new().unwrap();
+        let generator = ReadmeGenerator::new().unwrap();
         let ctx = ResourceTypeContext {
             kind: "Index".to_string(),
             kind_plural: "Indexes".to_string(),
             resources: vec![],
             description: "Indexes define the schema.".to_string(),
         };
-        let output = gen.generate_resource_readme(&ctx).unwrap();
+        let output = generator.generate_resource_readme(&ctx).unwrap();
         assert!(output.contains("Indexes"));
         assert!(output.contains("Indexes define the schema."));
     }

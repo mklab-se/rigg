@@ -7,15 +7,15 @@ use anyhow::Result;
 use colored::Colorize;
 use tracing::info;
 
-use hoist_client::auth::AzCliAuth;
 use hoist_client::ArmClient;
 use hoist_client::AzureSearchClient;
-use hoist_core::constraints::check_immutability;
+use hoist_client::auth::AzCliAuth;
 use hoist_core::constraints::ViolationSeverity;
+use hoist_core::constraints::check_immutability;
 use hoist_core::normalize::{format_json, normalize};
+use hoist_core::resources::ResourceKind;
 use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
-use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 use hoist_core::state::Checksums;
 use hoist_diff::Change;
@@ -837,7 +837,7 @@ async fn discover_storage_credentials(
     cached: &mut Option<String>,
 ) -> Option<String> {
     // Return cached value if available
-    if let Some(ref conn) = cached {
+    if let Some(conn) = cached {
         return Some(conn.clone());
     }
 
@@ -1462,9 +1462,11 @@ mod tests {
         let checksums = Checksums::default();
         // No stored checksum means we haven't pulled this resource yet —
         // no conflict to detect (it's a new resource from our perspective)
-        assert!(checksums
-            .get(ResourceKind::Index, "unknown-index")
-            .is_none());
+        assert!(
+            checksums
+                .get(ResourceKind::Index, "unknown-index")
+                .is_none()
+        );
     }
 
     fn test_env() -> hoist_core::config::ResolvedEnvironment {

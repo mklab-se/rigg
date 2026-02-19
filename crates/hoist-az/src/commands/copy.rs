@@ -3,13 +3,13 @@
 //! A local-only operation: reads files, rewrites names and cross-references,
 //! and writes new files. No network calls — push separately after copying.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 
-use hoist_core::copy::{rewrite_references, NameMap};
+use hoist_core::copy::{NameMap, rewrite_references};
 use hoist_core::normalize::format_json;
-use hoist_core::resources::managed;
 use hoist_core::resources::ResourceKind;
+use hoist_core::resources::managed;
 
 use crate::commands::load_config_and_env;
 

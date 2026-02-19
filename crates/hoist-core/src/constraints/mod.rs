@@ -3,8 +3,8 @@
 pub mod dependencies;
 pub mod immutability;
 
-pub use dependencies::{check_dependencies, DependencyViolation};
-pub use immutability::{check_immutability, ImmutabilityViolation, ViolationSeverity};
+pub use dependencies::{DependencyViolation, check_dependencies};
+pub use immutability::{ImmutabilityViolation, ViolationSeverity, check_immutability};
 
 use thiserror::Error;
 

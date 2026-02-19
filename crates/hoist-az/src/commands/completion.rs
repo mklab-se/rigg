@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::CommandFactory;
-use clap_complete::{generate, Shell as ClapShell};
+use clap_complete::{Shell as ClapShell, generate};
 
 use crate::cli::{Cli, Shell};
 
