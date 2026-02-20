@@ -15,6 +15,7 @@ pub mod init;
 pub mod pull;
 pub mod pull_watch;
 pub mod push;
+pub mod scaffold;
 pub mod status;
 pub mod validate;
 

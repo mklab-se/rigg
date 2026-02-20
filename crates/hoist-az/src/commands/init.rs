@@ -247,7 +247,20 @@ async fn run_fresh(
         println!("Next steps:");
         println!("  1. Verify authentication: hoist auth status");
         println!("  2. Pull existing resources: hoist pull --all");
-        println!("  3. View differences: hoist diff --all");
+        match template {
+            InitTemplate::Agentic => {
+                println!("  3. Or create new resources from scratch:");
+                println!("       hoist new knowledge-base my-kb");
+                println!("       hoist new knowledge-source my-ks --index my-index");
+                println!("       hoist new agent my-agent --model gpt-4o");
+            }
+            _ => {
+                println!(
+                    "  3. Or create a new resource: hoist new index my-first-index --vector --semantic"
+                );
+            }
+        }
+        println!("  4. View differences: hoist diff --all");
     }
 
     println!();

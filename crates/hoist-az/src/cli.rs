@@ -234,6 +234,10 @@ pub enum Commands {
         yes: bool,
     },
 
+    /// Create a new resource file from a template (no network calls)
+    #[command(subcommand)]
+    New(NewCommands),
+
     /// Copy a resource locally under a new name (no network calls)
     Copy {
         /// Source resource name
@@ -443,6 +447,129 @@ pub enum AuthCommands {
 
     /// Clear cached authentication
     Logout,
+}
+
+#[derive(Subcommand)]
+pub enum NewCommands {
+    /// Create a new search index definition
+    Index {
+        /// Resource name
+        name: String,
+
+        /// Add vector search configuration (HNSW, cosine, 1536 dimensions)
+        #[arg(long)]
+        vector: bool,
+
+        /// Add semantic search configuration
+        #[arg(long)]
+        semantic: bool,
+    },
+
+    /// Create a new data source definition
+    Datasource {
+        /// Resource name
+        name: String,
+
+        /// Data source type
+        #[arg(long, default_value = "azureblob")]
+        r#type: String,
+
+        /// Container name
+        #[arg(long, default_value = "documents")]
+        container: String,
+    },
+
+    /// Create a new indexer definition
+    Indexer {
+        /// Resource name
+        name: String,
+
+        /// Data source to index from
+        #[arg(long)]
+        datasource: String,
+
+        /// Target index to write to
+        #[arg(long)]
+        index: String,
+
+        /// Optional skillset for AI enrichment
+        #[arg(long)]
+        skillset: Option<String>,
+
+        /// Indexing schedule (ISO 8601 duration)
+        #[arg(long, default_value = "PT5M")]
+        schedule: String,
+    },
+
+    /// Create a new skillset definition
+    Skillset {
+        /// Resource name
+        name: String,
+    },
+
+    /// Create a new synonym map definition
+    SynonymMap {
+        /// Resource name
+        name: String,
+    },
+
+    /// Create a new alias definition
+    Alias {
+        /// Resource name
+        name: String,
+
+        /// Target index name
+        #[arg(long)]
+        index: String,
+    },
+
+    /// Create a new knowledge base definition
+    KnowledgeBase {
+        /// Resource name
+        name: String,
+    },
+
+    /// Create a new knowledge source definition
+    KnowledgeSource {
+        /// Resource name
+        name: String,
+
+        /// Target index name
+        #[arg(long)]
+        index: String,
+
+        /// Optional knowledge base name
+        #[arg(long)]
+        knowledge_base: Option<String>,
+    },
+
+    /// Create a new Foundry agent definition
+    Agent {
+        /// Agent name
+        name: String,
+
+        /// Model to use
+        #[arg(long, default_value = "gpt-4o")]
+        model: String,
+    },
+
+    /// Scaffold a complete Agentic RAG system (agent + knowledge base + knowledge source)
+    AgenticRag {
+        /// Base name for all resources (e.g., 'my-system' creates my-system agent, my-system-kb, my-system-ks)
+        name: String,
+
+        /// Model to use for the agent
+        #[arg(long, default_value = "gpt-4o")]
+        model: String,
+
+        /// Data source type for the knowledge source
+        #[arg(long, default_value = "azureBlob")]
+        datasource_type: String,
+
+        /// Container name for the data source
+        #[arg(long, default_value = "documents")]
+        container: String,
+    },
 }
 
 /// Resource type and name for deletion (exactly one must be specified)
@@ -799,6 +926,7 @@ impl Cli {
                 })?;
                 commands::delete::run(kind, &name, force, env_override).await
             }
+            Commands::New(cmd) => commands::scaffold::run(cmd, env_override),
             Commands::Copy {
                 source,
                 target,

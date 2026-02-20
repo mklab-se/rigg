@@ -82,6 +82,8 @@ hoist push --all
 
 During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
 
+For a complete greenfield walkthrough — building an Agentic RAG system from scratch — see **[Getting Started](GETTING_STARTED.md)**.
+
 **Connect your AI tool** (optional but recommended):
 
 ```bash
@@ -229,6 +231,22 @@ hoist push --knowledgesources
 ```
 
 Knowledge source copy automatically renames all managed sub-resources (index, indexer, data source, skillset) and rewrites cross-references. No network calls — files are created locally for review before pushing.
+
+### Scaffolding
+
+Create new resource files from templates — no Azure connection required:
+
+```bash
+# Create individual resources
+hoist new index my-index --vector --semantic
+hoist new agent my-agent --model gpt-4o
+hoist new knowledge-source my-ks --index my-index
+
+# Scaffold a complete Agentic RAG system in one command
+hoist new agentic-rag my-system --model gpt-4o --container documents
+```
+
+The `agentic-rag` command creates a pre-wired agent, knowledge base, and knowledge source — all connected and ready to push.
 
 ### Watch Mode
 

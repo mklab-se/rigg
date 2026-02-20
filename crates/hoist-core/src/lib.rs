@@ -11,6 +11,7 @@ pub mod constraints;
 pub mod copy;
 pub mod normalize;
 pub mod resources;
+pub mod scaffold;
 pub mod service;
 pub mod state;
 pub mod templates;
