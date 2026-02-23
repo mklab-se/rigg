@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-02-23
+
+### Added
+
+- **Human-readable diff descriptions** — `hoist diff` now produces clear English descriptions instead of cryptic symbols and arrows. Every change includes context-aware language: `"Index field 'language' is enabled on the server for filtering (was disabled locally)"` instead of `filterable: false → true`. Covers all resource types with 100+ specific description patterns for fields, skills, mappings, schedules, and more
+- **Enhanced diff JSON format** — JSON diff output now includes `resource_type`, `resource_name`, `status` (`modified`/`local_only`/`remote_only`/`unchanged`), `summary`, and per-change `description` fields. AI agents get structured, self-describing output without needing to interpret raw JSON paths
+- **Expressive pull/push previews** — pull and push previews now show action-oriented descriptions: `"Index 'products' has 3 differences — pulling will update your local file"` with per-change detail lines. Push previews warn about immutable field changes that require drop-and-recreate
+- **`hoist_delete` MCP tool** — AI agents can now delete resources via MCP. Supports `target='remote'` (Azure only) and `target='local'` (local files only) with the same preview/force pattern as push and pull. 9 MCP tools total (up from 8)
+- **`hoist mcp install --scope` flag** — workspace-level (`--scope workspace`, default) and global (`--scope global`) MCP installation. Workspace scope registers hoist for the current project only; global scope registers for all sessions. Works with both Claude Code and VS Code targets
+- **Knowledge source creation fix** — creating a new knowledge source from scratch no longer fails. Previously, hoist pushed managed sub-resources (index, indexer, data source, skillset) before the KS, causing Azure to reject the KS creation with "resources already exist." Now detects new-vs-existing KS and skips sub-resource push for new ones (Azure auto-provisions them)
+- **Knowledge source update guidance** — when a KS push fails due to the known Azure managed-resource recreation bug, hoist now detects the error pattern and provides specific workaround steps with environment name. Push previews proactively warn when updating existing knowledge sources
+
+### Changed
+
+- **Breaking: `hoist delete` requires `--target`** — the delete command no longer deletes from Azure and removes local files in one operation. You must specify `--target remote` (deletes from Azure only, local files kept) or `--target local` (removes local files only, Azure untouched). This prevents accidental dual-deletion and makes each operation's scope explicit
+- **Local file deletion messaging** — `hoist delete --target local` now clearly states that local files are shared across all environments and that Azure resources are not affected in any environment
+- **MCP server instructions** — updated with environment guidance, delete tool documentation, and knowledge source lifecycle information. All references now use MCP tool names instead of CLI commands
+- **Description engine rewrite** — `describe.rs` replaced with a resource-aware English description engine. Labels adapt to context: diff uses `"locally"` / `"on the server"`, push uses `"on the server"` / `"locally"`, cross-env diff uses environment names
+
+### Tests
+
+- 543 tests across workspace (up from 522)
+
+## [0.7.0] - 2026-02-22
+
+See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite command, DX improvements.
+
 ## [0.6.0] - 2026-02-19
 
 ### Added

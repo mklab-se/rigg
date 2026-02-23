@@ -26,6 +26,9 @@ pub struct Change {
     /// New value (for modifications and additions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_value: Option<Value>,
+    /// Human-readable description of this change (set by higher layers, not by diff engine)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Type of change
@@ -77,6 +80,7 @@ fn diff_values(
                 kind: ChangeKind::Modified,
                 old_value: Some(old.clone()),
                 new_value: Some(new.clone()),
+                description: None,
             });
         }
         _ => {}
@@ -101,6 +105,7 @@ fn diff_objects(
             kind: ChangeKind::Removed,
             old_value: old.get(*key).cloned(),
             new_value: None,
+            description: None,
         });
     }
 
@@ -112,6 +117,7 @@ fn diff_objects(
             kind: ChangeKind::Added,
             old_value: None,
             new_value: new.get(*key).cloned(),
+            description: None,
         });
     }
 
@@ -170,6 +176,7 @@ fn diff_arrays_by_key(
             kind: ChangeKind::Removed,
             old_value: old_map.get(key).cloned().cloned(),
             new_value: None,
+            description: None,
         });
     }
 
@@ -181,6 +188,7 @@ fn diff_arrays_by_key(
             kind: ChangeKind::Added,
             old_value: None,
             new_value: new_map.get(key).cloned().cloned(),
+            description: None,
         });
     }
 
@@ -215,6 +223,7 @@ fn diff_arrays_positional(
                     kind: ChangeKind::Removed,
                     old_value: Some(old_val.clone()),
                     new_value: None,
+                    description: None,
                 });
             }
             (None, Some(new_val)) => {
@@ -223,6 +232,7 @@ fn diff_arrays_positional(
                     kind: ChangeKind::Added,
                     old_value: None,
                     new_value: Some(new_val.clone()),
+                    description: None,
                 });
             }
             (None, None) => unreachable!(),

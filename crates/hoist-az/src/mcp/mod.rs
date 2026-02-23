@@ -11,7 +11,7 @@ use crate::cli::McpCommands;
 pub async fn run(cmd: McpCommands) -> Result<()> {
     match cmd {
         McpCommands::Serve => serve().await,
-        McpCommands::Install { target } => install(target),
+        McpCommands::Install { target, scope } => install(target, scope),
     }
 }
 
@@ -36,20 +36,26 @@ async fn serve() -> Result<()> {
 }
 
 /// Install hoist as an MCP server with AI tools
-fn install(target: crate::cli::McpInstallTarget) -> Result<()> {
-    match target {
-        crate::cli::McpInstallTarget::ClaudeCode => install_claude_code(),
-        crate::cli::McpInstallTarget::VsCode => install_vscode(),
+fn install(target: crate::cli::McpInstallTarget, scope: crate::cli::McpInstallScope) -> Result<()> {
+    use crate::cli::{McpInstallScope, McpInstallTarget};
+    match (target, scope) {
+        (McpInstallTarget::ClaudeCode, McpInstallScope::Workspace) => {
+            install_claude_code("project")
+        }
+        (McpInstallTarget::ClaudeCode, McpInstallScope::Global) => install_claude_code("user"),
+        (McpInstallTarget::VsCode, McpInstallScope::Workspace) => install_vscode_workspace(),
+        (McpInstallTarget::VsCode, McpInstallScope::Global) => install_vscode_global(),
     }
 }
 
-fn install_claude_code() -> Result<()> {
-    // Run: claude mcp add hoist -- hoist mcp serve
+fn install_claude_code(scope: &str) -> Result<()> {
     let status = std::process::Command::new("claude")
         .args([
             "mcp",
             "add",
             "hoist",
+            "--scope",
+            scope,
             "--transport",
             "stdio",
             "--",
@@ -59,10 +65,23 @@ fn install_claude_code() -> Result<()> {
         ])
         .status();
 
+    let scope_desc = if scope == "project" {
+        "workspace"
+    } else {
+        "global"
+    };
+
     match status {
         Ok(s) if s.success() => {
-            println!("Registered hoist MCP server with Claude Code.");
-            println!("The hoist tools are now available in all Claude Code sessions.");
+            println!(
+                "Registered hoist MCP server with Claude Code ({}).",
+                scope_desc
+            );
+            if scope == "project" {
+                println!("Available when Claude Code opens this project.");
+            } else {
+                println!("Available in all Claude Code sessions.");
+            }
             Ok(())
         }
         Ok(s) => {
@@ -71,18 +90,42 @@ fn install_claude_code() -> Result<()> {
         Err(e) => {
             eprintln!("Could not run 'claude' CLI: {}", e);
             eprintln!();
-            eprintln!("To register manually, add to your Claude Code MCP config:");
-            eprintln!(r#"  claude mcp add hoist --transport stdio -- hoist mcp serve"#);
+            eprintln!("To register manually:");
+            eprintln!(
+                r#"  claude mcp add hoist --scope {} --transport stdio -- hoist mcp serve"#,
+                scope
+            );
             anyhow::bail!("Claude CLI not found");
         }
     }
 }
 
-fn install_vscode() -> Result<()> {
-    let config_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let mcp_config_path = config_dir.join(".vscode").join("mcp.json");
+fn install_vscode_workspace() -> Result<()> {
+    let project_root = find_project_root()?;
+    let mcp_config_path = project_root.join(".vscode").join("mcp.json");
 
+    write_vscode_mcp_config(&mcp_config_path)?;
+
+    println!("Registered hoist MCP server with VS Code (workspace).");
+    println!("Config: {}", mcp_config_path.display());
+    println!("Available when VS Code opens this project.");
+    Ok(())
+}
+
+fn install_vscode_global() -> Result<()> {
+    let home_dir =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let mcp_config_path = home_dir.join(".vscode").join("mcp.json");
+
+    write_vscode_mcp_config(&mcp_config_path)?;
+
+    println!("Registered hoist MCP server with VS Code (global).");
+    println!("Config: {}", mcp_config_path.display());
+    println!("Available in all VS Code sessions.");
+    Ok(())
+}
+
+fn write_vscode_mcp_config(mcp_config_path: &std::path::Path) -> Result<()> {
     let mcp_entry = serde_json::json!({
         "servers": {
             "hoist": {
@@ -93,9 +136,8 @@ fn install_vscode() -> Result<()> {
         }
     });
 
-    // If file exists, try to merge; otherwise create
     if mcp_config_path.exists() {
-        let content = std::fs::read_to_string(&mcp_config_path)?;
+        let content = std::fs::read_to_string(mcp_config_path)?;
         let mut config: serde_json::Value =
             serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
 
@@ -105,13 +147,29 @@ fn install_vscode() -> Result<()> {
             config["servers"] = mcp_entry["servers"].clone();
         }
 
-        std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&config)?)?;
+        std::fs::write(mcp_config_path, serde_json::to_string_pretty(&config)?)?;
     } else {
         std::fs::create_dir_all(mcp_config_path.parent().unwrap())?;
-        std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_entry)?)?;
+        std::fs::write(mcp_config_path, serde_json::to_string_pretty(&mcp_entry)?)?;
     }
 
-    println!("Registered hoist MCP server with VS Code.");
-    println!("Config: {}", mcp_config_path.display());
     Ok(())
+}
+
+/// Find the project root by walking up from the current directory looking for hoist.yaml.
+/// Falls back to the current working directory if not found.
+fn find_project_root() -> Result<std::path::PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let mut dir = cwd.as_path();
+    loop {
+        if dir.join("hoist.yaml").exists() {
+            return Ok(dir.to_path_buf());
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+    // Fallback to cwd
+    Ok(cwd)
 }

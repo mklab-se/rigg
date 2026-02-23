@@ -68,6 +68,23 @@ pub struct MutatingParams {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct DeleteParams {
+    /// Environment name (uses default if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
+    /// Resource type: "indexes", "indexers", "datasources", "skillsets",
+    /// "synonymmaps", "aliases", "knowledgebases", "knowledgesources", "agents"
+    pub resource_type: String,
+    /// Name of the resource to delete
+    pub name: String,
+    /// Where to delete: "remote" (from Azure) or "local" (remove local files)
+    pub target: String,
+    /// When true, execute the deletion. When false (default), return a preview of what would happen.
+    #[schemars(default)]
+    pub force: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct ListParams {
     /// Environment name (uses default if omitted)
     #[schemars(default)]
@@ -166,7 +183,7 @@ impl HoistMcpServer {
 
     /// Compare local resource files against live Azure services (diff).
     #[tool(
-        description = "Compare local resource files against live Azure. Shows what would change if you pushed. Use resource_type and name to narrow scope."
+        description = "Compare local resource files against live Azure. Returns enhanced JSON with resource_type, status, summary, and per-change descriptions. Use resource_type and name to narrow scope. NOTE: Knowledge source changes may require delete-and-recreate due to a known Azure limitation."
     )]
     async fn hoist_diff(&self, Parameters(params): Parameters<ResourceParams>) -> String {
         match run_diff(
@@ -183,7 +200,7 @@ impl HoistMcpServer {
 
     /// Pull resources from Azure to local files.
     #[tool(
-        description = "Pull resource definitions from Azure to local files. Without force, returns a preview. With force=true, executes the pull."
+        description = "Pull resource definitions from Azure to local files. Without force, returns a preview. With force=true, executes the pull. Knowledge sources and their managed sub-resources (index, indexer, data source, skillset) are pulled together automatically."
     )]
     async fn hoist_pull(&self, Parameters(params): Parameters<MutatingParams>) -> String {
         match run_pull(
@@ -201,13 +218,32 @@ impl HoistMcpServer {
 
     /// Push local resource files to Azure.
     #[tool(
-        description = "Push local resource changes to Azure. Without force, returns a preview of what would change. With force=true, executes the push. Always validate and diff first."
+        description = "Push local resource changes to Azure. Without force, returns a preview of what would change. With force=true, executes the push. Always validate and diff first. IMPORTANT: When pushing knowledge sources (--knowledgesources), hoist automatically handles all managed sub-resources (index, indexer, data source, skillset) — do NOT push these sub-resources separately. Knowledge source updates may fail due to a known Azure limitation where Azure tries to recreate managed sub-resources. If this happens, use hoist_delete to delete the knowledge source from Azure first, then push again."
     )]
     async fn hoist_push(&self, Parameters(params): Parameters<MutatingParams>) -> String {
         match run_push(
             params.env.as_deref(),
             params.resource_type.as_deref(),
             params.name.as_deref(),
+            params.force.unwrap_or(false),
+        )
+        .await
+        {
+            Ok(json) => serde_json::to_string_pretty(&json).unwrap(),
+            Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Delete a resource from Azure or remove local files.
+    #[tool(
+        description = "Delete a resource. target='remote' deletes from Azure only (local files kept). target='local' removes local files only (Azure untouched). Without force, returns a preview. With force=true, executes. IMPORTANT: Local files are shared across all environments — removing them locally affects all environments. After deleting, use hoist_push or hoist_pull to sync. For knowledge sources, deleting from Azure also removes managed sub-resources (index, indexer, data source, skillset) and all indexed data."
+    )]
+    async fn hoist_delete(&self, Parameters(params): Parameters<DeleteParams>) -> String {
+        match run_delete(
+            params.env.as_deref(),
+            &params.resource_type,
+            &params.name,
+            &params.target,
             params.force.unwrap_or(false),
         )
         .await
@@ -225,7 +261,30 @@ impl ServerHandler for HoistMcpServer {
             instructions: Some(
                 "hoist manages Azure AI Search and Microsoft Foundry configuration as code. \
                  Use hoist_describe for a complete project overview, hoist_status for environment info, \
-                 and hoist_diff/hoist_pull/hoist_push for syncing with Azure."
+                 and hoist_diff/hoist_pull/hoist_push for syncing with Azure. \
+                 \
+                 ENVIRONMENTS: All tools accept an optional 'env' parameter. If omitted, the default \
+                 environment is used. Use hoist_env_list to see all configured environments. Always \
+                 pass 'env' explicitly when operating on non-default environments. \
+                 \
+                 IMPORTANT — Knowledge Source managed sub-resources: \
+                 When you push knowledge sources (resource_type='knowledgesources'), hoist automatically \
+                 handles all managed sub-resources (index, indexer, data source, skillset) in the correct \
+                 order. Do NOT create or push these sub-resources separately — they are managed by Azure \
+                 as part of the knowledge source lifecycle. If you need to modify a managed index schema \
+                 or skillset, edit the corresponding file in the knowledge source directory and push with \
+                 resource_type='knowledgesources'. \
+                 \
+                 Known Azure limitation: Updating an existing knowledge source may fail because Azure \
+                 tries to recreate managed sub-resources that already exist. Workaround: use hoist_delete \
+                 with target='remote' to delete the knowledge source from Azure, then use hoist_push to \
+                 recreate it. \
+                 \
+                 DELETING RESOURCES — use hoist_delete: \
+                 target='remote': deletes from the Azure service only (local files are NOT affected). \
+                 target='local': removes local files only (Azure resources are NOT affected). \
+                 Local files are shared across all environments — removing them locally affects all envs. \
+                 After deleting, use hoist_push or hoist_pull to sync."
                     .into(),
             ),
             server_info: rmcp::model::Implementation {
@@ -645,6 +704,123 @@ async fn run_push(
 
     Ok(serde_json::json!({
         "success": output.status.success(),
+        "output": stdout.to_string(),
+        "errors": if stderr.is_empty() { None } else { Some(stderr.to_string()) },
+    }))
+}
+
+async fn run_delete(
+    env_override: Option<&str>,
+    resource_type: &str,
+    name: &str,
+    target: &str,
+    force: bool,
+) -> anyhow::Result<serde_json::Value> {
+    // Validate target
+    if target != "remote" && target != "local" {
+        return Ok(serde_json::json!({
+            "error": "Invalid target. Must be 'remote' (delete from Azure) or 'local' (remove local files)."
+        }));
+    }
+
+    // Resolve the singular CLI flag for the resource type
+    let flag = match resource_type {
+        "indexes" => "--index",
+        "indexers" => "--indexer",
+        "datasources" => "--datasource",
+        "skillsets" => "--skillset",
+        "synonymmaps" => "--synonymmap",
+        "aliases" => "--alias",
+        "knowledgebases" => "--knowledgebase",
+        "knowledgesources" => "--knowledgesource",
+        "agents" => "--agent",
+        _ => {
+            return Ok(serde_json::json!({
+                "error": format!("Unknown resource type '{}'. Valid types: indexes, indexers, datasources, skillsets, synonymmaps, aliases, knowledgebases, knowledgesources, agents", resource_type)
+            }));
+        }
+    };
+
+    let (project_root, _config, env) = commands::load_config_and_env(env_override)?;
+
+    if !force {
+        // Preview mode: describe what would happen
+        let mut preview = serde_json::json!({
+            "preview": true,
+            "environment": env.name,
+            "resource_type": resource_type,
+            "name": name,
+            "target": target,
+        });
+
+        if target == "remote" {
+            let service_name = if resource_type == "agents" {
+                env.foundry
+                    .first()
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("(unknown)")
+            } else {
+                env.primary_search_service()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("(unknown)")
+            };
+            preview["message"] = serde_json::json!(format!(
+                "Would delete {} '{}' from {} (environment '{}').",
+                resource_type.trim_end_matches('s'),
+                name,
+                service_name,
+                env.name
+            ));
+            preview["service"] = serde_json::json!(service_name);
+
+            if resource_type == "knowledgesources" {
+                preview["warning"] = serde_json::json!(
+                    "Deleting a knowledge source from Azure also deletes its managed sub-resources (index, indexer, data source, skillset) and all indexed data."
+                );
+            }
+        } else {
+            preview["message"] = serde_json::json!(format!(
+                "Would remove local files for {} '{}'. Local files are shared across all environments.",
+                resource_type.trim_end_matches('s'),
+                name,
+            ));
+        }
+
+        preview["instruction"] =
+            serde_json::json!("Re-run with force=true to execute the deletion.");
+        return Ok(preview);
+    }
+
+    // Execute mode
+    let mut args: Vec<String> = vec![
+        "delete".into(),
+        flag.into(),
+        name.into(),
+        "--target".into(),
+        target.into(),
+        "--force".into(),
+    ];
+
+    if let Some(env_name) = env_override {
+        args.push("--env".into());
+        args.push(env_name.into());
+    }
+
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args(&args)
+        .env("HOIST_ENV", env_override.unwrap_or(&env.name))
+        .current_dir(&project_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    Ok(serde_json::json!({
+        "success": output.status.success(),
+        "environment": env.name,
+        "target": target,
         "output": stdout.to_string(),
         "errors": if stderr.is_empty() { None } else { Some(stderr.to_string()) },
     }))

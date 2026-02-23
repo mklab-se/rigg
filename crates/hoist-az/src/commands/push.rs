@@ -129,6 +129,7 @@ pub async fn run(
                     let content = std::fs::read_to_string(&ks_file)?;
                     let local: serde_json::Value = serde_json::from_str(&content)?;
 
+                    let push_count_before = resources_to_push.len();
                     collect_push_resource(
                         &client,
                         *kind,
@@ -144,8 +145,17 @@ pub async fn run(
                     )
                     .await;
 
-                    // If --knowledge-sources, also collect managed sub-resources from this KS dir
-                    if has_ks {
+                    // Check if this KS is being created (new) vs updated
+                    let ks_is_new = resources_to_push.get(push_count_before).is_some_and(
+                        |(k, n, _, exists)| {
+                            *k == ResourceKind::KnowledgeSource && n == &ks_name && !exists
+                        },
+                    );
+
+                    // Only collect managed sub-resources for EXISTING knowledge sources.
+                    // When creating a new KS, Azure auto-provisions sub-resources — pushing
+                    // them first would cause KS creation to fail ("resources already exist").
+                    if has_ks && !ks_is_new {
                         let managed_subs = managed::read_managed_sub_resources(&path, &ks_name);
                         for (sub_kind, sub_name, sub_def) in managed_subs {
                             collect_push_resource(
@@ -452,24 +462,40 @@ pub async fn run(
     }
 
     // Show what will be pushed
+    let push_labels = Some(("on the server", "locally"));
     println!("Resources to push:");
+
+    // Track KS updates for proactive warning
+    let mut ks_updates: Vec<String> = Vec::new();
 
     for (kind, name, _, exists) in &resources_to_push {
         if *exists {
-            println!(
-                "  {} {} '{}' (update)",
-                "~".yellow(),
-                kind.display_name(),
-                name
-            );
             if let Some(changes) = change_details.get(&(*kind, name.clone())) {
-                for line in describe_changes(changes, None) {
+                println!(
+                    "  {} {} '{}' will be updated on the server with {} change{}:",
+                    "~".yellow(),
+                    kind.display_name(),
+                    name,
+                    changes.len(),
+                    if changes.len() == 1 { "" } else { "s" }
+                );
+                for line in describe_changes(changes, *kind, name, push_labels) {
                     println!("{}", line);
                 }
+            } else {
+                println!(
+                    "  {} {} '{}' will be updated on the server",
+                    "~".yellow(),
+                    kind.display_name(),
+                    name
+                );
+            }
+            if *kind == ResourceKind::KnowledgeSource {
+                ks_updates.push(name.clone());
             }
         } else {
             println!(
-                "  {} {} '{}' (create)",
+                "  {} {} '{}' will be created on the server",
                 "+".green(),
                 kind.display_name(),
                 name
@@ -510,6 +536,36 @@ pub async fn run(
             );
             println!();
         }
+    }
+
+    // Proactive KS update warning
+    if !ks_updates.is_empty() {
+        println!(
+            "{} Knowledge source update{} may fail due to a known Azure limitation:",
+            "NOTE:".yellow().bold(),
+            if ks_updates.len() == 1 { "" } else { "s" }
+        );
+        for ks_name in &ks_updates {
+            println!("  {} Knowledge Source '{}'", "!".yellow(), ks_name);
+        }
+        println!(
+            "  Azure may attempt to recreate managed sub-resources (index, indexer, data source,"
+        );
+        println!("  skillset) which already exist, causing the update to fail.");
+        println!("  If this happens, delete the knowledge source from Azure, then push again:");
+        println!(
+            "    hoist delete --knowledgesource <name> --target remote  (deletes from '{}' on Azure)",
+            env.name
+        );
+        println!(
+            "    hoist push --knowledgesources                         (recreates in '{}' on Azure)",
+            env.name
+        );
+        println!(
+            "  {} This deletes the search index and all its data. Re-indexing occurs automatically.",
+            "WARNING:".yellow().bold()
+        );
+        println!();
     }
 
     // Confirm unless --force
@@ -597,6 +653,42 @@ pub async fn run(
                 }
                 Err(e) => {
                     println!("FAILED: {}", e);
+                    // Provide KS-specific guidance for known Azure bug
+                    if *kind == ResourceKind::KnowledgeSource
+                        && is_ks_recreation_bug(&e.to_string())
+                    {
+                        println!();
+                        println!(
+                            "  {} Knowledge source '{}' failed because managed sub-resources",
+                            "KNOWN AZURE LIMITATION:".yellow().bold(),
+                            name
+                        );
+                        println!(
+                            "  (index, indexer, data source, skillset) already exist on Azure."
+                        );
+                        println!(
+                            "  Azure manages these sub-resources as part of the knowledge source"
+                        );
+                        println!("  lifecycle — they should not be created separately.");
+                        println!();
+                        println!("  Workaround — delete from Azure, then retry:");
+                        println!(
+                            "    1. hoist delete --knowledgesource {} --target remote  (deletes from '{}' on Azure)",
+                            name, env.name
+                        );
+                        println!(
+                            "    2. hoist push --knowledgesources                      (recreates in '{}' on Azure)",
+                            env.name
+                        );
+                        println!();
+                        println!(
+                            "  {} This deletes the search index and all its data.",
+                            "WARNING:".yellow().bold()
+                        );
+                        println!(
+                            "  Re-indexing occurs automatically but takes time and may incur costs."
+                        );
+                    }
                     error_count += 1;
                 }
             }
@@ -762,6 +854,28 @@ async fn collect_push_resource(
             ));
         }
     }
+}
+
+/// Check if an error message indicates the known Azure KS recreation bug.
+///
+/// Azure sometimes tries to recreate managed sub-resources (index, indexer, data source,
+/// skillset) when updating or creating a knowledge source. This fails if they already exist.
+/// Common patterns:
+/// - "Cannot create Knowledge Source '...' because the following Azure Search resources already exist"
+/// - 409/Conflict when managed sub-resources exist
+fn is_ks_recreation_bug(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    // Match the explicit Azure error about KS managed sub-resources
+    if lower.contains("cannot create knowledge source") && lower.contains("already exist") {
+        return true;
+    }
+    // Match general conflict patterns involving managed sub-resources
+    (lower.contains("already exist") || lower.contains("conflict") || lower.contains("409"))
+        && (lower.contains("index")
+            || lower.contains("indexer")
+            || lower.contains("datasource")
+            || lower.contains("data source")
+            || lower.contains("skillset"))
 }
 
 /// Remove volatile and read-only fields from a resource definition before sending to Azure.

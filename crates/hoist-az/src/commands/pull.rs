@@ -375,29 +375,41 @@ pub async fn execute_pull(
         return Ok(());
     }
 
+    let pull_labels = Some(("locally", "on the server"));
     println!("Pull summary:");
     for r in &new_resources {
         println!(
-            "  {} {} '{}' (new)",
+            "  {} {} '{}' is new on the server and will be created locally",
             "+".green(),
             r.kind.display_name(),
             r.name
         );
     }
     for r in &updated_resources {
-        println!(
-            "  {} {} '{}' (modified)",
-            "~".yellow(),
-            r.kind.display_name(),
-            r.name
-        );
-        for line in describe_changes(&r.changes, None) {
-            println!("{}", line);
+        if r.changes.is_empty() {
+            println!(
+                "  {} {} '{}' has changed on the server — pulling will update your local file",
+                "~".yellow(),
+                r.kind.display_name(),
+                r.name
+            );
+        } else {
+            println!(
+                "  {} {} '{}' has {} difference{} — pulling will update your local file:",
+                "~".yellow(),
+                r.kind.display_name(),
+                r.name,
+                r.changes.len(),
+                if r.changes.len() == 1 { "" } else { "s" }
+            );
+            for line in describe_changes(&r.changes, r.kind, &r.name, pull_labels) {
+                println!("{}", line);
+            }
         }
     }
     for (kind, name, _) in &deleted_resources {
         println!(
-            "  {} {} '{}' (deleted on server)",
+            "  {} {} '{}' was deleted on the server — pulling will remove your local file",
             "-".red(),
             kind.display_name(),
             name

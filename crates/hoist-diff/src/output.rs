@@ -24,6 +24,11 @@ pub fn format_text(result: &DiffResult, resource_name: &str) -> String {
 }
 
 fn format_change_text(change: &Change) -> String {
+    // If a higher layer set a description, use it directly
+    if let Some(desc) = &change.description {
+        return format!("  {}\n", desc);
+    }
+
     match change.kind {
         ChangeKind::Added => {
             let value_str = format_value_preview(change.new_value.as_ref());
@@ -36,27 +41,50 @@ fn format_change_text(change: &Change) -> String {
         ChangeKind::Modified => {
             let old_str = format_value_preview(change.old_value.as_ref());
             let new_str = format_value_preview(change.new_value.as_ref());
-            format!("  ~ {}: {} -> {}\n", change.path, old_str, new_str)
+            format!("  ~ {}: was {}, now {}\n", change.path, old_str, new_str)
         }
     }
 }
 
-fn format_value_preview(value: Option<&Value>) -> String {
+/// Create a human-readable preview of a JSON value.
+///
+/// Used by the base diff formatter. Higher-level formatters (describe.rs)
+/// have their own value formatting with resource-aware context.
+pub fn format_value_preview(value: Option<&Value>) -> String {
     match value {
         None => "(none)".to_string(),
         Some(Value::Null) => "null".to_string(),
         Some(Value::Bool(b)) => b.to_string(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::String(s)) => {
-            if s.len() > 50 {
-                format!("\"{}...\"", &s[..47])
+            if s.len() > 500 {
+                format!("\"{}...\" ({} chars)", &s[..497], s.len())
             } else {
                 format!("\"{}\"", s)
             }
         }
-        Some(Value::Array(arr)) => format!("[{} items]", arr.len()),
+        Some(Value::Array(arr)) => {
+            if arr.is_empty() {
+                "[]".to_string()
+            } else if arr.len() <= 3 && arr.iter().all(is_simple_value) {
+                // Show actual values for small arrays of simple items
+                let items: Vec<String> =
+                    arr.iter().map(|v| format_value_preview(Some(v))).collect();
+                format!("[{}]", items.join(", "))
+            } else {
+                format!("[{} items]", arr.len())
+            }
+        }
         Some(Value::Object(obj)) => format!("{{...}} ({} keys)", obj.len()),
     }
+}
+
+/// Check if a value is a simple scalar (not array or object).
+fn is_simple_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null
+    )
 }
 
 /// Format diff result as JSON
@@ -149,6 +177,29 @@ mod tests {
         assert!(output.contains("1 change"));
         assert!(output.contains("value"));
         assert!(output.contains("~")); // modified indicator
+        assert!(output.contains("was"));
+        assert!(output.contains("now"));
+    }
+
+    #[test]
+    fn test_format_text_uses_description_when_set() {
+        let result = DiffResult {
+            is_equal: false,
+            changes: vec![Change {
+                path: "description".to_string(),
+                kind: ChangeKind::Modified,
+                old_value: Some(json!("old")),
+                new_value: Some(json!("new")),
+                description: Some(
+                    "The description differs: locally has \"old\" while on the server has \"new\""
+                        .to_string(),
+                ),
+            }],
+        };
+
+        let output = format_text(&result, "test-index");
+        assert!(output.contains("The description differs"));
+        assert!(!output.contains("~")); // Should not use generic format
     }
 
     #[test]
@@ -160,11 +211,73 @@ mod tests {
                 kind: ChangeKind::Modified,
                 old_value: Some(json!("old")),
                 new_value: Some(json!("new")),
+                description: None,
             }],
         };
 
         let output = format_json(&result);
         assert!(output.contains("modified"));
         assert!(output.contains("name"));
+    }
+
+    #[test]
+    fn test_format_value_preview_long_string() {
+        let long = "a".repeat(600);
+        let preview = format_value_preview(Some(&json!(long)));
+        assert!(preview.contains("..."));
+        assert!(preview.contains("600 chars"));
+    }
+
+    #[test]
+    fn test_format_value_preview_medium_string_not_truncated() {
+        let medium = "a".repeat(400);
+        let preview = format_value_preview(Some(&json!(medium)));
+        assert!(!preview.contains("..."));
+        assert_eq!(preview, format!("\"{}\"", medium));
+    }
+
+    #[test]
+    fn test_format_value_preview_small_array() {
+        let preview = format_value_preview(Some(&json!([1, 2, 3])));
+        assert_eq!(preview, "[1, 2, 3]");
+    }
+
+    #[test]
+    fn test_format_value_preview_small_string_array() {
+        let preview = format_value_preview(Some(&json!(["a", "b"])));
+        assert_eq!(preview, "[\"a\", \"b\"]");
+    }
+
+    #[test]
+    fn test_format_value_preview_large_array() {
+        let preview = format_value_preview(Some(&json!([1, 2, 3, 4])));
+        assert_eq!(preview, "[4 items]");
+    }
+
+    #[test]
+    fn test_format_value_preview_empty_array() {
+        let preview = format_value_preview(Some(&json!([])));
+        assert_eq!(preview, "[]");
+    }
+
+    #[test]
+    fn test_format_value_preview_complex_array_items() {
+        let preview = format_value_preview(Some(&json!([{"a": 1}])));
+        assert_eq!(preview, "[1 items]");
+    }
+
+    #[test]
+    fn test_modified_uses_english_phrasing() {
+        let change = Change {
+            path: "description".to_string(),
+            kind: ChangeKind::Modified,
+            old_value: Some(json!("old text")),
+            new_value: Some(json!("new text")),
+            description: None,
+        };
+        let output = format_change_text(&change);
+        assert!(output.contains("was"));
+        assert!(output.contains("now"));
+        assert!(!output.contains("->"));
     }
 }

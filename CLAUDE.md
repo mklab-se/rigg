@@ -164,7 +164,7 @@ State files live in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`.
 - **Client construction**: `AzureSearchClient::from_service_config(&SearchServiceConfig)` creates clients from resolved environment service configs. `FoundryClient::new(&FoundryServiceConfig)` for Foundry.
 - **Push conflict detection**: Before pushing, compares the remote resource checksum against the stored pull baseline. If the server has changed since last pull, shows a warning listing conflicting resources. Uses the same `Checksums::calculate()` / volatile field normalization as pull.
 - **Pull overwrite warning**: Before overwriting local files, compares disk content checksum against stored pull baseline. If local files were modified since last pull, warns before overwriting.
-- **Delete command**: `hoist delete --<kind> <name>` deletes from Azure and removes local files. Knowledge source deletion removes the entire KS directory including managed sub-resources. Updates state and checksums. `DeleteResource` struct in `cli.rs` with `resolve()` method.
+- **Delete command**: `hoist delete --<kind> <name> --target <remote|local>` operates on one target at a time. `--target remote` deletes from Azure only (local files untouched). `--target local` removes local files only (Azure untouched). The `--target` flag is required — no default. After deleting, use push/pull to sync. Knowledge source deletion (remote) removes the entire KS and its managed sub-resources. `DeleteResource` struct in `cli.rs` with `resolve()` method.
 
 ## Test Projects
 
@@ -192,7 +192,7 @@ hoist exposes an MCP (Model Context Protocol) server and agent skills for AI-ass
 
 ### MCP Server (`hoist mcp serve`)
 
-Starts a stdio-based MCP server with 8 tools. Any MCP-compatible client (Claude Code, VS Code Copilot, Claude Desktop) can call these tools directly.
+Starts a stdio-based MCP server with 9 tools. Any MCP-compatible client (Claude Code, VS Code Copilot, Claude Desktop) can call these tools directly.
 
 | Tool | Description |
 |------|-------------|
@@ -204,12 +204,13 @@ Starts a stdio-based MCP server with 8 tools. Any MCP-compatible client (Claude 
 | `hoist_diff` | Compare local vs remote (JSON diff) |
 | `hoist_pull` | Pull from Azure (preview without `force`, execute with `force: true`) |
 | `hoist_push` | Push to Azure (preview without `force`, execute with `force: true`) |
+| `hoist_delete` | Delete from Azure (`target='remote'`) or remove local files (`target='local'`). Preview without `force`, execute with `force: true` |
 
-**Code location:** `crates/hoist-az/src/mcp/` — `mod.rs` (server lifecycle, install commands), `tools.rs` (all 8 tool implementations).
+**Code location:** `crates/hoist-az/src/mcp/` — `mod.rs` (server lifecycle, install commands), `tools.rs` (all 9 tool implementations).
 
 **Auto-discovery:** `.mcp.json` in the repo root auto-registers the MCP server with Claude Code and VS Code when the project is opened.
 
-**Manual install:** `hoist mcp install [claude-code|vs-code]` registers hoist as an MCP server at the user level.
+**Manual install:** `hoist mcp install [claude-code|vs-code] [--scope workspace|global]` registers hoist as an MCP server. Defaults to workspace scope (project-level).
 
 ### Agent Skills (`.claude/skills/`)
 

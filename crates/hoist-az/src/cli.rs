@@ -279,11 +279,15 @@ pub enum Commands {
         alias: bool,
     },
 
-    /// Delete a resource from Azure and remove local files
+    /// Delete a resource from Azure or remove local files
     Delete {
         /// Resource type and name to delete
         #[command(flatten)]
         resource: DeleteResource,
+
+        /// Where to delete: "remote" (Azure only) or "local" (local files only)
+        #[arg(long)]
+        target: DeleteTarget,
 
         /// Skip confirmation prompt
         #[arg(long)]
@@ -370,6 +374,10 @@ pub enum McpCommands {
     Install {
         #[arg(value_enum, default_value = "claude-code")]
         target: McpInstallTarget,
+
+        /// Installation scope: workspace (project-level) or global (user-level)
+        #[arg(long, value_enum, default_value = "workspace")]
+        scope: McpInstallScope,
     },
 }
 
@@ -379,6 +387,14 @@ pub enum McpInstallTarget {
     ClaudeCode,
     /// Register with VS Code
     VsCode,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum McpInstallScope {
+    /// Project-level installation (available when this project is open)
+    Workspace,
+    /// User-level installation (available in all sessions)
+    Global,
 }
 
 #[derive(Subcommand)]
@@ -570,6 +586,15 @@ pub enum NewCommands {
         #[arg(long, default_value = "documents")]
         container: String,
     },
+}
+
+/// Where to delete a resource from
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DeleteTarget {
+    /// Delete from the remote Azure service only (local files are kept)
+    Remote,
+    /// Delete local files only (Azure resource is kept)
+    Local,
 }
 
 /// Resource type and name for deletion (exactly one must be specified)
@@ -920,11 +945,15 @@ impl Cli {
             } => {
                 commands::push::run(&resources, recursive, filter, force || yes, env_override).await
             }
-            Commands::Delete { resource, force } => {
+            Commands::Delete {
+                resource,
+                target,
+                force,
+            } => {
                 let (kind, name) = resource.resolve().ok_or_else(|| {
                     anyhow::anyhow!("Specify a resource to delete (e.g., --index <name>)")
                 })?;
-                commands::delete::run(kind, &name, force, env_override).await
+                commands::delete::run(kind, &name, target, force, env_override).await
             }
             Commands::New(cmd) => commands::scaffold::run(cmd, env_override),
             Commands::Copy {

@@ -10,18 +10,23 @@ use hoist_core::resources::ResourceKind;
 use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::service::ServiceDomain;
-use hoist_diff::{
-    diff,
-    output::{OutputFormat, format_report},
-};
+use hoist_diff::diff;
 
 use crate::cli::{DiffFormat, ResourceTypeFlags};
 use crate::commands::common::{
     get_read_only_fields, get_volatile_fields, read_agent_yaml,
     resolve_resource_selection_from_flags,
 };
-use crate::commands::describe::describe_changes;
+use crate::commands::describe::{annotate_changes, describe_changes, describe_changes_plain};
 use crate::commands::load_config_and_env;
+
+/// A diff result with full resource context for enhanced JSON output.
+struct ResourceDiff {
+    kind: ResourceKind,
+    resource_name: String,
+    display_id: String,
+    result: hoist_diff::DiffResult,
+}
 
 pub async fn run(
     flags: &ResourceTypeFlags,
@@ -65,7 +70,7 @@ pub async fn run(
 
     let primary_search_svc = env.primary_search_service();
 
-    let mut all_diffs = Vec::new();
+    let mut all_diffs: Vec<ResourceDiff> = Vec::new();
     let mut has_changes = false;
 
     // --- Search resources ---
@@ -211,18 +216,20 @@ pub async fn run(
                     let resource_id = format!("{}/{}", kind.directory_name(), name);
 
                     // Check if already reported
-                    if all_diffs.iter().any(|(id, _)| id == &resource_id) {
+                    if all_diffs.iter().any(|d| d.display_id == resource_id) {
                         continue;
                     }
 
                     // Remote only - note it but don't mark as change (we don't auto-delete)
-                    all_diffs.push((
-                        format!("{} (remote only)", resource_id),
-                        hoist_diff::DiffResult {
+                    all_diffs.push(ResourceDiff {
+                        kind: *kind,
+                        resource_name: name.to_string(),
+                        display_id: resource_id,
+                        result: hoist_diff::DiffResult {
                             is_equal: true, // Don't count as change for exit code
                             changes: vec![],
                         },
-                    ));
+                    });
                 }
             }
         }
@@ -299,23 +306,31 @@ pub async fn run(
                                 has_changes = true;
                             }
 
-                            all_diffs.push((resource_id, diff_result));
+                            all_diffs.push(ResourceDiff {
+                                kind: ResourceKind::Agent,
+                                resource_name: name.clone(),
+                                display_id: resource_id,
+                                result: diff_result,
+                            });
                         }
                         None => {
                             // Local only - will be created
                             has_changes = true;
-                            all_diffs.push((
-                                resource_id,
-                                hoist_diff::DiffResult {
+                            all_diffs.push(ResourceDiff {
+                                kind: ResourceKind::Agent,
+                                resource_name: name.clone(),
+                                display_id: resource_id,
+                                result: hoist_diff::DiffResult {
                                     is_equal: false,
                                     changes: vec![hoist_diff::Change {
                                         path: ".".to_string(),
                                         kind: hoist_diff::ChangeKind::Added,
                                         old_value: None,
                                         new_value: Some(local_normalized),
+                                        description: None,
                                     }],
                                 },
-                            ));
+                            });
                         }
                     }
                 }
@@ -326,16 +341,18 @@ pub async fn run(
                 let local_yaml = agents_dir.join(format!("{}.yaml", remote_name));
                 if !local_yaml.exists() {
                     let resource_id = format!("agents/{}", remote_name);
-                    if all_diffs.iter().any(|(id, _)| id == &resource_id) {
+                    if all_diffs.iter().any(|d| d.display_id == resource_id) {
                         continue;
                     }
-                    all_diffs.push((
-                        format!("{} (remote only)", resource_id),
-                        hoist_diff::DiffResult {
+                    all_diffs.push(ResourceDiff {
+                        kind: ResourceKind::Agent,
+                        resource_name: remote_name.clone(),
+                        display_id: resource_id,
+                        result: hoist_diff::DiffResult {
                             is_equal: true,
                             changes: vec![],
                         },
-                    ));
+                    });
                 }
             }
         }
@@ -344,43 +361,11 @@ pub async fn run(
     // Format output
     match format {
         DiffFormat::Text => {
-            let (changed, unchanged): (Vec<_>, Vec<_>) =
-                all_diffs.iter().partition(|(_, r)| !r.is_equal);
-
-            if changed.is_empty() {
-                println!(
-                    "No drift detected, all {} resource(s) match the server.",
-                    unchanged.len()
-                );
-            } else {
-                println!(
-                    "{} resource(s) with drift:\n",
-                    changed.len().to_string().yellow()
-                );
-                for (name, result) in &changed {
-                    println!(
-                        "  {} {} ({} change{})",
-                        "~".yellow(),
-                        name,
-                        result.changes.len(),
-                        if result.changes.len() == 1 { "" } else { "s" }
-                    );
-                    for line in describe_changes(&result.changes, Some(("local", "server"))) {
-                        println!("{}", line);
-                    }
-                }
-                println!();
-                if !unchanged.is_empty() {
-                    println!(
-                        "  {} resource(s) match the server",
-                        unchanged.len().to_string().dimmed()
-                    );
-                }
-            }
+            format_diff_text(&all_diffs, Some(("locally", "on the server")));
         }
         DiffFormat::Json => {
-            let report = format_report(&all_diffs, OutputFormat::Json);
-            print!("{}", report);
+            let json = format_diff_json(&mut all_diffs, ("locally", "on the server"));
+            print!("{}", json);
         }
     }
 
@@ -399,7 +384,7 @@ async fn diff_resource(
     name: &str,
     path: &std::path::Path,
     strip_fields: &[&str],
-    all_diffs: &mut Vec<(String, hoist_diff::DiffResult)>,
+    all_diffs: &mut Vec<ResourceDiff>,
     has_changes: &mut bool,
 ) -> Result<()> {
     let content = std::fs::read_to_string(path)?;
@@ -423,7 +408,7 @@ async fn diff_resource_value(
     name: &str,
     local: &serde_json::Value,
     strip_fields: &[&str],
-    all_diffs: &mut Vec<(String, hoist_diff::DiffResult)>,
+    all_diffs: &mut Vec<ResourceDiff>,
     has_changes: &mut bool,
 ) -> Result<()> {
     let local_normalized = normalize(local, strip_fields);
@@ -438,22 +423,30 @@ async fn diff_resource_value(
                 *has_changes = true;
             }
 
-            all_diffs.push((resource_id, diff_result));
+            all_diffs.push(ResourceDiff {
+                kind,
+                resource_name: name.to_string(),
+                display_id: resource_id,
+                result: diff_result,
+            });
         }
         Err(hoist_client::ClientError::NotFound { .. }) => {
             *has_changes = true;
-            all_diffs.push((
-                resource_id,
-                hoist_diff::DiffResult {
+            all_diffs.push(ResourceDiff {
+                kind,
+                resource_name: name.to_string(),
+                display_id: resource_id,
+                result: hoist_diff::DiffResult {
                     is_equal: false,
                     changes: vec![hoist_diff::Change {
                         path: ".".to_string(),
                         kind: hoist_diff::ChangeKind::Added,
                         old_value: None,
                         new_value: Some(local_normalized),
+                        description: None,
                     }],
                 },
-            ));
+            });
         }
         Err(e) => return Err(e.into()),
     }
@@ -488,7 +481,7 @@ async fn run_cross_env_diff(
         .copied()
         .collect();
 
-    let mut all_diffs = Vec::new();
+    let mut all_diffs: Vec<ResourceDiff> = Vec::new();
     let mut has_changes = false;
 
     // --- Search resources (cross-env) ---
@@ -554,39 +547,50 @@ async fn run_cross_env_diff(
                             if !diff_result.is_equal {
                                 has_changes = true;
                             }
-                            all_diffs.push((resource_id, diff_result));
+                            all_diffs.push(ResourceDiff {
+                                kind: *kind,
+                                resource_name: name.clone(),
+                                display_id: resource_id,
+                                result: diff_result,
+                            });
                         }
                         (Some(left), None) => {
                             has_changes = true;
                             let left_norm = normalize(left, &strip_fields);
-                            all_diffs.push((
-                                format!("{} ({} only)", resource_id, left_env.name),
-                                hoist_diff::DiffResult {
+                            all_diffs.push(ResourceDiff {
+                                kind: *kind,
+                                resource_name: name.clone(),
+                                display_id: resource_id,
+                                result: hoist_diff::DiffResult {
                                     is_equal: false,
                                     changes: vec![hoist_diff::Change {
                                         path: ".".to_string(),
                                         kind: hoist_diff::ChangeKind::Added,
                                         old_value: None,
                                         new_value: Some(left_norm),
+                                        description: None,
                                     }],
                                 },
-                            ));
+                            });
                         }
                         (None, Some(right)) => {
                             has_changes = true;
                             let right_norm = normalize(right, &strip_fields);
-                            all_diffs.push((
-                                format!("{} ({} only)", resource_id, right_env.name),
-                                hoist_diff::DiffResult {
+                            all_diffs.push(ResourceDiff {
+                                kind: *kind,
+                                resource_name: name.clone(),
+                                display_id: resource_id,
+                                result: hoist_diff::DiffResult {
                                     is_equal: false,
                                     changes: vec![hoist_diff::Change {
                                         path: ".".to_string(),
                                         kind: hoist_diff::ChangeKind::Added,
                                         old_value: None,
                                         new_value: Some(right_norm),
+                                        description: None,
                                     }],
                                 },
-                            ));
+                            });
                         }
                         (None, None) => {}
                     }
@@ -664,39 +668,50 @@ async fn run_cross_env_diff(
                     if !diff_result.is_equal {
                         has_changes = true;
                     }
-                    all_diffs.push((resource_id, diff_result));
+                    all_diffs.push(ResourceDiff {
+                        kind: ResourceKind::Agent,
+                        resource_name: name.clone(),
+                        display_id: resource_id,
+                        result: diff_result,
+                    });
                 }
                 (Some(left), None) => {
                     has_changes = true;
                     let left_norm = normalize(left, volatile);
-                    all_diffs.push((
-                        format!("{} ({} only)", resource_id, left_env.name),
-                        hoist_diff::DiffResult {
+                    all_diffs.push(ResourceDiff {
+                        kind: ResourceKind::Agent,
+                        resource_name: name.clone(),
+                        display_id: resource_id,
+                        result: hoist_diff::DiffResult {
                             is_equal: false,
                             changes: vec![hoist_diff::Change {
                                 path: ".".to_string(),
                                 kind: hoist_diff::ChangeKind::Added,
                                 old_value: None,
                                 new_value: Some(left_norm),
+                                description: None,
                             }],
                         },
-                    ));
+                    });
                 }
                 (None, Some(right)) => {
                     has_changes = true;
                     let right_norm = normalize(right, volatile);
-                    all_diffs.push((
-                        format!("{} ({} only)", resource_id, right_env.name),
-                        hoist_diff::DiffResult {
+                    all_diffs.push(ResourceDiff {
+                        kind: ResourceKind::Agent,
+                        resource_name: name.clone(),
+                        display_id: resource_id,
+                        result: hoist_diff::DiffResult {
                             is_equal: false,
                             changes: vec![hoist_diff::Change {
                                 path: ".".to_string(),
                                 kind: hoist_diff::ChangeKind::Added,
                                 old_value: None,
                                 new_value: Some(right_norm),
+                                description: None,
                             }],
                         },
-                    ));
+                    });
                 }
                 (None, None) => {}
             }
@@ -704,52 +719,16 @@ async fn run_cross_env_diff(
     }
 
     // Format output
-    let left_label = &left_env.name;
-    let right_label = &right_env.name;
+    let left_label = format!("on {}", left_env.name);
+    let right_label = format!("on {}", right_env.name);
 
     match format {
         DiffFormat::Text => {
-            let (changed, unchanged): (Vec<_>, Vec<_>) =
-                all_diffs.iter().partition(|(_, r)| !r.is_equal);
-
-            if changed.is_empty() {
-                println!(
-                    "No differences between '{}' and '{}', all {} resource(s) match.",
-                    left_label,
-                    right_label,
-                    unchanged.len()
-                );
-            } else {
-                println!(
-                    "{} resource(s) differ between '{}' and '{}':\n",
-                    changed.len().to_string().yellow(),
-                    left_label,
-                    right_label,
-                );
-                for (name, result) in &changed {
-                    println!(
-                        "  {} {} ({} change{})",
-                        "~".yellow(),
-                        name,
-                        result.changes.len(),
-                        if result.changes.len() == 1 { "" } else { "s" }
-                    );
-                    for line in describe_changes(&result.changes, Some((left_label, right_label))) {
-                        println!("{}", line);
-                    }
-                }
-                println!();
-                if !unchanged.is_empty() {
-                    println!(
-                        "  {} resource(s) match between environments",
-                        unchanged.len().to_string().dimmed()
-                    );
-                }
-            }
+            format_diff_text(&all_diffs, Some((&left_label, &right_label)));
         }
         DiffFormat::Json => {
-            let report = format_report(&all_diffs, OutputFormat::Json);
-            print!("{}", report);
+            let json = format_diff_json(&mut all_diffs, (&left_label, &right_label));
+            print!("{}", json);
         }
     }
 
@@ -758,6 +737,113 @@ async fn run_cross_env_diff(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shared formatting helpers
+// ---------------------------------------------------------------------------
+
+/// Print diff results as colored terminal text.
+fn format_diff_text(diffs: &[ResourceDiff], labels: Option<(&str, &str)>) {
+    let (changed, unchanged): (Vec<_>, Vec<_>) = diffs.iter().partition(|d| !d.result.is_equal);
+
+    if changed.is_empty() {
+        println!(
+            "No drift detected, all {} resource(s) match.",
+            unchanged.len()
+        );
+        return;
+    }
+
+    println!(
+        "{} resource(s) with drift:\n",
+        changed.len().to_string().yellow()
+    );
+    for d in &changed {
+        println!(
+            "  {} {} ({} change{})",
+            "~".yellow(),
+            d.display_id,
+            d.result.changes.len(),
+            if d.result.changes.len() == 1 { "" } else { "s" }
+        );
+        for line in describe_changes(&d.result.changes, d.kind, &d.resource_name, labels) {
+            println!("{}", line);
+        }
+    }
+    println!();
+    if !unchanged.is_empty() {
+        println!(
+            "  {} resource(s) match",
+            unchanged.len().to_string().dimmed()
+        );
+    }
+}
+
+/// Produce enhanced JSON diff output with annotated descriptions.
+fn format_diff_json(diffs: &mut [ResourceDiff], labels: (&str, &str)) -> String {
+    let report: Vec<_> = diffs
+        .iter_mut()
+        .map(|d| {
+            // Determine status
+            let status = if d.result.is_equal {
+                "unchanged"
+            } else if d.result.changes.len() == 1 && d.result.changes[0].path == "." {
+                match d.result.changes[0].kind {
+                    hoist_diff::ChangeKind::Added => "local_only",
+                    hoist_diff::ChangeKind::Removed => "remote_only",
+                    _ => "modified",
+                }
+            } else {
+                "modified"
+            };
+
+            // Annotate changes with English descriptions
+            annotate_changes(
+                &mut d.result.changes,
+                d.kind,
+                &d.resource_name,
+                Some(labels),
+            );
+
+            // Build summary line
+            let summary = if d.result.is_equal {
+                format!(
+                    "{} '{}' is unchanged",
+                    d.kind.display_name(),
+                    d.resource_name
+                )
+            } else {
+                let descs = describe_changes_plain(
+                    &d.result.changes,
+                    d.kind,
+                    &d.resource_name,
+                    Some(labels),
+                );
+                if descs.len() == 1 {
+                    descs[0].clone()
+                } else {
+                    format!(
+                        "{} '{}' has {} difference(s)",
+                        d.kind.display_name(),
+                        d.resource_name,
+                        d.result.changes.len()
+                    )
+                }
+            };
+
+            serde_json::json!({
+                "resource_type": d.kind.display_name(),
+                "resource_name": d.resource_name,
+                "resource_id": d.display_id,
+                "status": status,
+                "summary": summary,
+                "changes": d.result.changes,
+            })
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "[]".to_string())
 }
 
 /// Build a managed map from local KS files on disk.
