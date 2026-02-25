@@ -8,7 +8,7 @@ use colored::Colorize;
 use hoist_core::resources::ResourceKind;
 use hoist_diff::{
     CONTEXT_TRUNCATE_LEN, Change, ChangeKind, DiffLine, WordSegment, WordSegmentKind, diff_text,
-    format_value_preview, is_long_text, truncate_context,
+    format_value_preview, is_long_text, normalize_for_diff, truncate_context,
 };
 use serde_json::Value;
 
@@ -1347,12 +1347,14 @@ fn describe_long_text_diff(
 
     match change.kind {
         ChangeKind::Modified => {
-            let old_v = full_str_val(&change.old_value);
-            let new_v = full_str_val(&change.new_value);
+            let old_v = normalize_for_diff(&full_str_val(&change.old_value));
+            let new_v = normalize_for_diff(&full_str_val(&change.new_value));
             let result = diff_text(&old_v, &new_v);
+            let total_changed = result.deletions + result.insertions;
+            let line_word = if total_changed == 1 { "line" } else { "lines" };
             let mut parts = vec![format!(
-                "The {} {} ({} removed, {} added):",
-                subject, verb_differ, result.deletions, result.insertions
+                "The {} {} {} vs {} ({} {} changed):",
+                subject, verb_differ, old_label, new_label, total_changed, line_word,
             )];
             for (i, hunk) in result.hunks.iter().enumerate() {
                 if i > 0 {
@@ -1431,18 +1433,24 @@ fn format_long_text_colored(
 
     match change.kind {
         ChangeKind::Modified => {
-            let old_v = full_str_val(&change.old_value);
-            let new_v = full_str_val(&change.new_value);
+            let old_v = normalize_for_diff(&full_str_val(&change.old_value));
+            let new_v = normalize_for_diff(&full_str_val(&change.new_value));
             let result = diff_text(&old_v, &new_v);
+            let total_changed = result.deletions + result.insertions;
+            let line_word = if total_changed == 1 { "line" } else { "lines" };
 
             let mut lines = vec![format!(
                 "      {}",
                 format!(
-                    "The {} {} ({} removed, {} added):",
-                    subject, verb_differ, result.deletions, result.insertions
+                    "The {} {} {} vs {} ({} {} changed):",
+                    subject, verb_differ, old_label, new_label, total_changed, line_word,
                 )
                 .yellow()
             )];
+            lines.push(format!(
+                "        {}",
+                format!("- = {}  + = {}", old_label, new_label).dimmed()
+            ));
 
             for (i, hunk) in result.hunks.iter().enumerate() {
                 if i > 0 {
@@ -2089,7 +2097,7 @@ mod tests {
             Some(json!(new)),
         );
         let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
-        assert!(desc.contains("differ (1 removed, 1 added)"));
+        assert!(desc.contains("differ locally vs on the server (2 lines changed)"));
         // Word-level diff: old side shows all-equal (no brackets), new side brackets changed words
         assert!(desc.contains("- Always be polite."));
         assert!(desc.contains("+ Always be"));
@@ -2121,8 +2129,8 @@ mod tests {
         );
         let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
         // Short values should use fallback, not line-level diff
-        assert!(!desc.contains("removed"));
-        assert!(!desc.contains("added)"));
+        assert!(!desc.contains("lines changed"));
+        assert!(!desc.contains("line changed"));
     }
 
     #[test]
@@ -2167,7 +2175,7 @@ mod tests {
             "on the server",
         );
         assert!(desc.contains("description of Index 'my-index'"));
-        assert!(desc.contains("0 removed, 1 added"));
+        assert!(desc.contains("differs locally vs on the server (1 line changed)"));
     }
 
     #[test]
@@ -2187,7 +2195,7 @@ mod tests {
         );
         assert!(desc.contains("old desc"));
         assert!(desc.contains("new desc"));
-        assert!(!desc.contains("removed"));
+        assert!(!desc.contains("lines changed"));
     }
 
     #[test]

@@ -132,6 +132,7 @@ async fn run_fresh(
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
             resources: Vec::new(),
         },
+        ai: None,
         environments: std::collections::BTreeMap::from([(
             env_name.clone(),
             EnvironmentConfig {
@@ -273,6 +274,7 @@ async fn run_fresh(
             &selection,
             None, // no filter
             true, // force (user already confirmed)
+            None, // no AI explanations during init
         )
         .await?;
     } else {
@@ -369,6 +371,7 @@ async fn run_non_interactive(
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
             resources: Vec::new(),
         },
+        ai: None,
         environments: std::collections::BTreeMap::from([(
             env_name.clone(),
             EnvironmentConfig {
@@ -451,6 +454,7 @@ async fn run_non_interactive(
                 &selection,
                 None,
                 true, // force — non-interactive
+                None, // no AI explanations during init
             )
             .await?;
         }
@@ -1330,6 +1334,7 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
+            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -1555,6 +1560,7 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
+            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -1777,6 +1783,7 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
+            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {

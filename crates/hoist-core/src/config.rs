@@ -25,6 +25,8 @@ pub struct Config {
     pub project: ProjectConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai: Option<AiConfig>,
     pub environments: BTreeMap<String, EnvironmentConfig>,
 }
 
@@ -85,6 +87,42 @@ pub struct FoundryServiceConfig {
     /// Resource group (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_group: Option<String>,
+}
+
+/// AI configuration for Azure OpenAI integration (project-level, not per-environment)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// AI Services account name
+    pub account: String,
+    /// Model deployment name (e.g., "gpt-4o-mini")
+    pub deployment: String,
+    /// Auto-discovered endpoint from ARM; overrides name-based URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Azure subscription ID (for ARM discovery)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
+    /// Resource group (for ARM discovery)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_group: Option<String>,
+    /// Azure OpenAI API version
+    #[serde(default = "default_openai_api_version")]
+    pub api_version: String,
+}
+
+fn default_openai_api_version() -> String {
+    "2024-12-01-preview".to_string()
+}
+
+impl AiConfig {
+    /// Get the Azure OpenAI endpoint URL
+    pub fn openai_endpoint(&self) -> String {
+        if let Some(ref ep) = self.endpoint {
+            ep.trim_end_matches('/').to_string()
+        } else {
+            format!("https://{}.openai.azure.com", self.account)
+        }
+    }
 }
 
 fn default_api_version() -> String {
@@ -324,6 +362,11 @@ impl Config {
             })
     }
 
+    /// Check if AI features are configured
+    pub fn has_ai(&self) -> bool {
+        self.ai.is_some()
+    }
+
     /// Get all environment names
     pub fn environment_names(&self) -> Vec<&str> {
         self.environments.keys().map(|s| s.as_str()).collect()
@@ -396,6 +439,7 @@ mod tests {
         Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -416,6 +460,7 @@ mod tests {
                 files_path: None,
             },
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -433,6 +478,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::new(),
         };
         assert!(config.validate().is_err());
@@ -443,6 +489,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -478,6 +525,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -504,6 +552,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -522,6 +571,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -549,6 +599,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -629,6 +680,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -667,6 +719,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([(
                 "staging".to_string(),
                 EnvironmentConfig {
@@ -686,6 +739,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -721,6 +775,7 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
+            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),

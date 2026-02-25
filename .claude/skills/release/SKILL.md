@@ -1,0 +1,57 @@
+---
+name: release
+description: "Release a new version: bump version, update docs, commit, push, and tag"
+argument-hint: "<major|minor|patch>"
+---
+
+Release a new version of hoist.
+
+## Input
+
+$ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop and ask.
+
+## Steps
+
+### 1. Determine the new version
+
+- Read the current version from the `version` field in the workspace `Cargo.toml`
+- Apply the semver bump based on $ARGUMENTS:
+  - `patch`: 0.10.1 -> 0.10.2
+  - `minor`: 0.10.1 -> 0.11.0
+  - `major`: 0.10.1 -> 1.0.0
+- Show the user: "Releasing hoist v{OLD} -> v{NEW}"
+
+### 2. Pre-flight checks
+
+- Run `cargo fmt --all -- --check` — abort if formatting issues
+- Run `cargo clippy --workspace -- -D warnings` — abort if warnings
+- Run `cargo test --workspace` — abort if any test fails
+- Run `git status` — abort if there are uncommitted changes that are NOT documentation or version files
+
+### 3. Bump version numbers
+
+- Update `version` in the root `Cargo.toml` `[workspace.package]` section
+- Update internal crate dependency versions (`hoist-core`, `hoist-client`, `hoist-diff`) in the root `Cargo.toml` `[workspace.dependencies]` section — they use `version = "X.Y.Z"` format (no `=` prefix)
+
+### 4. Update documentation
+
+- **CHANGELOG.md**: Rename the `[Unreleased]` section to `[{NEW_VERSION}] - {TODAY}` (YYYY-MM-DD format). If there is no `[Unreleased]` section, create a new dated entry summarizing changes since the last release
+- **README.md**: Review for accuracy — update any version references if present
+- **CLAUDE.md**: Review for accuracy — no version references to update typically
+
+### 5. Verify the build
+
+- Run `cargo build --workspace` to ensure everything compiles with the new version
+- Run `cargo test --workspace` once more after version bump
+
+### 6. Commit, push, and tag
+
+- Stage all changed files: `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and any updated docs
+- Commit with message: `Release v{NEW_VERSION}`
+- Push to main: `git push`
+- Create and push tag: `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}`
+
+### 7. Confirm
+
+- Tell the user the release is tagged and pushed
+- Remind them that the GitHub Actions release workflow will now build binaries, publish to crates.io, and update the Homebrew tap

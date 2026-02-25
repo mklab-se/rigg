@@ -5,6 +5,7 @@ use colored::Colorize;
 use tracing::info;
 
 use hoist_client::AzureSearchClient;
+use hoist_core::Config;
 use hoist_core::normalize::normalize;
 use hoist_core::resources::ResourceKind;
 use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
@@ -34,9 +35,20 @@ pub async fn run(
     exit_code: bool,
     env_override: Option<&str>,
     compare_env: Option<&str>,
+    no_explain: bool,
+    explain_flag: bool,
 ) -> Result<()> {
     let (project_root, config, env) = load_config_and_env(env_override)?;
     let files_root = config.files_root(&project_root);
+
+    // AI explanations: on by default when ai: is configured, unless --no-explain
+    let use_explain = if no_explain {
+        false
+    } else if explain_flag {
+        true
+    } else {
+        config.has_ai()
+    };
 
     // Cross-environment diff: compare two remotes directly
     if let Some(right_env_name) = compare_env {
@@ -75,6 +87,10 @@ pub async fn run(
 
     // --- Search resources ---
     if let (false, Some(search_svc)) = (search_kinds.is_empty(), primary_search_svc) {
+        eprintln!(
+            "Comparing local and remote resources on {}...",
+            search_svc.name
+        );
         let client = AzureSearchClient::from_service_config(search_svc)?;
 
         let service_dir = env.search_service_dir(&files_root, search_svc);
@@ -241,6 +257,10 @@ pub async fn run(
         let volatile = agent_volatile_fields();
 
         for foundry_config in &env.foundry {
+            eprintln!(
+                "Comparing local and remote agents on {}/{}...",
+                foundry_config.name, foundry_config.project
+            );
             let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
             info!(
                 "Connected to Foundry {}/{} using {}",
@@ -358,13 +378,25 @@ pub async fn run(
         }
     }
 
+    // Generate AI explanations for changed resources
+    let ai_summaries = if use_explain && has_changes {
+        generate_ai_summaries(&config, &all_diffs).await
+    } else {
+        std::collections::HashMap::new()
+    };
+
     // Format output
     match format {
         DiffFormat::Text => {
-            format_diff_text(&all_diffs, Some(("locally", "on the server")));
+            format_diff_text(
+                &all_diffs,
+                Some(("locally", "on the server")),
+                &ai_summaries,
+            );
         }
         DiffFormat::Json => {
-            let json = format_diff_json(&mut all_diffs, ("locally", "on the server"));
+            let json =
+                format_diff_json(&mut all_diffs, ("locally", "on the server"), &ai_summaries);
             print!("{}", json);
         }
     }
@@ -461,6 +493,10 @@ async fn run_cross_env_diff(
     left_env: &hoist_core::config::ResolvedEnvironment,
     right_env: &hoist_core::config::ResolvedEnvironment,
 ) -> Result<()> {
+    eprintln!(
+        "Comparing environments '{}' and '{}'...",
+        left_env.name, right_env.name
+    );
     let include_preview = left_env.sync.include_preview || right_env.sync.include_preview;
     let selection = resolve_resource_selection_from_flags(flags, include_preview, true);
 
@@ -718,16 +754,17 @@ async fn run_cross_env_diff(
         }
     }
 
-    // Format output
+    // Format output (cross-env diffs don't use AI explanations)
     let left_label = format!("on {}", left_env.name);
     let right_label = format!("on {}", right_env.name);
+    let no_ai = std::collections::HashMap::new();
 
     match format {
         DiffFormat::Text => {
-            format_diff_text(&all_diffs, Some((&left_label, &right_label)));
+            format_diff_text(&all_diffs, Some((&left_label, &right_label)), &no_ai);
         }
         DiffFormat::Json => {
-            let json = format_diff_json(&mut all_diffs, (&left_label, &right_label));
+            let json = format_diff_json(&mut all_diffs, (&left_label, &right_label), &no_ai);
             print!("{}", json);
         }
     }
@@ -740,11 +777,84 @@ async fn run_cross_env_diff(
 }
 
 // ---------------------------------------------------------------------------
+// AI explanation helpers
+// ---------------------------------------------------------------------------
+
+/// Generate AI summaries for all changed resources.
+async fn generate_ai_summaries(
+    config: &Config,
+    diffs: &[ResourceDiff],
+) -> std::collections::HashMap<String, String> {
+    let mut summaries = std::collections::HashMap::new();
+
+    let ai_config = match &config.ai {
+        Some(c) => c,
+        None => return summaries,
+    };
+
+    let client = match hoist_client::AzureOpenAIClient::from_config(ai_config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: Could not create AI client: {}", e);
+            return summaries;
+        }
+    };
+
+    let changed: Vec<&ResourceDiff> = diffs.iter().filter(|d| !d.result.is_equal).collect();
+    if changed.is_empty() {
+        return summaries;
+    }
+
+    eprintln!("Generating AI explanations...");
+
+    // Run LLM calls concurrently
+    let futures: Vec<_> = changed
+        .iter()
+        .map(|d| {
+            let display_id = d.display_id.clone();
+            let resource_type = d.kind.display_name().to_string();
+            let resource_name = d.resource_name.clone();
+            let changes = d.result.changes.clone();
+            let client_ref = &client;
+            async move {
+                let result = crate::commands::explain::explain_resource_changes(
+                    client_ref,
+                    &resource_type,
+                    &resource_name,
+                    &changes,
+                )
+                .await;
+                (display_id, result)
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+
+    for (display_id, result) in results {
+        match result {
+            Ok(summary) => {
+                summaries.insert(display_id, summary);
+            }
+            Err(e) => {
+                eprintln!("Warning: AI explanation failed for {}: {}", display_id, e);
+            }
+        }
+    }
+
+    summaries
+}
+
+// ---------------------------------------------------------------------------
 // Shared formatting helpers
 // ---------------------------------------------------------------------------
 
 /// Print diff results as colored terminal text.
-fn format_diff_text(diffs: &[ResourceDiff], labels: Option<(&str, &str)>) {
+fn format_diff_text(
+    diffs: &[ResourceDiff],
+    labels: Option<(&str, &str)>,
+    ai_summaries: &std::collections::HashMap<String, String>,
+) {
     let (changed, unchanged): (Vec<_>, Vec<_>) = diffs.iter().partition(|d| !d.result.is_equal);
 
     if changed.is_empty() {
@@ -773,6 +883,13 @@ fn format_diff_text(diffs: &[ResourceDiff], labels: Option<(&str, &str)>) {
         for line in describe_changes(&d.result.changes, d.kind, &d.resource_name, labels) {
             println!("{}", line);
         }
+        // AI summary
+        if let Some(summary) = ai_summaries.get(&d.display_id) {
+            println!();
+            for line in summary.lines() {
+                println!("      {} {}", "AI:".cyan(), line);
+            }
+        }
     }
     println!();
     if !unchanged.is_empty() {
@@ -784,7 +901,11 @@ fn format_diff_text(diffs: &[ResourceDiff], labels: Option<(&str, &str)>) {
 }
 
 /// Produce enhanced JSON diff output with annotated descriptions.
-fn format_diff_json(diffs: &mut [ResourceDiff], labels: (&str, &str)) -> String {
+fn format_diff_json(
+    diffs: &mut [ResourceDiff],
+    labels: (&str, &str),
+    ai_summaries: &std::collections::HashMap<String, String>,
+) -> String {
     let report: Vec<_> = diffs
         .iter_mut()
         .map(|d| {
@@ -835,14 +956,18 @@ fn format_diff_json(diffs: &mut [ResourceDiff], labels: (&str, &str)) -> String 
                 }
             };
 
-            serde_json::json!({
+            let mut entry = serde_json::json!({
                 "resource_type": d.kind.display_name(),
                 "resource_name": d.resource_name,
                 "resource_id": d.display_id,
                 "status": status,
                 "summary": summary,
                 "changes": d.result.changes,
-            })
+            });
+            if let Some(ai) = ai_summaries.get(&d.display_id) {
+                entry["ai_summary"] = serde_json::json!(ai);
+            }
+            entry
         })
         .collect();
 

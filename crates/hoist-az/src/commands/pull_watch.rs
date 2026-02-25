@@ -49,6 +49,7 @@ pub async fn run(
             &selection,
             filter.as_deref(),
             force,
+            None, // no AI explanations in watch mode
         )
         .await
         {

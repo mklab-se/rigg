@@ -9,6 +9,12 @@ use similar::{ChangeTag, TextDiff};
 /// Minimum string length to trigger line-level diffing.
 pub const LONG_TEXT_THRESHOLD: usize = 120;
 
+/// Per-line threshold: lines longer than this are split at sentence boundaries.
+const SENTENCE_SPLIT_THRESHOLD: usize = 120;
+
+/// Target width when word-wrapping lines with no sentence boundaries.
+const WORD_WRAP_WIDTH: usize = 80;
+
 /// Maximum display length for context lines before truncation.
 pub const CONTEXT_TRUNCATE_LEN: usize = 80;
 
@@ -244,6 +250,111 @@ pub fn truncate_context(s: &str, max_len: usize) -> String {
         .unwrap_or(s.len());
 
     format!("{}{}{}", &s[..prefix_end], ellipsis, &s[suffix_start..])
+}
+
+/// Normalize text for more readable line-level diffs.
+///
+/// Long lines (single paragraphs without newlines) are split at sentence
+/// boundaries so that the diff can show which sentence changed, rather than
+/// showing the entire paragraph as one changed block.
+///
+/// Lines shorter than the threshold are left unchanged. When no sentence
+/// boundaries are found in a long line, it falls back to word-wrapping.
+pub fn normalize_for_diff(text: &str) -> String {
+    let mut result = String::new();
+    let parts: Vec<&str> = text.split('\n').collect();
+    let line_count = parts.len();
+    for (idx, line) in parts.into_iter().enumerate() {
+        // Preserve trailing newline semantics: if the original text ended with
+        // \n, the split produces a final empty element that we should skip.
+        if line.is_empty() && idx == line_count - 1 {
+            break;
+        }
+        if line.len() <= SENTENCE_SPLIT_THRESHOLD {
+            result.push_str(line);
+            result.push('\n');
+        } else {
+            let sentences = split_at_sentence_boundaries(line);
+            if sentences.len() <= 1 {
+                // No sentence boundaries found — word-wrap instead
+                let wrapped = word_wrap(line.trim(), WORD_WRAP_WIDTH);
+                for wrap_line in &wrapped {
+                    result.push_str(wrap_line);
+                    result.push('\n');
+                }
+            } else {
+                for sentence in &sentences {
+                    let trimmed = sentence.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed.len() > SENTENCE_SPLIT_THRESHOLD {
+                        let wrapped = word_wrap(trimmed, WORD_WRAP_WIDTH);
+                        for wrap_line in &wrapped {
+                            result.push_str(wrap_line);
+                            result.push('\n');
+                        }
+                    } else {
+                        result.push_str(trimmed);
+                        result.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Split text at sentence boundaries (`. `, `? `, `! ` followed by an
+/// uppercase letter). The punctuation stays with the preceding sentence.
+fn split_at_sentence_boundaries(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut result = Vec::new();
+    let mut start = 0;
+
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if (bytes[i] == b'.' || bytes[i] == b'?' || bytes[i] == b'!')
+            && bytes[i + 1] == b' '
+            && bytes[i + 2].is_ascii_uppercase()
+        {
+            // Include the punctuation on this segment, skip the space
+            result.push(&text[start..=i]);
+            start = i + 2;
+            i = start;
+        } else {
+            i += 1;
+        }
+    }
+    if start < text.len() {
+        result.push(&text[start..]);
+    }
+    result
+}
+
+/// Word-wrap text at the given width, breaking at space boundaries.
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split(' ') {
+        if word.is_empty() {
+            continue;
+        }
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.len() + 1 + word.len() > width {
+            lines.push(current);
+            current = word.to_string();
+        } else {
+            current.push(' ');
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -525,5 +636,73 @@ mod tests {
             }
         }
         panic!("Expected a Modified DiffLine");
+    }
+
+    // === normalize_for_diff tests ===
+
+    #[test]
+    fn test_normalize_short_lines_unchanged() {
+        let text = "Line one.\nLine two.\nLine three.\n";
+        assert_eq!(normalize_for_diff(text), text);
+    }
+
+    #[test]
+    fn test_normalize_splits_long_paragraph_at_sentences() {
+        let text = "You are a helpful assistant. You should always respond politely. Use formal language when speaking to customers. Never share personal information. Always verify the caller's identity before proceeding.";
+        let normalized = normalize_for_diff(text);
+        let lines: Vec<&str> = normalized.lines().collect();
+        assert!(
+            lines.len() >= 4,
+            "Expected at least 4 sentence lines, got {}: {:?}",
+            lines.len(),
+            lines
+        );
+        assert!(lines[0].ends_with('.'));
+        assert!(lines[1].ends_with('.'));
+    }
+
+    #[test]
+    fn test_normalize_preserves_existing_multiline() {
+        let text = "Short line one.\nShort line two.\nShort line three.\n";
+        assert_eq!(normalize_for_diff(text), text);
+    }
+
+    #[test]
+    fn test_normalize_word_wraps_when_no_sentences() {
+        // A long line with no sentence boundaries (no ". A" pattern)
+        let text = "this is a very long line without any sentence boundaries or uppercase letters after periods and it just keeps going and going and going and going for a really long time";
+        let normalized = normalize_for_diff(text);
+        let lines: Vec<&str> = normalized.lines().collect();
+        assert!(
+            lines.len() > 1,
+            "Expected word-wrap to split into multiple lines, got: {:?}",
+            lines
+        );
+        for line in &lines {
+            assert!(
+                line.len() <= WORD_WRAP_WIDTH + 20,
+                "Line too long after wrapping: {} chars",
+                line.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_improves_diff_granularity() {
+        let old = "You are a helpful assistant. Always respond politely. Use formal language. Never share secrets.";
+        let new = "You are a helpful assistant. Always respond very politely. Use formal language. Never share secrets.";
+        // Without normalization: 1 delete + 1 insert (whole paragraph)
+        let raw_result = diff_text(old, new);
+        // With normalization: only the changed sentence differs
+        let norm_old = normalize_for_diff(old);
+        let norm_new = normalize_for_diff(new);
+        let norm_result = diff_text(&norm_old, &norm_new);
+        // The normalized version should have fewer changed lines
+        assert!(
+            norm_result.deletions <= raw_result.deletions,
+            "Normalized diff should have same or fewer deletions"
+        );
+        assert_eq!(norm_result.deletions, 1);
+        assert_eq!(norm_result.insertions, 1);
     }
 }

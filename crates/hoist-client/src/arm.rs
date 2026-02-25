@@ -180,6 +180,48 @@ struct StorageKeyList {
     keys: Vec<StorageKey>,
 }
 
+/// Azure OpenAI model deployment
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelDeployment {
+    pub name: String,
+    #[serde(default)]
+    pub properties: ModelDeploymentProperties,
+    #[serde(default)]
+    pub sku: ModelDeploymentSku,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelDeploymentProperties {
+    #[serde(default)]
+    pub model: ModelDeploymentModel,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelDeploymentModel {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelDeploymentSku {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub capacity: u32,
+}
+
+impl std::fmt::Display for ModelDeployment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({}, {})",
+            self.name, self.properties.model.name, self.sku.name
+        )
+    }
+}
+
 /// ARM list response envelope
 #[derive(Debug, Deserialize)]
 struct ArmListResponse<T> {
@@ -419,6 +461,91 @@ impl ArmClient {
             })
     }
 
+    /// List model deployments for an AI Services account.
+    pub async fn list_model_deployments(
+        &self,
+        account: &AiServicesAccount,
+        subscription_id: &str,
+    ) -> Result<Vec<ModelDeployment>, ClientError> {
+        let resource_group = parse_resource_group(&account.id).ok_or_else(|| ClientError::Api {
+            status: 0,
+            message: format!("Could not parse resource group from ARM ID: {}", account.id),
+        })?;
+
+        let url = format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}/deployments?api-version=2024-10-01",
+            ARM_BASE_URL, subscription_id, resource_group, account.name
+        );
+        debug!("Listing model deployments: {}", url);
+
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+
+        let result: ArmListResponse<ModelDeployment> = response.json().await?;
+        Ok(result.value)
+    }
+
+    /// Create a model deployment on an AI Services account.
+    pub async fn create_model_deployment(
+        &self,
+        account: &AiServicesAccount,
+        subscription_id: &str,
+        deployment_name: &str,
+        model_name: &str,
+        model_version: &str,
+    ) -> Result<(), ClientError> {
+        let resource_group = parse_resource_group(&account.id).ok_or_else(|| ClientError::Api {
+            status: 0,
+            message: format!("Could not parse resource group from ARM ID: {}", account.id),
+        })?;
+
+        let url = format!(
+            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}/deployments/{}?api-version=2024-10-01",
+            ARM_BASE_URL, subscription_id, resource_group, account.name, deployment_name
+        );
+        debug!("Creating model deployment: {}", url);
+
+        let body = serde_json::json!({
+            "sku": {
+                "name": "GlobalStandard",
+                "capacity": 1
+            },
+            "properties": {
+                "model": {
+                    "format": "OpenAI",
+                    "name": model_name,
+                    "version": model_version
+                }
+            }
+        });
+
+        let response = self
+            .http
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+
+        Ok(())
+    }
+
     /// Build a full connection string for a storage account.
     pub async fn get_storage_connection_string(
         &self,
@@ -543,6 +670,27 @@ mod tests {
         };
         assert_eq!(format!("{}", project), "my-project (westus2)");
         assert_eq!(project.display_name(), "my-project");
+    }
+
+    #[test]
+    fn test_model_deployment_display() {
+        let deployment = ModelDeployment {
+            name: "gpt-4o-mini".to_string(),
+            properties: ModelDeploymentProperties {
+                model: ModelDeploymentModel {
+                    name: "gpt-4o-mini".to_string(),
+                    version: "2024-07-18".to_string(),
+                },
+            },
+            sku: ModelDeploymentSku {
+                name: "GlobalStandard".to_string(),
+                capacity: 1,
+            },
+        };
+        assert_eq!(
+            format!("{}", deployment),
+            "gpt-4o-mini (gpt-4o-mini, GlobalStandard)"
+        );
     }
 
     #[test]

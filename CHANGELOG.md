@@ -2,6 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-02-25
+
+### Added
+
+- **AI-enhanced explanations** — `hoist diff`, `hoist pull`, and `hoist push` now provide natural language explanations of configuration changes using Azure OpenAI. Instead of just showing structural diffs, hoist explains *what the changes mean* — e.g., "The agent's instructions were refined to emphasize a polite tone" instead of just "instructions differ (3 lines changed)"
+- **`hoist ai init` command** — interactive setup for Azure OpenAI integration. Discovers AI Services accounts and model deployments via ARM, recommends gpt-4o-mini, and stores configuration in the `ai:` section of `hoist.yaml`
+- **`hoist ai status` command** — check AI configuration and test connectivity to the Azure OpenAI endpoint
+- **`hoist ai remove` command** — remove AI configuration from `hoist.yaml`
+- **`AiConfig` in `hoist.yaml`** — new top-level `ai:` section for Azure OpenAI configuration (account, deployment, endpoint, subscription, resource group, api_version)
+- **Azure OpenAI client** — new `AzureOpenAIClient` in hoist-client with `chat_completion()` for LLM calls via Cognitive Services auth scope
+- **ARM discovery for model deployments** — `list_model_deployments()` and `create_model_deployment()` on the ARM client for Azure AI Services accounts
+- **`explain` parameter on MCP `hoist_diff` tool** — AI agents can request AI-enhanced explanations by passing `explain: true` (opt-in for MCP, opt-out for CLI)
+- **`--no-explain` flag** — disable AI explanations on `hoist diff`, `hoist pull`, and `hoist push` when AI is configured (AI explanations are on by default when the `ai:` config exists)
+
+### Changed
+
+- **AI explanations are opt-out on CLI** — when the `ai:` section is configured in `hoist.yaml`, diff/pull/push commands include AI explanations by default. Use `--no-explain` to disable. MCP tools remain opt-in (`explain: true`)
+- **Concurrent LLM calls** — AI explanations for multiple resources are fetched concurrently using `futures::future::join_all` for faster results
+
+### Tests
+
+- 595 tests across workspace (up from 543)
+
+## [0.10.1] - 2026-02-24
+
+### Changed
+
+- **Word-level highlighting for text diffs** — long text properties (like agent instructions) now highlight individual changed words within lines instead of showing entire lines as changed. Uses bold + color for changed words within context
+- **Truncated context in text diffs** — large text diffs show only the relevant changed sections with `... (N lines unchanged) ...` markers instead of displaying the entire text
+- **Visual separation for diff sections** — clearer visual distinction between structural JSON diffs and inline text diffs
+
+## [0.10.0] - 2026-02-24
+
+### Added
+
+- **Line-level text diffs for long text properties** — properties with multi-line text (like agent instructions, skillset descriptions) now show line-by-line diffs instead of just "values differ (N lines)". Uses the `similar` crate for unified diff output with +/- markers, integrated into both text and JSON output formats
+
+## [0.9.0] - 2026-02-23
+
+### Added
+
+- **Non-interactive `hoist init`** — `hoist init` can now be run fully non-interactively by passing `--search <name>` and/or `--foundry <name> --project <project>` flags, enabling CI/CD and scripted setups
+- **Edm type validation** — `hoist validate` now checks index field `type` values against the set of valid Azure Search Edm types and warns about unrecognized types
+- **E2E test skill** — comprehensive end-to-end test skill for validating the full hoist user experience against live Azure services
+
+### Changed
+
+- UX polish across status, validate, pull, push, and delete commands
+- Improved error messages and progress feedback
+
 ## [0.8.0] - 2026-02-23
 
 ### Added

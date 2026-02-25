@@ -34,10 +34,14 @@ pub async fn run(
     recursive: bool,
     filter: Option<String>,
     force: bool,
+    no_explain: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
     let (project_root, config, env) = load_config_and_env(env_override)?;
     let files_root = config.files_root(&project_root);
+
+    // AI explanations: on by default when ai: is configured, unless --no-explain
+    let use_explain = !no_explain && config.has_ai();
 
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
@@ -53,6 +57,12 @@ pub async fn run(
         selection
     };
 
+    let ai_config = if use_explain {
+        config.ai.as_ref()
+    } else {
+        None
+    };
+
     execute_pull(
         &project_root,
         &files_root,
@@ -60,6 +70,7 @@ pub async fn run(
         &selection,
         filter.as_deref(),
         force,
+        ai_config,
     )
     .await
 }
@@ -180,6 +191,7 @@ async fn expand_pull_selection(
 ///
 /// `project_root` is where state files (.hoist/) live.
 /// `files_root` is where resource files (search/, foundry/) live.
+/// `ai_config` enables AI-generated explanations when `Some`.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_pull(
     project_root: &Path,
@@ -188,6 +200,7 @@ pub async fn execute_pull(
     selection: &ResourceSelection,
     filter: Option<&str>,
     force: bool,
+    ai_config: Option<&hoist_core::config::AiConfig>,
 ) -> Result<()> {
     let kinds = selection.kinds();
 
@@ -219,6 +232,7 @@ pub async fn execute_pull(
         let search_svc = env
             .primary_search_service()
             .ok_or_else(|| anyhow::anyhow!("No search service in environment '{}'", env.name))?;
+        eprintln!("Fetching resources from {}...", search_svc.name);
         let client = AzureSearchClient::from_service_config(search_svc)?;
 
         info!(
@@ -313,6 +327,10 @@ pub async fn execute_pull(
     // --- Foundry agents ---
     if !foundry_kinds.is_empty() && env.has_foundry() {
         for foundry_config in &env.foundry {
+            eprintln!(
+                "Fetching agents from {}/{}...",
+                foundry_config.name, foundry_config.project
+            );
             let agents_dir = foundry_agents_dir(env, files_root, foundry_config);
             discover_foundry_agents(
                 &agents_dir,
@@ -430,6 +448,49 @@ pub async fn execute_pull(
             "  {} resource(s) already up to date",
             total_unchanged.to_string().dimmed()
         );
+    }
+
+    // Generate AI explanations for updated resources
+    if let Some(ai_cfg) = ai_config {
+        let changed_resources: Vec<_> = updated_resources
+            .iter()
+            .filter(|r| !r.changes.is_empty())
+            .collect();
+        if !changed_resources.is_empty() {
+            if let Ok(ai_client) = hoist_client::AzureOpenAIClient::from_config(ai_cfg) {
+                eprintln!("Generating AI explanations...");
+                let ai_futures: Vec<_> = changed_resources
+                    .iter()
+                    .map(|r| {
+                        let kind_name = r.kind.display_name().to_string();
+                        let name = r.name.clone();
+                        let changes = r.changes.clone();
+                        let client_ref = &ai_client;
+                        async move {
+                            let result = crate::commands::explain::explain_resource_changes(
+                                client_ref, &kind_name, &name, &changes,
+                            )
+                            .await;
+                            (name, result)
+                        }
+                    })
+                    .collect();
+                let results = futures::future::join_all(ai_futures).await;
+                println!();
+                for (name, result) in results {
+                    match result {
+                        Ok(summary) => {
+                            for line in summary.lines() {
+                                println!("      {} {}", "AI:".cyan(), line);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: AI explanation failed for {}: {}", name, e);
+                        }
+                    }
+                }
+            }
+        }
     }
     println!();
 

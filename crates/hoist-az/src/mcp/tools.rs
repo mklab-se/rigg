@@ -48,6 +48,9 @@ pub struct ResourceParams {
     /// Specific resource name to operate on
     #[schemars(default)]
     pub name: Option<String>,
+    /// Generate AI-enhanced explanations of changes (requires ai: config in hoist.yaml)
+    #[schemars(default)]
+    pub explain: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -190,6 +193,7 @@ impl HoistMcpServer {
             params.env.as_deref(),
             params.resource_type.as_deref(),
             params.name.as_deref(),
+            params.explain.unwrap_or(false),
         )
         .await
         {
@@ -612,10 +616,16 @@ async fn run_diff(
     env_override: Option<&str>,
     resource_type: Option<&str>,
     name: Option<&str>,
+    explain: bool,
 ) -> anyhow::Result<serde_json::Value> {
     let (project_root, _config, env) = commands::load_config_and_env(env_override)?;
 
     let mut args = vec!["diff".into(), "--format".into(), "json".into()];
+    if explain {
+        args.push("--explain".into());
+    } else {
+        args.push("--no-explain".into());
+    }
     add_resource_type_args(resource_type, name, &mut args);
 
     let output = std::process::Command::new(std::env::current_exe()?)
@@ -640,7 +650,7 @@ async fn run_pull(
     force: bool,
 ) -> anyhow::Result<serde_json::Value> {
     if !force {
-        let diff_result = run_diff(env_override, resource_type, name).await?;
+        let diff_result = run_diff(env_override, resource_type, name, false).await?;
         return Ok(serde_json::json!({
             "preview": true,
             "message": "Preview of what would be pulled. Re-run with force=true to execute.",
@@ -678,7 +688,7 @@ async fn run_push(
     force: bool,
 ) -> anyhow::Result<serde_json::Value> {
     if !force {
-        let diff_result = run_diff(env_override, resource_type, name).await?;
+        let diff_result = run_diff(env_override, resource_type, name, false).await?;
         return Ok(serde_json::json!({
             "preview": true,
             "message": "Preview of what would be pushed. Re-run with force=true to execute.",

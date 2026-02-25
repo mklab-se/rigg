@@ -17,7 +17,7 @@ pub mod state;
 pub mod templates;
 
 pub use config::{
-    Config, ConfigError, EnvironmentConfig, FoundryServiceConfig, ResolvedEnvironment,
+    AiConfig, Config, ConfigError, EnvironmentConfig, FoundryServiceConfig, ResolvedEnvironment,
     SearchServiceConfig, SyncConfig,
 };
 pub use resources::ResourceKind;

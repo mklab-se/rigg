@@ -49,6 +49,13 @@ impl AzCliAuth {
         }
     }
 
+    /// Create an auth provider for Azure Cognitive Services (OpenAI)
+    pub fn for_cognitive_services() -> Self {
+        Self {
+            resource_scope: "https://cognitiveservices.azure.com/.default",
+        }
+    }
+
     /// Create a new auth provider (defaults to Search scope for backward compatibility)
     pub fn new() -> Self {
         Self::for_search()
@@ -274,6 +281,11 @@ pub fn get_auth_provider_for(
     get_auth_provider_for_scope(scope)
 }
 
+/// Get the best available authentication provider for Azure Cognitive Services (OpenAI)
+pub fn get_cognitive_services_auth() -> Result<Box<dyn AuthProvider>, AuthError> {
+    get_auth_provider_for_scope("https://cognitiveservices.azure.com/.default")
+}
+
 /// Get the best available authentication provider for a specific resource scope
 fn get_auth_provider_for_scope(scope: &'static str) -> Result<Box<dyn AuthProvider>, AuthError> {
     // First try environment variables
@@ -445,6 +457,15 @@ mod tests {
     fn test_az_cli_auth_foundry_scope() {
         let auth = AzCliAuth::for_foundry();
         assert_eq!(auth.resource_scope, "https://ai.azure.com");
+    }
+
+    #[test]
+    fn test_az_cli_auth_cognitive_services_scope() {
+        let auth = AzCliAuth::for_cognitive_services();
+        assert_eq!(
+            auth.resource_scope,
+            "https://cognitiveservices.azure.com/.default"
+        );
     }
 
     #[test]

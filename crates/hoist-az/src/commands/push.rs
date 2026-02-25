@@ -36,10 +36,14 @@ pub async fn run(
     recursive: bool,
     filter: Option<String>,
     force: bool,
+    no_explain: bool,
     env_override: Option<&str>,
 ) -> Result<()> {
     let (project_root, config, env) = load_config_and_env(env_override)?;
     let files_root = config.files_root(&project_root);
+
+    // AI explanations: on by default when ai: is configured, unless --no-explain
+    let use_explain = !no_explain && config.has_ai();
 
     // Push has no default fallback — user must specify resource types
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, false);
@@ -79,6 +83,7 @@ pub async fn run(
     if !search_kinds.is_empty() {
         let search_svc = primary_search_svc
             .ok_or_else(|| anyhow::anyhow!("No search service in environment '{}'", env.name))?;
+        eprintln!("Comparing local resources against {}...", server_name);
         let client = AzureSearchClient::from_service_config(search_svc)?;
 
         info!(
@@ -276,6 +281,10 @@ pub async fn run(
     // --- Foundry agents ---
     if has_foundry_kinds && env.has_foundry() {
         for foundry_config in &env.foundry {
+            eprintln!(
+                "Comparing local agents against {}/{}...",
+                foundry_config.name, foundry_config.project
+            );
             let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
             info!(
                 "Connected to Foundry {}/{} using {}",
@@ -516,6 +525,45 @@ pub async fn run(
             "  {} resource(s) already match the server",
             total_unchanged.to_string().dimmed()
         );
+    }
+
+    // Generate AI explanations for changed resources
+    if use_explain && !change_details.is_empty() {
+        if let Some(ai_config) = &config.ai {
+            if let Ok(ai_client) = hoist_client::AzureOpenAIClient::from_config(ai_config) {
+                eprintln!("Generating AI explanations...");
+                let ai_futures: Vec<_> = change_details
+                    .iter()
+                    .map(|((kind, name), changes)| {
+                        let kind_name = kind.display_name().to_string();
+                        let name = name.clone();
+                        let changes = changes.clone();
+                        let client_ref = &ai_client;
+                        async move {
+                            let result = crate::commands::explain::explain_resource_changes(
+                                client_ref, &kind_name, &name, &changes,
+                            )
+                            .await;
+                            (name, result)
+                        }
+                    })
+                    .collect();
+                let results = futures::future::join_all(ai_futures).await;
+                println!();
+                for (name, result) in results {
+                    match result {
+                        Ok(summary) => {
+                            for line in summary.lines() {
+                                println!("      {} {}", "AI:".cyan(), line);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: AI explanation failed for {}: {}", name, e);
+                        }
+                    }
+                }
+            }
+        }
     }
     println!();
 

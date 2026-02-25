@@ -13,5 +13,5 @@ pub use output::{format_json, format_text, format_value_preview};
 pub use semantic::{Change, ChangeKind, DiffResult, diff};
 pub use text_diff::{
     CONTEXT_TRUNCATE_LEN, DiffLine, TextDiffHunk, TextDiffResult, WordSegment, WordSegmentKind,
-    diff_text, diff_words, is_long_text, truncate_context,
+    diff_text, diff_words, is_long_text, normalize_for_diff, truncate_context,
 };

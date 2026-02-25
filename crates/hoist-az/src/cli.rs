@@ -230,6 +230,10 @@ pub enum Commands {
         /// Execute immediately without preview or confirmation
         #[arg(long)]
         force: bool,
+
+        /// Suppress AI-generated explanations (enabled by default when ai: is configured)
+        #[arg(long)]
+        no_explain: bool,
     },
 
     /// Upload local JSON files to Azure, creating or updating resources
@@ -252,6 +256,10 @@ pub enum Commands {
         /// Execute immediately without preview or confirmation (alias for --force)
         #[arg(long, short, hide = true)]
         yes: bool,
+
+        /// Suppress AI-generated explanations (enabled by default when ai: is configured)
+        #[arg(long)]
+        no_explain: bool,
     },
 
     /// Create a new resource file from a template (no network calls)
@@ -330,6 +338,14 @@ pub enum Commands {
         /// Compare against a second environment (instead of local files)
         #[arg(long)]
         compare_env: Option<String>,
+
+        /// Suppress AI-generated explanations (enabled by default when ai: is configured)
+        #[arg(long)]
+        no_explain: bool,
+
+        /// Force AI explanations even when ai: is not configured (useful with --explain)
+        #[arg(long, hide = true)]
+        explain: bool,
     },
 
     /// Validate local JSON files for structural and referential integrity
@@ -376,6 +392,10 @@ pub enum Commands {
 
     /// Show version information
     Version,
+
+    /// Configure AI features (Azure OpenAI integration)
+    #[command(subcommand)]
+    Ai(AiCommands),
 
     /// MCP (Model Context Protocol) server for AI agent integration
     #[command(subcommand)]
@@ -483,6 +503,23 @@ pub enum AuthCommands {
 
     /// Clear cached authentication
     Logout,
+}
+
+#[derive(Subcommand)]
+pub enum AiCommands {
+    /// Set up Azure OpenAI for AI-enhanced features
+    Init {
+        /// AI Services account name (bypasses interactive discovery)
+        #[arg(long)]
+        account: Option<String>,
+        /// Model deployment name (bypasses interactive discovery)
+        #[arg(long)]
+        deployment: Option<String>,
+    },
+    /// Check AI configuration status
+    Status,
+    /// Remove AI configuration
+    Remove,
 }
 
 #[derive(Subcommand)]
@@ -972,15 +1009,35 @@ impl Cli {
                 recursive,
                 filter,
                 force,
-            } => commands::pull::run(&resources, recursive, filter, force, env_override).await,
+                no_explain,
+            } => {
+                commands::pull::run(
+                    &resources,
+                    recursive,
+                    filter,
+                    force,
+                    no_explain,
+                    env_override,
+                )
+                .await
+            }
             Commands::Push {
                 resources,
                 recursive,
                 filter,
                 force,
                 yes,
+                no_explain,
             } => {
-                commands::push::run(&resources, recursive, filter, force || yes, env_override).await
+                commands::push::run(
+                    &resources,
+                    recursive,
+                    filter,
+                    force || yes,
+                    no_explain,
+                    env_override,
+                )
+                .await
             }
             Commands::Delete {
                 resource,
@@ -1017,11 +1074,14 @@ impl Cli {
                 alias,
                 env_override,
             ),
+            Commands::Ai(cmd) => commands::ai::run(cmd).await,
             Commands::Diff {
                 resources,
                 format,
                 exit_code,
                 compare_env,
+                no_explain,
+                explain,
             } => {
                 commands::diff::run(
                     &resources,
@@ -1029,6 +1089,8 @@ impl Cli {
                     exit_code,
                     env_override,
                     compare_env.as_deref(),
+                    no_explain,
+                    explain,
                 )
                 .await
             }

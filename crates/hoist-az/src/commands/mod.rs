@@ -1,5 +1,6 @@
 //! CLI command implementations
 
+pub mod ai;
 pub mod auth;
 pub mod common;
 pub mod completion;
@@ -11,6 +12,7 @@ pub mod describe;
 pub mod describe_project;
 pub mod diff;
 pub mod env;
+pub mod explain;
 pub mod init;
 pub mod pull;
 pub mod pull_watch;
