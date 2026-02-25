@@ -473,9 +473,13 @@ pub async fn run(
     let push_labels = Some(("on the server", "locally"));
     println!("Resources to push:");
 
+    let mut prev_had_details = false;
     for (kind, name, _, exists) in &resources_to_push {
         if *exists {
             if let Some(changes) = change_details.get(&(*kind, name.clone())) {
+                if prev_had_details {
+                    println!();
+                }
                 println!(
                     "  {} {} '{}' will be updated on the server with {} change{}:",
                     "~".yellow(),
@@ -487,6 +491,7 @@ pub async fn run(
                 for line in describe_changes(changes, *kind, name, push_labels) {
                     println!("{}", line);
                 }
+                prev_had_details = true;
             } else {
                 println!(
                     "  {} {} '{}' will be updated on the server",
@@ -494,6 +499,7 @@ pub async fn run(
                     kind.display_name(),
                     name
                 );
+                prev_had_details = false;
             }
         } else {
             println!(
@@ -502,6 +508,7 @@ pub async fn run(
                 kind.display_name(),
                 name
             );
+            prev_had_details = false;
         }
     }
     if total_unchanged > 0 {

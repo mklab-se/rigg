@@ -389,6 +389,7 @@ pub async fn execute_pull(
             r.name
         );
     }
+    let mut prev_had_details = false;
     for r in &updated_resources {
         if r.changes.is_empty() {
             println!(
@@ -397,7 +398,11 @@ pub async fn execute_pull(
                 r.kind.display_name(),
                 r.name
             );
+            prev_had_details = false;
         } else {
+            if prev_had_details {
+                println!();
+            }
             println!(
                 "  {} {} '{}' has {} difference{} — pulling will update your local file:",
                 "~".yellow(),
@@ -409,6 +414,7 @@ pub async fn execute_pull(
             for line in describe_changes(&r.changes, r.kind, &r.name, pull_labels) {
                 println!("{}", line);
             }
+            prev_had_details = true;
         }
     }
     for (kind, name, _) in &deleted_resources {

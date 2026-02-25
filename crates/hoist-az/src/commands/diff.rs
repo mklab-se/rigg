@@ -759,7 +759,10 @@ fn format_diff_text(diffs: &[ResourceDiff], labels: Option<(&str, &str)>) {
         "{} resource(s) with drift:\n",
         changed.len().to_string().yellow()
     );
-    for d in &changed {
+    for (idx, d) in changed.iter().enumerate() {
+        if idx > 0 {
+            println!();
+        }
         println!(
             "  {} {} ({} change{})",
             "~".yellow(),

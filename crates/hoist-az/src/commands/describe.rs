@@ -6,7 +6,10 @@
 
 use colored::Colorize;
 use hoist_core::resources::ResourceKind;
-use hoist_diff::{Change, ChangeKind, DiffLine, diff_text, format_value_preview, is_long_text};
+use hoist_diff::{
+    CONTEXT_TRUNCATE_LEN, Change, ChangeKind, DiffLine, WordSegment, WordSegmentKind, diff_text,
+    format_value_preview, is_long_text, truncate_context,
+};
 use serde_json::Value;
 
 /// Maximum number of changes shown per resource before truncating.
@@ -1353,21 +1356,29 @@ fn describe_long_text_diff(
             )];
             for (i, hunk) in result.hunks.iter().enumerate() {
                 if i > 0 {
-                    parts.push("  ...".to_string());
+                    parts.push("  ---".to_string());
                 }
                 for line in &hunk.lines {
-                    let text = match line {
+                    match line {
                         DiffLine::Equal(s) => {
-                            format!("    {}", s.trim_end_matches(['\n', '\r']))
+                            let trimmed = s.trim_end_matches(['\n', '\r']);
+                            let display = truncate_context(trimmed, CONTEXT_TRUNCATE_LEN);
+                            parts.push(format!("    {}", display));
                         }
                         DiffLine::Delete(s) => {
-                            format!("  - {}", s.trim_end_matches(['\n', '\r']))
+                            parts.push(format!("  - {}", s.trim_end_matches(['\n', '\r'])));
                         }
                         DiffLine::Insert(s) => {
-                            format!("  + {}", s.trim_end_matches(['\n', '\r']))
+                            parts.push(format!("  + {}", s.trim_end_matches(['\n', '\r'])));
                         }
-                    };
-                    parts.push(text);
+                        DiffLine::Modified {
+                            old_segments,
+                            new_segments,
+                        } => {
+                            parts.push(format!("  - {}", render_word_segments_plain(old_segments)));
+                            parts.push(format!("  + {}", render_word_segments_plain(new_segments)));
+                        }
+                    }
                 }
             }
             parts.join("\n")
@@ -1435,30 +1446,43 @@ fn format_long_text_colored(
 
             for (i, hunk) in result.hunks.iter().enumerate() {
                 if i > 0 {
-                    lines.push(format!("        {}", "...".dimmed()));
+                    lines.push(format!("        {}", "---".dimmed()));
                 }
                 for diff_line in &hunk.lines {
-                    let text = match diff_line {
+                    match diff_line {
                         DiffLine::Equal(s) => {
-                            format!(
-                                "        {}",
-                                format!("  {}", s.trim_end_matches(['\n', '\r'])).dimmed()
-                            )
+                            let trimmed = s.trim_end_matches(['\n', '\r']);
+                            let display = truncate_context(trimmed, CONTEXT_TRUNCATE_LEN);
+                            lines.push(format!("        {}", format!("  {}", display).dimmed()));
                         }
                         DiffLine::Delete(s) => {
-                            format!(
+                            lines.push(format!(
                                 "        {}",
                                 format!("- {}", s.trim_end_matches(['\n', '\r'])).red()
-                            )
+                            ));
                         }
                         DiffLine::Insert(s) => {
-                            format!(
+                            lines.push(format!(
                                 "        {}",
                                 format!("+ {}", s.trim_end_matches(['\n', '\r'])).green()
-                            )
+                            ));
                         }
-                    };
-                    lines.push(text);
+                        DiffLine::Modified {
+                            old_segments,
+                            new_segments,
+                        } => {
+                            lines.push(format!(
+                                "        {}{}",
+                                "- ".red(),
+                                render_word_segments_colored(old_segments, true)
+                            ));
+                            lines.push(format!(
+                                "        {}{}",
+                                "+ ".green(),
+                                render_word_segments_colored(new_segments, false)
+                            ));
+                        }
+                    }
                 }
             }
 
@@ -1495,6 +1519,58 @@ fn format_long_text_colored(
             lines
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Word segment rendering helpers
+// ---------------------------------------------------------------------------
+
+/// Render word segments as a colored string for terminal output.
+///
+/// - `is_old = true`: unchanged words are dimmed, changed words are red+bold
+/// - `is_old = false`: unchanged words are dimmed, changed words are green+bold
+fn render_word_segments_colored(segments: &[WordSegment], is_old: bool) -> String {
+    use std::fmt::Write;
+    let mut buf = String::new();
+    for seg in segments {
+        let text = seg.text.trim_end_matches(['\n', '\r']);
+        if text.is_empty() {
+            continue;
+        }
+        match seg.kind {
+            WordSegmentKind::Equal => {
+                let _ = write!(buf, "{}", text.dimmed());
+            }
+            WordSegmentKind::Changed => {
+                if is_old {
+                    let _ = write!(buf, "{}", text.red().bold());
+                } else {
+                    let _ = write!(buf, "{}", text.green().bold());
+                }
+            }
+        }
+    }
+    buf
+}
+
+/// Render word segments as plain text with [brackets] around changed words.
+fn render_word_segments_plain(segments: &[WordSegment]) -> String {
+    let mut buf = String::new();
+    for seg in segments {
+        let text = seg.text.trim_end_matches(['\n', '\r']);
+        if text.is_empty() {
+            continue;
+        }
+        match seg.kind {
+            WordSegmentKind::Equal => buf.push_str(text),
+            WordSegmentKind::Changed => {
+                buf.push('[');
+                buf.push_str(text);
+                buf.push(']');
+            }
+        }
+    }
+    buf
 }
 
 // ---------------------------------------------------------------------------
@@ -2014,8 +2090,11 @@ mod tests {
         );
         let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
         assert!(desc.contains("differ (1 removed, 1 added)"));
+        // Word-level diff: old side shows all-equal (no brackets), new side brackets changed words
         assert!(desc.contains("- Always be polite."));
-        assert!(desc.contains("+ Always be extremely polite."));
+        assert!(desc.contains("+ Always be"));
+        assert!(desc.contains("[extremely]"));
+        assert!(desc.contains("polite."));
     }
 
     #[test]
@@ -2064,8 +2143,9 @@ mod tests {
             "on the server",
         );
         assert!(desc.contains("retrieval instructions for knowledge base 'my-kb'"));
-        assert!(desc.contains("- Maximum 5 sources per response."));
-        assert!(desc.contains("+ Maximum 10 sources per response."));
+        // Word-level diff: changed number bracketed, rest equal
+        assert!(desc.contains("- Maximum [5] sources per response."));
+        assert!(desc.contains("+ Maximum [10] sources per response."));
     }
 
     #[test]
