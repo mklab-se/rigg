@@ -1360,23 +1360,31 @@ fn describe_long_text_diff(
                 if i > 0 {
                     parts.push("  ---".to_string());
                 }
+                let mut prev_was_change = false;
                 for line in &hunk.lines {
                     match line {
                         DiffLine::Equal(s) => {
+                            prev_was_change = false;
                             let trimmed = s.trim_end_matches(['\n', '\r']);
                             let display = truncate_context(trimmed, CONTEXT_TRUNCATE_LEN);
                             parts.push(format!("    {}", display));
                         }
                         DiffLine::Delete(s) => {
+                            prev_was_change = true;
                             parts.push(format!("  - {}", s.trim_end_matches(['\n', '\r'])));
                         }
                         DiffLine::Insert(s) => {
+                            prev_was_change = true;
                             parts.push(format!("  + {}", s.trim_end_matches(['\n', '\r'])));
                         }
                         DiffLine::Modified {
                             old_segments,
                             new_segments,
                         } => {
+                            if prev_was_change {
+                                parts.push(String::new());
+                            }
+                            prev_was_change = true;
                             parts.push(format!("  - {}", render_word_segments_plain(old_segments)));
                             parts.push(format!("  + {}", render_word_segments_plain(new_segments)));
                         }
@@ -1456,20 +1464,26 @@ fn format_long_text_colored(
                 if i > 0 {
                     lines.push(format!("        {}", "---".dimmed()));
                 }
+                let mut prev_was_change = false;
                 for diff_line in &hunk.lines {
                     match diff_line {
                         DiffLine::Equal(s) => {
+                            prev_was_change = false;
                             let trimmed = s.trim_end_matches(['\n', '\r']);
                             let display = truncate_context(trimmed, CONTEXT_TRUNCATE_LEN);
                             lines.push(format!("        {}", format!("  {}", display).dimmed()));
                         }
                         DiffLine::Delete(s) => {
+                            // No blank line before Delete — Deletes and following Inserts
+                            // are part of the same logical change group.
+                            prev_was_change = true;
                             lines.push(format!(
                                 "        {}",
                                 format!("- {}", s.trim_end_matches(['\n', '\r'])).red()
                             ));
                         }
                         DiffLine::Insert(s) => {
+                            prev_was_change = true;
                             lines.push(format!(
                                 "        {}",
                                 format!("+ {}", s.trim_end_matches(['\n', '\r'])).green()
@@ -1479,6 +1493,12 @@ fn format_long_text_colored(
                             old_segments,
                             new_segments,
                         } => {
+                            // Blank line before each Modified pair when following another
+                            // change — visually separates side-by-side comparisons.
+                            if prev_was_change {
+                                lines.push(String::new());
+                            }
+                            prev_was_change = true;
                             lines.push(format!(
                                 "        {}{}",
                                 "- ".red(),

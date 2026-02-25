@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.1] - 2026-02-25
+
+### Changed
+
+- **Improved readability of text diffs** — consecutive Modified pairs (side-by-side `-`/`+` comparisons) in long text diffs are now separated by blank lines, making it much easier to visually parse which old line corresponds to which new line. Applies to both colored terminal output and plain text output
+
 ## [0.11.0] - 2026-02-25
 
 ### Added
