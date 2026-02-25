@@ -6,7 +6,7 @@
 
 use colored::Colorize;
 use hoist_core::resources::ResourceKind;
-use hoist_diff::{Change, ChangeKind, format_value_preview};
+use hoist_diff::{Change, ChangeKind, DiffLine, diff_text, format_value_preview, is_long_text};
 use serde_json::Value;
 
 /// Maximum number of changes shown per resource before truncating.
@@ -68,15 +68,22 @@ pub fn describe_changes(
     let shown = sorted.len().min(MAX_CHANGES_SHOWN);
 
     for change in &sorted[..shown] {
-        let desc = if let Some(d) = &change.description {
-            d.clone()
+        if is_long_text_change(change, kind) {
+            let subject = long_text_subject(&change.path, kind, resource_name);
+            lines.extend(format_long_text_colored(
+                change, &subject, old_label, new_label,
+            ));
         } else {
-            build_description(change, kind, resource_name, old_label, new_label)
-        };
-        lines.push(format!(
-            "      {}",
-            colorize_description(&desc, change.kind)
-        ));
+            let desc = if let Some(d) = &change.description {
+                d.clone()
+            } else {
+                build_description(change, kind, resource_name, old_label, new_label)
+            };
+            lines.push(format!(
+                "      {}",
+                colorize_description(&desc, change.kind)
+            ));
+        }
     }
 
     if sorted.len() > MAX_CHANGES_SHOWN {
@@ -168,22 +175,24 @@ fn try_specific_pattern(
     let path = &change.path;
     let kind_name = kind.display_name();
 
-    // C. Long text properties (never truncate)
-    if path == "instructions" && kind == ResourceKind::Agent {
-        return Some(describe_long_text(
-            change,
-            &format!("instructions for agent '{}'", name),
-            old_label,
-            new_label,
-        ));
-    }
-    if path == "synonyms" && kind == ResourceKind::SynonymMap {
-        return Some(describe_long_text(
-            change,
-            &format!("synonym rules for '{}'", name),
-            old_label,
-            new_label,
-        ));
+    // C. Long text properties — line-level diff for modified, full text for added/removed
+    if is_long_text_property(path, kind) {
+        let value_is_long = change
+            .old_value
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .is_some_and(is_long_text)
+            || change
+                .new_value
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .is_some_and(is_long_text);
+        if value_is_long {
+            let subject = long_text_subject(path, kind, name);
+            return Some(describe_long_text_diff(
+                change, &subject, old_label, new_label,
+            ));
+        }
     }
 
     // B. Top-level simple properties
@@ -1255,29 +1264,235 @@ fn describe_index_advanced(
 // Long text descriptions
 // ---------------------------------------------------------------------------
 
-fn describe_long_text(change: &Change, subject: &str, old_label: &str, new_label: &str) -> String {
+/// Properties that benefit from line-level diffing when their values are long.
+fn is_long_text_property(path: &str, kind: ResourceKind) -> bool {
+    matches!(
+        (path, kind),
+        ("instructions", ResourceKind::Agent)
+            | ("synonyms", ResourceKind::SynonymMap)
+            | ("retrievalInstructions", ResourceKind::KnowledgeBase)
+            | ("answerInstructions", ResourceKind::KnowledgeBase)
+            | ("description", _)
+    )
+}
+
+/// Check if a change involves a long text property with a long actual value.
+fn is_long_text_change(change: &Change, kind: ResourceKind) -> bool {
+    if !is_long_text_property(&change.path, kind) {
+        return false;
+    }
+    change
+        .old_value
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .is_some_and(is_long_text)
+        || change
+            .new_value
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .is_some_and(is_long_text)
+}
+
+/// Build a human-readable subject phrase for a long text property.
+fn long_text_subject(path: &str, kind: ResourceKind, name: &str) -> String {
+    let kind_name = kind.display_name();
+    match (path, kind) {
+        ("instructions", ResourceKind::Agent) => format!("instructions for agent '{}'", name),
+        ("synonyms", ResourceKind::SynonymMap) => format!("synonym rules for '{}'", name),
+        ("retrievalInstructions", ResourceKind::KnowledgeBase) => {
+            format!("retrieval instructions for knowledge base '{}'", name)
+        }
+        ("answerInstructions", ResourceKind::KnowledgeBase) => {
+            format!("answer instructions for knowledge base '{}'", name)
+        }
+        ("description", _) => format!("description of {} '{}'", kind_name, name),
+        _ => format!("'{}' of {} '{}'", path, kind_name, name),
+    }
+}
+
+/// Whether the subject noun is singular (affects verb conjugation).
+fn is_singular_subject(path: &str) -> bool {
+    path == "description"
+}
+
+/// Indent each line of a multi-line string.
+fn indent_lines(text: &str, prefix: &str) -> String {
+    text.lines()
+        .map(|l| format!("{}{}", prefix, l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Produce a line-level diff description for modified long text, or full text
+/// for added/removed. Used for plain-text output (MCP/JSON, annotations).
+fn describe_long_text_diff(
+    change: &Change,
+    subject: &str,
+    old_label: &str,
+    new_label: &str,
+) -> String {
+    let verb_differ = if is_singular_subject(&change.path) {
+        "differs"
+    } else {
+        "differ"
+    };
+    let verb_exist = if is_singular_subject(&change.path) {
+        "exists"
+    } else {
+        "exist"
+    };
+
     match change.kind {
         ChangeKind::Modified => {
             let old_v = full_str_val(&change.old_value);
             let new_v = full_str_val(&change.new_value);
-            format!(
-                "The {} differ between {} and {}:\n\n  {}:\n{}\n\n  {}:\n{}",
-                subject, old_label, new_label, old_label, old_v, new_label, new_v
-            )
+            let result = diff_text(&old_v, &new_v);
+            let mut parts = vec![format!(
+                "The {} {} ({} removed, {} added):",
+                subject, verb_differ, result.deletions, result.insertions
+            )];
+            for (i, hunk) in result.hunks.iter().enumerate() {
+                if i > 0 {
+                    parts.push("  ...".to_string());
+                }
+                for line in &hunk.lines {
+                    let text = match line {
+                        DiffLine::Equal(s) => {
+                            format!("    {}", s.trim_end_matches(['\n', '\r']))
+                        }
+                        DiffLine::Delete(s) => {
+                            format!("  - {}", s.trim_end_matches(['\n', '\r']))
+                        }
+                        DiffLine::Insert(s) => {
+                            format!("  + {}", s.trim_end_matches(['\n', '\r']))
+                        }
+                    };
+                    parts.push(text);
+                }
+            }
+            parts.join("\n")
         }
         ChangeKind::Added => {
             let new_v = full_str_val(&change.new_value);
             format!(
-                "The {} exist {} but not {}:\n{}",
-                subject, new_label, old_label, new_v
+                "The {} {} {} but not {}:\n{}",
+                subject,
+                verb_exist,
+                new_label,
+                old_label,
+                indent_lines(&new_v, "    ")
             )
         }
         ChangeKind::Removed => {
             let old_v = full_str_val(&change.old_value);
             format!(
-                "The {} exist {} but not {}:\n{}",
-                subject, old_label, new_label, old_v
+                "The {} {} {} but not {}:\n{}",
+                subject,
+                verb_exist,
+                old_label,
+                new_label,
+                indent_lines(&old_v, "    ")
             )
+        }
+    }
+}
+
+/// Format a long text change with per-line terminal colors.
+///
+/// For Modified: line-level diff with red/green/dimmed context.
+/// For Added/Removed: indented text body in green/red.
+fn format_long_text_colored(
+    change: &Change,
+    subject: &str,
+    old_label: &str,
+    new_label: &str,
+) -> Vec<String> {
+    let verb_differ = if is_singular_subject(&change.path) {
+        "differs"
+    } else {
+        "differ"
+    };
+    let verb_exist = if is_singular_subject(&change.path) {
+        "exists"
+    } else {
+        "exist"
+    };
+
+    match change.kind {
+        ChangeKind::Modified => {
+            let old_v = full_str_val(&change.old_value);
+            let new_v = full_str_val(&change.new_value);
+            let result = diff_text(&old_v, &new_v);
+
+            let mut lines = vec![format!(
+                "      {}",
+                format!(
+                    "The {} {} ({} removed, {} added):",
+                    subject, verb_differ, result.deletions, result.insertions
+                )
+                .yellow()
+            )];
+
+            for (i, hunk) in result.hunks.iter().enumerate() {
+                if i > 0 {
+                    lines.push(format!("        {}", "...".dimmed()));
+                }
+                for diff_line in &hunk.lines {
+                    let text = match diff_line {
+                        DiffLine::Equal(s) => {
+                            format!(
+                                "        {}",
+                                format!("  {}", s.trim_end_matches(['\n', '\r'])).dimmed()
+                            )
+                        }
+                        DiffLine::Delete(s) => {
+                            format!(
+                                "        {}",
+                                format!("- {}", s.trim_end_matches(['\n', '\r'])).red()
+                            )
+                        }
+                        DiffLine::Insert(s) => {
+                            format!(
+                                "        {}",
+                                format!("+ {}", s.trim_end_matches(['\n', '\r'])).green()
+                            )
+                        }
+                    };
+                    lines.push(text);
+                }
+            }
+
+            lines
+        }
+        ChangeKind::Added => {
+            let new_v = full_str_val(&change.new_value);
+            let mut lines = vec![format!(
+                "      {}",
+                format!(
+                    "The {} {} {} but not {}:",
+                    subject, verb_exist, new_label, old_label
+                )
+                .green()
+            )];
+            for text_line in new_v.lines() {
+                lines.push(format!("        {}", text_line.green()));
+            }
+            lines
+        }
+        ChangeKind::Removed => {
+            let old_v = full_str_val(&change.old_value);
+            let mut lines = vec![format!(
+                "      {}",
+                format!(
+                    "The {} {} {} but not {}:",
+                    subject, verb_exist, old_label, new_label
+                )
+                .red()
+            )];
+            for text_line in old_v.lines() {
+                lines.push(format!("        {}", text_line.red()));
+            }
+            lines
         }
     }
 }
@@ -1784,19 +1999,139 @@ mod tests {
         assert!(!lines[0].contains("\x1b")); // no ANSI codes
     }
 
-    // === Agent instructions (never truncated) ===
+    // === Agent instructions (line-level diff) ===
 
     #[test]
-    fn test_agent_instructions_full_content() {
-        let long_instructions = "x".repeat(2000);
+    fn test_agent_instructions_line_diff() {
+        let old = "You are a helpful assistant.\nAlways be polite.\nUse formal language.\n";
+        let new =
+            "You are a helpful assistant.\nAlways be extremely polite.\nUse formal language.\n";
         let c = change(
             "instructions",
             ChangeKind::Modified,
-            Some(json!("short")),
-            Some(json!(long_instructions)),
+            Some(json!(old)),
+            Some(json!(new)),
         );
         let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
-        assert!(desc.contains(&long_instructions));
+        assert!(desc.contains("differ (1 removed, 1 added)"));
+        assert!(desc.contains("- Always be polite."));
+        assert!(desc.contains("+ Always be extremely polite."));
+    }
+
+    #[test]
+    fn test_agent_instructions_added() {
+        let instructions = "You are a helpful assistant.\nAlways be polite.\n";
+        let c = change(
+            "instructions",
+            ChangeKind::Added,
+            None,
+            Some(json!(instructions)),
+        );
+        let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
+        assert!(desc.contains("exist on the server but not locally"));
+        assert!(desc.contains("You are a helpful assistant."));
+    }
+
+    #[test]
+    fn test_short_instructions_fall_through() {
+        let c = change(
+            "instructions",
+            ChangeKind::Modified,
+            Some(json!("short old")),
+            Some(json!("short new")),
+        );
+        let desc = build_description(&c, ResourceKind::Agent, "bot", "locally", "on the server");
+        // Short values should use fallback, not line-level diff
+        assert!(!desc.contains("removed"));
+        assert!(!desc.contains("added)"));
+    }
+
+    #[test]
+    fn test_kb_retrieval_instructions_diff() {
+        let old = "Prioritize EU directives.\nMaximum 5 sources per response.\nInclude cross-references.\n";
+        let new = "Prioritize EU directives.\nMaximum 10 sources per response.\nInclude cross-references.\n";
+        let c = change(
+            "retrievalInstructions",
+            ChangeKind::Modified,
+            Some(json!(old)),
+            Some(json!(new)),
+        );
+        let desc = build_description(
+            &c,
+            ResourceKind::KnowledgeBase,
+            "my-kb",
+            "locally",
+            "on the server",
+        );
+        assert!(desc.contains("retrieval instructions for knowledge base 'my-kb'"));
+        assert!(desc.contains("- Maximum 5 sources per response."));
+        assert!(desc.contains("+ Maximum 10 sources per response."));
+    }
+
+    #[test]
+    fn test_long_description_uses_diff() {
+        let old = "a\n".repeat(70);
+        let mut new_text = old.clone();
+        new_text.push_str("extra line\n");
+        let c = change(
+            "description",
+            ChangeKind::Modified,
+            Some(json!(old)),
+            Some(json!(new_text)),
+        );
+        let desc = build_description(
+            &c,
+            ResourceKind::Index,
+            "my-index",
+            "locally",
+            "on the server",
+        );
+        assert!(desc.contains("description of Index 'my-index'"));
+        assert!(desc.contains("0 removed, 1 added"));
+    }
+
+    #[test]
+    fn test_short_description_uses_inline() {
+        let c = change(
+            "description",
+            ChangeKind::Modified,
+            Some(json!("old desc")),
+            Some(json!("new desc")),
+        );
+        let desc = build_description(
+            &c,
+            ResourceKind::Index,
+            "my-index",
+            "locally",
+            "on the server",
+        );
+        assert!(desc.contains("old desc"));
+        assert!(desc.contains("new desc"));
+        assert!(!desc.contains("removed"));
+    }
+
+    #[test]
+    fn test_describe_changes_long_text_multiline() {
+        let old = "Line one\nLine two\nLine three\n";
+        let new = "Line one\nLine TWO\nLine three\n";
+        let changes = vec![change(
+            "instructions",
+            ChangeKind::Modified,
+            Some(json!(old)),
+            Some(json!(new)),
+        )];
+        let lines = describe_changes(
+            &changes,
+            ResourceKind::Agent,
+            "bot",
+            Some(("locally", "on the server")),
+        );
+        // Should produce multiple lines (header + diff lines)
+        assert!(lines.len() > 1);
+        let joined = lines.iter().map(|l| strip_ansi(l)).collect::<String>();
+        assert!(joined.contains("differ"));
+        assert!(joined.contains("- Line two"));
+        assert!(joined.contains("+ Line TWO"));
     }
 
     // === Fallback for unknown properties ===

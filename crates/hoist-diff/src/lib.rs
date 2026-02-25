@@ -7,6 +7,8 @@
 
 pub mod output;
 pub mod semantic;
+pub mod text_diff;
 
 pub use output::{format_json, format_text, format_value_preview};
 pub use semantic::{Change, ChangeKind, DiffResult, diff};
+pub use text_diff::{DiffLine, TextDiffHunk, TextDiffResult, diff_text, is_long_text};
