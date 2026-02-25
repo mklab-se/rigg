@@ -147,12 +147,15 @@ pub async fn run(
         DeleteTarget::Remote => {
             println!(
                 "  To also remove local files: hoist delete --{} {} --target local",
-                kind.api_path().trim_end_matches('s'),
+                kind.cli_flag_name(),
                 name
             );
         }
         DeleteTarget::Local => {
-            println!("  To restore from Azure: hoist pull --{}", kind.api_path());
+            println!(
+                "  To restore from Azure: hoist pull --{}",
+                kind.cli_flag_name_plural()
+            );
         }
     }
 

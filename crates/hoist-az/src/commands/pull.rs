@@ -238,9 +238,13 @@ pub async fn execute_pull(
             }
         }
 
-        // Fetch knowledge sources first if included, to build managed map
+        // Always build the managed map when preview resources exist, even if
+        // --knowledgesources wasn't explicitly requested. This prevents standalone
+        // pulls (e.g. --indexes) from duplicating managed KS sub-resources into
+        // the top-level directories.
         let has_ks = fetch_kinds.contains(&ResourceKind::KnowledgeSource);
-        if has_ks {
+        let needs_managed_map = has_ks || env.sync.include_preview;
+        if needs_managed_map {
             let ks_results = client.list(ResourceKind::KnowledgeSource).await;
             if let Ok(ks_list) = &ks_results {
                 let ks_pairs: Vec<(String, Value)> = ks_list

@@ -22,19 +22,52 @@ pub(crate) struct DiscoveryContext {
     pub(crate) subscription_id: String,
 }
 
+/// Options for non-interactive initialization.
+pub struct NonInteractiveOptions {
+    pub search_service: Option<String>,
+    pub search_subscription: Option<String>,
+    pub foundry_account: Option<String>,
+    pub foundry_project: Option<String>,
+    pub yes: bool,
+}
+
+impl NonInteractiveOptions {
+    /// Returns true if any non-interactive flags were provided.
+    pub fn has_flags(&self) -> bool {
+        self.search_service.is_some() || self.foundry_account.is_some() || self.yes
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     dir: Option<PathBuf>,
     template: InitTemplate,
     files_path: Option<String>,
+    search_service: Option<String>,
+    search_subscription: Option<String>,
+    foundry_account: Option<String>,
+    foundry_project: Option<String>,
+    yes: bool,
 ) -> Result<()> {
     let project_dir = dir.unwrap_or_else(|| std::env::current_dir().unwrap());
     let config_path = project_dir.join(Config::FILENAME);
 
+    let opts = NonInteractiveOptions {
+        search_service,
+        search_subscription,
+        foundry_account,
+        foundry_project,
+        yes,
+    };
+
     if config_path.exists() {
         // Additive update: discover and add new services to existing config
         run_additive(&project_dir).await
+    } else if opts.has_flags() {
+        // Non-interactive: build config from CLI flags
+        run_non_interactive(project_dir, template, files_path, &opts).await
     } else {
-        // Fresh init: full setup from scratch
+        // Fresh init: full interactive setup from scratch
         run_fresh(project_dir, template, files_path).await
     }
 }
@@ -264,6 +297,168 @@ async fn run_fresh(
     }
 
     println!();
+
+    Ok(())
+}
+
+/// Non-interactive initialization from CLI flags (for CI/CD and scripted usage)
+async fn run_non_interactive(
+    project_dir: PathBuf,
+    template: InitTemplate,
+    files_path: Option<String>,
+    opts: &NonInteractiveOptions,
+) -> Result<()> {
+    println!("Initializing hoist project in {}", project_dir.display());
+    println!();
+
+    // Validate flag combinations
+    if opts.foundry_account.is_some() != opts.foundry_project.is_some() {
+        anyhow::bail!("--foundry-account and --foundry-project must be specified together");
+    }
+
+    // Build service configs from flags
+    let search_configs: Vec<SearchServiceConfig> = if let Some(ref name) = opts.search_service {
+        vec![SearchServiceConfig {
+            name: name.clone(),
+            label: None,
+            subscription: opts.search_subscription.clone(),
+            resource_group: None,
+            api_version: "2024-07-01".to_string(),
+            preview_api_version: "2025-11-01-preview".to_string(),
+        }]
+    } else {
+        vec![]
+    };
+
+    let foundry_configs: Vec<FoundryServiceConfig> =
+        if let (Some(account), Some(project)) = (&opts.foundry_account, &opts.foundry_project) {
+            vec![FoundryServiceConfig {
+                name: account.clone(),
+                project: project.clone(),
+                label: None,
+                api_version: "2025-05-15-preview".to_string(),
+                endpoint: None,
+                subscription: None,
+                resource_group: None,
+            }]
+        } else {
+            vec![]
+        };
+
+    if search_configs.is_empty() && foundry_configs.is_empty() {
+        anyhow::bail!(
+            "At least one service must be specified. Use --search-service and/or --foundry-account + --foundry-project"
+        );
+    }
+
+    // Create configuration
+    let env_name = "prod".to_string();
+    let config = Config {
+        project: ProjectConfig {
+            name: Some(
+                project_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("hoist-project")
+                    .to_string(),
+            ),
+            description: None,
+            files_path: files_path.clone(),
+        },
+        sync: SyncConfig {
+            include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
+            resources: Vec::new(),
+        },
+        environments: std::collections::BTreeMap::from([(
+            env_name.clone(),
+            EnvironmentConfig {
+                default: true,
+                description: None,
+                search: search_configs,
+                foundry: foundry_configs,
+            },
+        )]),
+    };
+    let env = config
+        .resolve_env(None)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Create directory structure
+    std::fs::create_dir_all(&project_dir)?;
+    let files_dir = config.files_root(&project_dir);
+    if files_dir != project_dir {
+        std::fs::create_dir_all(&files_dir)?;
+    }
+
+    // Save configuration
+    config.save(&project_dir)?;
+
+    // Create .hoist state directory
+    let state_dir = project_dir.join(".hoist").join(&env_name);
+    std::fs::create_dir_all(&state_dir)?;
+    let hoist_dir = project_dir.join(".hoist");
+    let gitignore_path = hoist_dir.join(".gitignore");
+    std::fs::write(&gitignore_path, "# Ignore local state\n*\n!.gitignore\n")?;
+
+    // Create resource directories based on template
+    let resource_kinds: Vec<ResourceKind> = match template {
+        InitTemplate::Minimal => vec![ResourceKind::Index, ResourceKind::DataSource],
+        InitTemplate::Full => vec![
+            ResourceKind::Index,
+            ResourceKind::Indexer,
+            ResourceKind::DataSource,
+            ResourceKind::Skillset,
+            ResourceKind::SynonymMap,
+            ResourceKind::Alias,
+        ],
+        InitTemplate::Agentic => ResourceKind::all().to_vec(),
+    }
+    .into_iter()
+    .filter(|k| match k.domain() {
+        ServiceDomain::Search => env.has_search(),
+        ServiceDomain::Foundry => env.has_foundry(),
+    })
+    .collect();
+
+    for search_svc in &env.search {
+        let search_base = env.search_service_dir(&files_dir, search_svc);
+        for kind in &resource_kinds {
+            if kind.domain() == ServiceDomain::Search {
+                let dir = search_base.join(kind.directory_name());
+                std::fs::create_dir_all(&dir)?;
+            }
+        }
+    }
+    for foundry_svc in &env.foundry {
+        let foundry_base = env.foundry_service_dir(&files_dir, foundry_svc);
+        std::fs::create_dir_all(foundry_base.join("agents"))?;
+    }
+
+    println!("Project initialized successfully!");
+    println!();
+
+    // Auto-pull if --yes was specified
+    if opts.yes {
+        let pull_kinds: Vec<ResourceKind> = resource_kinds.to_vec();
+        if !pull_kinds.is_empty() {
+            let selection = crate::commands::common::ResourceSelection {
+                selections: pull_kinds.iter().map(|k| (*k, None)).collect(),
+            };
+            crate::commands::pull::execute_pull(
+                &project_dir,
+                &files_dir,
+                &env,
+                &selection,
+                None,
+                true, // force — non-interactive
+            )
+            .await?;
+        }
+    } else {
+        println!("Next steps:");
+        println!("  hoist pull --all    # Pull existing resources from Azure");
+        println!("  hoist status        # View project status");
+    }
 
     Ok(())
 }

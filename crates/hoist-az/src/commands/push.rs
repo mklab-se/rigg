@@ -14,10 +14,12 @@ use hoist_core::constraints::ViolationSeverity;
 use hoist_core::constraints::check_immutability;
 use hoist_core::normalize::{format_json, normalize};
 use hoist_core::resources::ResourceKind;
-use hoist_core::resources::agent::{agent_volatile_fields, strip_agent_empty_fields};
+use hoist_core::resources::agent::{
+    agent_to_yaml, agent_volatile_fields, strip_agent_empty_fields,
+};
 use hoist_core::resources::managed::{self, ManagedMap};
 use hoist_core::service::ServiceDomain;
-use hoist_core::state::Checksums;
+use hoist_core::state::{Checksums, LocalState, ResourceState};
 use hoist_diff::Change;
 
 use crate::cli::ResourceTypeFlags;
@@ -198,7 +200,13 @@ pub async fn run(
                     .ok_or_else(|| anyhow::anyhow!("Invalid file name"))?;
 
                 // Skip managed resources in standalone dirs — they're pushed via KS cascade
-                if managed::managing_ks(&managed_map, *kind, name).is_some() {
+                if let Some(ks_name) = managed::managing_ks(&managed_map, *kind, name) {
+                    info!(
+                        "Skipping managed {} '{}' (owned by knowledge source '{}') — use --knowledgesources to push",
+                        kind.display_name(),
+                        name,
+                        ks_name
+                    );
                     continue;
                 }
 
@@ -465,9 +473,6 @@ pub async fn run(
     let push_labels = Some(("on the server", "locally"));
     println!("Resources to push:");
 
-    // Track KS updates for proactive warning
-    let mut ks_updates: Vec<String> = Vec::new();
-
     for (kind, name, _, exists) in &resources_to_push {
         if *exists {
             if let Some(changes) = change_details.get(&(*kind, name.clone())) {
@@ -489,9 +494,6 @@ pub async fn run(
                     kind.display_name(),
                     name
                 );
-            }
-            if *kind == ResourceKind::KnowledgeSource {
-                ks_updates.push(name.clone());
             }
         } else {
             println!(
@@ -538,36 +540,6 @@ pub async fn run(
         }
     }
 
-    // Proactive KS update warning
-    if !ks_updates.is_empty() {
-        println!(
-            "{} Knowledge source update{} may fail due to a known Azure limitation:",
-            "NOTE:".yellow().bold(),
-            if ks_updates.len() == 1 { "" } else { "s" }
-        );
-        for ks_name in &ks_updates {
-            println!("  {} Knowledge Source '{}'", "!".yellow(), ks_name);
-        }
-        println!(
-            "  Azure may attempt to recreate managed sub-resources (index, indexer, data source,"
-        );
-        println!("  skillset) which already exist, causing the update to fail.");
-        println!("  If this happens, delete the knowledge source from Azure, then push again:");
-        println!(
-            "    hoist delete --knowledgesource <name> --target remote  (deletes from '{}' on Azure)",
-            env.name
-        );
-        println!(
-            "    hoist push --knowledgesources                         (recreates in '{}' on Azure)",
-            env.name
-        );
-        println!(
-            "  {} This deletes the search index and all its data. Re-indexing occurs automatically.",
-            "WARNING:".yellow().bold()
-        );
-        println!();
-    }
-
     // Confirm unless --force
     if !force && !prompt_yes_no("Proceed with push?")? {
         println!("Aborted.");
@@ -589,6 +561,7 @@ pub async fn run(
 
     let mut success_count = 0;
     let mut error_count = 0;
+    let mut pushed_resources: Vec<(ResourceKind, String)> = Vec::new();
 
     // Cache for discovered storage connection string (avoids repeated ARM calls)
     let mut cached_connection_string: Option<String> = None;
@@ -650,6 +623,7 @@ pub async fn run(
                 Ok(_) => {
                     println!("done");
                     success_count += 1;
+                    pushed_resources.push((*kind, name.clone()));
                 }
                 Err(e) => {
                     println!("FAILED: {}", e);
@@ -717,6 +691,7 @@ pub async fn run(
                     Ok(_response) => {
                         println!("done");
                         success_count += 1;
+                        pushed_resources.push((*kind, name.clone()));
                     }
                     Err(e) => {
                         println!("FAILED: {}", e);
@@ -725,6 +700,118 @@ pub async fn run(
                 }
             }
         }
+    }
+
+    // === Pull-back phase: re-fetch pushed resources to sync local files with server canonical form ===
+    // This eliminates false diffs after push by ensuring local files match exactly what Azure returns.
+    if !pushed_resources.is_empty() {
+        println!(
+            "Syncing {} pushed resource(s) with server canonical form...",
+            pushed_resources.len()
+        );
+        let mut checksums = Checksums::load_env(&project_root, &env.name).unwrap_or_default();
+        let mut state = LocalState::load_env(&project_root, &env.name).unwrap_or_default();
+        let managed_map = if let Some(svc) = env.primary_search_service() {
+            build_local_managed_map(&env.search_service_dir(&files_root, svc))
+        } else {
+            ManagedMap::new()
+        };
+
+        let search_pushed: Vec<_> = pushed_resources
+            .iter()
+            .filter(|(k, _)| k.domain() == ServiceDomain::Search)
+            .collect();
+        let agent_pushed: Vec<_> = pushed_resources
+            .iter()
+            .filter(|(k, _)| k.domain() == ServiceDomain::Foundry)
+            .collect();
+
+        // Pull-back search resources
+        if !search_pushed.is_empty() {
+            if let Some(search_svc) = env.primary_search_service() {
+                let client = AzureSearchClient::from_service_config(search_svc)?;
+                let service_dir = env.search_service_dir(&files_root, search_svc);
+
+                for (kind, name) in &search_pushed {
+                    if let Ok(remote) = client.get(*kind, name).await {
+                        let volatile_fields = get_volatile_fields(*kind);
+                        let normalized = normalize(&remote, &volatile_fields);
+                        let json_content = format_json(&normalized);
+                        let new_checksum = Checksums::calculate(&json_content);
+
+                        // Write the canonical file
+                        let resource_dir = service_dir.join(managed::resource_directory(
+                            *kind,
+                            name,
+                            &managed_map,
+                        ));
+                        std::fs::create_dir_all(&resource_dir)?;
+                        let filename = managed::resource_filename(*kind, name, &managed_map);
+                        let file_path = resource_dir.join(&filename);
+                        std::fs::write(&file_path, &json_content)?;
+
+                        // Update checksums and state
+                        let etag = remote
+                            .get("@odata.etag")
+                            .and_then(|e| e.as_str())
+                            .map(String::from);
+                        checksums.set_managed(*kind, name, new_checksum.clone(), &managed_map);
+                        state.set_managed(
+                            *kind,
+                            name,
+                            ResourceState {
+                                kind: *kind,
+                                etag,
+                                checksum: new_checksum,
+                                synced_at: chrono::Utc::now(),
+                            },
+                            &managed_map,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Pull-back agents
+        if !agent_pushed.is_empty() {
+            if let Some(foundry_config) = env.foundry.first() {
+                let foundry_client = hoist_client::FoundryClient::new(foundry_config)?;
+                let agents_dir = env
+                    .foundry_service_dir(&files_root, foundry_config)
+                    .join("agents");
+                std::fs::create_dir_all(&agents_dir)?;
+
+                for (_kind, name) in &agent_pushed {
+                    if let Ok(remote) = foundry_client.get_agent(name).await {
+                        // Write canonical YAML
+                        let yaml_content = agent_to_yaml(&remote);
+                        let yaml_path = agents_dir.join(format!("{}.yaml", name));
+                        std::fs::write(&yaml_path, &yaml_content)?;
+
+                        // Calculate checksum from normalized JSON (same as pull)
+                        let volatile = agent_volatile_fields();
+                        let normalized = normalize(&remote, volatile);
+                        let json_content = format_json(&normalized);
+                        let new_checksum = Checksums::calculate(&json_content);
+
+                        checksums.set(ResourceKind::Agent, name, new_checksum.clone());
+                        state.set(
+                            ResourceKind::Agent,
+                            name,
+                            ResourceState {
+                                kind: ResourceKind::Agent,
+                                etag: None,
+                                checksum: new_checksum,
+                                synced_at: chrono::Utc::now(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        checksums.save_env(&project_root, &env.name)?;
+        state.save_env(&project_root, &env.name)?;
     }
 
     println!();

@@ -179,7 +179,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
                 for kind in ResourceKind::stable() {
                     let dir = search_base.join(kind.directory_name());
                     if !dir.exists() {
-                        println!("    {}: (not initialized)", kind.display_name());
+                        println!("    {}: (none pulled)", kind.display_name());
                     } else {
                         let count = count_resources(&dir);
                         println!("    {}: {}", kind.display_name(), count);
@@ -194,7 +194,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
                     let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
                     if !kb_dir.exists() {
                         println!(
-                            "    {}: (not initialized)",
+                            "    {}: (none pulled)",
                             ResourceKind::KnowledgeBase.display_name()
                         );
                     } else {
@@ -210,7 +210,7 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
                     let ks_dir = search_base.join(ResourceKind::KnowledgeSource.directory_name());
                     if !ks_dir.exists() {
                         println!(
-                            "    {}: (not initialized)",
+                            "    {}: (none pulled)",
                             ResourceKind::KnowledgeSource.display_name()
                         );
                     } else {

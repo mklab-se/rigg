@@ -47,6 +47,7 @@ pub struct ResourceState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Checksums {
     /// Checksum by resource key (kind/name)
+    #[serde(default)]
     pub checksums: HashMap<String, String>,
 }
 
@@ -530,6 +531,17 @@ mod tests {
             *stored, modified_checksum,
             "Modified file should differ from stored checksum"
         );
+    }
+
+    #[test]
+    fn test_checksums_load_bare_empty_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_dir = dir.path().join(".hoist").join("test");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::write(env_dir.join("checksums.json"), "{}").unwrap();
+
+        let checksums = Checksums::load_env(dir.path(), "test").unwrap();
+        assert!(checksums.checksums.is_empty());
     }
 
     #[test]

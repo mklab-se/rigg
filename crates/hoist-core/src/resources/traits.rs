@@ -73,6 +73,40 @@ impl ResourceKind {
         )
     }
 
+    /// Returns the singular CLI flag name for this resource type.
+    ///
+    /// Used in hint messages like `hoist delete --index my-index --target local`.
+    pub fn cli_flag_name(&self) -> &'static str {
+        match self {
+            ResourceKind::Index => "index",
+            ResourceKind::Indexer => "indexer",
+            ResourceKind::DataSource => "datasource",
+            ResourceKind::Skillset => "skillset",
+            ResourceKind::SynonymMap => "synonymmap",
+            ResourceKind::Alias => "alias",
+            ResourceKind::KnowledgeBase => "knowledgebase",
+            ResourceKind::KnowledgeSource => "knowledgesource",
+            ResourceKind::Agent => "agent",
+        }
+    }
+
+    /// Returns the plural CLI flag name for this resource type.
+    ///
+    /// Used in hint messages like `hoist pull --indexes`.
+    pub fn cli_flag_name_plural(&self) -> &'static str {
+        match self {
+            ResourceKind::Index => "indexes",
+            ResourceKind::Indexer => "indexers",
+            ResourceKind::DataSource => "datasources",
+            ResourceKind::Skillset => "skillsets",
+            ResourceKind::SynonymMap => "synonymmaps",
+            ResourceKind::Alias => "aliases",
+            ResourceKind::KnowledgeBase => "knowledgebases",
+            ResourceKind::KnowledgeSource => "knowledgesources",
+            ResourceKind::Agent => "agents",
+        }
+    }
+
     /// Returns the display name for this resource type
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -353,6 +387,29 @@ mod tests {
         assert_eq!(json, "\"agent\"");
         let back: ResourceKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn test_cli_flag_names() {
+        assert_eq!(ResourceKind::Index.cli_flag_name(), "index");
+        assert_eq!(ResourceKind::Indexer.cli_flag_name(), "indexer");
+        assert_eq!(ResourceKind::DataSource.cli_flag_name(), "datasource");
+        assert_eq!(ResourceKind::Skillset.cli_flag_name(), "skillset");
+        assert_eq!(ResourceKind::SynonymMap.cli_flag_name(), "synonymmap");
+        assert_eq!(ResourceKind::Alias.cli_flag_name(), "alias");
+        assert_eq!(ResourceKind::KnowledgeBase.cli_flag_name(), "knowledgebase");
+        assert_eq!(
+            ResourceKind::KnowledgeSource.cli_flag_name(),
+            "knowledgesource"
+        );
+        assert_eq!(ResourceKind::Agent.cli_flag_name(), "agent");
+    }
+
+    #[test]
+    fn test_cli_flag_names_plural() {
+        assert_eq!(ResourceKind::Index.cli_flag_name_plural(), "indexes");
+        assert_eq!(ResourceKind::Alias.cli_flag_name_plural(), "aliases");
+        assert_eq!(ResourceKind::Agent.cli_flag_name_plural(), "agents");
     }
 
     #[test]

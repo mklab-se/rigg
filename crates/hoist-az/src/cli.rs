@@ -180,6 +180,26 @@ pub enum Commands {
         /// Config (hoist.yaml) and state (.hoist/) remain at the init directory.
         #[arg(long)]
         files_path: Option<String>,
+
+        /// Azure AI Search service name (bypasses interactive discovery)
+        #[arg(long)]
+        search_service: Option<String>,
+
+        /// Azure subscription ID (used with --search-service)
+        #[arg(long)]
+        search_subscription: Option<String>,
+
+        /// Foundry AI Services account name (bypasses interactive discovery)
+        #[arg(long)]
+        foundry_account: Option<String>,
+
+        /// Foundry project name (required with --foundry-account)
+        #[arg(long)]
+        foundry_project: Option<String>,
+
+        /// Skip confirmation prompts (for CI/CD and scripted usage)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// View and modify project configuration (hoist.yaml)
@@ -926,7 +946,24 @@ impl Cli {
                 dir,
                 template,
                 files_path,
-            } => commands::init::run(dir, template, files_path).await,
+                search_service,
+                search_subscription,
+                foundry_account,
+                foundry_project,
+                yes,
+            } => {
+                commands::init::run(
+                    dir,
+                    template,
+                    files_path,
+                    search_service,
+                    search_subscription,
+                    foundry_account,
+                    foundry_project,
+                    yes,
+                )
+                .await
+            }
             Commands::Config(cmd) => commands::config::run(cmd).await,
             Commands::Env(cmd) => commands::env::run(cmd).await,
             Commands::Auth(cmd) => commands::auth::run(cmd).await,
