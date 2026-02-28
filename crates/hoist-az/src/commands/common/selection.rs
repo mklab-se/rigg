@@ -1,52 +1,14 @@
-//! Shared utilities used by multiple commands
+//! Resource selection resolution from CLI flags.
+//!
+//! Resolves which resource kinds (and optional name filters) to operate on
+//! based on plural boolean flags (`--indexes`), singular name flags
+//! (`--index my-idx`), `--all`, `--search-only`, `--foundry-only`, and
+//! the `include_preview` config setting.
 
-use anyhow::Result;
-
-use hoist_core::resources::{Resource, ResourceKind};
+use hoist_core::resources::ResourceKind;
 use hoist_core::service::ServiceDomain;
 
 use crate::cli::ResourceTypeFlags;
-
-/// Resolve which resource kinds to operate on based on CLI flags.
-///
-/// If `--all` is set, returns all kinds (respecting `include_preview`).
-/// If specific flags are set, returns only those kinds.
-/// If no flags are set and `has_default_fallback` is true, returns all kinds (respecting `include_preview`).
-/// If no flags are set and `has_default_fallback` is false, returns an empty vec.
-///
-/// Superseded by `resolve_resource_selection()` which also handles singular flags.
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub fn resolve_resource_kinds(
-    all: bool,
-    indexes: bool,
-    indexers: bool,
-    datasources: bool,
-    skillsets: bool,
-    synonymmaps: bool,
-    aliases: bool,
-    knowledgebases: bool,
-    knowledgesources: bool,
-    include_preview: bool,
-    has_default_fallback: bool,
-) -> Vec<ResourceKind> {
-    let sel = resolve_resource_selection(
-        all,
-        indexes,
-        indexers,
-        datasources,
-        skillsets,
-        synonymmaps,
-        aliases,
-        knowledgebases,
-        knowledgesources,
-        false, // agents
-        &SingularFlags::default(),
-        include_preview,
-        has_default_fallback,
-    );
-    sel.kinds()
-}
 
 /// A resolved resource selection: which kinds to operate on and optional name filters.
 #[derive(Debug, Clone)]
@@ -226,7 +188,7 @@ pub fn resolve_resource_selection(
         }
     }
 
-    // Plural boolean flags (no name filter) — only add if singular not already present for that kind
+    // Plural boolean flags (no name filter) -- only add if singular not already present for that kind
     let plural_pairs: &[(bool, ResourceKind, bool)] = &[
         (indexes, ResourceKind::Index, true),
         (indexers, ResourceKind::Indexer, true),
@@ -252,7 +214,7 @@ pub fn resolve_resource_selection(
         }
     }
 
-    // Default fallback if nothing specified — include all configured resources
+    // Default fallback if nothing specified -- include all configured resources
     if selections.is_empty() && has_default_fallback {
         let mut kinds: Vec<ResourceKind> = if include_preview {
             ResourceKind::all()
@@ -273,83 +235,45 @@ pub fn resolve_resource_selection(
     ResourceSelection { selections }
 }
 
-/// Get the volatile fields to strip for a given resource kind during normalization.
-/// These are stripped from local files during pull AND before push.
-pub fn get_volatile_fields(kind: ResourceKind) -> Vec<&'static str> {
-    match kind {
-        ResourceKind::Index => hoist_core::resources::Index::volatile_fields().to_vec(),
-        ResourceKind::Indexer => hoist_core::resources::Indexer::volatile_fields().to_vec(),
-        ResourceKind::DataSource => hoist_core::resources::DataSource::volatile_fields().to_vec(),
-        ResourceKind::Skillset => hoist_core::resources::Skillset::volatile_fields().to_vec(),
-        ResourceKind::SynonymMap => hoist_core::resources::SynonymMap::volatile_fields().to_vec(),
-        ResourceKind::Alias => hoist_core::resources::Alias::volatile_fields().to_vec(),
-        ResourceKind::KnowledgeBase => {
-            hoist_core::resources::KnowledgeBase::volatile_fields().to_vec()
-        }
-        ResourceKind::KnowledgeSource => {
-            hoist_core::resources::KnowledgeSource::volatile_fields().to_vec()
-        }
-        ResourceKind::Agent => vec!["created_at", "object"],
-    }
-}
-
-/// Get the read-only fields for a given resource kind.
-/// These are kept in local files (informational) but stripped before pushing to Azure.
-pub fn get_read_only_fields(kind: ResourceKind) -> Vec<&'static str> {
-    match kind {
-        ResourceKind::Index => hoist_core::resources::Index::read_only_fields().to_vec(),
-        ResourceKind::Indexer => hoist_core::resources::Indexer::read_only_fields().to_vec(),
-        ResourceKind::DataSource => hoist_core::resources::DataSource::read_only_fields().to_vec(),
-        ResourceKind::Skillset => hoist_core::resources::Skillset::read_only_fields().to_vec(),
-        ResourceKind::SynonymMap => hoist_core::resources::SynonymMap::read_only_fields().to_vec(),
-        ResourceKind::Alias => hoist_core::resources::Alias::read_only_fields().to_vec(),
-        ResourceKind::KnowledgeBase => {
-            hoist_core::resources::KnowledgeBase::read_only_fields().to_vec()
-        }
-        ResourceKind::KnowledgeSource => {
-            hoist_core::resources::KnowledgeSource::read_only_fields().to_vec()
-        }
-        ResourceKind::Agent => vec![],
-    }
-}
-
-/// Order resources by dependencies (data sources before indexers, etc.)
-pub fn order_by_dependencies(
-    resources: &[(ResourceKind, String, serde_json::Value, bool)],
-) -> Vec<(ResourceKind, String, serde_json::Value, bool)> {
-    let order = [
-        ResourceKind::SynonymMap,      // No dependencies
-        ResourceKind::DataSource,      // No dependencies
-        ResourceKind::Index,           // May depend on synonym maps
-        ResourceKind::Alias,           // Points to indexes
-        ResourceKind::Skillset,        // No dependencies
-        ResourceKind::KnowledgeBase,   // No dependencies
-        ResourceKind::Indexer,         // Depends on data source, index, skillset
-        ResourceKind::KnowledgeSource, // Depends on index, knowledge base
-        ResourceKind::Agent,           // Foundry: no cross-service dependencies
-    ];
-
-    let mut ordered = resources.to_vec();
-    ordered
-        .sort_by_key(|(kind, _, _, _)| order.iter().position(|k| k == kind).unwrap_or(usize::MAX));
-
-    ordered
-}
-
-/// Read a single agent YAML file and return the parsed JSON Value.
+/// Resolve which resource kinds to operate on based on CLI flags.
 ///
-/// The agent name is derived from the filename stem (e.g. `regulus.yaml` → `"regulus"`).
-/// The name is NOT injected here — callers add it before wrapping for API use.
-pub fn read_agent_yaml(path: &std::path::Path) -> Result<serde_json::Value> {
-    let content = std::fs::read_to_string(path)?;
-    hoist_core::resources::agent::yaml_to_agent(&content)
-        .map_err(|e| anyhow::anyhow!("Invalid YAML in {}: {}", path.display(), e))
+/// Superseded by `resolve_resource_selection()` which also handles singular flags.
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+pub fn resolve_resource_kinds(
+    all: bool,
+    indexes: bool,
+    indexers: bool,
+    datasources: bool,
+    skillsets: bool,
+    synonymmaps: bool,
+    aliases: bool,
+    knowledgebases: bool,
+    knowledgesources: bool,
+    include_preview: bool,
+    has_default_fallback: bool,
+) -> Vec<ResourceKind> {
+    let sel = resolve_resource_selection(
+        all,
+        indexes,
+        indexers,
+        datasources,
+        skillsets,
+        synonymmaps,
+        aliases,
+        knowledgebases,
+        knowledgesources,
+        false, // agents
+        &SingularFlags::default(),
+        include_preview,
+        has_default_fallback,
+    );
+    sel.kinds()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     // === resolve_resource_kinds tests ===
 
@@ -437,181 +361,13 @@ mod tests {
 
     #[test]
     fn test_knowledge_flags_ignored_falls_back_to_default() {
-        // KB/KS flags set but include_preview=false, no other flags → falls back
+        // KB/KS flags set but include_preview=false, no other flags -> falls back
         let kinds = resolve_resource_kinds(
             false, false, false, false, false, false, false, true, true, false, true,
         );
         // stable (5) + Agent (1) = 6
         assert_eq!(kinds.len(), 6);
         assert!(kinds.contains(&ResourceKind::Agent));
-    }
-
-    // === get_volatile_fields tests ===
-
-    #[test]
-    fn test_volatile_fields_search_resources_include_etag() {
-        for kind in ResourceKind::search_kinds() {
-            let fields = get_volatile_fields(kind);
-            assert!(
-                fields.contains(&"@odata.etag"),
-                "{:?} missing @odata.etag",
-                kind
-            );
-        }
-    }
-
-    #[test]
-    fn test_volatile_fields_agent_has_created_at() {
-        let fields = get_volatile_fields(ResourceKind::Agent);
-        assert!(fields.contains(&"created_at"));
-        assert!(fields.contains(&"object"));
-        assert!(!fields.contains(&"@odata.etag"));
-    }
-
-    #[test]
-    fn test_volatile_fields_knowledge_base_strips_secrets() {
-        let fields = get_volatile_fields(ResourceKind::KnowledgeBase);
-        assert!(fields.contains(&"storageConnectionStringSecret"));
-    }
-
-    #[test]
-    fn test_volatile_fields_datasource_strips_credentials() {
-        let fields = get_volatile_fields(ResourceKind::DataSource);
-        assert!(fields.contains(&"credentials"));
-    }
-
-    // === get_read_only_fields tests ===
-
-    #[test]
-    fn test_read_only_fields_kb_is_empty() {
-        // knowledgeSources is a normal pushable field, not read-only
-        let fields = get_read_only_fields(ResourceKind::KnowledgeBase);
-        assert!(fields.is_empty());
-    }
-
-    #[test]
-    fn test_read_only_fields_ks_has_created_resources() {
-        let fields = get_read_only_fields(ResourceKind::KnowledgeSource);
-        assert!(fields.contains(&"createdResources"));
-        assert!(fields.contains(&"ingestionPermissionOptions"));
-    }
-
-    #[test]
-    fn test_read_only_fields_indexer_has_start_time() {
-        let fields = get_read_only_fields(ResourceKind::Indexer);
-        assert!(fields.contains(&"startTime"));
-    }
-
-    #[test]
-    fn test_read_only_fields_empty_for_most_types() {
-        assert!(get_read_only_fields(ResourceKind::Index).is_empty());
-        assert!(get_read_only_fields(ResourceKind::DataSource).is_empty());
-        assert!(get_read_only_fields(ResourceKind::Skillset).is_empty());
-        assert!(get_read_only_fields(ResourceKind::SynonymMap).is_empty());
-        assert!(get_read_only_fields(ResourceKind::Alias).is_empty());
-    }
-
-    // === order_by_dependencies tests ===
-
-    #[test]
-    fn test_order_datasource_before_indexer() {
-        let resources = vec![
-            (ResourceKind::Indexer, "ixer".to_string(), json!({}), false),
-            (ResourceKind::DataSource, "ds".to_string(), json!({}), false),
-        ];
-        let ordered = order_by_dependencies(&resources);
-        assert_eq!(ordered[0].0, ResourceKind::DataSource);
-        assert_eq!(ordered[1].0, ResourceKind::Indexer);
-    }
-
-    #[test]
-    fn test_order_index_before_indexer() {
-        let resources = vec![
-            (ResourceKind::Indexer, "ixer".to_string(), json!({}), false),
-            (ResourceKind::Index, "idx".to_string(), json!({}), false),
-        ];
-        let ordered = order_by_dependencies(&resources);
-        assert_eq!(ordered[0].0, ResourceKind::Index);
-        assert_eq!(ordered[1].0, ResourceKind::Indexer);
-    }
-
-    #[test]
-    fn test_order_knowledge_base_before_knowledge_source() {
-        let resources = vec![
-            (
-                ResourceKind::KnowledgeSource,
-                "ks".to_string(),
-                json!({}),
-                false,
-            ),
-            (
-                ResourceKind::KnowledgeBase,
-                "kb".to_string(),
-                json!({}),
-                false,
-            ),
-        ];
-        let ordered = order_by_dependencies(&resources);
-        assert_eq!(ordered[0].0, ResourceKind::KnowledgeBase);
-        assert_eq!(ordered[1].0, ResourceKind::KnowledgeSource);
-    }
-
-    #[test]
-    fn test_order_full_dependency_chain() {
-        let resources = vec![
-            (
-                ResourceKind::KnowledgeSource,
-                "ks".to_string(),
-                json!({}),
-                false,
-            ),
-            (ResourceKind::Indexer, "ixer".to_string(), json!({}), false),
-            (ResourceKind::Index, "idx".to_string(), json!({}), false),
-            (ResourceKind::Alias, "al".to_string(), json!({}), false),
-            (ResourceKind::DataSource, "ds".to_string(), json!({}), false),
-            (
-                ResourceKind::KnowledgeBase,
-                "kb".to_string(),
-                json!({}),
-                false,
-            ),
-            (ResourceKind::Skillset, "sk".to_string(), json!({}), false),
-            (ResourceKind::SynonymMap, "sm".to_string(), json!({}), false),
-        ];
-        let ordered = order_by_dependencies(&resources);
-        let kinds: Vec<_> = ordered.iter().map(|(k, _, _, _)| *k).collect();
-        assert_eq!(
-            kinds,
-            vec![
-                ResourceKind::SynonymMap,
-                ResourceKind::DataSource,
-                ResourceKind::Index,
-                ResourceKind::Alias,
-                ResourceKind::Skillset,
-                ResourceKind::KnowledgeBase,
-                ResourceKind::Indexer,
-                ResourceKind::KnowledgeSource,
-            ]
-        );
-    }
-
-    #[test]
-    fn test_order_empty() {
-        let resources: Vec<(ResourceKind, String, serde_json::Value, bool)> = vec![];
-        let ordered = order_by_dependencies(&resources);
-        assert!(ordered.is_empty());
-    }
-
-    #[test]
-    fn test_order_preserves_within_same_kind() {
-        let resources = vec![
-            (ResourceKind::Index, "b-index".to_string(), json!({}), false),
-            (ResourceKind::Index, "a-index".to_string(), json!({}), false),
-        ];
-        let ordered = order_by_dependencies(&resources);
-        // sort_by_key is stable, so same-kind order is preserved
-        assert_eq!(ordered[0].1, "b-index");
-        assert_eq!(ordered[1].1, "a-index");
     }
 
     // === resolve_resource_selection tests ===
@@ -713,7 +469,7 @@ mod tests {
             false,
         );
 
-        // Singular takes precedence — only one entry for Index
+        // Singular takes precedence -- only one entry for Index
         assert_eq!(sel.kinds(), vec![ResourceKind::Index]);
         assert_eq!(sel.name_filter(ResourceKind::Index), Some("specific-idx"));
     }
@@ -836,7 +592,7 @@ mod tests {
 
     #[test]
     fn test_selection_singular_prevents_fallback() {
-        // A singular flag is set → should NOT fall back to all kinds
+        // A singular flag is set -> should NOT fall back to all kinds
         let mut singular = no_singular();
         singular.index = Some("my-idx".to_string());
 
@@ -971,78 +727,5 @@ mod tests {
         assert_eq!(singular.index, Some("my-idx".to_string()));
         assert_eq!(singular.agent, Some("my-agent".to_string()));
         assert_eq!(singular.indexer, None);
-    }
-
-    // === read_agent_yaml tests ===
-
-    #[test]
-    fn test_read_agent_yaml_full() {
-        let dir = tempfile::tempdir().unwrap();
-        let yaml_path = dir.path().join("my-agent.yaml");
-
-        std::fs::write(
-            &yaml_path,
-            "kind: prompt\nmodel: gpt-4o\ninstructions: You are helpful.\ntools:\n  - type: code_interpreter\ntool_resources:\n  file_search:\n    vector_store_ids:\n      - vs_1\n",
-        )
-        .unwrap();
-
-        let value = read_agent_yaml(&yaml_path).unwrap();
-        assert_eq!(value["model"], "gpt-4o");
-        assert_eq!(value["kind"], "prompt");
-        assert!(value["instructions"].as_str().unwrap().contains("helpful"));
-        assert_eq!(value["tools"].as_array().unwrap().len(), 1);
-        assert!(
-            value["tool_resources"]["file_search"]["vector_store_ids"]
-                .as_array()
-                .unwrap()
-                .len()
-                == 1
-        );
-    }
-
-    #[test]
-    fn test_read_agent_yaml_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let yaml_path = dir.path().join("missing.yaml");
-
-        let result = read_agent_yaml(&yaml_path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_read_agent_yaml_invalid_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        let yaml_path = dir.path().join("bad.yaml");
-        std::fs::write(&yaml_path, "{{invalid yaml").unwrap();
-
-        let result = read_agent_yaml(&yaml_path);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_read_agent_yaml_roundtrip() {
-        use hoist_core::resources::agent::agent_to_yaml;
-
-        let dir = tempfile::tempdir().unwrap();
-        let yaml_path = dir.path().join("roundtrip.yaml");
-
-        let original = json!({
-            "name": "roundtrip",
-            "kind": "prompt",
-            "model": "gpt-4o",
-            "instructions": "Be concise.",
-            "tools": [{"type": "file_search"}]
-        });
-
-        // Write YAML from agent JSON
-        let yaml = agent_to_yaml(&original);
-        std::fs::write(&yaml_path, &yaml).unwrap();
-
-        // Read back
-        let parsed = read_agent_yaml(&yaml_path).unwrap();
-        assert_eq!(parsed["kind"], "prompt");
-        assert_eq!(parsed["model"], "gpt-4o");
-        assert_eq!(parsed["instructions"], "Be concise.");
-        assert_eq!(parsed["tools"].as_array().unwrap().len(), 1);
     }
 }
