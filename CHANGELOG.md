@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-03-03
+
+### Fixed
+
+- **Azure CLI auth scope bug** — `hoist ai status` reported "Not logged in" even after `az login` because the Cognitive Services scope included an invalid `/.default` suffix. Removed the suffix so `az account get-access-token --resource https://cognitiveservices.azure.com` works correctly
+- **AADSTS error swallowed** — Azure AD token errors (AADSTS codes) were mapped to a generic "Not logged in" message. Now shows the actual error detail, the `az` debug command to run manually, and a fix suggestion (e.g., assign 'Cognitive Services User' role)
+
+### Added
+
+- **Multi-provider AI support** — `hoist ai init` now offers a choice of AI providers for diff explanations: Claude, Codex, Copilot, Ollama, and Azure OpenAI. Previously only Azure OpenAI was available
+- **`AiProvider` enum** — new type in hoist-core with 5 variants, display names, descriptions, binary detection, and default model recommendations
+- **Local CLI agent integration** — new `local_agent` module in hoist-client invokes claude/codex/copilot as subprocesses with timeout, output capture, and error handling
+- **Ollama support** — new `ollama` module in hoist-client with HTTP API client for listing models and chat completions against locally running LLMs
+- **Unified AI dispatcher** — new `ai::generate_text()` / `ai::generate_text_with_limit()` functions route to the correct backend based on the configured provider
+- **`--provider` and `--model` flags** on `hoist ai init` for non-interactive setup
+- **Provider-specific status** — `hoist ai status` shows provider name, model, and checks availability (binary on PATH for CLI agents, TCP connectivity for Ollama, token acquisition for Azure OpenAI)
+
+### Changed
+
+- **`AiConfig` fields** — `account` and `deployment` are now `Option<String>` (only needed for Azure OpenAI). Added `provider`, `model`, and `ollama_url` fields. Backward compatible: existing configs without `provider` default to Azure OpenAI
+- **AI call sites use unified dispatcher** — `explain.rs`, `diff/ai.rs`, `push/explain.rs`, and `pull/output.rs` now route through `ai::generate_text()` instead of calling `AzureOpenAIClient` directly
+
+### Tests
+
+- 614 tests across workspace (up from 606)
+
 ## [0.12.0] - 2026-03-03
 
 ### Changed
