@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.1] - 2026-03-03
+
+### Improved
+
+- **AI explanation prompts** — rewrote system prompts for diff/push/pull AI explanations to be factual and proportional. Explanations now state what changed without speculating about purpose or impact. Obvious intent is stated plainly (e.g., "added Norwegian support") but editorializing is eliminated (no "this enhances...", "this improves..."). Single-line changes get 1-2 sentences; large restructurings get longer explanations. Unchanged parts of resources are no longer described
+
 ## [0.13.0] - 2026-03-03
 
 ### Fixed

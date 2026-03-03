@@ -5,35 +5,32 @@ use hoist_core::resources::ResourceKind;
 use hoist_diff::Change;
 
 const NARRATIVE_SYSTEM_PROMPT: &str = "\
-You are explaining configuration changes for Azure AI Search and Microsoft Foundry resources \
-to a developer. Write a clear, detailed narrative that helps the user understand exactly what \
-is different and what will happen.
+You are summarizing configuration changes for Azure AI Search and Microsoft Foundry resources. \
+The user wants to know exactly what changed — nothing more.
 
-Guidelines:
-- Describe the actual content and behavior of resources, not just property names or JSON paths.
-- For agent instructions, explain what the instructions say and how they differ between versions.
-- For search indexes, describe what fields are being added, removed, or changed and what that \
-  means for search behavior (e.g., filtering, sorting, retrieval).
-- For indexers, skillsets, and data sources, explain what the pipeline does and how it changes.
-- Reference specific content from the configurations — quote key phrases when they help clarify.
-- Group related changes and note cross-resource patterns (e.g., shared models or settings).
-- Mention unchanged properties only when they provide useful context.
-- Frame the explanation based on the operation context (comparing, pulling, or pushing).
-- Write in paragraph form with a professional but approachable tone. Do not use bullet points \
-  or technical change lists — the user wants a readable narrative.
-- Be thorough — cover all changes — but don't be repetitive.
-- Start with a brief overview of the scope, then go into detail for each resource.";
+Rules:
+- State what was added, removed, or changed. Be factual and specific.
+- When the intent of a change is obvious from the content, state it plainly \
+  (e.g., \"added Norwegian support\" when nb-NO is added to a languages list).
+- NEVER speculate beyond what the content clearly shows. Do not invent purpose or impact \
+  (no \"this enhances...\", \"this improves...\", \"this ensures...\").
+- Scale your response to the size of the change. A one-line change gets 1-2 sentences. \
+  A large restructuring gets a longer explanation.
+- Do NOT describe unchanged parts of a resource. Focus exclusively on the diff.
+- Quote specific values when they clarify (e.g., \"added 'nb-NO' to the languages list\").
+- For text changes (like agent instructions), summarize what text was added, removed, or \
+  reworded — quote short phrases. Do not describe what the instructions \"do\".
+- Use bullet points for multiple changes. Use prose only if there is a single simple change.
+- Frame the direction (push = local → server, pull = server → local, diff = comparison).";
 
 /// Per-resource AI summary (used for JSON/MCP output backward compatibility).
 const PER_RESOURCE_SYSTEM_PROMPT: &str = "\
-You are analyzing configuration changes for Azure AI Search and Microsoft Foundry resources. \
-The user has already seen a detailed per-change breakdown. Your job is to explain the practical \
-IMPACT of these changes — what will behave differently, what risks exist, and whether the \
-changes look intentional and consistent. Be concise (2-4 sentences). Do not repeat the change \
-descriptions the user already sees. Instead, synthesize: Why might someone have made these \
-changes? Are there any concerns (e.g., breaking changes, missing dependencies, inconsistencies \
-between changes)? If agent instructions changed, summarize the intent shift, not the \
-word-level edits.";
+You are summarizing configuration changes for a single Azure AI Search or Microsoft Foundry \
+resource. The user has already seen the per-change breakdown. Your job is to give a concise \
+factual summary (2-4 sentences). State what changed. When intent is obvious from the content, \
+state it plainly. Do NOT speculate beyond what the content shows — no \"enhances\", \
+\"improves\", \"ensures\". If you see a potential issue (e.g., a breaking change or missing \
+dependency), mention it as a factual observation.";
 
 /// Status of a resource in the change set.
 pub enum ChangeStatus {
