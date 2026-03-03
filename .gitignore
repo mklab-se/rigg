@@ -23,3 +23,6 @@ coverage/
 
 # Drafts (blog posts, notes, etc.)
 /drafts/
+
+# Playwright MCP artifacts
+.playwright-mcp/

@@ -40,6 +40,18 @@ impl AzureOpenAIClient {
         user_prompt: &str,
         temperature: f32,
     ) -> Result<String, ClientError> {
+        self.chat_completion_with_limit(system_prompt, user_prompt, temperature, 500)
+            .await
+    }
+
+    /// Send a chat completion request with a custom max_tokens limit.
+    pub async fn chat_completion_with_limit(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<String, ClientError> {
         let token = self.auth.get_token()?;
 
         let url = format!(
@@ -54,7 +66,7 @@ impl AzureOpenAIClient {
                 { "role": "user", "content": user_prompt },
             ],
             "temperature": temperature,
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
         });
 
         let response = self

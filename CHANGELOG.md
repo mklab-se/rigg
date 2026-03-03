@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] - 2026-03-03
+
+### Changed
+
+- **Narrative AI explanations** — AI-powered diff explanations are now generated as a single cohesive narrative covering all changed resources, replacing the previous per-resource 2-3 sentence summaries. The AI receives full local and remote resource content (not just change paths) and frames its explanation based on the operation direction (push, pull, or diff). This produces much more useful explanations that describe what configurations actually *do* and how they differ, rather than listing which JSON fields changed
+- **Richer AI prompts** — value summaries sent to the AI now include array item names and object keys (e.g., `[3 items: field1, field2, field3]` instead of `[3 items]`), and long strings include up to 2,000 characters of content. Simple scalar changes are filtered from raw details to reduce noise
+- **Configurable token limit for AI completions** — the Azure OpenAI client now supports a custom `max_tokens` parameter via `chat_completion_with_limit()`, allowing narrative explanations to use up to 4,000 tokens while keeping per-resource summaries at 500
+
+### Tests
+
+- 606 tests across workspace (up from 595)
+
 ## [0.11.1] - 2026-02-25
 
 ### Changed
