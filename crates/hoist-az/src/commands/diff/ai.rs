@@ -17,13 +17,6 @@ pub(super) async fn generate_ai_narrative(
     total_unchanged: usize,
 ) -> Option<String> {
     let ai_config = config.ai.as_ref()?;
-    let client = match hoist_client::AzureOpenAIClient::from_config(ai_config) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: Could not create AI client: {}", e);
-            return None;
-        }
-    };
 
     let changed: Vec<&ResourceDiff> = diffs.iter().filter(|d| !d.result.is_equal).collect();
     if changed.is_empty() {
@@ -54,7 +47,8 @@ pub(super) async fn generate_ai_narrative(
         })
         .collect();
 
-    match explain::explain_all_changes(&client, &contexts, command_context, total_unchanged).await {
+    match explain::explain_all_changes(ai_config, &contexts, command_context, total_unchanged).await
+    {
         Ok(narrative) => Some(narrative),
         Err(e) => {
             eprintln!("Warning: AI explanation failed: {}", e);
@@ -75,14 +69,6 @@ pub(super) async fn generate_ai_summaries(
         None => return summaries,
     };
 
-    let client = match hoist_client::AzureOpenAIClient::from_config(ai_config) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: Could not create AI client: {}", e);
-            return summaries;
-        }
-    };
-
     let changed: Vec<&ResourceDiff> = diffs.iter().filter(|d| !d.result.is_equal).collect();
     if changed.is_empty() {
         return summaries;
@@ -101,10 +87,9 @@ pub(super) async fn generate_ai_summaries(
             let changes = d.result.changes.clone();
             let descriptions =
                 describe_changes_plain(&d.result.changes, d.kind, &d.resource_name, labels);
-            let client_ref = &client;
             async move {
                 let result = crate::commands::explain::explain_resource_changes(
-                    client_ref,
+                    ai_config,
                     &resource_type,
                     &resource_name,
                     &changes,

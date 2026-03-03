@@ -507,14 +507,20 @@ pub enum AuthCommands {
 
 #[derive(Subcommand)]
 pub enum AiCommands {
-    /// Set up Azure OpenAI for AI-enhanced features
+    /// Set up an AI provider for diff explanations
     Init {
-        /// AI Services account name (bypasses interactive discovery)
+        /// AI Services account name (Azure OpenAI only, bypasses interactive discovery)
         #[arg(long)]
         account: Option<String>,
-        /// Model deployment name (bypasses interactive discovery)
+        /// Model deployment name (Azure OpenAI only, bypasses interactive discovery)
         #[arg(long)]
         deployment: Option<String>,
+        /// AI provider to use (bypasses interactive selection)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Model to use (bypasses interactive selection)
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Check AI configuration status
     Status,

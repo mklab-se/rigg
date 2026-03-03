@@ -6,11 +6,14 @@
 //! - ARM discovery for subscriptions, search services, AI Services accounts, and Foundry projects
 //! - Response parsing and error handling
 
+pub mod ai;
 pub mod arm;
 pub mod auth;
 pub mod client;
 pub mod error;
 pub mod foundry;
+pub mod local_agent;
+pub mod ollama;
 pub mod openai;
 
 pub use arm::ArmClient;

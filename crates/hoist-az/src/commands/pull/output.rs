@@ -104,14 +104,6 @@ pub(super) async fn generate_pull_narrative(
     deleted_resources: &[(ResourceKind, String, PathBuf)],
     total_unchanged: usize,
 ) -> Option<String> {
-    let client = match hoist_client::AzureOpenAIClient::from_config(ai_config) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Warning: Could not create AI client: {}", e);
-            return None;
-        }
-    };
-
     eprintln!("Generating AI explanation...");
 
     let pull_labels = Some(("locally", "on the server"));
@@ -163,7 +155,7 @@ pub(super) async fn generate_pull_narrative(
         return None;
     }
 
-    match explain::explain_all_changes(&client, &contexts, "pull", total_unchanged).await {
+    match explain::explain_all_changes(ai_config, &contexts, "pull", total_unchanged).await {
         Ok(narrative) => Some(narrative),
         Err(e) => {
             eprintln!("Warning: AI explanation failed: {}", e);

@@ -19,6 +19,17 @@ pub struct AzureOpenAIClient {
 impl AzureOpenAIClient {
     /// Create from an AiConfig section
     pub fn from_config(config: &AiConfig) -> Result<Self, ClientError> {
+        let endpoint = config.openai_endpoint().ok_or_else(|| {
+            ClientError::LocalAgent(
+                "Azure OpenAI requires an account name or endpoint. Run 'hoist ai init'.".into(),
+            )
+        })?;
+        let deployment = config.deployment.clone().ok_or_else(|| {
+            ClientError::LocalAgent(
+                "Azure OpenAI requires a deployment name. Run 'hoist ai init'.".into(),
+            )
+        })?;
+
         let auth = get_cognitive_services_auth()?;
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
@@ -27,8 +38,8 @@ impl AzureOpenAIClient {
         Ok(Self {
             http,
             auth,
-            endpoint: config.openai_endpoint(),
-            deployment: config.deployment.clone(),
+            endpoint,
+            deployment,
             api_version: config.api_version.clone(),
         })
     }
@@ -100,33 +111,43 @@ impl AzureOpenAIClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hoist_core::AiProvider;
 
     #[test]
     fn test_openai_endpoint_from_config() {
         let config = AiConfig {
-            account: "my-ai-services".to_string(),
-            deployment: "gpt-4o-mini".to_string(),
+            provider: AiProvider::AzureOpenai,
+            model: None,
+            account: Some("my-ai-services".to_string()),
+            deployment: Some("gpt-4o-mini".to_string()),
             endpoint: None,
             subscription: None,
             resource_group: None,
             api_version: "2024-12-01-preview".to_string(),
+            ollama_url: None,
         };
         assert_eq!(
-            config.openai_endpoint(),
-            "https://my-ai-services.openai.azure.com"
+            config.openai_endpoint().as_deref(),
+            Some("https://my-ai-services.openai.azure.com")
         );
     }
 
     #[test]
     fn test_openai_endpoint_with_override() {
         let config = AiConfig {
-            account: "my-ai-services".to_string(),
-            deployment: "gpt-4o-mini".to_string(),
+            provider: AiProvider::AzureOpenai,
+            model: None,
+            account: Some("my-ai-services".to_string()),
+            deployment: Some("gpt-4o-mini".to_string()),
             endpoint: Some("https://custom.openai.azure.com/".to_string()),
             subscription: None,
             resource_group: None,
             api_version: "2024-12-01-preview".to_string(),
+            ollama_url: None,
         };
-        assert_eq!(config.openai_endpoint(), "https://custom.openai.azure.com");
+        assert_eq!(
+            config.openai_endpoint().as_deref(),
+            Some("https://custom.openai.azure.com")
+        );
     }
 }

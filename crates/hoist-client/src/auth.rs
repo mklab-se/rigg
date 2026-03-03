@@ -52,7 +52,7 @@ impl AzCliAuth {
     /// Create an auth provider for Azure Cognitive Services (OpenAI)
     pub fn for_cognitive_services() -> Self {
         Self {
-            resource_scope: "https://cognitiveservices.azure.com/.default",
+            resource_scope: "https://cognitiveservices.azure.com",
         }
     }
 
@@ -161,8 +161,22 @@ impl AuthProvider for AzCliAuth {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("not logged in") || stderr.contains("AADSTS") {
+            if stderr.contains("not logged in") {
                 return Err(AuthError::NotLoggedIn);
+            }
+            if stderr.contains("AADSTS") {
+                // Extract the first AADSTS error line for a concise message
+                let detail = stderr
+                    .lines()
+                    .find(|l| l.contains("AADSTS"))
+                    .unwrap_or(&stderr)
+                    .trim();
+                return Err(AuthError::TokenError(format!(
+                    "Failed to get access token for {}: {}\n  \
+                     Debug: az account get-access-token --resource {}\n  \
+                     Fix: Ensure 'Cognitive Services User' role is assigned on the AI Services resource",
+                    self.resource_scope, detail, self.resource_scope
+                )));
             }
             return Err(AuthError::TokenError(stderr.to_string()));
         }
@@ -283,7 +297,7 @@ pub fn get_auth_provider_for(
 
 /// Get the best available authentication provider for Azure Cognitive Services (OpenAI)
 pub fn get_cognitive_services_auth() -> Result<Box<dyn AuthProvider>, AuthError> {
-    get_auth_provider_for_scope("https://cognitiveservices.azure.com/.default")
+    get_auth_provider_for_scope("https://cognitiveservices.azure.com")
 }
 
 /// Get the best available authentication provider for a specific resource scope
@@ -462,10 +476,7 @@ mod tests {
     #[test]
     fn test_az_cli_auth_cognitive_services_scope() {
         let auth = AzCliAuth::for_cognitive_services();
-        assert_eq!(
-            auth.resource_scope,
-            "https://cognitiveservices.azure.com/.default"
-        );
+        assert_eq!(auth.resource_scope, "https://cognitiveservices.azure.com");
     }
 
     #[test]

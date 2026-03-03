@@ -40,6 +40,16 @@ pub enum ClientError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Local agent error: {0}")]
+    LocalAgent(String),
+}
+
+impl ClientError {
+    /// Create a local agent error
+    pub fn local_agent(msg: impl Into<String>) -> Self {
+        Self::LocalAgent(msg.into())
+    }
 }
 
 impl ClientError {
@@ -155,6 +165,9 @@ impl ClientError {
             ClientError::RateLimited { .. } => "Wait and retry the operation",
             ClientError::ServiceUnavailable(_) => {
                 "The Azure Search service may be temporarily unavailable. Try again later."
+            }
+            ClientError::LocalAgent(_) => {
+                "Check that the AI provider is installed and configured. Run 'hoist ai init' to reconfigure."
             }
             _ => "Check the error message for details",
         }

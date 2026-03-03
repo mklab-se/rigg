@@ -1,6 +1,6 @@
 //! AI-powered diff explanations using Azure OpenAI
 
-use hoist_client::AzureOpenAIClient;
+use hoist_core::config::AiConfig;
 use hoist_core::resources::ResourceKind;
 use hoist_diff::Change;
 
@@ -63,20 +63,19 @@ pub struct ResourceContext {
 /// This is the primary AI explanation shown to users in terminal output.
 /// It replaces the per-change description list when AI is enabled.
 pub async fn explain_all_changes(
-    client: &AzureOpenAIClient,
+    config: &AiConfig,
     resources: &[ResourceContext],
     command_context: &str,
     total_unchanged: usize,
 ) -> Result<String, hoist_client::ClientError> {
     let user_prompt = build_narrative_prompt(resources, command_context, total_unchanged);
-    client
-        .chat_completion_with_limit(NARRATIVE_SYSTEM_PROMPT, &user_prompt, 0.3, 4000)
+    hoist_client::ai::generate_text_with_limit(config, NARRATIVE_SYSTEM_PROMPT, &user_prompt, 4000)
         .await
 }
 
 /// Generate a per-resource AI summary (for JSON/MCP output).
 pub async fn explain_resource_changes(
-    client: &AzureOpenAIClient,
+    config: &AiConfig,
     resource_type: &str,
     resource_name: &str,
     changes: &[Change],
@@ -90,9 +89,7 @@ pub async fn explain_resource_changes(
         descriptions,
         command_context,
     );
-    client
-        .chat_completion(PER_RESOURCE_SYSTEM_PROMPT, &user_prompt, 0.3)
-        .await
+    hoist_client::ai::generate_text(config, PER_RESOURCE_SYSTEM_PROMPT, &user_prompt).await
 }
 
 // ---------------------------------------------------------------------------
