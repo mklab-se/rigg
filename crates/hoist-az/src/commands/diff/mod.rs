@@ -46,7 +46,7 @@ pub async fn run(
     } else if explain_flag {
         true
     } else {
-        config.has_ai()
+        crate::commands::ai::is_ai_active()
     };
 
     // Cross-environment diff: compare two remotes directly
@@ -117,8 +117,7 @@ pub async fn run(
             if use_explain && has_changes {
                 // AI narrative mode: single narrative replaces per-change descriptions
                 let unchanged_count = all_diffs.iter().filter(|d| d.result.is_equal).count();
-                match ai::generate_ai_narrative(&config, &all_diffs, "diff", unchanged_count).await
-                {
+                match ai::generate_ai_narrative(&all_diffs, "diff", unchanged_count).await {
                     Some(narrative) => {
                         println!("{}", narrative);
                     }
@@ -138,7 +137,7 @@ pub async fn run(
         DiffFormat::Json => {
             // JSON output: per-resource AI summaries for MCP/structured consumers
             let ai_summaries = if use_explain && has_changes {
-                ai::generate_ai_summaries(&config, &all_diffs).await
+                ai::generate_ai_summaries(&all_diffs).await
             } else {
                 std::collections::HashMap::new()
             };

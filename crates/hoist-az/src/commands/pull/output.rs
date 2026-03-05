@@ -98,7 +98,6 @@ pub(super) fn print_local_modification_warnings(updated_resources: &[DiscoveredR
 ///
 /// Returns `Some(narrative)` on success, `None` on failure (caller falls back to non-AI output).
 pub(super) async fn generate_pull_narrative(
-    ai_config: &hoist_core::config::AiConfig,
     new_resources: &[DiscoveredResource],
     updated_resources: &[DiscoveredResource],
     deleted_resources: &[(ResourceKind, String, PathBuf)],
@@ -155,7 +154,7 @@ pub(super) async fn generate_pull_narrative(
         return None;
     }
 
-    match explain::explain_all_changes(ai_config, &contexts, "pull", total_unchanged).await {
+    match explain::explain_all_changes(&contexts, "pull", total_unchanged).await {
         Ok(narrative) => Some(narrative),
         Err(e) => {
             eprintln!("Warning: AI explanation failed: {}", e);

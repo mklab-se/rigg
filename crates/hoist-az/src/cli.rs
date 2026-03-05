@@ -393,9 +393,11 @@ pub enum Commands {
     /// Show version information
     Version,
 
-    /// Configure AI features (Azure OpenAI integration)
-    #[command(subcommand)]
-    Ai(AiCommands),
+    /// Manage AI features (shows status when run without a subcommand)
+    Ai {
+        #[command(subcommand)]
+        command: Option<AiCommands>,
+    },
 
     /// MCP (Model Context Protocol) server for AI agent integration
     #[command(subcommand)]
@@ -507,25 +509,17 @@ pub enum AuthCommands {
 
 #[derive(Subcommand)]
 pub enum AiCommands {
-    /// Set up an AI provider for diff explanations
-    Init {
-        /// AI Services account name (Azure OpenAI only, bypasses interactive discovery)
-        #[arg(long)]
-        account: Option<String>,
-        /// Model deployment name (Azure OpenAI only, bypasses interactive discovery)
-        #[arg(long)]
-        deployment: Option<String>,
-        /// AI provider to use (bypasses interactive selection)
-        #[arg(long)]
-        provider: Option<String>,
-        /// Model to use (bypasses interactive selection)
-        #[arg(long)]
-        model: Option<String>,
+    /// Test AI integration by sending a message
+    Test {
+        /// Message to send (default: "Say hello in one sentence.")
+        message: Option<String>,
     },
-    /// Check AI configuration status
-    Status,
-    /// Remove AI configuration
-    Remove,
+    /// Enable AI features for hoist
+    Enable,
+    /// Disable AI features for hoist
+    Disable,
+    /// Open AI configuration file in your editor
+    Config,
 }
 
 #[derive(Subcommand)]
@@ -1080,7 +1074,7 @@ impl Cli {
                 alias,
                 env_override,
             ),
-            Commands::Ai(cmd) => commands::ai::run(cmd).await,
+            Commands::Ai { command } => commands::ai::run(command).await,
             Commands::Diff {
                 resources,
                 format,

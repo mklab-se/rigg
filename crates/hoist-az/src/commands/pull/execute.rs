@@ -36,7 +36,7 @@ pub async fn execute_pull(
     selection: &ResourceSelection,
     filter: Option<&str>,
     force: bool,
-    ai_config: Option<&hoist_core::config::AiConfig>,
+    use_explain: bool,
 ) -> Result<()> {
     let kinds = selection.kinds();
 
@@ -199,9 +199,8 @@ pub async fn execute_pull(
     }
 
     // Try AI narrative mode first when AI is enabled
-    let used_ai_narrative = if let Some(ai_cfg) = ai_config {
+    let used_ai_narrative = if use_explain {
         match output::generate_pull_narrative(
-            ai_cfg,
             &new_resources,
             &updated_resources,
             &deleted_resources,

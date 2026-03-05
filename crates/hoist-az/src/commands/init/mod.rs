@@ -18,9 +18,9 @@ use hoist_core::service::ServiceDomain;
 
 use crate::cli::InitTemplate;
 
-// Re-export pub(crate) items used by other modules (ai.rs, env.rs)
+// Re-export pub(crate) items used by other modules (env.rs)
 pub(crate) use discovery::{
-    DiscoveryContext, discover_new_foundry_services, discover_new_search_services, try_authenticate,
+    discover_new_foundry_services, discover_new_search_services, try_authenticate,
 };
 
 /// Options for non-interactive initialization.
@@ -136,7 +136,6 @@ async fn run_fresh(
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
             resources: Vec::new(),
         },
-        ai: None,
         environments: std::collections::BTreeMap::from([(
             env_name.clone(),
             EnvironmentConfig {
@@ -276,9 +275,9 @@ async fn run_fresh(
             &files_dir,
             &env,
             &selection,
-            None, // no filter
-            true, // force (user already confirmed)
-            None, // no AI explanations during init
+            None,  // no filter
+            true,  // force (user already confirmed)
+            false, // no AI explanations during init
         )
         .await?;
     } else {
@@ -375,7 +374,6 @@ async fn run_non_interactive(
             include_preview: matches!(template, InitTemplate::Agentic | InitTemplate::Full),
             resources: Vec::new(),
         },
-        ai: None,
         environments: std::collections::BTreeMap::from([(
             env_name.clone(),
             EnvironmentConfig {
@@ -457,8 +455,8 @@ async fn run_non_interactive(
                 &env,
                 &selection,
                 None,
-                true, // force -- non-interactive
-                None, // no AI explanations during init
+                true,  // force -- non-interactive
+                false, // no AI explanations during init
             )
             .await?;
         }

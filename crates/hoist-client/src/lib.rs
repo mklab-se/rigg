@@ -12,13 +12,9 @@ pub mod auth;
 pub mod client;
 pub mod error;
 pub mod foundry;
-pub mod local_agent;
-pub mod ollama;
-pub mod openai;
 
 pub use arm::ArmClient;
 pub use auth::AuthProvider;
 pub use client::AzureSearchClient;
 pub use error::ClientError;
 pub use foundry::FoundryClient;
-pub use openai::AzureOpenAIClient;

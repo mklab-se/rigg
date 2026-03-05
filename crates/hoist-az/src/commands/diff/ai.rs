@@ -1,7 +1,5 @@
 //! AI-powered explanation helpers for diff output.
 
-use hoist_core::Config;
-
 use crate::commands::describe::describe_changes_plain;
 use crate::commands::explain::{self, ChangeStatus, ResourceContext};
 
@@ -11,13 +9,10 @@ use super::ResourceDiff;
 ///
 /// Returns `Some(narrative)` on success, `None` on failure (caller falls back to non-AI output).
 pub(super) async fn generate_ai_narrative(
-    config: &Config,
     diffs: &[ResourceDiff],
     command_context: &str,
     total_unchanged: usize,
 ) -> Option<String> {
-    let ai_config = config.ai.as_ref()?;
-
     let changed: Vec<&ResourceDiff> = diffs.iter().filter(|d| !d.result.is_equal).collect();
     if changed.is_empty() {
         return None;
@@ -47,8 +42,7 @@ pub(super) async fn generate_ai_narrative(
         })
         .collect();
 
-    match explain::explain_all_changes(ai_config, &contexts, command_context, total_unchanged).await
-    {
+    match explain::explain_all_changes(&contexts, command_context, total_unchanged).await {
         Ok(narrative) => Some(narrative),
         Err(e) => {
             eprintln!("Warning: AI explanation failed: {}", e);
@@ -59,15 +53,9 @@ pub(super) async fn generate_ai_narrative(
 
 /// Generate AI summaries for all changed resources.
 pub(super) async fn generate_ai_summaries(
-    config: &Config,
     diffs: &[ResourceDiff],
 ) -> std::collections::HashMap<String, String> {
     let mut summaries = std::collections::HashMap::new();
-
-    let ai_config = match &config.ai {
-        Some(c) => c,
-        None => return summaries,
-    };
 
     let changed: Vec<&ResourceDiff> = diffs.iter().filter(|d| !d.result.is_equal).collect();
     if changed.is_empty() {
@@ -89,7 +77,6 @@ pub(super) async fn generate_ai_summaries(
                 describe_changes_plain(&d.result.changes, d.kind, &d.resource_name, labels);
             async move {
                 let result = crate::commands::explain::explain_resource_changes(
-                    ai_config,
                     &resource_type,
                     &resource_name,
                     &changes,

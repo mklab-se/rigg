@@ -451,7 +451,6 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
-            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -677,7 +676,6 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
-            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -822,7 +820,6 @@ mod tests {
                 include_preview: false,
                 resources: Vec::new(),
             },
-            ai: None,
             environments: std::collections::BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {

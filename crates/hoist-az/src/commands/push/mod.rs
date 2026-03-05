@@ -39,7 +39,7 @@ pub async fn run(
     let files_root = config.files_root(&project_root);
 
     // AI explanations: on by default when ai: is configured, unless --no-explain
-    let use_explain = !no_explain && config.has_ai();
+    let use_explain = !no_explain && crate::commands::ai::is_ai_active();
 
     // Push has no default fallback — user must specify resource types
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, false);
@@ -371,7 +371,6 @@ pub async fn run(
     // Try AI narrative mode first when AI is enabled
     let used_ai_narrative = if use_explain {
         explain::generate_push_narrative(
-            &config,
             &resources_to_push,
             &change_details,
             &remote_values,

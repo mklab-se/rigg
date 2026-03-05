@@ -25,8 +25,6 @@ pub struct Config {
     pub project: ProjectConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ai: Option<AiConfig>,
     pub environments: BTreeMap<String, EnvironmentConfig>,
 }
 
@@ -87,149 +85,6 @@ pub struct FoundryServiceConfig {
     /// Resource group (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_group: Option<String>,
-}
-
-/// AI provider backend for diff explanations
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AiProvider {
-    /// Azure OpenAI API (requires Azure subscription and deployment)
-    #[default]
-    AzureOpenai,
-    /// Anthropic Claude via local CLI
-    Claude,
-    /// OpenAI Codex via local CLI
-    Codex,
-    /// GitHub Copilot via local CLI
-    Copilot,
-    /// Local LLMs via Ollama
-    Ollama,
-}
-
-impl std::fmt::Display for AiProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.display_name())
-    }
-}
-
-impl AiProvider {
-    /// Human-readable name for display
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::AzureOpenai => "Azure OpenAI",
-            Self::Claude => "Claude",
-            Self::Codex => "Codex",
-            Self::Copilot => "Copilot",
-            Self::Ollama => "Ollama",
-        }
-    }
-
-    /// Short description of the provider
-    pub fn description(&self) -> &'static str {
-        match self {
-            Self::AzureOpenai => "Azure OpenAI API (requires Azure subscription)",
-            Self::Claude => "Anthropic Claude via local CLI",
-            Self::Codex => "OpenAI Codex via local CLI",
-            Self::Copilot => "GitHub Copilot via local CLI",
-            Self::Ollama => "Local LLMs via Ollama",
-        }
-    }
-
-    /// Binary name to check for availability (None for API-only providers)
-    pub fn binary_name(&self) -> Option<&'static str> {
-        match self {
-            Self::AzureOpenai => None,
-            Self::Claude => Some("claude"),
-            Self::Codex => Some("codex"),
-            Self::Copilot => Some("copilot"),
-            Self::Ollama => Some("ollama"),
-        }
-    }
-
-    /// Default model recommendation for this provider (None if user must choose)
-    pub fn default_model(&self) -> Option<&'static str> {
-        match self {
-            Self::AzureOpenai => None, // uses deployment name from config
-            Self::Claude => Some("sonnet"),
-            Self::Codex => Some("o4-mini"),
-            Self::Copilot => Some("gpt-4.1"),
-            Self::Ollama => None, // user must select from installed models
-        }
-    }
-
-    /// All known providers
-    pub fn all() -> &'static [AiProvider] {
-        &[
-            Self::Claude,
-            Self::Codex,
-            Self::Copilot,
-            Self::Ollama,
-            Self::AzureOpenai,
-        ]
-    }
-}
-
-/// AI configuration for diff explanations (project-level, not per-environment)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiConfig {
-    /// AI provider backend
-    #[serde(default)]
-    pub provider: AiProvider,
-    /// Model to use (optional, provider-specific defaults applied at runtime)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// AI Services account name (Azure OpenAI only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
-    /// Model deployment name, e.g., "gpt-4o-mini" (Azure OpenAI only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deployment: Option<String>,
-    /// Custom endpoint URL — overrides name-based URL (Azure OpenAI only)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-    /// Azure subscription ID (for ARM discovery)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subscription: Option<String>,
-    /// Resource group (for ARM discovery)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_group: Option<String>,
-    /// Azure OpenAI API version
-    #[serde(default = "default_openai_api_version")]
-    pub api_version: String,
-    /// Ollama server URL (defaults to http://localhost:11434)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ollama_url: Option<String>,
-}
-
-fn default_openai_api_version() -> String {
-    "2024-12-01-preview".to_string()
-}
-
-impl AiConfig {
-    /// Get the Azure OpenAI endpoint URL (only valid for Azure OpenAI provider)
-    pub fn openai_endpoint(&self) -> Option<String> {
-        if let Some(ref ep) = self.endpoint {
-            Some(ep.trim_end_matches('/').to_string())
-        } else {
-            self.account
-                .as_ref()
-                .map(|a| format!("https://{a}.openai.azure.com"))
-        }
-    }
-
-    /// Get the effective model: configured model or provider default
-    pub fn effective_model(&self) -> Option<String> {
-        self.model
-            .clone()
-            .or_else(|| self.provider.default_model().map(String::from))
-    }
-
-    /// Get the Ollama base URL (defaults to localhost)
-    pub fn ollama_base_url(&self) -> String {
-        self.ollama_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost:11434".to_string())
-    }
 }
 
 fn default_api_version() -> String {
@@ -469,11 +324,6 @@ impl Config {
             })
     }
 
-    /// Check if AI features are configured
-    pub fn has_ai(&self) -> bool {
-        self.ai.is_some()
-    }
-
     /// Get all environment names
     pub fn environment_names(&self) -> Vec<&str> {
         self.environments.keys().map(|s| s.as_str()).collect()
@@ -546,7 +396,6 @@ mod tests {
         Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -567,7 +416,6 @@ mod tests {
                 files_path: None,
             },
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -585,7 +433,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::new(),
         };
         assert!(config.validate().is_err());
@@ -596,7 +443,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -632,7 +478,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -659,7 +504,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -678,7 +522,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "prod".to_string(),
                 EnvironmentConfig {
@@ -706,7 +549,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -787,7 +629,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -826,7 +667,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([(
                 "staging".to_string(),
                 EnvironmentConfig {
@@ -846,7 +686,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),
@@ -882,7 +721,6 @@ mod tests {
         let config = Config {
             project: ProjectConfig::default(),
             sync: SyncConfig::default(),
-            ai: None,
             environments: BTreeMap::from([
                 (
                     "prod".to_string(),

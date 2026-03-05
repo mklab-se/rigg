@@ -12,14 +12,11 @@ use crate::commands::explain::{self, ChangeStatus, ResourceContext, format_for_a
 ///
 /// Returns `Some(narrative)` on success, `None` on failure (caller falls back to non-AI output).
 pub(super) async fn generate_push_narrative(
-    config: &hoist_core::Config,
     resources_to_push: &[(ResourceKind, String, serde_json::Value, bool)],
     change_details: &HashMap<(ResourceKind, String), Vec<Change>>,
     remote_values: &HashMap<(ResourceKind, String), serde_json::Value>,
     total_unchanged: usize,
 ) -> Option<String> {
-    let ai_config = config.ai.as_ref()?;
-
     eprintln!("Generating AI explanation...");
 
     let push_labels = Some(("on the server", "locally"));
@@ -61,7 +58,7 @@ pub(super) async fn generate_push_narrative(
         return None;
     }
 
-    match explain::explain_all_changes(ai_config, &contexts, "push", total_unchanged).await {
+    match explain::explain_all_changes(&contexts, "push", total_unchanged).await {
         Ok(narrative) => Some(narrative),
         Err(e) => {
             eprintln!("Warning: AI explanation failed: {}", e);

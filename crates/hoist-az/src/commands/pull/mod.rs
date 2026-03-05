@@ -40,8 +40,8 @@ pub async fn run(
     let (project_root, config, env) = load_config_and_env(env_override)?;
     let files_root = config.files_root(&project_root);
 
-    // AI explanations: on by default when ai: is configured, unless --no-explain
-    let use_explain = !no_explain && config.has_ai();
+    // AI explanations: on by default when ailloy is configured, unless --no-explain
+    let use_explain = !no_explain && crate::commands::ai::is_ai_active();
 
     let selection = resolve_resource_selection_from_flags(flags, env.sync.include_preview, true);
 
@@ -57,12 +57,6 @@ pub async fn run(
         selection
     };
 
-    let ai_config = if use_explain {
-        config.ai.as_ref()
-    } else {
-        None
-    };
-
     execute_pull(
         &project_root,
         &files_root,
@@ -70,7 +64,7 @@ pub async fn run(
         &selection,
         filter.as_deref(),
         force,
-        ai_config,
+        use_explain,
     )
     .await
 }

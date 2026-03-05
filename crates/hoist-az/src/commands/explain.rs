@@ -1,6 +1,5 @@
 //! AI-powered diff explanations using Azure OpenAI
 
-use hoist_core::config::AiConfig;
 use hoist_core::resources::ResourceKind;
 use hoist_diff::Change;
 
@@ -60,25 +59,22 @@ pub struct ResourceContext {
 /// This is the primary AI explanation shown to users in terminal output.
 /// It replaces the per-change description list when AI is enabled.
 pub async fn explain_all_changes(
-    config: &AiConfig,
     resources: &[ResourceContext],
     command_context: &str,
     total_unchanged: usize,
-) -> Result<String, hoist_client::ClientError> {
+) -> anyhow::Result<String> {
     let user_prompt = build_narrative_prompt(resources, command_context, total_unchanged);
-    hoist_client::ai::generate_text_with_limit(config, NARRATIVE_SYSTEM_PROMPT, &user_prompt, 4000)
-        .await
+    hoist_client::ai::generate_text_with_limit(NARRATIVE_SYSTEM_PROMPT, &user_prompt, 4000).await
 }
 
 /// Generate a per-resource AI summary (for JSON/MCP output).
 pub async fn explain_resource_changes(
-    config: &AiConfig,
     resource_type: &str,
     resource_name: &str,
     changes: &[Change],
     descriptions: &[String],
     command_context: &str,
-) -> Result<String, hoist_client::ClientError> {
+) -> anyhow::Result<String> {
     let user_prompt = build_per_resource_prompt(
         resource_type,
         resource_name,
@@ -86,7 +82,7 @@ pub async fn explain_resource_changes(
         descriptions,
         command_context,
     );
-    hoist_client::ai::generate_text(config, PER_RESOURCE_SYSTEM_PROMPT, &user_prompt).await
+    hoist_client::ai::generate_text(PER_RESOURCE_SYSTEM_PROMPT, &user_prompt).await
 }
 
 // ---------------------------------------------------------------------------
