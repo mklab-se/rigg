@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.0] - 2026-03-06
+
+### Changed
+
+- **Replaced custom AI providers with ailloy** — removed the `local_agent`, `ollama`, and `openai` modules from hoist-client in favor of the [`ailloy`](https://crates.io/crates/ailloy) crate for multi-provider AI support. This eliminates ~580 lines of custom provider code while maintaining the same functionality
+
 ## [0.13.1] - 2026-03-03
 
 ### Improved

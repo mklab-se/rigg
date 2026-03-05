@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.13.1"
+version = "0.14.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -76,6 +76,6 @@ tempfile = "3.10"
 ailloy = { version = "0.4", default-features = false }
 
 # Internal crates
-hoist-core = { version = "0.13.1", path = "crates/hoist-core" }
-hoist-client = { version = "0.13.1", path = "crates/hoist-client" }
-hoist-diff = { version = "0.13.1", path = "crates/hoist-diff" }
+hoist-core = { version = "0.14.0", path = "crates/hoist-core" }
+hoist-client = { version = "0.14.0", path = "crates/hoist-client" }
+hoist-diff = { version = "0.14.0", path = "crates/hoist-diff" }
