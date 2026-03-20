@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.0] - 2026-03-20
+
+### Changed
+
+- **Replaced custom AI commands with ailloy config TUI** — `hoist ai config` now launches the interactive ailloy configuration UI instead of opening the config file in an editor. The `hoist ai init`, `hoist ai status`, and `hoist ai remove` subcommands are removed — ailloy handles all provider/model configuration through its built-in TUI. This eliminates ~160 lines of custom AI setup code
+- **Added `hoist ai status` shortcut** — `hoist ai status` is now an alias that shows AI status (same as running `hoist ai` without a subcommand)
+- **Added `hoist ai skill` subcommand** — generates AI agent skill files and reference documentation for hoist. `--emit` outputs a ready-to-save skill markdown file; `--reference` outputs full command reference. Without flags, shows a setup guide
+
 ## [0.14.0] - 2026-03-06
 
 ### Changed

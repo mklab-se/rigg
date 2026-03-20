@@ -518,8 +518,20 @@ pub enum AiCommands {
     Enable,
     /// Disable AI features for hoist
     Disable,
-    /// Open AI configuration file in your editor
+    /// Interactively configure AI provider and model settings
     Config,
+    /// Show AI status (same as running `hoist ai` without a subcommand)
+    Status,
+    /// AI agent skill information — helps set up Claude Code skills for hoist
+    Skill {
+        /// Output the skill markdown content (ready to save as a skill file)
+        #[arg(long)]
+        emit: bool,
+
+        /// Output detailed reference documentation for AI agents
+        #[arg(long)]
+        reference: bool,
+    },
 }
 
 #[derive(Subcommand)]

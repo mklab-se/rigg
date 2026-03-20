@@ -18,6 +18,7 @@ pub mod pull;
 pub mod pull_watch;
 pub mod push;
 pub mod scaffold;
+pub mod skill;
 pub mod status;
 pub mod validate;
 
