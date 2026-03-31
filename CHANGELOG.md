@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.0] - 2026-03-31
+
+### Changed
+
+- **Renamed from Hoist to Rigg** — the CLI tool, crate names, and all references have been renamed from `hoist` to `rigg` to reflect the project's identity
+
 ## [0.15.0] - 2026-03-20
 
 ### Changed
