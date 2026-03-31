@@ -1,11 +1,11 @@
 ---
 name: test-complete-enduser-experience
-description: Comprehensive end-to-end test of the hoist CLI user experience — covers cloud-first and local-first workflows, all resource types, sync verification, and knowledge source edge cases against live Azure services.
-allowed-tools: mcp__hoist__hoist_status, mcp__hoist__hoist_describe, mcp__hoist__hoist_env_list, mcp__hoist__hoist_validate, mcp__hoist__hoist_list, mcp__hoist__hoist_diff, mcp__hoist__hoist_pull, mcp__hoist__hoist_push, mcp__hoist__hoist_delete, Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
+description: Comprehensive end-to-end test of the rigg CLI user experience — covers cloud-first and local-first workflows, all resource types, sync verification, and knowledge source edge cases against live Azure services.
+allowed-tools: mcp__rigg__rigg_status, mcp__rigg__rigg_describe, mcp__rigg__rigg_env_list, mcp__rigg__rigg_validate, mcp__rigg__rigg_list, mcp__rigg__rigg_diff, mcp__rigg__rigg_pull, mcp__rigg__rigg_push, mcp__rigg__rigg_delete, Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
 argument-hint: "[environment-name]"
 ---
 
-Perform a comprehensive end-to-end test of the hoist CLI user experience against live Azure services. This test covers every stage from project setup to resource synchronization, verifying that all commands succeed on first try and the experience is smooth and reliable.
+Perform a comprehensive end-to-end test of the rigg CLI user experience against live Azure services. This test covers every stage from project setup to resource synchronization, verifying that all commands succeed on first try and the experience is smooth and reliable.
 
 Environment: $ARGUMENTS (use default if empty)
 
@@ -29,9 +29,9 @@ Use `AskUserQuestion` to let the user select from the discovered resources and c
 ## Phase 1: Project initialization
 
 1. Create a temporary test directory (e.g., `test-projects/e2e-test-<timestamp>`)
-2. Run `hoist init` in that directory, configuring it with the user-selected Azure services
-3. Verify that `hoist.yaml` was created with the correct configuration
-4. Run `hoist status` and `hoist env list` to confirm the project is properly initialized
+2. Run `rigg init` in that directory, configuring it with the user-selected Azure services
+3. Verify that `rigg.yaml` was created with the correct configuration
+4. Run `rigg status` and `rigg env list` to confirm the project is properly initialized
 
 ---
 
@@ -40,13 +40,13 @@ Use `AskUserQuestion` to let the user select from the discovered resources and c
 Test pulling resources that already exist in Azure into the local project.
 
 ### 2a. Pull all resources
-1. Run `hoist pull` (preview first, then execute) to pull all available resources
+1. Run `rigg pull` (preview first, then execute) to pull all available resources
 2. Verify that local files were created for each pulled resource
-3. Run `hoist describe` to get a full inventory of what was pulled
+3. Run `rigg describe` to get a full inventory of what was pulled
 
 ### 2b. Sync verification (critical)
 For EVERY resource type that was pulled:
-1. Run `hoist diff` immediately after pull
+1. Run `rigg diff` immediately after pull
 2. **Verify that diff reports NO differences** — if any diffs appear, this is a bug
 3. Pay special attention to:
    - Knowledge sources and their managed sub-resources (index, indexer, data source, skillset)
@@ -86,10 +86,10 @@ For each resource type, create a minimal valid definition locally and push it:
 8. **Agent**: Create a Foundry agent YAML definition, push, verify
 
 For each resource:
-- Use `hoist validate` before pushing
-- Use `hoist diff` to preview changes
-- Push with `hoist push` (preview first, then force)
-- Immediately run `hoist diff` after push — **must report no differences**
+- Use `rigg validate` before pushing
+- Use `rigg diff` to preview changes
+- Push with `rigg push` (preview first, then force)
+- Immediately run `rigg diff` after push — **must report no differences**
 
 ### 3b. Modify and re-push
 1. Make a change to at least one resource of each type (e.g., add a field to an index, update agent instructions)
@@ -103,10 +103,10 @@ For each resource:
 Test deploying a complete set of related resources together, simulating a CI/CD pipeline.
 
 1. Create a cohesive set of resources: an agent + knowledge base + knowledge source (with managed sub-resources) + standalone index
-2. Push all resources together using `hoist push --all`
-3. Verify with `hoist diff --all` — must report no differences
+2. Push all resources together using `rigg push --all`
+3. Verify with `rigg diff --all` — must report no differences
 4. Modify several resources at once
-5. Run `hoist validate` to check for dependency/reference errors
+5. Run `rigg validate` to check for dependency/reference errors
 6. Push all changes at once
 7. Verify sync again
 
@@ -125,25 +125,25 @@ Knowledge sources are the most complex resource type and deserve extra attention
    - `<ks-name>/<ks-name>-skillset.json` (managed skillset)
 3. **Sync verification**: Diff immediately after pull — no differences
 4. **Modification**: Modify the KS definition and push (test the delete-and-recreate workaround if needed)
-5. **Deletion and recreation**: Delete the KS from Azure (`hoist delete --knowledgesource <name> --target remote`), then re-push to verify clean recreation
+5. **Deletion and recreation**: Delete the KS from Azure (`rigg delete --knowledgesource <name> --target remote`), then re-push to verify clean recreation
 6. **Standalone vs managed**: Verify that standalone resources (not managed by a KS) remain in their top-level directories and are not confused with managed resources
 
 ---
 
 ## Phase 6: Delete and cleanup verification
 
-1. Delete each test resource from Azure using `hoist delete --target remote`
+1. Delete each test resource from Azure using `rigg delete --target remote`
 2. Verify that local files are untouched after remote deletion
-3. Delete local files using `hoist delete --target local`
+3. Delete local files using `rigg delete --target local`
 4. Verify that Azure resources are untouched after local deletion
-5. Run `hoist status` to confirm clean state
+5. Run `rigg status` to confirm clean state
 
 ---
 
 ## Phase 7: Edge cases and error handling
 
-1. **Conflict detection**: Modify a resource in Azure (via pull from a different state), then try to push a local change — verify that hoist warns about conflicts
-2. **Overwrite warning**: Pull a resource, modify the local file manually, then pull again — verify that hoist warns before overwriting local changes
+1. **Conflict detection**: Modify a resource in Azure (via pull from a different state), then try to push a local change — verify that rigg warns about conflicts
+2. **Overwrite warning**: Pull a resource, modify the local file manually, then pull again — verify that rigg warns before overwriting local changes
 3. **Invalid resources**: Try pushing an invalid resource definition — verify helpful error messages
 4. **Auth issues**: If possible, test behavior when auth token is expired or missing
 

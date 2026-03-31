@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mklab-se/hoist/main/media/hoist-horizontal.png" alt="hoist" width="600">
+  <img src="https://raw.githubusercontent.com/mklab-se/rigg/main/media/rigg-horizontal.png" alt="rigg" width="600">
 </p>
 
-<h1 align="center">hoist</h1>
+<h1 align="center">rigg</h1>
 
 <p align="center">
   Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a> and <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/">Microsoft Foundry</a>.<br>
@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mklab-se/hoist/actions/workflows/ci.yml"><img src="https://github.com/mklab-se/hoist/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://crates.io/crates/hoist-az"><img src="https://img.shields.io/crates/v/hoist-az.svg" alt="crates.io"></a>
-  <a href="https://github.com/mklab-se/hoist/releases/latest"><img src="https://img.shields.io/github/v/release/mklab-se/hoist" alt="GitHub Release"></a>
-  <a href="https://github.com/mklab-se/homebrew-tap/blob/main/Formula/hoist.rb"><img src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmklab-se%2Fhomebrew-tap%2Fmain%2FFormula%2Fhoist.rb&search=%5Cd%2B%5C.%5Cd%2B%5C.%5Cd%2B&label=homebrew&prefix=v&color=orange" alt="Homebrew"></a>
-  <a href="https://github.com/mklab-se/hoist/blob/main/LICENSE.md"><img src="https://img.shields.io/crates/l/hoist-az.svg" alt="License"></a>
+  <a href="https://github.com/mklab-se/rigg/actions/workflows/ci.yml"><img src="https://github.com/mklab-se/rigg/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/rigg"><img src="https://img.shields.io/crates/v/rigg.svg" alt="crates.io"></a>
+  <a href="https://github.com/mklab-se/rigg/releases/latest"><img src="https://img.shields.io/github/v/release/mklab-se/rigg" alt="GitHub Release"></a>
+  <a href="https://github.com/mklab-se/homebrew-tap/blob/main/Formula/rigg.rb"><img src="https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmklab-se%2Fhomebrew-tap%2Fmain%2FFormula%2Frigg.rb&search=%5Cd%2B%5C.%5Cd%2B%5C.%5Cd%2B&label=homebrew&prefix=v&color=orange" alt="Homebrew"></a>
+  <a href="https://github.com/mklab-se/rigg/blob/main/LICENSE.md"><img src="https://img.shields.io/crates/l/rigg.svg" alt="License"></a>
 </p>
 
 ## The Problem
@@ -32,11 +32,11 @@ For relational databases, this gap was solved long ago with migration tools like
 - **No CI/CD pipeline** — There's no way to validate configuration in a pull request, auto-deploy on merge, or detect drift on a schedule. Every deployment is manual.
 - **Manual environment promotion** — Copying configurations from dev to staging to production means manually exporting JSON across both services, updating cross-resource references, and hoping nothing was missed.
 
-## What Hoist Does
+## What Rigg Does
 
-`hoist` makes your entire Agentic RAG infrastructure visible, reviewable, and AI-accessible. It pulls resource definitions from Azure AI Search and Microsoft Foundry as local files, versions them in Git, and pushes changes back. The same `hoist pull` that gives you Git history also gives Claude Code the context to help you optimize your agent.
+`rigg` makes your entire Agentic RAG infrastructure visible, reviewable, and AI-accessible. It pulls resource definitions from Azure AI Search and Microsoft Foundry as local files, versions them in Git, and pushes changes back. The same `rigg pull` that gives you Git history also gives Claude Code the context to help you optimize your agent.
 
-Whether you use both services together for a full RAG stack, or either one independently, hoist serves two audiences at once:
+Whether you use both services together for a full RAG stack, or either one independently, rigg serves two audiences at once:
 
 **For you and your team:**
 
@@ -48,59 +48,59 @@ Whether you use both services together for a full RAG stack, or either one indep
 
 **For your AI coding tools:**
 
-- **Full project understanding** — `hoist describe` gives AI tools the complete dependency graph from agents through knowledge bases to indexes in a single call
+- **Full project understanding** — `rigg describe` gives AI tools the complete dependency graph from agents through knowledge bases to indexes in a single call
 - **Direct access** — a built-in [MCP server](#ai-agent-integration) lets Claude Code, GitHub Copilot, and other AI tools pull, push, diff, and explore your resources through structured tool calls
 - **File-level context** — with every definition as a local file, AI can read and reason about your entire stack. No portal access, no REST API calls, no blind spots
 
-You can use hoist for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
+You can use rigg for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
 
 ## Quick Start
 
 ```bash
 # Install
-cargo install hoist-az
+cargo install rigg
 ```
 
 On macOS, you can also install via Homebrew:
 
 ```bash
-brew install mklab-se/tap/hoist
+brew install mklab-se/tap/rigg
 ```
 
 See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, and shell completions.
 
 ```bash
 # Initialize a project (discovers your services via Azure CLI)
-hoist init .
+rigg init .
 
 # Pull all resources as local files
-hoist pull --all
+rigg pull --all
 
 # Edit locally, then push changes back
-hoist push --all
+rigg push --all
 ```
 
-During `init`, hoist discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
+During `init`, rigg discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
 
 For a complete greenfield walkthrough — building an Agentic RAG system from scratch — see **[Getting Started](GETTING_STARTED.md)**.
 
 **Connect your AI tool** (optional but recommended):
 
 ```bash
-# Register hoist's MCP server with Claude Code
-hoist mcp install claude-code
+# Register rigg's MCP server with Claude Code
+rigg mcp install claude-code
 
 # Or VS Code (GitHub Copilot)
-hoist mcp install vs-code
+rigg mcp install vs-code
 ```
 
-Now your AI tool can see your entire RAG stack — run `/hoist-status` to try it. See [MCP.md](MCP.md) for the full reference.
+Now your AI tool can see your entire RAG stack — run `/rigg-status` to try it. See [MCP.md](MCP.md) for the full reference.
 
 After pulling, your project contains normalized, version-control-friendly representations of every resource:
 
 ```
-hoist.yaml                                    # Project configuration
-.hoist/                                       # Per-environment sync state (gitignored)
+rigg.yaml                                     # Project configuration
+.rigg/                                        # Per-environment sync state (gitignored)
 
 search/
   search-management/                          # Stable search resources
@@ -132,7 +132,7 @@ foundry/
 
 Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Foundry agents are stored as single YAML files matching the Foundry portal format.
 
-Use `hoist describe` to see how everything connects:
+Use `rigg describe` to see how everything connects:
 
 ```
 My RAG System
@@ -176,28 +176,28 @@ Download resource definitions from Azure and upload local changes back:
 
 ```bash
 # Pull everything (search + foundry)
-hoist pull --all
+rigg pull --all
 
 # Pull specific resource types
-hoist pull --indexes --skillsets
-hoist pull --agents
+rigg pull --indexes --skillsets
+rigg pull --agents
 
 # Pull a single resource by name
-hoist pull --index hotels
-hoist pull --agent research-assistant
+rigg pull --index hotels
+rigg pull --agent research-assistant
 
 # Scope to one service domain
-hoist pull --search-only
-hoist pull --foundry-only
+rigg pull --search-only
+rigg pull --foundry-only
 
 # Push (shows preview, asks for confirmation)
-hoist push --all
+rigg push --all
 
 # Push without confirmation
-hoist push --all --force
+rigg push --all --force
 
 # Push a single resource
-hoist push --indexer hotels-indexer
+rigg push --indexer hotels-indexer
 ```
 
 ### Semantic Diff
@@ -205,7 +205,7 @@ hoist push --indexer hotels-indexer
 Compare local files against the live service with field-level change descriptions:
 
 ```bash
-hoist diff --all
+rigg diff --all
 ```
 
 ```
@@ -221,13 +221,13 @@ Copy resources locally under new names, then push separately:
 
 ```bash
 # Copy a knowledge source and all its managed sub-resources
-hoist copy my-ks my-new-ks --knowledgesource
+rigg copy my-ks my-new-ks --knowledgesource
 
 # Copy a standalone index
-hoist copy hotels hotels-v2 --index
+rigg copy hotels hotels-v2 --index
 
 # Then push the copy
-hoist push --knowledgesources
+rigg push --knowledgesources
 ```
 
 Knowledge source copy automatically renames all managed sub-resources (index, indexer, data source, skillset) and rewrites cross-references. No network calls — files are created locally for review before pushing.
@@ -238,12 +238,12 @@ Create new resource files from templates — no Azure connection required:
 
 ```bash
 # Create individual resources
-hoist new index my-index --vector --semantic
-hoist new agent my-agent --model gpt-4o
-hoist new knowledge-source my-ks --index my-index
+rigg new index my-index --vector --semantic
+rigg new agent my-agent --model gpt-4o
+rigg new knowledge-source my-ks --index my-index
 
 # Scaffold a complete Agentic RAG system in one command
-hoist new agentic-rag my-system --model gpt-4o --container documents
+rigg new agentic-rag my-system --model gpt-4o --container documents
 ```
 
 The `agentic-rag` command creates a pre-wired agent, knowledge base, and knowledge source — all connected and ready to push.
@@ -253,7 +253,7 @@ The `agentic-rag` command creates a pre-wired agent, knowledge base, and knowled
 Continuously poll for server-side changes:
 
 ```bash
-hoist pull-watch --all --interval 30
+rigg pull-watch --all --interval 30
 ```
 
 ### Validation
@@ -261,17 +261,17 @@ hoist pull-watch --all --interval 30
 Check local files for structural issues and referential integrity before pushing:
 
 ```bash
-hoist validate
+rigg validate
 ```
 
 ### CI/CD
 
-Use hoist in your CI/CD pipeline to validate, deploy, and detect drift:
+Use rigg in your CI/CD pipeline to validate, deploy, and detect drift:
 
 ```yaml
 # GitHub Actions example
 - name: Validate
-  run: hoist validate --strict
+  run: rigg validate --strict
   env:
     AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
     AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -279,12 +279,12 @@ Use hoist in your CI/CD pipeline to validate, deploy, and detect drift:
 
 - name: Push
   if: github.ref == 'refs/heads/main'
-  run: hoist push --all --force
+  run: rigg push --all --force
 ```
 
-- **PR gate** — `hoist validate --strict` in CI catches schema errors and broken references before merge
-- **Auto-deploy** — `hoist push --all --force` on merge to `main` deploys changes automatically
-- **Drift detection** — schedule `hoist diff --all` to catch portal changes between deployments
+- **PR gate** — `rigg validate --strict` in CI catches schema errors and broken references before merge
+- **Auto-deploy** — `rigg push --all --force` on merge to `main` deploys changes automatically
+- **Drift detection** — schedule `rigg diff --all` to catch portal changes between deployments
 - **Service principal auth** — set `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_TENANT_ID` environment variables
 
 ## Resource Types
@@ -312,23 +312,23 @@ Use `--search-only` or `--foundry-only` to scope operations to a single service 
 
 ## Authentication
 
-`hoist` authenticates using the Azure CLI or service principal credentials:
+`rigg` authenticates using the Azure CLI or service principal credentials:
 
 ```bash
 # Option 1: Azure CLI (recommended for development)
 az login
-hoist pull --all
+rigg pull --all
 
 # Option 2: Service principal (for CI/CD)
 export AZURE_CLIENT_ID=...
 export AZURE_CLIENT_SECRET=...
 export AZURE_TENANT_ID=...
-hoist pull --all
+rigg pull --all
 ```
 
 ## Configuration
 
-Project settings live in `hoist.yaml`:
+Project settings live in `rigg.yaml`:
 
 ```yaml
 project:
@@ -360,8 +360,8 @@ environments:
 View and modify settings with the `config` command:
 
 ```bash
-hoist config show
-hoist config set sync.include_preview false
+rigg config show
+rigg config set sync.include_preview false
 ```
 
 ### Deployment Environments
@@ -370,40 +370,40 @@ Manage the same resource definitions across multiple Azure targets:
 
 ```bash
 # Add a new environment
-hoist env add test
+rigg env add test
 
 # List environments
-hoist env list
+rigg env list
 
 # Pull from a specific environment
-hoist pull --all --env test
+rigg pull --all --env test
 
 # Push to a specific environment
-hoist push --all --env prod
+rigg push --all --env prod
 
 # Compare two environments
-hoist diff --all --env test --compare-env prod
+rigg diff --all --env test --compare-env prod
 
 # Set the default environment
-hoist env set-default prod
+rigg env set-default prod
 ```
 
-The `--env` flag (or `HOIST_ENV` environment variable) works with all commands. When omitted, hoist uses the environment marked `default: true` in the config.
+The `--env` flag (or `RIGG_ENV` environment variable) works with all commands. When omitted, rigg uses the environment marked `default: true` in the config.
 
 ## AI Agent Integration
 
 Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
 
-hoist solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server that gives AI coding tools the complete picture. `hoist describe` returns the full project graph — every resource, dependency, agent instruction, and file path — in a single call. With this context, your AI tool can help you optimize agent instructions, debug retrieval pipelines, plan schema changes, and deploy across environments.
+rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server that gives AI coding tools the complete picture. `rigg describe` returns the full project graph — every resource, dependency, agent instruction, and file path — in a single call. With this context, your AI tool can help you optimize agent instructions, debug retrieval pipelines, plan schema changes, and deploy across environments.
 
 Any MCP-compatible AI tool works: Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI.
 
 ```bash
 # Register with Claude Code
-hoist mcp install claude-code
+rigg mcp install claude-code
 
 # Or VS Code (GitHub Copilot)
-hoist mcp install vs-code
+rigg mcp install vs-code
 ```
 
 Projects with a `.mcp.json` file in the repo root are auto-discovered — no manual setup needed.
@@ -412,9 +412,9 @@ Once connected, use slash commands for common workflows:
 
 | Command | What it does |
 |---------|--------------|
-| `/hoist-status` | Show environment info, auth state, and resource inventory |
-| `/hoist-pull` | Pull from Azure with preview and confirmation |
-| `/hoist-push` | Safe push: validate, diff, confirm, then push |
+| `/rigg-status` | Show environment info, auth state, and resource inventory |
+| `/rigg-pull` | Pull from Azure with preview and confirmation |
+| `/rigg-push` | Safe push: validate, diff, confirm, then push |
 
 See [MCP.md](MCP.md) for the MCP tool reference, and [SKILLS.md](SKILLS.md) for the full list of agent skills and slash commands.
 
@@ -423,18 +423,18 @@ See [MCP.md](MCP.md) for the MCP tool reference, and [SKILLS.md](SKILLS.md) for 
 Four crates with a clear dependency hierarchy:
 
 ```
-hoist-az  →  hoist-core
-     ↓              ↑
-hoist-client ───┘
-hoist-diff  (standalone)
+rigg  →  rigg-core
+     ↓          ↑
+rigg-client ───┘
+rigg-diff  (standalone)
 ```
 
 | Crate | Purpose |
 |---|---|
-| `hoist-core` | Resource types, config, environment resolution, state tracking, JSON normalization, copy/rename logic |
-| `hoist-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
-| `hoist-diff` | Semantic JSON diffing with identity-key-based array matching |
-| `hoist-az` | Clap-based CLI, command implementations |
+| `rigg-core` | Resource types, config, environment resolution, state tracking, JSON normalization, copy/rename logic |
+| `rigg-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
+| `rigg-diff` | Semantic JSON diffing with identity-key-based array matching |
+| `rigg` | Clap-based CLI, command implementations |
 
 ## License
 

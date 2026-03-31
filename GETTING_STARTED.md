@@ -1,6 +1,6 @@
 # Getting Started: Build an Agentic RAG System
 
-This walkthrough takes you from zero to a deployed Agentic RAG system using hoist, Azure AI Search, and Microsoft Foundry.
+This walkthrough takes you from zero to a deployed Agentic RAG system using rigg, Azure AI Search, and Microsoft Foundry.
 
 ## How the Pieces Connect
 
@@ -22,12 +22,12 @@ Agent                                Knowledge Base
 - **Knowledge Source** — connects a data source to a knowledge base (Search)
 - **Index + managed resources** — auto-provisioned by Azure when you create a knowledge source
 
-hoist manages all of these as local files, so you can version, review, and deploy them together.
+rigg manages all of these as local files, so you can version, review, and deploy them together.
 
-## 1. Install hoist
+## 1. Install rigg
 
 ```bash
-brew install mklab-se/tap/hoist
+brew install mklab-se/tap/rigg
 ```
 
 Or see [INSTALL.md](INSTALL.md) for other methods. Make sure you're logged in to Azure:
@@ -40,21 +40,21 @@ az login
 
 ```bash
 mkdir my-rag-system && cd my-rag-system
-hoist init . --template agentic
+rigg init . --template agentic
 ```
 
-The `agentic` template sets up directories for all resource types, including preview agentic retrieval resources. hoist will discover your Azure services and create a `hoist.yaml` config.
+The `agentic` template sets up directories for all resource types, including preview agentic retrieval resources. rigg will discover your Azure services and create a `rigg.yaml` config.
 
 > **Shortcut:** If you want to scaffold everything at once, skip steps 3-5 and run:
 > ```bash
-> hoist new agentic-rag my-system --model gpt-4o --container documents
+> rigg new agentic-rag my-system --model gpt-4o --container documents
 > ```
 > This creates a pre-wired agent, knowledge base, and knowledge source in one command. Jump to [step 6](#6-deploy-to-azure).
 
 ## 3. Create the Knowledge Base
 
 ```bash
-hoist new knowledge-base regulatory-kb
+rigg new knowledge-base regulatory-kb
 ```
 
 Edit the generated file to add retrieval instructions:
@@ -71,7 +71,7 @@ Edit the generated file to add retrieval instructions:
 ## 4. Create a Knowledge Source
 
 ```bash
-hoist new knowledge-source regulatory --index regulatory-index --knowledge-base regulatory-kb
+rigg new knowledge-source regulatory --index regulatory-index --knowledge-base regulatory-kb
 ```
 
 This creates the knowledge source definition. After pushing, Azure will auto-provision managed sub-resources (index, indexer, data source, skillset) — you don't need to create them manually.
@@ -94,7 +94,7 @@ Edit the generated file to configure your data connection:
 ## 5. Create the Agent
 
 ```bash
-hoist new agent research-assistant --model gpt-4o
+rigg new agent research-assistant --model gpt-4o
 ```
 
 Edit the generated YAML to add instructions and connect to the knowledge base:
@@ -112,7 +112,7 @@ tools:
     server_url: https://<your-search-service>.search.windows.net/knowledgebases/regulatory-kb/mcp
 ```
 
-Replace `<your-search-service>` with your actual Azure AI Search service name (visible in `hoist.yaml`).
+Replace `<your-search-service>` with your actual Azure AI Search service name (visible in `rigg.yaml`).
 
 ## 6. Deploy to Azure
 
@@ -120,10 +120,10 @@ Preview what will be pushed, then deploy:
 
 ```bash
 # Preview changes
-hoist push --all
+rigg push --all
 
 # Deploy (after confirming the preview)
-hoist push --all --force
+rigg push --all --force
 ```
 
 ## 7. Pull Back Managed Resources
@@ -131,7 +131,7 @@ hoist push --all --force
 After pushing the knowledge source, Azure auto-provisions managed sub-resources. Pull them back to have the complete picture locally:
 
 ```bash
-hoist pull --all
+rigg pull --all
 ```
 
 Your project now contains all the auto-provisioned resources:
@@ -157,20 +157,20 @@ foundry/
 
 ```bash
 # Check project status
-hoist status
+rigg status
 
 # See the full dependency graph
-hoist describe
+rigg describe
 ```
 
-`hoist describe` shows how everything connects — from the agent through the knowledge base to the index.
+`rigg describe` shows how everything connects — from the agent through the knowledge base to the index.
 
 ## Next Steps
 
 - **Version control**: `git init && git add -A && git commit -m "Initial RAG configuration"`
-- **Diff against Azure**: `hoist diff --all` shows what changed since last sync
-- **Add environments**: Configure `test` and `prod` environments in `hoist.yaml` for environment promotion
-- **Connect your AI tool**: `hoist mcp install claude-code` lets Claude Code see and manage your RAG stack
-- **CI/CD**: Use `hoist validate` in PR checks and `hoist push --all --force` on merge to main
+- **Diff against Azure**: `rigg diff --all` shows what changed since last sync
+- **Add environments**: Configure `test` and `prod` environments in `rigg.yaml` for environment promotion
+- **Connect your AI tool**: `rigg mcp install claude-code` lets Claude Code see and manage your RAG stack
+- **CI/CD**: Use `rigg validate` in PR checks and `rigg push --all --force` on merge to main
 
 See [README.md](README.md) for the full feature reference.

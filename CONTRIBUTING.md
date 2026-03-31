@@ -1,6 +1,6 @@
-# Contributing to hoist
+# Contributing to rigg
 
-Thank you for considering contributing to hoist! This guide will help you get started.
+Thank you for considering contributing to rigg! This guide will help you get started.
 
 ## Getting Started
 
@@ -15,17 +15,17 @@ Thank you for considering contributing to hoist! This guide will help you get st
 
 ```
 crates/
-  hoist-az/       # CLI binary and command implementations
-  hoist-core/      # Resource types, config, normalization, copy logic
-  hoist-azent/    # Azure REST API client and authentication
-  hoist-diff/      # Standalone semantic JSON diff engine
+  rigg/           # CLI binary and command implementations
+  rigg-core/      # Resource types, config, normalization, copy logic
+  rigg-client/    # Azure REST API client and authentication
+  rigg-diff/      # Standalone semantic JSON diff engine
 ```
 
 ### Running Tests
 
 ```bash
 cargo test                    # All tests
-cargo test -p hoist-core   # Single crate
+cargo test -p rigg-core       # Single crate
 cargo test test_name          # Single test
 cargo clippy                  # Lint check
 ```
@@ -59,7 +59,7 @@ cargo clippy                  # Lint check
 
 To add support for a new Azure AI Search resource type:
 
-1. Add a variant to `ResourceKind` in `crates/hoist-core/src/resources/traits.rs`
+1. Add a variant to `ResourceKind` in `crates/rigg-core/src/resources/traits.rs`
 2. Create a struct implementing the `Resource` trait (volatile fields, dependencies, etc.)
 3. Register it in the resource module
 4. Add the API path and directory mapping
@@ -84,7 +84,7 @@ To add support for a new Azure AI Search resource type:
 
 - Use GitHub Issues
 - Include: what you expected, what happened, reproduction steps
-- Include your `hoist.toml` (with credentials removed) if relevant
+- Include your `rigg.yaml` (with credentials removed) if relevant
 
 ## License
 

@@ -1,0 +1,23 @@
+[package]
+name = "rigg-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Azure AI Search and Microsoft Foundry REST API client and authentication for rigg"
+readme = "README.md"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+rigg-core.workspace = true
+urlencoding.workspace = true
+ailloy.workspace = true

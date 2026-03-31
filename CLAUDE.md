@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`hoist` is a configuration-as-code CLI tool for Azure AI Search and Microsoft Foundry. It pulls/pushes resource definitions (indexes, indexers, skillsets, knowledge bases, Foundry agents, etc.) as normalized JSON files, enabling Git-based versioning of search and AI service configuration.
+`rigg` is a configuration-as-code CLI tool for Azure AI Search and Microsoft Foundry. It pulls/pushes resource definitions (indexes, indexers, skillsets, knowledge bases, Foundry agents, etc.) as normalized JSON files, enabling Git-based versioning of search and AI service configuration.
 
 ## Build & Test Commands
 
 ```bash
 cargo build                          # Build all crates
 cargo test                           # Run all tests (522 tests across 4 crates)
-cargo test -p hoist-core             # Test a specific crate
+cargo test -p rigg-core              # Test a specific crate
 cargo test test_name                 # Run a single test by name
 cargo clippy                         # Lint
-cargo run --bin hoist -- pull        # Run CLI directly
-cargo install --path crates/hoist-az # Install binary
+cargo run --bin rigg -- pull         # Run CLI directly
+cargo install --path crates/rigg     # Install binary
 ```
 
 ## Pre-Push Verification (REQUIRED)
@@ -35,19 +35,19 @@ All three must exit cleanly. Do not push if any of them fail — fix the issues 
 Four crates with a clear dependency hierarchy:
 
 ```
-hoist-az  →  hoist-core
-     ↓              ↑
-hoist-client ───┘
-hoist-diff  (standalone)
+rigg  →  rigg-core
+     ↓          ↑
+rigg-client ───┘
+rigg-diff  (standalone)
 ```
 
-**hoist-core** — Resource type system (`ResourceKind`, `ServiceDomain`), config (`hoist.yaml`), environment resolution (`ResolvedEnvironment`), state tracking (`.hoist/<env>/`), JSON normalization, constraints (immutability/dependency validation).
+**rigg-core** — Resource type system (`ResourceKind`, `ServiceDomain`), config (`rigg.yaml`), environment resolution (`ResolvedEnvironment`), state tracking (`.rigg/<env>/`), JSON normalization, constraints (immutability/dependency validation).
 
-**hoist-client** — Azure Search REST API client (`client.rs`), Microsoft Foundry client (`foundry.rs`), Azure Resource Manager discovery (`arm.rs`), authentication via Azure CLI or service principal (`auth.rs`) with per-domain scoping.
+**rigg-client** — Azure Search REST API client (`client.rs`), Microsoft Foundry client (`foundry.rs`), Azure Resource Manager discovery (`arm.rs`), authentication via Azure CLI or service principal (`auth.rs`) with per-domain scoping.
 
-**hoist-diff** — Semantic JSON diffing with identity-key-based array matching. Standalone, no Azure dependencies.
+**rigg-diff** — Semantic JSON diffing with identity-key-based array matching. Standalone, no Azure dependencies.
 
-**hoist-az** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → resolve environment → create client → perform operation → update state.
+**rigg** — Clap-based CLI. Each command in `commands/` follows the pattern: load config → resolve environment → create client → perform operation → update state.
 
 ## Resource Type System
 
@@ -72,8 +72,8 @@ Agent name is derived from the filename (not stored in the YAML). The `agent_to_
 ## Directory Layout on Disk
 
 ```
-hoist.yaml
-.hoist/
+rigg.yaml
+.rigg/
   <env>/state.json, checksums.json    # Per-environment state (gitignored)
 search/                                # Single search service
   search-management/                   # Stable search resources
@@ -107,7 +107,7 @@ Knowledge source managed sub-resources (auto-provisioned by Azure via `createdRe
 
 ## Deployment Environments
 
-Named environments are first-class config concepts. Config uses YAML (`hoist.yaml`):
+Named environments are first-class config concepts. Config uses YAML (`rigg.yaml`):
 
 ```yaml
 project:
@@ -136,7 +136,7 @@ environments:
 
 ### Environment resolution
 
-- `--env <name>` flag (or `HOIST_ENV` env var) on any command to target a specific environment
+- `--env <name>` flag (or `RIGG_ENV` env var) on any command to target a specific environment
 - If omitted, uses the environment marked `default: true`, or the only environment if there's just one
 - `ResolvedEnvironment` is the central abstraction all commands work through
 - `Config::resolve_env(name)` resolves an environment by name or default
@@ -144,18 +144,18 @@ environments:
 
 ### Environment management
 
-- `hoist env list` — list all environments
-- `hoist env show [name]` — show environment details
-- `hoist env set-default <name>` — set default environment
+- `rigg env list` — list all environments
+- `rigg env show [name]` — show environment details
+- `rigg env set-default <name>` — set default environment
 
 ### Per-environment state
 
-State files live in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`. Methods: `LocalState::load_env()` / `save_env()`, `Checksums::load_env()` / `save_env()`.
+State files live in `.rigg/<env>/state.json` and `.rigg/<env>/checksums.json`. Methods: `LocalState::load_env()` / `save_env()`, `Checksums::load_env()` / `save_env()`.
 
 ## Key Patterns
 
 - **Managed resources**: Knowledge sources auto-provision sub-resources (index, indexer, data source, skillset) listed in `createdResources`. The `managed.rs` module tracks ownership via `ManagedMap` (`HashMap<(ResourceKind, String), String>` mapping `(kind, azure_name)` to `ks_name`). Pull routes managed resources to KS subdirectories; push does cascade push (KS → Index → Skillset → DataSource → Indexer); diff reads from managed-aware paths; standalone flags (`--indexes`) skip managed resources.
-- **Drop-and-recreate**: When pushing an index with removed fields (immutable in Azure), hoist detects `ViolationSeverity::RequiresRecreate` and offers to delete and recreate the resource.
+- **Drop-and-recreate**: When pushing an index with removed fields (immutable in Azure), rigg detects `ViolationSeverity::RequiresRecreate` and offers to delete and recreate the resource.
 - **Checksum-based change detection**: Pull skips writing files when content hasn't changed, but always verifies the file exists on disk (stale checksums don't suppress re-writes).
 - **JSON normalization**: Strips volatile fields (`@odata.etag`, `@odata.context`, credentials), preserves Azure's property ordering (via `serde_json` `preserve_order` feature), sorts arrays by identity key, redacts secrets.
 - **Auth chain**: Environment variables (service principal) take priority, then Azure CLI. Auth is scoped per service domain (`search.azure.com` for Search, `ai.azure.com` for Foundry). ARM discovery uses a separate token scoped to `management.azure.com`.
@@ -164,18 +164,18 @@ State files live in `.hoist/<env>/state.json` and `.hoist/<env>/checksums.json`.
 - **Client construction**: `AzureSearchClient::from_service_config(&SearchServiceConfig)` creates clients from resolved environment service configs. `FoundryClient::new(&FoundryServiceConfig)` for Foundry.
 - **Push conflict detection**: Before pushing, compares the remote resource checksum against the stored pull baseline. If the server has changed since last pull, shows a warning listing conflicting resources. Uses the same `Checksums::calculate()` / volatile field normalization as pull.
 - **Pull overwrite warning**: Before overwriting local files, compares disk content checksum against stored pull baseline. If local files were modified since last pull, warns before overwriting.
-- **Delete command**: `hoist delete --<kind> <name> --target <remote|local>` operates on one target at a time. `--target remote` deletes from Azure only (local files untouched). `--target local` removes local files only (Azure untouched). The `--target` flag is required — no default. After deleting, use push/pull to sync. Knowledge source deletion (remote) removes the entire KS and its managed sub-resources. `DeleteResource` struct in `cli.rs` with `resolve()` method.
+- **Delete command**: `rigg delete --<kind> <name> --target <remote|local>` operates on one target at a time. `--target remote` deletes from Azure only (local files untouched). `--target local` removes local files only (Azure untouched). The `--target` flag is required — no default. After deleting, use push/pull to sync. Knowledge source deletion (remote) removes the entire KS and its managed sub-resources. `DeleteResource` struct in `cli.rs` with `resolve()` method.
 
 ## Test Projects
 
-The `test-projects/` directory (gitignored) is available for manual testing of the `hoist` CLI. Use it to run `hoist init`, `hoist pull`, etc. against real or mock service configurations without polluting the repo. Create subdirectories per test scenario as needed.
+The `test-projects/` directory (gitignored) is available for manual testing of the `rigg` CLI. Use it to run `rigg init`, `rigg pull`, etc. against real or mock service configurations without polluting the repo. Create subdirectories per test scenario as needed.
 
 ## Releasing
 
 Releases are automated via `.github/workflows/release.yml`. To publish a new version:
 
 1. Bump `version` in the workspace `Cargo.toml` (all crates share it via `version.workspace = true`)
-2. Update the internal crate dependency versions (`hoist-core`, `hoist-client`, `hoist-diff`) to match
+2. Update the internal crate dependency versions (`rigg-core`, `rigg-client`, `rigg-diff`) to match
 3. Commit and push to `main`
 4. Tag and push: `git tag v0.X.Y && git push origin v0.X.Y`
 
@@ -188,29 +188,29 @@ The workflow runs CI, builds release binaries for Linux/macOS/Windows, creates a
 
 ## AI Agent Integration
 
-hoist exposes an MCP (Model Context Protocol) server and agent skills for AI-assisted workflows.
+rigg exposes an MCP (Model Context Protocol) server and agent skills for AI-assisted workflows.
 
-### MCP Server (`hoist mcp serve`)
+### MCP Server (`rigg mcp serve`)
 
 Starts a stdio-based MCP server with 9 tools. Any MCP-compatible client (Claude Code, VS Code Copilot, Claude Desktop) can call these tools directly.
 
 | Tool | Description |
 |------|-------------|
-| `hoist_status` | Project status, auth state, resource counts |
-| `hoist_describe` | Full project description with all resources, dependencies, agent configs |
-| `hoist_env_list` | List configured environments |
-| `hoist_validate` | Validate local resource files |
-| `hoist_list` | List resource names by type (local/remote/both) |
-| `hoist_diff` | Compare local vs remote (JSON diff) |
-| `hoist_pull` | Pull from Azure (preview without `force`, execute with `force: true`) |
-| `hoist_push` | Push to Azure (preview without `force`, execute with `force: true`) |
-| `hoist_delete` | Delete from Azure (`target='remote'`) or remove local files (`target='local'`). Preview without `force`, execute with `force: true` |
+| `rigg_status` | Project status, auth state, resource counts |
+| `rigg_describe` | Full project description with all resources, dependencies, agent configs |
+| `rigg_env_list` | List configured environments |
+| `rigg_validate` | Validate local resource files |
+| `rigg_list` | List resource names by type (local/remote/both) |
+| `rigg_diff` | Compare local vs remote (JSON diff) |
+| `rigg_pull` | Pull from Azure (preview without `force`, execute with `force: true`) |
+| `rigg_push` | Push to Azure (preview without `force`, execute with `force: true`) |
+| `rigg_delete` | Delete from Azure (`target='remote'`) or remove local files (`target='local'`). Preview without `force`, execute with `force: true` |
 
-**Code location:** `crates/hoist-az/src/mcp/` — `mod.rs` (server lifecycle, install commands), `tools.rs` (all 9 tool implementations).
+**Code location:** `crates/rigg/src/mcp/` — `mod.rs` (server lifecycle, install commands), `tools.rs` (all 9 tool implementations).
 
 **Auto-discovery:** `.mcp.json` in the repo root auto-registers the MCP server with Claude Code and VS Code when the project is opened.
 
-**Manual install:** `hoist mcp install [claude-code|vs-code] [--scope workspace|global]` registers hoist as an MCP server. Defaults to workspace scope (project-level).
+**Manual install:** `rigg mcp install [claude-code|vs-code] [--scope workspace|global]` registers rigg as an MCP server. Defaults to workspace scope (project-level).
 
 ### Agent Skills (`.claude/skills/`)
 
@@ -218,13 +218,13 @@ Skills are cross-platform (Claude Code, GitHub Copilot, Codex, Cursor, Gemini CL
 
 | Skill | Type | Description |
 |-------|------|-------------|
-| `hoist-guide` | Auto-loaded | Reference guide, loaded when hoist context is detected |
-| `hoist-pull` | User-invoked (`/hoist-pull`) | Pull workflow with preview → confirm → execute |
-| `hoist-push` | User-invoked (`/hoist-push`) | Safe push: validate → diff → confirm → push |
-| `hoist-status` | User-invoked (`/hoist-status`) | Environment inspection |
+| `rigg-guide` | Auto-loaded | Reference guide, loaded when rigg context is detected |
+| `rigg-pull` | User-invoked (`/rigg-pull`) | Pull workflow with preview → confirm → execute |
+| `rigg-push` | User-invoked (`/rigg-push`) | Safe push: validate → diff → confirm → push |
+| `rigg-status` | User-invoked (`/rigg-status`) | Environment inspection |
 
 ### Key design decisions
 
 - **`force` flag pattern:** Mutating MCP tools (pull/push) without `force` return a preview. With `force: true` they execute. Same semantics as CLI `--force`.
-- **Subprocess isolation:** Tools that produce stdout (describe, validate, diff, pull, push) spawn a subprocess `hoist --output json` to avoid stdout contamination (MCP uses stdout for JSON-RPC).
-- **`hoist_describe` precision:** JSON output includes `file_path` for every resource and full `instructions` for agents (not truncated). AI agents can `Read` any file path for complete content.
+- **Subprocess isolation:** Tools that produce stdout (describe, validate, diff, pull, push) spawn a subprocess `rigg --output json` to avoid stdout contamination (MCP uses stdout for JSON-RPC).
+- **`rigg_describe` precision:** JSON output includes `file_path` for every resource and full `instructions` for agents (not truncated). AI agents can `Read` any file path for complete content.

@@ -4,7 +4,7 @@ description: "Release a new version: bump version, update docs, commit, push, an
 argument-hint: "<major|minor|patch>"
 ---
 
-Release a new version of hoist.
+Release a new version of rigg.
 
 ## Input
 
@@ -19,7 +19,7 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
   - `patch`: 0.10.1 -> 0.10.2
   - `minor`: 0.10.1 -> 0.11.0
   - `major`: 0.10.1 -> 1.0.0
-- Show the user: "Releasing hoist v{OLD} -> v{NEW}"
+- Show the user: "Releasing rigg v{OLD} -> v{NEW}"
 
 ### 2. Update dependencies
 
@@ -36,7 +36,7 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 ### 4. Bump version numbers
 
 - Update `version` in the root `Cargo.toml` `[workspace.package]` section
-- Update internal crate dependency versions (`hoist-core`, `hoist-client`, `hoist-diff`) in the root `Cargo.toml` `[workspace.dependencies]` section — they use `version = "X.Y.Z"` format (no `=` prefix)
+- Update internal crate dependency versions (`rigg-core`, `rigg-client`, `rigg-diff`) in the root `Cargo.toml` `[workspace.dependencies]` section — they use `version = "X.Y.Z"` format (no `=` prefix)
 
 ### 5. Update documentation
 

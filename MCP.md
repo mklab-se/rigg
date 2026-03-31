@@ -1,30 +1,30 @@
 # MCP Server
 
-hoist includes a built-in [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that gives AI coding tools structured access to your Azure AI Search and Microsoft Foundry configuration — pull, push, diff, validate, and explore through tool calls instead of shell commands.
+rigg includes a built-in [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) server that gives AI coding tools structured access to your Azure AI Search and Microsoft Foundry configuration — pull, push, diff, validate, and explore through tool calls instead of shell commands.
 
-## Why Connect Your AI Tool to Hoist?
+## Why Connect Your AI Tool to Rigg?
 
 Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets and data sources. Understanding one piece in isolation isn't enough to make meaningful improvements — but that's all your AI coding tool can do when configuration lives behind Azure portals and REST APIs.
 
-hoist changes this in two ways:
+rigg changes this in two ways:
 
-1. **Every resource as a local file.** After `hoist pull`, your entire configuration is on disk — agent YAML, index schemas, skillset pipelines, knowledge base rules. Your AI tool can already read these directly. But files alone don't capture how everything connects.
+1. **Every resource as a local file.** After `rigg pull`, your entire configuration is on disk — agent YAML, index schemas, skillset pipelines, knowledge base rules. Your AI tool can already read these directly. But files alone don't capture how everything connects.
 
-2. **A structured API for the complete picture.** The MCP server's `hoist_describe` tool returns the full project graph in a single call — every resource, dependency chain, agent instruction (untruncated), and file path. The AI doesn't need to discover your project structure by reading files one at a time; it gets the complete system map instantly.
+2. **A structured API for the complete picture.** The MCP server's `rigg_describe` tool returns the full project graph in a single call — every resource, dependency chain, agent instruction (untruncated), and file path. The AI doesn't need to discover your project structure by reading files one at a time; it gets the complete system map instantly.
 
 With this context, your AI tool can help you:
 
 - **Optimize agent instructions** with knowledge of what indexes, fields, and retrieval strategies are actually available
 - **Debug retrieval quality** by understanding the full chain from agent query to knowledge source to index schema
 - **Plan schema changes** knowing which knowledge sources, skillsets, and indexers depend on an index
-- **Deploy across environments** using hoist's environment model and push/pull tools
+- **Deploy across environments** using rigg's environment model and push/pull tools
 - **Detect configuration drift** by diffing local files against live services
 
-This is what makes hoist different from manually reading JSON files — the AI understands the *system*, not just individual resources.
+This is what makes rigg different from manually reading JSON files — the AI understands the *system*, not just individual resources.
 
 ## Compatible Tools
 
-Any MCP-compatible AI tool works with hoist, including:
+Any MCP-compatible AI tool works with rigg, including:
 
 - [Claude Code](https://claude.ai/code)
 - [GitHub Copilot](https://github.com/features/copilot) (VS Code)
@@ -37,15 +37,15 @@ Any MCP-compatible AI tool works with hoist, including:
 
 ### Automatic (project-level)
 
-If you cloned a hoist project that includes `.mcp.json` in the repo root, the MCP server is auto-discovered by Claude Code and VS Code when you open the project. No setup needed.
+If you cloned a rigg project that includes `.mcp.json` in the repo root, the MCP server is auto-discovered by Claude Code and VS Code when you open the project. No setup needed.
 
 To add auto-discovery to your own project, create `.mcp.json` in the repo root:
 
 ```json
 {
   "mcpServers": {
-    "hoist": {
-      "command": "hoist",
+    "rigg": {
+      "command": "rigg",
       "args": ["mcp", "serve"]
     }
   }
@@ -54,23 +54,23 @@ To add auto-discovery to your own project, create `.mcp.json` in the repo root:
 
 ### Manual (user-level)
 
-To register hoist as an MCP server across all your projects (not just ones with `.mcp.json`):
+To register rigg as an MCP server across all your projects (not just ones with `.mcp.json`):
 
 ```bash
 # Claude Code
-hoist mcp install claude-code
+rigg mcp install claude-code
 
 # VS Code (GitHub Copilot)
-hoist mcp install vs-code
+rigg mcp install vs-code
 ```
 
-For other MCP clients, configure them to run `hoist mcp serve` as a stdio server. The server communicates via JSON-RPC over stdin/stdout.
+For other MCP clients, configure them to run `rigg mcp serve` as a stdio server. The server communicates via JSON-RPC over stdin/stdout.
 
 ### Verify it's working
 
-In Claude Code, type `/hoist-status` — the AI will call the MCP tools and report your project's environment, auth state, and resource inventory. If you see environment and resource details, MCP is working.
+In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report your project's environment, auth state, and resource inventory. If you see environment and resource details, MCP is working.
 
-In VS Code with Copilot, open the MCP panel and check that "hoist" appears as a connected server with its tools listed.
+In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with its tools listed.
 
 ## Available Tools
 
@@ -80,19 +80,19 @@ The MCP server exposes 8 tools. All tools accept an optional `env` parameter to 
 
 | Tool | What it does |
 |------|--------------|
-| `hoist_status` | Project status: environment info, auth state, resource counts, last sync time |
-| `hoist_describe` | Full project description with all resources, dependencies, agent configurations, and knowledge base flows. Includes file paths for every resource so the AI can read full definitions |
-| `hoist_env_list` | List all configured environments with their services |
-| `hoist_validate` | Validate local resource files for syntax errors and broken cross-references |
-| `hoist_list` | List resource names by type. Source can be `local` (fast disk scan), `remote` (Azure API), or `both` (find drift) |
-| `hoist_diff` | Compare local files against live Azure services. Shows field-level changes |
+| `rigg_status` | Project status: environment info, auth state, resource counts, last sync time |
+| `rigg_describe` | Full project description with all resources, dependencies, agent configurations, and knowledge base flows. Includes file paths for every resource so the AI can read full definitions |
+| `rigg_env_list` | List all configured environments with their services |
+| `rigg_validate` | Validate local resource files for syntax errors and broken cross-references |
+| `rigg_list` | List resource names by type. Source can be `local` (fast disk scan), `remote` (Azure API), or `both` (find drift) |
+| `rigg_diff` | Compare local files against live Azure services. Shows field-level changes |
 
 ### Mutating tools
 
 | Tool | What it does |
 |------|--------------|
-| `hoist_pull` | Pull resource definitions from Azure to local files |
-| `hoist_push` | Push local changes to Azure |
+| `rigg_pull` | Pull resource definitions from Azure to local files |
+| `rigg_push` | Push local changes to Azure |
 
 Mutating tools use a **safe-by-default** pattern:
 - **Without `force`**: returns a preview of what would change, but doesn't execute
@@ -133,10 +133,10 @@ This means the AI always shows you what will happen before making changes.
 
 ### "What does my project look like?"
 
-Ask the AI to describe your project. It will call `hoist_describe` and give you a structured overview of all resources, how they connect, and where the files are:
+Ask the AI to describe your project. It will call `rigg_describe` and give you a structured overview of all resources, how they connect, and where the files are:
 
 ```
-> Describe my hoist project
+> Describe my rigg project
 
 Your project "My RAG System" has:
 - 1 Foundry agent (research-assistant, gpt-4o) connected to regulatory-kb
@@ -149,7 +149,7 @@ Your project "My RAG System" has:
 ### "Pull the latest from Azure"
 
 ```
-> /hoist-pull
+> /rigg-pull
 
 Previewing pull from prod...
 - regulatory-index.json: 2 fields changed
@@ -162,7 +162,7 @@ Pulled 2 resources from prod.
 
 ### "Help me optimize my agent"
 
-The AI can read your agent's full instructions, tools, model, and connected knowledge sources via `hoist_describe`, then suggest changes:
+The AI can read your agent's full instructions, tools, model, and connected knowledge sources via `rigg_describe`, then suggest changes:
 
 ```
 > How can I improve my research-assistant agent?
@@ -179,7 +179,7 @@ Suggestions:
 ### "Deploy to a new environment"
 
 ```
-> /hoist-push test
+> /rigg-push test
 
 Validating local files... 0 errors, 0 warnings
 Diffing against test environment...
@@ -191,15 +191,15 @@ Push 2 resources to test? [confirm]
 
 ## How It Works
 
-The MCP server runs as a subcommand of the hoist CLI itself (`hoist mcp serve`). It's not a separate binary — if you have hoist installed, you have the MCP server. It communicates over stdio using the MCP JSON-RPC protocol.
+The MCP server runs as a subcommand of the rigg CLI itself (`rigg mcp serve`). It's not a separate binary — if you have rigg installed, you have the MCP server. It communicates over stdio using the MCP JSON-RPC protocol.
 
-When an AI tool calls an MCP tool, hoist:
-1. Loads your `hoist.yaml` configuration
+When an AI tool calls an MCP tool, rigg:
+1. Loads your `rigg.yaml` configuration
 2. Resolves the target environment
 3. Performs the requested operation (using the same code as the CLI)
 4. Returns structured JSON that the AI can reason about
 
-The `hoist_describe` tool is particularly important for AI agents — it returns the complete project graph in a single call, including file paths for every resource. This lets the AI understand your entire Agentic RAG stack without reading individual files.
+The `rigg_describe` tool is particularly important for AI agents — it returns the complete project graph in a single call, including file paths for every resource. This lets the AI understand your entire Agentic RAG stack without reading individual files.
 
 ## See Also
 

@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "hoist": {
-      "command": "hoist",
+    "rigg": {
+      "command": "rigg",
       "args": ["mcp", "serve"]
     }
   }

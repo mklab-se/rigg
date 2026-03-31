@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hoist-az",
-    "crates/hoist-core",
-    "crates/hoist-client",
-    "crates/hoist-diff",
+    "crates/rigg",
+    "crates/rigg-core",
+    "crates/rigg-client",
+    "crates/rigg-diff",
 ]
 
 [workspace.package]
@@ -12,7 +12,7 @@ version = "0.15.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
-repository = "https://github.com/mklab-se/hoist"
+repository = "https://github.com/mklab-se/rigg"
 rust-version = "1.85"
 
 [workspace.dependencies]
@@ -76,6 +76,6 @@ tempfile = "3.10"
 ailloy = { version = "0.5", default-features = false, features = ["config-tui"] }
 
 # Internal crates
-hoist-core = { version = "0.15.0", path = "crates/hoist-core" }
-hoist-client = { version = "0.15.0", path = "crates/hoist-client" }
-hoist-diff = { version = "0.15.0", path = "crates/hoist-diff" }
+rigg-core = { version = "0.15.0", path = "crates/rigg-core" }
+rigg-client = { version = "0.15.0", path = "crates/rigg-client" }
+rigg-diff = { version = "0.15.0", path = "crates/rigg-diff" }
