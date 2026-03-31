@@ -4,6 +4,8 @@
 
 <h1 align="center">rigg</h1>
 
+<p align="center"><em>Previously known as <strong>hoist</strong>.</em></p>
+
 <p align="center">
   Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a> and <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/">Microsoft Foundry</a>.<br>
   Version control your entire Agentic RAG stack — and give AI tools like Claude Code and Copilot the context to help you build it.
