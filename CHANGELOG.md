@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.2] - 2026-05-04
+
+### Changed
+
+- **Bumped ailloy dependency to 0.7** — aligns rigg's workspace version with quelch's, allowing quelch to depend on `rigg-core` and `rigg-client` without duplicate-crate-version conflicts
+- **Bumped GitHub Actions to v5** — `actions/checkout` and `actions/upload-artifact` updated from v4 to v5 in CI and release workflows
+
+### Documentation
+
+- README now notes that rigg was previously known as hoist
+
 ## [0.16.0] - 2026-03-31
 
 ### Changed
