@@ -4,7 +4,9 @@
 //! `rigg analyze cosmos` CLI command.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use chrono::Utc;
 use hmac::{Hmac, Mac};
+use serde_json::Value;
 use sha2::Sha256;
 use thiserror::Error;
 
@@ -159,9 +161,6 @@ pub fn build_query_request(
         body,
     })
 }
-
-use chrono::Utc;
-use serde_json::Value;
 
 /// Sample up to `sample_size` documents from a Cosmos container.
 ///
