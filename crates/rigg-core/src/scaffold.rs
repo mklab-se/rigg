@@ -77,16 +77,28 @@ pub fn scaffold_index(name: &str, vector: bool, semantic: bool) -> Value {
 
 /// Scaffold an Azure AI Search data source definition.
 pub fn scaffold_datasource(name: &str, ds_type: &str, container: &str) -> Value {
-    json!({
+    let mut container_block = json!({ "name": container });
+    if ds_type == "cosmosdb" {
+        container_block["query"] = json!("SELECT * FROM c");
+    }
+
+    let mut ds = json!({
         "name": name,
         "type": ds_type,
         "credentials": {
             "connectionString": ""
         },
-        "container": {
-            "name": container
-        }
-    })
+        "container": container_block
+    });
+
+    if ds_type == "cosmosdb" {
+        ds["dataChangeDetectionPolicy"] = json!({
+            "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+            "highWaterMarkColumnName": "_ts"
+        });
+    }
+
+    ds
 }
 
 /// Scaffold an Azure AI Search indexer definition.
@@ -516,5 +528,32 @@ mod tests {
             "docs",
         );
         assert_eq!(rag.agent["model"], "gpt-4.1-mini");
+    }
+
+    #[test]
+    fn test_scaffold_datasource_cosmosdb_includes_query_and_change_detection() {
+        let ds = scaffold_datasource("my-cosmos", "cosmosdb", "my-container");
+        assert_eq!(ds["name"], "my-cosmos");
+        assert_eq!(ds["type"], "cosmosdb");
+        assert_eq!(ds["container"]["name"], "my-container");
+        assert_eq!(ds["container"]["query"], "SELECT * FROM c");
+        assert_eq!(
+            ds["dataChangeDetectionPolicy"]["@odata.type"],
+            "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy"
+        );
+        assert_eq!(
+            ds["dataChangeDetectionPolicy"]["highWaterMarkColumnName"],
+            "_ts"
+        );
+    }
+
+    #[test]
+    fn test_scaffold_datasource_azureblob_unchanged() {
+        let ds = scaffold_datasource("my-blob", "azureblob", "documents");
+        assert_eq!(ds["name"], "my-blob");
+        assert_eq!(ds["type"], "azureblob");
+        assert_eq!(ds["container"]["name"], "documents");
+        assert!(ds.get("dataChangeDetectionPolicy").is_none());
+        assert!(ds["container"].get("query").is_none());
     }
 }
