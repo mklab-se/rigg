@@ -26,3 +26,6 @@ coverage/
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Claude Code worktrees (created via EnterWorktree)
+/.claude/worktrees/
