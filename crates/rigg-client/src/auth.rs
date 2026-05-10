@@ -56,6 +56,13 @@ impl AzCliAuth {
         }
     }
 
+    /// Create an auth provider for Azure Cosmos DB
+    pub fn for_cosmos() -> Self {
+        Self {
+            resource_scope: "https://cosmos.azure.com",
+        }
+    }
+
     /// Create a new auth provider (defaults to Search scope for backward compatibility)
     pub fn new() -> Self {
         Self::for_search()
@@ -525,5 +532,11 @@ mod tests {
             status.subscription_id.as_deref(),
             Some("00000000-0000-0000-0000-000000000000")
         );
+    }
+
+    #[test]
+    fn test_for_cosmos_uses_cosmos_scope() {
+        let auth = AzCliAuth::for_cosmos();
+        assert_eq!(auth.resource_scope, "https://cosmos.azure.com");
     }
 }
