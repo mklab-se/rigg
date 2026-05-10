@@ -175,6 +175,37 @@ pub fn scaffold_knowledge_source(name: &str, index: &str, knowledge_base: Option
     ks
 }
 
+/// Scaffold a Knowledge Source with an explicit data-source `kind` (e.g.,
+/// `"azureBlob"`, `"azureCosmosDB"`).
+///
+/// When `container` is `Some`, a `<kind>Parameters` block is emitted with
+/// `containerName`. The `kind` value is used verbatim — pass the same casing
+/// Azure expects (`azureBlob`, `azureCosmosDB`, etc.).
+pub fn scaffold_knowledge_source_typed(
+    name: &str,
+    index: &str,
+    knowledge_base: Option<&str>,
+    kind: &str,
+    container: Option<&str>,
+) -> Value {
+    let mut ks = json!({
+        "name": name,
+        "indexName": index,
+        "kind": kind,
+    });
+
+    if let Some(kb) = knowledge_base {
+        ks["knowledgeBaseName"] = json!(kb);
+    }
+
+    if let Some(c) = container {
+        let params_key = format!("{kind}Parameters");
+        ks[params_key] = json!({ "containerName": c });
+    }
+
+    ks
+}
+
 /// Scaffold a Foundry agent definition as a JSON value.
 ///
 /// The returned value can be passed to `agent_to_yaml()` to produce the
@@ -555,5 +586,45 @@ mod tests {
         assert_eq!(ds["container"]["name"], "documents");
         assert!(ds.get("dataChangeDetectionPolicy").is_none());
         assert!(ds["container"].get("query").is_none());
+    }
+
+    #[test]
+    fn test_scaffold_knowledge_source_typed_cosmosdb() {
+        let ks = scaffold_knowledge_source_typed(
+            "my-ks",
+            "my-ks-index",
+            None,
+            "azureCosmosDB",
+            Some("my-container"),
+        );
+        assert_eq!(ks["name"], "my-ks");
+        assert_eq!(ks["indexName"], "my-ks-index");
+        assert_eq!(ks["kind"], "azureCosmosDB");
+        assert_eq!(
+            ks["azureCosmosDBParameters"]["containerName"],
+            "my-container"
+        );
+        assert!(ks.get("knowledgeBaseName").is_none());
+    }
+
+    #[test]
+    fn test_scaffold_knowledge_source_typed_with_kb() {
+        let ks = scaffold_knowledge_source_typed(
+            "my-ks",
+            "my-ks-index",
+            Some("my-kb"),
+            "azureCosmosDB",
+            Some("docs"),
+        );
+        assert_eq!(ks["knowledgeBaseName"], "my-kb");
+        assert_eq!(ks["azureCosmosDBParameters"]["containerName"], "docs");
+    }
+
+    #[test]
+    fn test_scaffold_knowledge_source_typed_no_container_omits_parameters() {
+        let ks =
+            scaffold_knowledge_source_typed("my-ks", "my-ks-index", None, "azureCosmosDB", None);
+        assert!(ks.get("azureCosmosDBParameters").is_none());
+        assert_eq!(ks["kind"], "azureCosmosDB");
     }
 }
