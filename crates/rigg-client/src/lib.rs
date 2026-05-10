@@ -10,6 +10,7 @@ pub mod ai;
 pub mod arm;
 pub mod auth;
 pub mod client;
+pub mod cosmos;
 pub mod error;
 pub mod foundry;
 
