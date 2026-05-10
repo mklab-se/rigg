@@ -94,6 +94,70 @@ fn url_encode_token(s: &str) -> String {
     s.replace('=', "%3D").replace('&', "%26")
 }
 
+/// Authentication mode for Cosmos REST calls.
+#[derive(Debug, Clone)]
+pub enum CosmosAuth {
+    /// AAD bearer token (acquired via `AzCliAuth::for_cosmos()`).
+    Bearer(String),
+    /// Cosmos master key (base64-encoded). Use with care; secret material.
+    MasterKey(String),
+}
+
+/// A built (but not sent) HTTP request to Cosmos. Used by `sample_documents`
+/// and exposed for unit testing the construction logic without hitting the network.
+#[derive(Debug)]
+pub struct CosmosRequest {
+    pub method: &'static str,
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: String,
+}
+
+/// Build a Cosmos `query documents` REST request. Pure: no network I/O.
+pub fn build_query_request(
+    endpoint: &str,
+    database: &str,
+    container: &str,
+    auth: &CosmosAuth,
+    sample_size: u32,
+    rfc1123_date: &str,
+) -> Result<CosmosRequest, CosmosError> {
+    let endpoint = endpoint.trim_end_matches('/');
+    let url = format!("{endpoint}/dbs/{database}/colls/{container}/docs");
+
+    let resource_link = format!("dbs/{database}/colls/{container}");
+    let auth_value = match auth {
+        CosmosAuth::Bearer(token) => format!("Bearer {token}"),
+        CosmosAuth::MasterKey(key) => {
+            build_master_key_authorization_token("POST", "docs", &resource_link, rfc1123_date, key)?
+        }
+    };
+
+    let body = format!(
+        r#"{{"query":"SELECT TOP @n * FROM c","parameters":[{{"name":"@n","value":{sample_size}}}]}}"#
+    );
+
+    let headers = vec![
+        ("Authorization", auth_value),
+        ("x-ms-version", "2018-12-31".to_string()),
+        ("x-ms-date", rfc1123_date.to_string()),
+        ("x-ms-documentdb-isquery", "True".to_string()),
+        (
+            "x-ms-documentdb-query-enablecrosspartition",
+            "True".to_string(),
+        ),
+        ("Content-Type", "application/query+json".to_string()),
+        ("Accept", "application/json".to_string()),
+    ];
+
+    Ok(CosmosRequest {
+        method: "POST",
+        url,
+        headers,
+        body,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +248,84 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("base64"));
+    }
+
+    #[test]
+    fn build_query_request_master_key_sets_required_headers() {
+        let req = build_query_request(
+            "https://acct.documents.azure.com:443/",
+            "mydb",
+            "mycoll",
+            &CosmosAuth::MasterKey("MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Ng==".into()),
+            20,
+            "Fri, 10 May 2026 12:00:00 GMT",
+        )
+        .unwrap();
+
+        assert_eq!(
+            req.url,
+            "https://acct.documents.azure.com:443/dbs/mydb/colls/mycoll/docs"
+        );
+        assert_eq!(req.method, "POST");
+        assert!(req.headers.iter().any(|(k, _)| *k == "x-ms-version"));
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, _)| *k == "x-ms-documentdb-isquery")
+        );
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, _)| *k == "x-ms-documentdb-query-enablecrosspartition")
+        );
+        assert!(req.headers.iter().any(|(k, _)| *k == "x-ms-date"));
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| *k == "Authorization" && v.starts_with("type%3Dmaster"))
+        );
+        assert_eq!(
+            req.body,
+            r#"{"query":"SELECT TOP @n * FROM c","parameters":[{"name":"@n","value":20}]}"#
+        );
+    }
+
+    #[test]
+    fn build_query_request_bearer_uses_aad_header() {
+        let req = build_query_request(
+            "https://acct.documents.azure.com:443/",
+            "mydb",
+            "mycoll",
+            &CosmosAuth::Bearer("eyFAKE.TOKEN".into()),
+            5,
+            "Fri, 10 May 2026 12:00:00 GMT",
+        )
+        .unwrap();
+
+        let auth_value = req
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Authorization")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(auth_value, "Bearer eyFAKE.TOKEN");
+        assert!(req.body.contains("\"value\":5"));
+    }
+
+    #[test]
+    fn build_query_request_handles_endpoint_without_trailing_slash() {
+        let req = build_query_request(
+            "https://acct.documents.azure.com:443",
+            "mydb",
+            "mycoll",
+            &CosmosAuth::Bearer("t".into()),
+            1,
+            "Fri, 10 May 2026 12:00:00 GMT",
+        )
+        .unwrap();
+        assert_eq!(
+            req.url,
+            "https://acct.documents.azure.com:443/dbs/mydb/colls/mycoll/docs"
+        );
     }
 }
