@@ -21,3 +21,6 @@ chrono.workspace = true
 rigg-core.workspace = true
 urlencoding.workspace = true
 ailloy.workspace = true
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
