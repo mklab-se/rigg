@@ -14,6 +14,8 @@ type HmacSha256 = Hmac<Sha256>;
 pub enum CosmosError {
     #[error("Invalid Cosmos connection string: {0}")]
     InvalidConnectionString(String),
+    #[error("Cosmos REST network error: {0}")]
+    Network(String),
 }
 
 /// Parse an Azure Cosmos DB connection string.
@@ -156,6 +158,60 @@ pub fn build_query_request(
         headers,
         body,
     })
+}
+
+use chrono::Utc;
+use serde_json::Value;
+
+/// Sample up to `sample_size` documents from a Cosmos container.
+///
+/// AAD via `CosmosAuth::Bearer` is preferred; `CosmosAuth::MasterKey` is the
+/// connection-string fallback path. Caller is responsible for choosing.
+pub async fn sample_documents(
+    endpoint: &str,
+    database: &str,
+    container: &str,
+    auth: &CosmosAuth,
+    sample_size: u32,
+) -> Result<Vec<Value>, CosmosError> {
+    // RFC1123 in GMT, e.g., "Fri, 10 May 2026 12:00:00 GMT".
+    let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let req = build_query_request(endpoint, database, container, auth, sample_size, &date)?;
+
+    let client = reqwest::Client::new();
+    let mut request_builder = client
+        .request(reqwest::Method::POST, &req.url)
+        .body(req.body);
+    for (k, v) in &req.headers {
+        request_builder = request_builder.header(*k, v);
+    }
+
+    let resp = request_builder
+        .send()
+        .await
+        .map_err(|e| CosmosError::Network(format!("request failed: {e}")))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| CosmosError::Network(format!("read body: {e}")))?;
+
+    if !status.is_success() {
+        return Err(CosmosError::Network(format!(
+            "Cosmos returned {status}: {body}"
+        )));
+    }
+
+    let parsed: Value = serde_json::from_str(&body)
+        .map_err(|e| CosmosError::Network(format!("invalid JSON response: {e}")))?;
+
+    let docs = parsed
+        .get("Documents")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(docs)
 }
 
 #[cfg(test)]
