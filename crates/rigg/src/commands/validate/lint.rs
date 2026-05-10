@@ -84,6 +84,29 @@ fn lint_datasource(name: &str, value: &serde_json::Value, warnings: &mut Vec<Str
             name
         ));
     }
+
+    // Cosmos-specific lints
+    if value.get("type").and_then(|t| t.as_str()) == Some("cosmosdb") {
+        let has_change_detection = value.get("dataChangeDetectionPolicy").is_some();
+        if !has_change_detection {
+            warnings.push(format!(
+                "data-sources/{name}.json: cosmosdb data source has no \"dataChangeDetectionPolicy\" — \
+                 incremental indexing will not work; consider adding a HighWaterMark policy on \"_ts\""
+            ));
+        }
+        let has_query = value
+            .get("container")
+            .and_then(|c| c.get("query"))
+            .and_then(|q| q.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if !has_query {
+            warnings.push(format!(
+                "data-sources/{name}.json: cosmosdb data source has no \"container.query\" — \
+                 a query (e.g., \"SELECT * FROM c\") is recommended"
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -375,5 +398,81 @@ mod tests {
         let mut warnings = Vec::new();
         lint_resources(&resources, &mut warnings);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_lint_cosmosdb_warns_when_missing_change_detection() {
+        let ds = json!({
+            "name": "my-cosmos",
+            "type": "cosmosdb",
+            "credentials": { "connectionString": "..." },
+            "container": { "name": "my-container", "query": "SELECT * FROM c" }
+        });
+        let mut warnings = Vec::new();
+        lint_datasource("my-cosmos", &ds, &mut warnings);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("my-cosmos") && w.contains("dataChangeDetectionPolicy")),
+            "expected change-detection warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_cosmosdb_warns_when_missing_query() {
+        let ds = json!({
+            "name": "my-cosmos",
+            "type": "cosmosdb",
+            "credentials": { "connectionString": "..." },
+            "container": { "name": "my-container" }
+        });
+        let mut warnings = Vec::new();
+        lint_datasource("my-cosmos", &ds, &mut warnings);
+        assert!(
+            warnings.iter().any(|w| w.contains("query")),
+            "expected query warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_cosmosdb_no_warning_when_complete() {
+        let ds = json!({
+            "name": "my-cosmos",
+            "type": "cosmosdb",
+            "credentials": { "connectionString": "..." },
+            "container": { "name": "my-container", "query": "SELECT * FROM c" },
+            "dataChangeDetectionPolicy": {
+                "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+                "highWaterMarkColumnName": "_ts"
+            }
+        });
+        let mut warnings = Vec::new();
+        lint_datasource("my-cosmos", &ds, &mut warnings);
+        let cosmos_warnings: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.contains("query") || w.contains("dataChangeDetectionPolicy"))
+            .collect();
+        assert!(
+            cosmos_warnings.is_empty(),
+            "expected no Cosmos warnings, got: {cosmos_warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_azureblob_unchanged_by_cosmos_rules() {
+        let ds = json!({
+            "name": "my-blob",
+            "type": "azureblob",
+            "credentials": { "connectionString": "..." },
+            "container": { "name": "documents" }
+        });
+        let mut warnings = Vec::new();
+        lint_datasource("my-blob", &ds, &mut warnings);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("dataChangeDetectionPolicy")),
+            "blob data source got Cosmos warning: {warnings:?}"
+        );
     }
 }
