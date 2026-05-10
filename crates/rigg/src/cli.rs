@@ -626,6 +626,15 @@ pub enum NewCommands {
         /// Optional knowledge base name
         #[arg(long)]
         knowledge_base: Option<String>,
+
+        /// Data source kind (e.g., "azureBlob", "azureCosmosDB").
+        /// When omitted, produces a minimal KS the user must complete manually.
+        #[arg(long)]
+        r#type: Option<String>,
+
+        /// Container or collection name (required when `--type` is set)
+        #[arg(long)]
+        container: Option<String>,
     },
 
     /// Create a new Foundry agent definition

@@ -132,13 +132,33 @@ pub fn run(cmd: NewCommands, env_override: Option<&str>) -> Result<()> {
             name,
             index,
             knowledge_base,
+            r#type,
+            container,
         } => {
             validate_resource_name(&name)?;
-            let value =
-                scaffold::scaffold_knowledge_source(&name, &index, knowledge_base.as_deref());
+
+            if r#type.is_none() && container.is_some() {
+                bail!("--container requires --type to be set");
+            }
+
+            let value = match r#type.as_deref() {
+                Some(kind) => scaffold::scaffold_knowledge_source_typed(
+                    &name,
+                    &index,
+                    knowledge_base.as_deref(),
+                    kind,
+                    container.as_deref(),
+                ),
+                None => {
+                    scaffold::scaffold_knowledge_source(&name, &index, knowledge_base.as_deref())
+                }
+            };
             let path = write_knowledge_source(&env, &files_root, &name, &value)?;
             print_created("Knowledge Source", &name, &path);
             println!();
+            if let Some(kind) = &r#type {
+                println!("  Kind: {}", kind);
+            }
             println!("  After pushing, Azure will auto-provision managed sub-resources:");
             println!("    {}-index         (search index)", name);
             println!("    {}-indexer       (indexer)", name);
