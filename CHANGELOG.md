@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.0] - 2026-07-01
+
+### Added
+
+- **Cosmos DB → Knowledge Source scaffolding (Phase 1)** — `rigg new knowledgesource` now supports `--type cosmos` with a `--container` flag to scaffold a Cosmos DB-backed data source and knowledge source, including a generated query and change-detection policy
+- **Cosmos DB client support in `rigg-client`** — connection-string parsing, master-key HMAC-SHA256 request signing, an `AzCliAuth::for_cosmos` auth scope, a Cosmos request builder, and an async `sample_documents` call, laying the groundwork for a future `rigg analyze` command
+- **Lint rule for Cosmos data sources** — flags Cosmos-backed data sources that are missing a query or a change-detection policy
+
 ## [0.16.2] - 2026-05-04
 
 ### Changed
