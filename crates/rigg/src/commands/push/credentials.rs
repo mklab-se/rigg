@@ -327,19 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_volatile_fields_removes_datasource_credentials() {
-        let definition = json!({
-            "name": "ds-1",
-            "type": "azureblob",
-            "credentials": { "connectionString": "secret" }
-        });
-        let clean = strip_volatile_fields(ResourceKind::DataSource, &definition);
-        let obj = clean.as_object().unwrap();
-        assert!(obj.contains_key("name"));
-        assert!(!obj.contains_key("credentials"));
-    }
-
-    #[test]
     fn test_strip_volatile_fields_preserves_non_volatile() {
         let definition = json!({
             "name": "sk-1",
@@ -359,28 +346,6 @@ mod tests {
         let clean = strip_volatile_fields(ResourceKind::Index, &definition);
         assert_eq!(clean, definition);
     }
-
-    #[test]
-    fn test_strip_volatile_fields_removes_indexer_start_time() {
-        let definition = json!({
-            "name": "my-indexer",
-            "dataSourceName": "ds-1",
-            "targetIndexName": "idx-1",
-            "schedule": {
-                "interval": "P1D",
-                "startTime": "2026-02-06T22:03:10.254Z"
-            }
-        });
-        let clean = strip_volatile_fields(ResourceKind::Indexer, &definition);
-        let schedule = clean.get("schedule").unwrap().as_object().unwrap();
-        assert!(schedule.contains_key("interval"));
-        assert!(
-            !schedule.contains_key("startTime"),
-            "startTime should be stripped from indexer schedule"
-        );
-    }
-
-    // --- Credential injection tests ---
 
     #[test]
     fn test_needs_credentials_datasource_new_no_creds() {

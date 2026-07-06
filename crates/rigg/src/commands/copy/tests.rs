@@ -168,7 +168,7 @@ fn test_copy_knowledge_source_filesystem() {
 fn test_copy_standalone_resource_filesystem() {
     let dir = tempfile::tempdir().unwrap();
     let service_dir = dir.path().to_path_buf();
-    let index_dir = service_dir.join("search-management/indexes");
+    let index_dir = service_dir.join("indexes");
     std::fs::create_dir_all(&index_dir).unwrap();
 
     std::fs::write(
@@ -199,7 +199,7 @@ fn test_copy_standalone_resource_filesystem() {
 fn test_copy_standalone_resource_target_exists() {
     let dir = tempfile::tempdir().unwrap();
     let service_dir = dir.path().to_path_buf();
-    let index_dir = service_dir.join("search-management/indexes");
+    let index_dir = service_dir.join("indexes");
     std::fs::create_dir_all(&index_dir).unwrap();
 
     std::fs::write(index_dir.join("src.json"), r#"{"name":"src","fields":[]}"#).unwrap();

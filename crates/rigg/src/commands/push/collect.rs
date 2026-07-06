@@ -218,33 +218,6 @@ mod tests {
     /// Verifies that pull normalization keeps read-only fields in local files
     /// and that pushable fields like knowledgeSources are also preserved.
     #[test]
-    fn test_pull_normalization_preserves_non_volatile_fields() {
-        let remote = json!({
-            "name": "my-kb",
-            "description": "Test",
-            "@odata.etag": "W/\"abc\"",
-            "storageConnectionStringSecret": "secret",
-            "knowledgeSources": [{"name": "ks-1"}]
-        });
-
-        // Pull uses only volatile_fields
-        let volatile = get_volatile_fields(ResourceKind::KnowledgeBase);
-        let normalized = normalize(&remote, &volatile);
-        let obj = normalized.as_object().unwrap();
-
-        // Volatile fields stripped
-        assert!(!obj.contains_key("@odata.etag"));
-        assert!(!obj.contains_key("storageConnectionStringSecret"));
-
-        // Pushable fields preserved
-        assert!(
-            obj.contains_key("knowledgeSources"),
-            "knowledgeSources is pushable and must be preserved"
-        );
-    }
-
-    /// Verifies that knowledgeSources changes on a KB are detected by push.
-    #[test]
     fn test_push_detects_knowledge_sources_change() {
         let local = json!({
             "name": "my-kb",

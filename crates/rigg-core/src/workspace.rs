@@ -36,7 +36,9 @@ pub enum WorkspaceError {
     UnknownProject(String, String),
     #[error("unknown environment '{0}' (available: {1})")]
     UnknownEnvironment(String, String),
-    #[error("no default environment configured; pass --env or set `default: true` on one environment")]
+    #[error(
+        "no default environment configured; pass --env or set `default: true` on one environment"
+    )]
     NoDefaultEnvironment,
     #[error(
         "environment '{env}' has {count} {kind} connections; set `{kind}-connection` in project.yaml for project '{project}'"
@@ -53,7 +55,9 @@ pub enum WorkspaceError {
         kind: &'static str,
         project: String,
     },
-    #[error("project '{project}' pins {kind} connection '{name}' which does not exist in environment '{env}'")]
+    #[error(
+        "project '{project}' pins {kind} connection '{name}' which does not exist in environment '{env}'"
+    )]
     UnknownConnection {
         project: String,
         kind: &'static str,
@@ -136,7 +140,11 @@ pub struct SearchConnection {
     /// Azure AI Search service name (e.g. `mklabsrch`).
     pub service: String,
     /// Override for the stable data-plane api-version.
-    #[serde(default, rename = "api-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "api-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub api_version: Option<String>,
     /// Override for the preview data-plane api-version.
     #[serde(
@@ -157,7 +165,11 @@ pub struct FoundryConnection {
     /// Foundry project name (e.g. `proj-default`).
     pub project: String,
     /// Override for the data-plane api-version (default `v1`).
-    #[serde(default, rename = "api-version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "api-version",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub api_version: Option<String>,
 }
 
@@ -211,12 +223,10 @@ impl Workspace {
         } else {
             start
         };
-        let mut dir = start
-            .canonicalize()
-            .map_err(|source| WorkspaceError::Io {
-                path: start.to_path_buf(),
-                source,
-            })?;
+        let mut dir = start.canonicalize().map_err(|source| WorkspaceError::Io {
+            path: start.to_path_buf(),
+            source,
+        })?;
         loop {
             if dir.join(WORKSPACE_FILE).is_file() {
                 return Workspace::load(&dir);
@@ -252,17 +262,17 @@ impl Workspace {
             entries.sort();
             for dir in entries {
                 let manifest_path = dir.join(PROJECT_FILE);
-                let text =
-                    std::fs::read_to_string(&manifest_path).map_err(|source| WorkspaceError::Io {
+                let text = std::fs::read_to_string(&manifest_path).map_err(|source| {
+                    WorkspaceError::Io {
                         path: manifest_path.clone(),
-                        source,
-                    })?;
-                let manifest: ProjectManifest = serde_yaml::from_str(&text).map_err(|source| {
-                    WorkspaceError::Parse {
-                        path: manifest_path,
                         source,
                     }
                 })?;
+                let manifest: ProjectManifest =
+                    serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse {
+                        path: manifest_path,
+                        source,
+                    })?;
                 let name = dir
                     .file_name()
                     .expect("project dir has a name")
@@ -284,16 +294,19 @@ impl Workspace {
     }
 
     pub fn project(&self, name: &str) -> Result<&Project> {
-        self.projects.iter().find(|p| p.name == name).ok_or_else(|| {
-            WorkspaceError::UnknownProject(
-                name.to_string(),
-                self.projects
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            )
-        })
+        self.projects
+            .iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| {
+                WorkspaceError::UnknownProject(
+                    name.to_string(),
+                    self.projects
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            })
     }
 
     /// Resolve an environment: explicit selection > `RIGG_ENV` > `default: true`.
@@ -446,12 +459,19 @@ environments:
     #[test]
     fn parses_single_connection_env() {
         let tmp = tempfile::tempdir().unwrap();
-        let ws = make_ws(tmp.path(), ws_yaml_single(), &[("p1", "description: test\n")]);
+        let ws = make_ws(
+            tmp.path(),
+            ws_yaml_single(),
+            &[("p1", "description: test\n")],
+        );
         let dev = ws.resolve_env(Some("dev")).unwrap();
         let p1 = ws.project("p1").unwrap();
         assert_eq!(dev.search_for(p1).unwrap().service, "mklabsrch");
         let f = dev.foundry_for(p1).unwrap();
-        assert_eq!((f.account.as_str(), f.project.as_str()), ("mklabaifndr", "proj-default"));
+        assert_eq!(
+            (f.account.as_str(), f.project.as_str()),
+            ("mklabaifndr", "proj-default")
+        );
     }
 
     #[test]
@@ -516,7 +536,10 @@ environments:
         std::fs::create_dir_all(&nested).unwrap();
         let ws = Workspace::discover(&nested).unwrap();
         assert_eq!(
-            ws.projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ws.projects
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["alpha", "beta"]
         );
         assert!(matches!(
@@ -537,7 +560,10 @@ environments:
         let p = ws.project("p").unwrap();
         assert!(matches!(
             dev.foundry_for(p),
-            Err(WorkspaceError::MissingConnection { kind: "foundry", .. })
+            Err(WorkspaceError::MissingConnection {
+                kind: "foundry",
+                ..
+            })
         ));
     }
 }

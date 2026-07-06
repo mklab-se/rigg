@@ -10,6 +10,7 @@ pub mod config;
 pub mod constraints;
 pub mod copy;
 pub mod normalize;
+pub mod registry;
 pub mod resources;
 pub mod scaffold;
 pub mod service;

@@ -111,13 +111,22 @@ pub fn resource_kind_description(kind: ResourceKind) -> &'static str {
             "Aliases provide stable endpoint names that point to indexes for zero-downtime reindexing."
         }
         ResourceKind::KnowledgeBase => {
-            "Knowledge bases (preview) provide structured knowledge for AI agent interactions."
+            "Knowledge bases route agentic retrieval across knowledge sources and expose an MCP retrieve tool."
         }
         ResourceKind::KnowledgeSource => {
-            "Knowledge sources (preview) connect indexes to knowledge bases for agentic search."
+            "Knowledge sources connect existing indexes to knowledge bases for agentic search."
         }
         ResourceKind::Agent => {
-            "Agents define Microsoft Foundry assistant configurations including instructions, tools, and knowledge."
+            "Agents define Microsoft Foundry agent configurations including instructions, tools, and knowledge."
+        }
+        ResourceKind::Deployment => {
+            "Model deployments make a model (e.g. gpt-5-mini) available in the Foundry account with a SKU and capacity."
+        }
+        ResourceKind::Connection => {
+            "Connections link the Foundry project to external services using identity-based authentication."
+        }
+        ResourceKind::Guardrail => {
+            "Guardrails (RAI policies) define content-filter behavior referenced by deployments and agents."
         }
     }
 }

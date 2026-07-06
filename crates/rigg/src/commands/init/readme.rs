@@ -227,7 +227,10 @@ pub(super) fn api_doc_url(kind: ResourceKind) -> &'static str {
         ResourceKind::KnowledgeSource => {
             "https://learn.microsoft.com/en-us/rest/api/searchservice/knowledge-sources/create-or-update?view=rest-searchservice-2025-05-01-preview"
         }
-        ResourceKind::Agent => "https://learn.microsoft.com/en-us/azure/ai-services/agents/",
+        ResourceKind::Agent
+        | ResourceKind::Deployment
+        | ResourceKind::Connection
+        | ResourceKind::Guardrail => "https://learn.microsoft.com/en-us/azure/ai-foundry/",
     }
 }
 
@@ -471,67 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn test_minimal_template_creates_index_and_datasource_dirs() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let config = make_config("test-service");
-
-        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
-
-        let search_base = project_dir.join("search");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
-        // Should NOT have indexers, skillsets, synonym-maps
-        assert!(!search_base.join("search-management/indexers").exists());
-        assert!(!search_base.join("search-management/skillsets").exists());
-    }
-
-    #[test]
-    fn test_full_template_creates_all_stable_dirs() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let config = make_config("test-service");
-
-        create_project_dirs(project_dir, &config, InitTemplate::Full).unwrap();
-
-        let search_base = project_dir.join("search");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/indexers").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
-        assert!(search_base.join("search-management/skillsets").is_dir());
-        assert!(search_base.join("search-management/synonym-maps").is_dir());
-        assert!(search_base.join("search-management/aliases").is_dir());
-        // Should NOT have preview dirs
-        assert!(
-            !search_base
-                .join("agentic-retrieval/knowledge-bases")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn test_agentic_template_creates_preview_dirs() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let config = make_config("test-service");
-
-        create_project_dirs(project_dir, &config, InitTemplate::Agentic).unwrap();
-
-        let search_base = project_dir.join("search");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(
-            search_base
-                .join("agentic-retrieval/knowledge-bases")
-                .is_dir()
-        );
-        assert!(
-            search_base
-                .join("agentic-retrieval/knowledge-sources")
-                .is_dir()
-        );
-    }
-
-    #[test]
     fn test_config_file_created() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
@@ -603,20 +545,6 @@ mod tests {
         // No RIGG.md or category READMEs -- all content is in root README.md
         assert!(!search_base.join("RIGG.md").exists());
         assert!(!search_base.join("README.md").exists());
-    }
-
-    #[test]
-    fn test_creates_dirs_under_search() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let config = make_config("test-service");
-
-        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
-
-        // Resources should be under search/
-        let search_base = project_dir.join("search");
-        assert!(search_base.join("search-management/indexes").is_dir());
-        assert!(search_base.join("search-management/data-sources").is_dir());
     }
 
     #[test]
@@ -731,53 +659,6 @@ mod tests {
     }
 
     #[test]
-    fn test_additive_init_creates_new_dirs() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-
-        let config = make_config("svc-1");
-        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
-
-        // Verify we can load and resolve the config
-        let loaded = Config::load(project_dir).unwrap();
-        let env = loaded.resolve_env(None).unwrap();
-        assert_eq!(env.search[0].name, "svc-1");
-        assert!(
-            project_dir
-                .join("search/search-management/indexes")
-                .is_dir()
-        );
-    }
-
-    #[test]
-    fn test_files_path_creates_dirs_under_subdir() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let mut config = make_config("test-service");
-        config.project.files_path = Some("rigg".to_string());
-
-        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
-
-        // Config should be at project root
-        assert!(project_dir.join(Config::FILENAME).exists());
-        // State should be at project root
-        assert!(project_dir.join(".rigg/.gitignore").exists());
-        // Resource dirs should be under rigg/
-        assert!(
-            project_dir
-                .join("rigg/search/search-management/indexes")
-                .is_dir()
-        );
-        assert!(
-            project_dir
-                .join("rigg/search/search-management/data-sources")
-                .is_dir()
-        );
-        // Resource dirs should NOT be at project root
-        assert!(!project_dir.join("search").exists());
-    }
-
-    #[test]
     fn test_files_path_config_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let project_dir = tmp.path();
@@ -788,22 +669,6 @@ mod tests {
 
         let loaded = Config::load(project_dir).unwrap();
         assert_eq!(loaded.project.files_path, Some("rigg".to_string()));
-    }
-
-    #[test]
-    fn test_files_path_none_uses_project_dir() {
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path();
-        let config = make_config("test-service");
-
-        create_project_dirs(project_dir, &config, InitTemplate::Minimal).unwrap();
-
-        // Resource dirs should be at project root (no files_path)
-        assert!(
-            project_dir
-                .join("search/search-management/indexes")
-                .is_dir()
-        );
     }
 
     #[test]

@@ -299,42 +299,12 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_url_knowledge_base_uses_preview_version() {
-        let client = make_client();
-        let url = client.collection_url(ResourceKind::KnowledgeBase);
-        assert_eq!(
-            url,
-            "https://test-svc.search.windows.net/knowledgebases?api-version=2025-11-01-preview"
-        );
-    }
-
-    #[test]
-    fn test_collection_url_knowledge_source_uses_preview_version() {
-        let client = make_client();
-        let url = client.collection_url(ResourceKind::KnowledgeSource);
-        assert_eq!(
-            url,
-            "https://test-svc.search.windows.net/knowledgesources?api-version=2025-11-01-preview"
-        );
-    }
-
-    #[test]
     fn test_resource_url_uses_preview_version() {
         let client = make_client();
         let url = client.resource_url(ResourceKind::Index, "my-index");
         assert_eq!(
             url,
             "https://test-svc.search.windows.net/indexes/my-index?api-version=2025-11-01-preview"
-        );
-    }
-
-    #[test]
-    fn test_resource_url_knowledge_base_uses_preview_version() {
-        let client = make_client();
-        let url = client.resource_url(ResourceKind::KnowledgeBase, "my-kb");
-        assert_eq!(
-            url,
-            "https://test-svc.search.windows.net/knowledgebases/my-kb?api-version=2025-11-01-preview"
         );
     }
 

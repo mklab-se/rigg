@@ -251,7 +251,10 @@ pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()>
                         summary.knowledge_sources.push(ks);
                     }
                 }
-                ResourceKind::Agent => {}
+                ResourceKind::Agent
+                | ResourceKind::Deployment
+                | ResourceKind::Connection
+                | ResourceKind::Guardrail => {}
             }
         }
     }

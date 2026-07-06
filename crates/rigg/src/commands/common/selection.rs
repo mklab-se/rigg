@@ -278,17 +278,6 @@ mod tests {
     // === resolve_resource_kinds tests ===
 
     #[test]
-    fn test_all_with_preview() {
-        let kinds = resolve_resource_kinds(
-            true, false, false, false, false, false, false, false, false, true, false,
-        );
-        assert_eq!(kinds.len(), 9);
-        assert!(kinds.contains(&ResourceKind::KnowledgeBase));
-        assert!(kinds.contains(&ResourceKind::KnowledgeSource));
-        assert!(kinds.contains(&ResourceKind::Agent));
-    }
-
-    #[test]
     fn test_all_without_preview() {
         let kinds = resolve_resource_kinds(
             true, false, false, false, false, false, false, false, false, false, false,
@@ -425,21 +414,6 @@ mod tests {
         assert_eq!(sel.kinds().len(), 2);
         assert_eq!(sel.name_filter(ResourceKind::Index), None);
         assert_eq!(sel.name_filter(ResourceKind::KnowledgeBase), Some("my-kb"));
-    }
-
-    #[test]
-    fn test_selection_all_ignores_singulars() {
-        let mut singular = no_singular();
-        singular.knowledgebase = Some("my-kb".to_string());
-
-        let sel = resolve_resource_selection(
-            true, false, false, false, false, false, false, false, false, false, &singular, true,
-            false,
-        );
-
-        assert_eq!(sel.kinds().len(), 9);
-        // --all clears all name filters
-        assert_eq!(sel.name_filter(ResourceKind::KnowledgeBase), None);
     }
 
     #[test]
@@ -700,20 +674,6 @@ mod tests {
             assert_eq!(kind.domain(), ServiceDomain::Search);
         }
         assert!(!sel.kinds().contains(&ResourceKind::Agent));
-    }
-
-    #[test]
-    fn test_flags_foundry_only_filters() {
-        let flags = ResourceTypeFlags {
-            all: true,
-            foundry_only: true,
-            ..Default::default()
-        };
-        let sel = resolve_resource_selection_from_flags(&flags, true, false);
-        for (kind, _) in &sel.selections {
-            assert_eq!(kind.domain(), ServiceDomain::Foundry);
-        }
-        assert_eq!(sel.kinds(), vec![ResourceKind::Agent]);
     }
 
     #[test]

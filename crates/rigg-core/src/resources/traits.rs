@@ -1,98 +1,133 @@
-//! Resource trait definition for Azure AI Search and Microsoft Foundry resources
+//! Resource kind definitions for Azure AI Search and Microsoft Foundry resources.
+//!
+//! Per-kind metadata (API paths, directory names, volatile/read-only/secret
+//! fields, references, capabilities) lives in [`crate::registry`]; the methods
+//! on [`ResourceKind`] delegate there.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::registry::{self, Domain};
 use crate::service::ServiceDomain;
 
 /// Enumeration of all supported resource types across service domains
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceKind {
     // Azure AI Search resources
-    Index,
-    Indexer,
     DataSource,
+    Index,
     Skillset,
+    Indexer,
     SynonymMap,
     Alias,
-    KnowledgeBase,
     KnowledgeSource,
+    KnowledgeBase,
     // Microsoft Foundry resources
     Agent,
+    Deployment,
+    Connection,
+    Guardrail,
 }
 
 impl ResourceKind {
     /// Returns the service domain this resource belongs to
     pub fn domain(&self) -> ServiceDomain {
-        match self {
-            ResourceKind::Agent => ServiceDomain::Foundry,
-            _ => ServiceDomain::Search,
+        match registry::meta(*self).domain {
+            Domain::Search => ServiceDomain::Search,
+            Domain::FoundryData | Domain::FoundryArm => ServiceDomain::Foundry,
         }
     }
 
-    /// Returns the API path segment for this resource type
+    /// Returns the API collection path segment for this resource type
     pub fn api_path(&self) -> &'static str {
-        match self {
-            ResourceKind::Index => "indexes",
-            ResourceKind::Indexer => "indexers",
-            ResourceKind::DataSource => "datasources",
-            ResourceKind::Skillset => "skillsets",
-            ResourceKind::SynonymMap => "synonymmaps",
-            ResourceKind::Alias => "aliases",
-            ResourceKind::KnowledgeBase => "knowledgebases",
-            ResourceKind::KnowledgeSource => "knowledgesources",
-            ResourceKind::Agent => "assistants",
-        }
+        registry::meta(*self).collection_path
     }
 
-    /// Returns the directory path for local storage (relative to service root).
-    ///
-    /// Search resources are organized under category prefixes:
-    /// - `search-management/` for core search resources
-    /// - `agentic-retrieval/` for knowledge bases and knowledge sources
+    /// Returns the directory name for local storage, relative to the
+    /// project's domain directory (`search/` or `foundry/`).
     pub fn directory_name(&self) -> &'static str {
+        registry::meta(*self).dir_name
+    }
+
+    /// Parse a directory name back to a kind.
+    pub fn from_directory_name(dir: &str) -> Option<ResourceKind> {
+        Self::all()
+            .iter()
+            .find(|k| k.directory_name() == dir)
+            .copied()
+    }
+
+    /// Returns the CLI name for this resource type (`rigg new <kind>`).
+    pub fn cli_name(&self) -> &'static str {
         match self {
-            ResourceKind::Index => "search-management/indexes",
-            ResourceKind::Indexer => "search-management/indexers",
-            ResourceKind::DataSource => "search-management/data-sources",
-            ResourceKind::Skillset => "search-management/skillsets",
-            ResourceKind::SynonymMap => "search-management/synonym-maps",
-            ResourceKind::Alias => "search-management/aliases",
-            ResourceKind::KnowledgeBase => "agentic-retrieval/knowledge-bases",
-            ResourceKind::KnowledgeSource => "agentic-retrieval/knowledge-sources",
-            ResourceKind::Agent => "agents",
+            ResourceKind::DataSource => "data-source",
+            ResourceKind::Index => "index",
+            ResourceKind::Skillset => "skillset",
+            ResourceKind::Indexer => "indexer",
+            ResourceKind::SynonymMap => "synonym-map",
+            ResourceKind::Alias => "alias",
+            ResourceKind::KnowledgeSource => "knowledge-source",
+            ResourceKind::KnowledgeBase => "knowledge-base",
+            ResourceKind::Agent => "agent",
+            ResourceKind::Deployment => "deployment",
+            ResourceKind::Connection => "connection",
+            ResourceKind::Guardrail => "guardrail",
         }
     }
 
-    /// Returns true if this resource type uses the preview API
-    pub fn is_preview(&self) -> bool {
-        matches!(
-            self,
-            ResourceKind::Alias | ResourceKind::KnowledgeBase | ResourceKind::KnowledgeSource
-        )
+    /// Parse a CLI name (as used by `rigg new`) into a kind.
+    pub fn from_cli_name(s: &str) -> Option<ResourceKind> {
+        Self::all().iter().find(|k| k.cli_name() == s).copied()
     }
 
-    /// Returns the singular CLI flag name for this resource type.
-    ///
-    /// Used in hint messages like `rigg delete --index my-index --target local`.
+    /// Returns the display name for this resource type
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ResourceKind::DataSource => "Data Source",
+            ResourceKind::Index => "Index",
+            ResourceKind::Skillset => "Skillset",
+            ResourceKind::Indexer => "Indexer",
+            ResourceKind::SynonymMap => "Synonym Map",
+            ResourceKind::Alias => "Alias",
+            ResourceKind::KnowledgeSource => "Knowledge Source",
+            ResourceKind::KnowledgeBase => "Knowledge Base",
+            ResourceKind::Agent => "Agent",
+            ResourceKind::Deployment => "Model Deployment",
+            ResourceKind::Connection => "Connection",
+            ResourceKind::Guardrail => "Guardrail",
+        }
+    }
+
+    /// Returns all resource kinds across all domains
+    pub fn all() -> &'static [ResourceKind] {
+        registry::all_kinds()
+    }
+
+    /// Legacy shim (pre-0.18 semantics): core search-management kinds.
+    /// Retired together with the old command implementations.
+    pub fn stable() -> &'static [ResourceKind] {
+        &[
+            ResourceKind::Index,
+            ResourceKind::Indexer,
+            ResourceKind::DataSource,
+            ResourceKind::Skillset,
+            ResourceKind::SynonymMap,
+        ]
+    }
+
+    /// Legacy shim: old singular flag name. Retired with the old CLI.
     pub fn cli_flag_name(&self) -> &'static str {
         match self {
-            ResourceKind::Index => "index",
-            ResourceKind::Indexer => "indexer",
             ResourceKind::DataSource => "datasource",
-            ResourceKind::Skillset => "skillset",
             ResourceKind::SynonymMap => "synonymmap",
-            ResourceKind::Alias => "alias",
             ResourceKind::KnowledgeBase => "knowledgebase",
             ResourceKind::KnowledgeSource => "knowledgesource",
-            ResourceKind::Agent => "agent",
+            other => other.cli_name(),
         }
     }
 
-    /// Returns the plural CLI flag name for this resource type.
-    ///
-    /// Used in hint messages like `rigg pull --indexes`.
+    /// Legacy shim: old plural flag name. Retired with the old CLI.
     pub fn cli_flag_name_plural(&self) -> &'static str {
         match self {
             ResourceKind::Index => "indexes",
@@ -104,53 +139,15 @@ impl ResourceKind {
             ResourceKind::KnowledgeBase => "knowledgebases",
             ResourceKind::KnowledgeSource => "knowledgesources",
             ResourceKind::Agent => "agents",
+            ResourceKind::Deployment => "deployments",
+            ResourceKind::Connection => "connections",
+            ResourceKind::Guardrail => "guardrails",
         }
-    }
-
-    /// Returns the display name for this resource type
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            ResourceKind::Index => "Index",
-            ResourceKind::Indexer => "Indexer",
-            ResourceKind::DataSource => "Data Source",
-            ResourceKind::Skillset => "Skillset",
-            ResourceKind::SynonymMap => "Synonym Map",
-            ResourceKind::Alias => "Alias",
-            ResourceKind::KnowledgeBase => "Knowledge Base",
-            ResourceKind::KnowledgeSource => "Knowledge Source",
-            ResourceKind::Agent => "Agent",
-        }
-    }
-
-    /// Returns all resource kinds across all domains
-    pub fn all() -> &'static [ResourceKind] {
-        &[
-            ResourceKind::Index,
-            ResourceKind::Indexer,
-            ResourceKind::DataSource,
-            ResourceKind::Skillset,
-            ResourceKind::SynonymMap,
-            ResourceKind::Alias,
-            ResourceKind::KnowledgeBase,
-            ResourceKind::KnowledgeSource,
-            ResourceKind::Agent,
-        ]
-    }
-
-    /// Returns non-preview Search resource kinds (stable search resources only)
-    pub fn stable() -> &'static [ResourceKind] {
-        &[
-            ResourceKind::Index,
-            ResourceKind::Indexer,
-            ResourceKind::DataSource,
-            ResourceKind::Skillset,
-            ResourceKind::SynonymMap,
-        ]
     }
 
     /// Returns all Search resource kinds
     pub fn search_kinds() -> Vec<ResourceKind> {
-        ResourceKind::all()
+        Self::all()
             .iter()
             .filter(|k| k.domain() == ServiceDomain::Search)
             .copied()
@@ -159,7 +156,7 @@ impl ResourceKind {
 
     /// Returns all Foundry resource kinds
     pub fn foundry_kinds() -> Vec<ResourceKind> {
-        ResourceKind::all()
+        Self::all()
             .iter()
             .filter(|k| k.domain() == ServiceDomain::Foundry)
             .copied()
@@ -173,38 +170,52 @@ impl fmt::Display for ResourceKind {
     }
 }
 
-/// Trait for Azure AI Search resources
+/// A (kind, name) reference to a resource.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ResourceRef {
+    pub kind: ResourceKind,
+    pub name: String,
+}
+
+impl ResourceRef {
+    pub fn new(kind: ResourceKind, name: impl Into<String>) -> Self {
+        ResourceRef {
+            kind,
+            name: name.into(),
+        }
+    }
+
+    /// Stable string key, e.g. `indexes/my-index` — used in state files.
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.kind.directory_name(), self.name)
+    }
+}
+
+impl fmt::Display for ResourceRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.kind.directory_name(), self.name)
+    }
+}
+
+/// Legacy typed-resource trait. The registry (`crate::registry`) is the new
+/// source of truth for per-kind metadata; this trait remains only while the
+/// old typed resource modules and their consumers are being retired during
+/// the 0.18 rewrite.
 pub trait Resource: Serialize + for<'de> Deserialize<'de> + Clone {
-    /// Returns the resource kind
     fn kind() -> ResourceKind;
-
-    /// Returns the resource name (identifier)
     fn name(&self) -> &str;
-
-    /// Returns fields that should be stripped during normalization (pull and push).
-    /// These are truly transient or sensitive: OData metadata, secrets, credentials.
     fn volatile_fields() -> &'static [&'static str] {
         &["@odata.etag", "@odata.context"]
     }
-
-    /// Returns fields that are read-only — Azure returns them in GET but rejects
-    /// them in PUT. These are kept in local files for documentation (e.g. showing
-    /// which resources are connected) but stripped before pushing to Azure.
     fn read_only_fields() -> &'static [&'static str] {
         &[]
     }
-
-    /// Returns the identity key for array sorting within this resource type
     fn identity_key() -> &'static str {
         "name"
     }
-
-    /// Returns dependencies on other resources (resource kind, name)
     fn dependencies(&self) -> Vec<(ResourceKind, String)> {
         Vec::new()
     }
-
-    /// Returns fields that are immutable after creation
     fn immutable_fields() -> &'static [&'static str] {
         &[]
     }
@@ -244,289 +255,83 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_all_returns_nine_kinds() {
-        assert_eq!(ResourceKind::all().len(), 9);
+    fn all_returns_twelve_kinds() {
+        assert_eq!(ResourceKind::all().len(), 12);
     }
 
     #[test]
-    fn test_stable_excludes_preview() {
-        let stable = ResourceKind::stable();
-        assert_eq!(stable.len(), 5);
-        for kind in stable {
-            assert!(!kind.is_preview());
-        }
-    }
-
-    #[test]
-    fn test_preview_kinds() {
-        assert!(ResourceKind::KnowledgeBase.is_preview());
-        assert!(ResourceKind::KnowledgeSource.is_preview());
-        assert!(!ResourceKind::Index.is_preview());
-        assert!(!ResourceKind::Indexer.is_preview());
-        assert!(!ResourceKind::DataSource.is_preview());
-        assert!(!ResourceKind::Skillset.is_preview());
-        assert!(!ResourceKind::SynonymMap.is_preview());
-        assert!(ResourceKind::Alias.is_preview());
-        assert!(!ResourceKind::Agent.is_preview());
-    }
-
-    #[test]
-    fn test_api_paths() {
+    fn api_paths() {
         assert_eq!(ResourceKind::Index.api_path(), "indexes");
-        assert_eq!(ResourceKind::Indexer.api_path(), "indexers");
         assert_eq!(ResourceKind::DataSource.api_path(), "datasources");
-        assert_eq!(ResourceKind::Skillset.api_path(), "skillsets");
-        assert_eq!(ResourceKind::SynonymMap.api_path(), "synonymmaps");
-        assert_eq!(ResourceKind::Alias.api_path(), "aliases");
-        assert_eq!(ResourceKind::KnowledgeBase.api_path(), "knowledgebases");
-        assert_eq!(ResourceKind::KnowledgeSource.api_path(), "knowledgesources");
-        assert_eq!(ResourceKind::Agent.api_path(), "assistants");
+        assert_eq!(ResourceKind::KnowledgeBase.api_path(), "knowledgeBases");
+        assert_eq!(ResourceKind::KnowledgeSource.api_path(), "knowledgeSources");
+        assert_eq!(ResourceKind::Agent.api_path(), "agents");
+        assert_eq!(ResourceKind::Deployment.api_path(), "deployments");
     }
 
     #[test]
-    fn test_directory_names() {
-        assert_eq!(
-            ResourceKind::Index.directory_name(),
-            "search-management/indexes"
-        );
-        assert_eq!(
-            ResourceKind::Indexer.directory_name(),
-            "search-management/indexers"
-        );
-        assert_eq!(
-            ResourceKind::DataSource.directory_name(),
-            "search-management/data-sources"
-        );
-        assert_eq!(
-            ResourceKind::Skillset.directory_name(),
-            "search-management/skillsets"
-        );
-        assert_eq!(
-            ResourceKind::SynonymMap.directory_name(),
-            "search-management/synonym-maps"
-        );
-        assert_eq!(
-            ResourceKind::Alias.directory_name(),
-            "search-management/aliases"
-        );
-        assert_eq!(
-            ResourceKind::KnowledgeBase.directory_name(),
-            "agentic-retrieval/knowledge-bases"
-        );
+    fn directory_names_are_flat_and_roundtrip() {
+        for kind in ResourceKind::all() {
+            let dir = kind.directory_name();
+            assert!(!dir.contains('/'), "{kind:?} dir must be flat: {dir}");
+            assert_eq!(ResourceKind::from_directory_name(dir), Some(*kind));
+        }
         assert_eq!(
             ResourceKind::KnowledgeSource.directory_name(),
-            "agentic-retrieval/knowledge-sources"
+            "knowledge-sources"
         );
-        assert_eq!(ResourceKind::Agent.directory_name(), "agents");
+        assert_eq!(ResourceKind::Guardrail.directory_name(), "guardrails");
     }
 
     #[test]
-    fn test_directory_names_categorized() {
-        // Search resources are organized under category prefixes
-        let agentic_kinds = [ResourceKind::KnowledgeBase, ResourceKind::KnowledgeSource];
-        for kind in ResourceKind::search_kinds() {
-            if agentic_kinds.contains(&kind) {
-                assert!(
-                    kind.directory_name().starts_with("agentic-retrieval/"),
-                    "{:?} should be under agentic-retrieval/, got: {}",
-                    kind,
-                    kind.directory_name()
-                );
-            } else {
-                assert!(
-                    kind.directory_name().starts_with("search-management/"),
-                    "{:?} should be under search-management/, got: {}",
-                    kind,
-                    kind.directory_name()
-                );
-            }
-        }
-        // Foundry agents are flat
-        assert_eq!(ResourceKind::Agent.directory_name(), "agents");
-    }
-
-    #[test]
-    fn test_display_names() {
-        assert_eq!(ResourceKind::Index.display_name(), "Index");
-        assert_eq!(ResourceKind::DataSource.display_name(), "Data Source");
-        assert_eq!(ResourceKind::KnowledgeBase.display_name(), "Knowledge Base");
-        assert_eq!(ResourceKind::Alias.display_name(), "Alias");
-        assert_eq!(ResourceKind::Agent.display_name(), "Agent");
-    }
-
-    #[test]
-    fn test_display_trait() {
-        assert_eq!(format!("{}", ResourceKind::Index), "Index");
-        assert_eq!(format!("{}", ResourceKind::Skillset), "Skillset");
-        assert_eq!(format!("{}", ResourceKind::Alias), "Alias");
-        assert_eq!(format!("{}", ResourceKind::Agent), "Agent");
-    }
-
-    #[test]
-    fn test_serde_roundtrip() {
-        let kind = ResourceKind::DataSource;
-        let json = serde_json::to_string(&kind).unwrap();
-        assert_eq!(json, "\"data-source\"");
-        let back: ResourceKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, kind);
-    }
-
-    #[test]
-    fn test_serde_roundtrip_alias() {
-        let kind = ResourceKind::Alias;
-        let json = serde_json::to_string(&kind).unwrap();
-        assert_eq!(json, "\"alias\"");
-        let back: ResourceKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, kind);
-    }
-
-    #[test]
-    fn test_serde_roundtrip_agent() {
-        let kind = ResourceKind::Agent;
-        let json = serde_json::to_string(&kind).unwrap();
-        assert_eq!(json, "\"agent\"");
-        let back: ResourceKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, kind);
-    }
-
-    #[test]
-    fn test_cli_flag_names() {
-        assert_eq!(ResourceKind::Index.cli_flag_name(), "index");
-        assert_eq!(ResourceKind::Indexer.cli_flag_name(), "indexer");
-        assert_eq!(ResourceKind::DataSource.cli_flag_name(), "datasource");
-        assert_eq!(ResourceKind::Skillset.cli_flag_name(), "skillset");
-        assert_eq!(ResourceKind::SynonymMap.cli_flag_name(), "synonymmap");
-        assert_eq!(ResourceKind::Alias.cli_flag_name(), "alias");
-        assert_eq!(ResourceKind::KnowledgeBase.cli_flag_name(), "knowledgebase");
-        assert_eq!(
-            ResourceKind::KnowledgeSource.cli_flag_name(),
-            "knowledgesource"
-        );
-        assert_eq!(ResourceKind::Agent.cli_flag_name(), "agent");
-    }
-
-    #[test]
-    fn test_cli_flag_names_plural() {
-        assert_eq!(ResourceKind::Index.cli_flag_name_plural(), "indexes");
-        assert_eq!(ResourceKind::Alias.cli_flag_name_plural(), "aliases");
-        assert_eq!(ResourceKind::Agent.cli_flag_name_plural(), "agents");
-    }
-
-    #[test]
-    fn test_all_kinds_in_stable_or_preview() {
+    fn cli_names_roundtrip() {
         for kind in ResourceKind::all() {
-            if kind.domain() == ServiceDomain::Search {
-                if kind.is_preview() {
-                    assert!(!ResourceKind::stable().contains(kind));
-                } else {
-                    assert!(ResourceKind::stable().contains(kind));
-                }
-            }
+            assert_eq!(ResourceKind::from_cli_name(kind.cli_name()), Some(*kind));
         }
     }
 
     #[test]
-    fn test_domain_search_kinds() {
-        let search = ResourceKind::search_kinds();
-        assert_eq!(search.len(), 8);
-        for kind in &search {
-            assert_eq!(kind.domain(), ServiceDomain::Search);
-        }
-    }
-
-    #[test]
-    fn test_domain_foundry_kinds() {
-        let foundry = ResourceKind::foundry_kinds();
-        assert_eq!(foundry.len(), 1);
-        assert_eq!(foundry[0], ResourceKind::Agent);
-        for kind in &foundry {
-            assert_eq!(kind.domain(), ServiceDomain::Foundry);
-        }
-    }
-
-    #[test]
-    fn test_agent_domain_is_foundry() {
-        assert_eq!(ResourceKind::Agent.domain(), ServiceDomain::Foundry);
-    }
-
-    #[test]
-    fn test_search_resources_domain_is_search() {
-        for kind in ResourceKind::stable() {
-            assert_eq!(kind.domain(), ServiceDomain::Search);
-        }
-        assert_eq!(ResourceKind::Alias.domain(), ServiceDomain::Search);
+    fn domains() {
+        assert_eq!(ResourceKind::Index.domain(), ServiceDomain::Search);
         assert_eq!(ResourceKind::KnowledgeBase.domain(), ServiceDomain::Search);
+        assert_eq!(ResourceKind::Agent.domain(), ServiceDomain::Foundry);
+        assert_eq!(ResourceKind::Deployment.domain(), ServiceDomain::Foundry);
+        assert_eq!(ResourceKind::Connection.domain(), ServiceDomain::Foundry);
+        assert_eq!(ResourceKind::Guardrail.domain(), ServiceDomain::Foundry);
+        assert_eq!(ResourceKind::search_kinds().len(), 8);
+        assert_eq!(ResourceKind::foundry_kinds().len(), 4);
+    }
+
+    #[test]
+    fn resource_ref_key() {
+        let r = ResourceRef::new(ResourceKind::Index, "docs");
+        assert_eq!(r.key(), "indexes/docs");
+        assert_eq!(r.to_string(), "indexes/docs");
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        for kind in ResourceKind::all() {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: ResourceKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, *kind);
+        }
         assert_eq!(
-            ResourceKind::KnowledgeSource.domain(),
-            ServiceDomain::Search
+            serde_json::to_string(&ResourceKind::DataSource).unwrap(),
+            "\"data-source\""
         );
     }
 
     #[test]
-    fn test_search_plus_foundry_equals_all() {
-        let mut combined = ResourceKind::search_kinds();
-        combined.extend(ResourceKind::foundry_kinds());
-        assert_eq!(combined.len(), ResourceKind::all().len());
-        for kind in ResourceKind::all() {
-            assert!(combined.contains(kind));
-        }
-    }
-
-    #[test]
-    fn test_validate_resource_name_valid() {
+    fn validate_resource_name_rules() {
         assert!(validate_resource_name("my-index").is_ok());
-        assert!(validate_resource_name("my_index_123").is_ok());
-        assert!(validate_resource_name("a").is_ok());
-        assert!(validate_resource_name("index.v2").is_ok());
-        assert!(validate_resource_name("...").is_ok());
-    }
-
-    #[test]
-    fn test_validate_resource_name_empty() {
-        let err = validate_resource_name("").unwrap_err();
-        assert!(err.to_string().contains("empty"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_too_long() {
-        let long_name = "a".repeat(261);
-        let err = validate_resource_name(&long_name).unwrap_err();
-        assert!(err.to_string().contains("260"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_exactly_260_ok() {
-        let name = "a".repeat(260);
-        assert!(validate_resource_name(&name).is_ok());
-    }
-
-    #[test]
-    fn test_validate_resource_name_forward_slash() {
-        let err = validate_resource_name("foo/bar").unwrap_err();
-        assert!(err.to_string().contains("/"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_backslash() {
-        let err = validate_resource_name("foo\\bar").unwrap_err();
-        assert!(err.to_string().contains("\\"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_null_byte() {
-        let err = validate_resource_name("foo\0bar").unwrap_err();
-        assert!(err.to_string().contains("null"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_dot() {
-        let err = validate_resource_name(".").unwrap_err();
-        assert!(err.to_string().contains("'.'"));
-    }
-
-    #[test]
-    fn test_validate_resource_name_dotdot() {
-        let err = validate_resource_name("..").unwrap_err();
-        assert!(err.to_string().contains("'..'"));
+        assert!(validate_resource_name(&"a".repeat(260)).is_ok());
+        assert!(validate_resource_name("").is_err());
+        assert!(validate_resource_name(&"a".repeat(261)).is_err());
+        assert!(validate_resource_name("foo/bar").is_err());
+        assert!(validate_resource_name("foo\\bar").is_err());
+        assert!(validate_resource_name("foo\0bar").is_err());
+        assert!(validate_resource_name(".").is_err());
+        assert!(validate_resource_name("..").is_err());
     }
 }

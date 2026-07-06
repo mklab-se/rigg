@@ -359,7 +359,7 @@ mod tests {
         let map = ManagedMap::new();
         assert_eq!(
             resource_directory(ResourceKind::Index, "my-index", &map),
-            PathBuf::from("search-management/indexes")
+            PathBuf::from("indexes")
         );
     }
 
