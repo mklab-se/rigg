@@ -15,6 +15,7 @@ pub mod scaffold;
 pub mod service;
 pub mod state;
 pub mod templates;
+pub mod workspace;
 
 pub use config::{
     Config, ConfigError, EnvironmentConfig, FoundryServiceConfig, ResolvedEnvironment,
