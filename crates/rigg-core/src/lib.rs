@@ -9,6 +9,7 @@
 pub mod config;
 pub mod constraints;
 pub mod copy;
+pub mod graph;
 pub mod normalize;
 pub mod registry;
 pub mod resources;
