@@ -1,7 +1,7 @@
 //! Microsoft Foundry REST API client
 //!
 //! Manages Foundry agents via the project-scoped `/agents` API
-//! (new Foundry experience, API version `2025-05-15-preview`).
+//! (v1 stable data plane at `https://{account}.services.ai.azure.com/api/projects/{project}`).
 
 use std::time::Duration;
 
@@ -27,10 +27,32 @@ pub struct FoundryClient {
     base_url: String,
     project: String,
     api_version: String,
+    /// Optional `Foundry-Features` header values gating preview features
+    /// (e.g. `HostedAgents=V1Preview`).
+    features: Vec<String>,
 }
 
 impl FoundryClient {
-    /// Create a new Foundry client from service configuration
+    /// Create a client from a workspace foundry connection (v1 data plane).
+    pub fn from_connection(
+        conn: &rigg_core::workspace::FoundryConnection,
+    ) -> Result<Self, ClientError> {
+        let auth = get_auth_provider_for(rigg_core::ServiceDomain::Foundry)?;
+        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        Ok(Self {
+            http,
+            auth,
+            base_url: format!("https://{}.services.ai.azure.com", conn.account),
+            project: conn.project.clone(),
+            api_version: conn
+                .api_version
+                .clone()
+                .unwrap_or_else(|| rigg_core::registry::FOUNDRY_API_VERSION.to_string()),
+            features: Vec::new(),
+        })
+    }
+
+    /// Create a new Foundry client from service configuration (legacy).
     pub fn new(config: &FoundryServiceConfig) -> Result<Self, ClientError> {
         let auth = get_auth_provider_for(rigg_core::ServiceDomain::Foundry)?;
         let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
@@ -40,7 +62,8 @@ impl FoundryClient {
             auth,
             base_url: config.service_url(),
             project: config.project.clone(),
-            api_version: config.api_version.clone(),
+            api_version: rigg_core::registry::FOUNDRY_API_VERSION.to_string(),
+            features: Vec::new(),
         })
     }
 
@@ -59,7 +82,14 @@ impl FoundryClient {
             base_url,
             project,
             api_version,
+            features: Vec::new(),
         })
+    }
+
+    /// Enable preview feature gates sent via the `Foundry-Features` header.
+    pub fn with_features(mut self, features: &[&str]) -> Self {
+        self.features = features.iter().map(|s| s.to_string()).collect();
+        self
     }
 
     /// Build URL for the agents collection
@@ -106,6 +136,10 @@ impl FoundryClient {
             .request(method.clone(), url)
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json");
+
+        if !self.features.is_empty() {
+            request = request.header("Foundry-Features", self.features.join(","));
+        }
 
         if let Some(json) = body {
             request = request.json(json);
@@ -423,7 +457,7 @@ mod tests {
         FoundryClient::with_auth(
             "https://my-ai-svc.services.ai.azure.com".to_string(),
             "my-project".to_string(),
-            "2025-05-15-preview".to_string(),
+            "v1".to_string(),
             Box::new(FakeAuth),
         )
         .unwrap()
@@ -435,7 +469,7 @@ mod tests {
         let url = client.agents_url();
         assert_eq!(
             url,
-            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents?api-version=2025-05-15-preview"
+            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents?api-version=v1"
         );
     }
 
@@ -445,7 +479,7 @@ mod tests {
         let url = client.agent_url("Regulus");
         assert_eq!(
             url,
-            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents/Regulus?api-version=2025-05-15-preview"
+            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents/Regulus?api-version=v1"
         );
     }
 
@@ -455,7 +489,7 @@ mod tests {
         let url = client.agent_versions_url("KITT");
         assert_eq!(
             url,
-            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents/KITT/versions?api-version=2025-05-15-preview"
+            "https://my-ai-svc.services.ai.azure.com/api/projects/my-project/agents/KITT/versions?api-version=v1"
         );
     }
 
