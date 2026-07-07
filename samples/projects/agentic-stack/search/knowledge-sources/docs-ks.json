@@ -1,0 +1,8 @@
+{
+  "name": "docs-ks",
+  "kind": "searchIndex",
+  "description": "Explicit knowledge source over an existing index.",
+  "searchIndexParameters": {
+    "searchIndexName": "docs-index"
+  }
+}

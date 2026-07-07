@@ -1,0 +1,9 @@
+{
+  "name": "quickstart-kb",
+  "description": "Agentic retrieval over the listed knowledge sources.",
+  "knowledgeSources": [
+    {
+      "name": "quickstart-ks"
+    }
+  ]
+}

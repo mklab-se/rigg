@@ -1,0 +1,10 @@
+{
+  "name": "docs-indexer",
+  "dataSourceName": "docs-ds",
+  "targetIndexName": "docs-index",
+  "skillsetName": "docs-skills",
+  "schedule": null,
+  "parameters": {
+    "configuration": {}
+  }
+}

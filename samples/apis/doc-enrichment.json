@@ -1,0 +1,110 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "doc-enrichment",
+    "version": "1.0.0",
+    "description": "Custom Web API skill contract. Implement this API (e.g. as an Azure Function) and point a skillset WebApiSkill at it with \"x-rigg-api\": \"doc-enrichment\"."
+  },
+  "paths": {
+    "/api/enrich": {
+      "post": {
+        "operationId": "doc-enrichment",
+        "summary": "Enrich a batch of documents",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrichmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Enriched values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrichmentResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EnrichmentRequest": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "recordId",
+                "data"
+              ],
+              "properties": {
+                "recordId": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "object",
+                  "description": "Skill inputs — replace with your input fields",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "EnrichmentResponse": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "recordId",
+                "data"
+              ],
+              "properties": {
+                "recordId": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "object",
+                  "description": "Skill outputs — replace with your output fields",
+                  "additionalProperties": true
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

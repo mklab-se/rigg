@@ -1,0 +1,14 @@
+{
+  "name": "product-catalog",
+  "type": "azuresql",
+  "credentials": {
+    "connectionString": "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Sql/servers/<server>;Database=catalog;Connection Timeout=30;"
+  },
+  "container": {
+    "name": "[dbo].[Products]"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.SqlIntegratedChangeTrackingPolicy"
+  },
+  "dataDeletionDetectionPolicy": null
+}

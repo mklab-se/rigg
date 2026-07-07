@@ -1,0 +1,12 @@
+{
+  "name": "reservations-indexer",
+  "dataSourceName": "hotel-reservations",
+  "targetIndexName": "reservations-index",
+  "skillsetName": null,
+  "schedule": {
+    "interval": "PT15M"
+  },
+  "parameters": {
+    "configuration": {}
+  }
+}

@@ -1,0 +1,7 @@
+# Rigg workspace configuration.
+# Resource definitions live in projects/<name>/ — see `rigg new project`.
+environments:
+  demo:
+    default: true
+    search: { service: your-search-service }
+    foundry: { account: your-foundry-account, project: your-foundry-project }

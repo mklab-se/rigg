@@ -1,0 +1,10 @@
+{
+  "name": "quickstart-indexer",
+  "dataSourceName": "quickstart-docs",
+  "targetIndexName": "quickstart-index",
+  "skillsetName": null,
+  "schedule": null,
+  "parameters": {
+    "configuration": {}
+  }
+}
