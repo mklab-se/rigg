@@ -8,5 +8,7 @@
     "name": "<container-name>"
   },
   "dataChangeDetectionPolicy": null,
-  "dataDeletionDetectionPolicy": null
+  "dataDeletionDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"
+  }
 }

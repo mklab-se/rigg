@@ -74,13 +74,42 @@ fn scaffold_datasource(name: &str, ds_type: &str) -> Result<Value, String> {
             json!({"name": "<container-or-table>"}),
         ),
     };
+    // Deletion tracking is on by default: without it, deleted source data
+    // stays in the index forever — almost never what anyone wants.
+    let (change_policy, deletion_policy) = match ds_type {
+        "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" => (
+            json!(null),
+            json!({
+                "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"
+            }),
+        ),
+        "cosmosdb" => (
+            json!({
+                "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+                "highWaterMarkColumnName": "_ts"
+            }),
+            json!({
+                "@odata.type": "#Microsoft.Azure.Search.SoftDeleteColumnDeletionDetectionPolicy",
+                "softDeleteColumnName": "isDeleted",
+                "softDeleteMarkerValue": "true"
+            }),
+        ),
+        "azuresql" => (
+            // Integrated change tracking detects deletes too; no separate policy.
+            json!({
+                "@odata.type": "#Microsoft.Azure.Search.SqlIntegratedChangeTrackingPolicy"
+            }),
+            json!(null),
+        ),
+        _ => (json!(null), json!(null)),
+    };
     Ok(json!({
         "name": name,
         "type": ds_type,
         "credentials": {"connectionString": connection_string},
         "container": container,
-        "dataChangeDetectionPolicy": null,
-        "dataDeletionDetectionPolicy": null
+        "dataChangeDetectionPolicy": change_policy,
+        "dataDeletionDetectionPolicy": deletion_policy
     }))
 }
 
