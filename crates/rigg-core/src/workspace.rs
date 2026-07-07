@@ -139,6 +139,10 @@ pub struct SearchConnection {
     pub name: Option<String>,
     /// Azure AI Search service name (e.g. `mklabsrch`).
     pub service: String,
+    /// Full endpoint override (sovereign clouds, testing). Default:
+    /// `https://{service}.search.windows.net`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Override for the stable data-plane api-version.
     #[serde(
         default,
@@ -162,6 +166,10 @@ pub struct FoundryConnection {
     pub name: Option<String>,
     /// Foundry account name (e.g. `mklabaifndr`).
     pub account: String,
+    /// Full endpoint override (sovereign clouds, testing). Default:
+    /// `https://{account}.services.ai.azure.com`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Foundry project name (e.g. `proj-default`).
     pub project: String,
     /// Override for the data-plane api-version (default `v1`).

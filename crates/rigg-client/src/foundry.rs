@@ -42,7 +42,11 @@ impl FoundryClient {
         Ok(Self {
             http,
             auth,
-            base_url: format!("https://{}.services.ai.azure.com", conn.account),
+            base_url: conn
+                .endpoint
+                .clone()
+                .map(|e| e.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| format!("https://{}.services.ai.azure.com", conn.account)),
             project: conn.project.clone(),
             api_version: conn
                 .api_version
