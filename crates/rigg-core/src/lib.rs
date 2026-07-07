@@ -10,6 +10,7 @@ pub mod config;
 pub mod graph;
 pub mod identity;
 pub mod normalize;
+pub mod openapi;
 pub mod registry;
 pub mod resources;
 pub mod scaffold;

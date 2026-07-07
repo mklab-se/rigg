@@ -200,6 +200,16 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&value)?);
     }
 
+    if !failures.is_empty() && crate::commands::ai_assist::ai_on(ctx) {
+        if let Ok(advice) = crate::commands::ai_assist::explain_doctor(&failures).await {
+            println!();
+            println!("AI advice (ailloy):");
+            for line in advice.lines() {
+                println!("  {line}");
+            }
+        }
+    }
+
     if failures.is_empty() {
         println!();
         println!("{} identity wiring looks good", "✓".green().bold());

@@ -19,10 +19,9 @@ pub async fn generate_text_with_limit(
     max_tokens: u32,
 ) -> anyhow::Result<String> {
     let client = Client::from_config()?;
-    let opts = ChatOptions::builder()
-        .temperature(0.3)
-        .max_tokens(max_tokens)
-        .build();
+    // No temperature override: several current models (gpt-5.x chat) only
+    // accept their default temperature.
+    let opts = ChatOptions::builder().max_tokens(max_tokens).build();
     let response = client
         .chat_with(
             &[Message::system(system_prompt), Message::user(user_prompt)],

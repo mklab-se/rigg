@@ -36,6 +36,18 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
     print!("{output}");
 
     let has_drift = diffs.iter().any(|(_, d)| !d.is_equal);
+    if has_drift && args.format == DiffFormat::Text && crate::commands::ai_assist::ai_on(ctx) {
+        match crate::commands::ai_assist::explain_diff(&output).await {
+            Ok(summary) => {
+                println!();
+                println!("AI summary (ailloy):");
+                for line in summary.lines() {
+                    println!("  {line}");
+                }
+            }
+            Err(e) => eprintln!("note: AI summary unavailable ({e})"),
+        }
+    }
     if args.exit_code && has_drift {
         return Err(anyhow!(CommandError::DriftOrConflict(
             "differences found".to_string()

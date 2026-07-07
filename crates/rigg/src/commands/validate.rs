@@ -186,10 +186,34 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
 }
 
 fn check_api_links(ws: &Workspace, value: &Value, display: &str, problems: &mut Vec<String>) {
+    // Walk skills so the contract check sees the whole skill object.
+    if let Some(skills) = value.get("skills").and_then(Value::as_array) {
+        for skill in skills {
+            let Some(api) = skill.get(X_RIGG_API).and_then(Value::as_str) else {
+                continue;
+            };
+            let path = ws.apis_dir().join(format!("{api}.json"));
+            if !path.is_file() {
+                problems.push(format!(
+                    "[{display}] x-rigg-api '{api}' has no spec at apis/{api}.json (create with `rigg new api {api}`)"
+                ));
+                continue;
+            }
+            let spec = match rigg_core::openapi::load(&path) {
+                Ok(spec) => spec,
+                Err(e) => {
+                    problems.push(format!("[{display}] apis/{api}.json: {e}"));
+                    continue;
+                }
+            };
+            check_skill_contract(skill, api, &spec, display, problems);
+        }
+    }
+    // Non-skillset x-rigg-api references still need the spec to exist.
     collect_key(value, X_RIGG_API, &mut |v| {
         if let Some(api) = v.as_str() {
             let path = ws.apis_dir().join(format!("{api}.json"));
-            if !path.is_file() {
+            if !path.is_file() && value.get("skills").is_none() {
                 problems.push(format!(
                     "[{display}] x-rigg-api '{api}' has no spec at apis/{api}.json (create with `rigg new api {api}`)"
                 ));
@@ -209,6 +233,51 @@ fn check_api_links(ws: &Workspace, value: &Value, display: &str, problems: &mut 
             }
         }
     });
+}
+
+/// Verify a WebApiSkill against its OpenAPI contract (spec §9).
+fn check_skill_contract(
+    skill: &Value,
+    api: &str,
+    spec: &rigg_core::openapi::ApiSpec,
+    display: &str,
+    problems: &mut Vec<String>,
+) {
+    // URI path must match one of the spec's paths (compared by path suffix).
+    if let Some(uri) = skill.get("uri").and_then(Value::as_str) {
+        if let Ok(parsed) = reqwest::Url::parse(uri) {
+            let uri_path = parsed.path();
+            if !uri_path.is_empty()
+                && uri_path != "/"
+                && !spec.paths.iter().any(|p| uri_path.ends_with(p.as_str()))
+            {
+                problems.push(format!(
+                    "[{display}] WebApiSkill uri path '{uri_path}' does not match any path in apis/{api}.json ({})",
+                    spec.paths.join(", ")
+                ));
+            }
+        }
+    }
+    if !spec.open_props {
+        for (field, props) in [
+            ("inputs", &spec.request_data_props),
+            ("outputs", &spec.response_data_props),
+        ] {
+            if let Some(entries) = skill.get(field).and_then(Value::as_array) {
+                for entry in entries {
+                    let Some(name) = entry.get("name").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if !props.contains(&name.to_string()) {
+                        problems.push(format!(
+                            "[{display}] skill {field} '{name}' is not in apis/{api}.json's data schema ({})",
+                            props.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn collect_key(value: &Value, key: &str, f: &mut dyn FnMut(&Value)) {

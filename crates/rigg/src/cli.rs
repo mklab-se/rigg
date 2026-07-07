@@ -47,6 +47,10 @@ pub struct Cli {
     /// Disable colored output
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    /// Disable AI assistance for this invocation (even when `rigg ai` is enabled)
+    #[arg(long, global = true)]
+    pub no_ai: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
