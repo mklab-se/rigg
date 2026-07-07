@@ -424,3 +424,50 @@ fn validate_checks_webapi_skill_contract() {
         .stdout(predicate::str::contains("wrong-path"))
         .stdout(predicate::str::contains("nonexistent"));
 }
+
+#[test]
+fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missing() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "new",
+            "data-source",
+            "blob-ds",
+            "-p",
+            "demo",
+            "--type",
+            "azureblob",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            ws.path()
+                .join("projects/demo/search/data-sources/blob-ds.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        v["dataDeletionDetectionPolicy"]["@odata.type"]
+            .as_str()
+            .unwrap()
+            .contains("NativeBlobSoftDelete"),
+        "blob scaffold must default to deletion tracking"
+    );
+
+    // strip the policy → validate warns (but does not fail)
+    let dir = ws.path().join("projects/demo/search/data-sources");
+    std::fs::write(
+        dir.join("no-del.json"),
+        r#"{"name": "no-del", "type": "azureblob", "credentials": {"connectionString": "ResourceId=/subscriptions/x;"}, "container": {"name": "c"}}"#,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "demo"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no deletion tracking"));
+}

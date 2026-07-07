@@ -152,10 +152,41 @@ fn validate_project(
                     Ok(None) => {}
                     Err(e) => problems.push(format!("[{display}] {e}")),
                 }
+                warn_missing_deletion_tracking(ds_type, &value, &display);
             } else {
                 problems.push(format!("[{display}] data source missing \"type\""));
             }
         }
+    }
+}
+
+/// Warn when a data source cannot detect deletions: removed source documents
+/// would stay in the index forever. SQL integrated change tracking covers
+/// deletes by itself; everything else needs an explicit deletion policy.
+fn warn_missing_deletion_tracking(ds_type: &str, value: &Value, display: &str) {
+    let has_deletion_policy = value
+        .get("dataDeletionDetectionPolicy")
+        .is_some_and(|p| !p.is_null());
+    let integrated_sql = value
+        .get("dataChangeDetectionPolicy")
+        .and_then(|p| p.get("@odata.type"))
+        .and_then(Value::as_str)
+        .is_some_and(|t| t.contains("SqlIntegratedChangeTracking"));
+    if !has_deletion_policy && !integrated_sql {
+        let hint = match ds_type {
+            "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" => {
+                "add NativeBlobSoftDeleteDeletionDetectionPolicy (and enable blob soft delete on the storage account)"
+            }
+            "cosmosdb" => "add SoftDeleteColumnDeletionDetectionPolicy on a soft-delete column",
+            "azuresql" => {
+                "use SqlIntegratedChangeTrackingPolicy (covers deletes) or a soft-delete column policy"
+            }
+            _ => "add a dataDeletionDetectionPolicy suited to the source",
+        };
+        eprintln!(
+            "{} [{display}] no deletion tracking — documents removed from the source will remain in the index; {hint}",
+            "warning:".yellow()
+        );
     }
 }
 

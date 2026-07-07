@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-07-07
+
+### Changed
+
+- **Deletion tracking is now the default** for data source scaffolds: blob
+  family gets `NativeBlobSoftDeleteDeletionDetectionPolicy`, Cosmos DB gets a
+  `_ts` high-water-mark change policy + soft-delete column policy, Azure SQL
+  gets `SqlIntegratedChangeTrackingPolicy` (which covers deletes). Without
+  deletion tracking, documents removed from the source stay in the index —
+  almost never what anyone wants.
+- `rigg validate` warns about data sources with no deletion tracking, with a
+  per-type hint for how to add it.
+
 ## [1.0.0] - 2026-07-07
 
 The first stable release. Rigg 1.0 completes the redesign begun in 0.18
