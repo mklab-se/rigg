@@ -294,8 +294,13 @@ impl ProjectState {
     }
 
     /// Checksum of the push-normalized form of a document.
+    ///
+    /// The form is canonicalized (object keys sorted recursively, arrays of
+    /// named objects sorted by name) so that server-side reordering between
+    /// GET and PUT responses never reads as a change — matching the semantics
+    /// of the order-insensitive diff.
     pub fn checksum(kind: ResourceKind, value: &Value) -> String {
-        let normalized = normalize_for_push(kind, value);
+        let normalized = canonical_form(&normalize_for_push(kind, value));
         let canonical = serde_json::to_string(&normalized).unwrap_or_default();
         format!("{:x}", md5_like(&canonical))
     }
@@ -356,6 +361,41 @@ impl ProjectState {
                 }
             }
         }
+    }
+}
+
+/// Order-canonical JSON: object keys sorted recursively; arrays whose items
+/// all carry a string `name` are sorted by it (identity-keyed arrays).
+fn canonical_form(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            // null-valued keys are dropped: Azure oscillates between omitting
+            // a field and returning it as null depending on the endpoint.
+            let mut sorted: Vec<(String, Value)> = map
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), canonical_form(v)))
+                .collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(sorted.into_iter().collect())
+        }
+        Value::Array(arr) => {
+            let mut items: Vec<Value> = arr.iter().map(canonical_form).collect();
+            if !items.is_empty()
+                && items
+                    .iter()
+                    .all(|i| i.get("name").and_then(Value::as_str).is_some())
+            {
+                items.sort_by(|a, b| {
+                    a["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .cmp(b["name"].as_str().unwrap_or_default())
+                });
+            }
+            Value::Array(items)
+        }
+        other => other.clone(),
     }
 }
 
@@ -514,6 +554,23 @@ mod tests {
         state.save(&ws, "dev", "p").unwrap();
         let loaded = ProjectState::load(&ws, "dev", "p");
         assert_eq!(loaded.baseline(&r), state.baseline(&r));
+    }
+
+    #[test]
+    fn checksum_is_order_canonical() {
+        // same content, different key order and array order
+        let a = serde_json::from_str::<Value>(
+            r#"{"name": "i", "fields": [{"name": "b"}, {"name": "a"}], "x": 1}"#,
+        )
+        .unwrap();
+        let b = serde_json::from_str::<Value>(
+            r#"{"x": 1, "name": "i", "fields": [{"name": "a"}, {"name": "b"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ProjectState::checksum(ResourceKind::Index, &a),
+            ProjectState::checksum(ResourceKind::Index, &b)
+        );
     }
 
     #[test]

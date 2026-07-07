@@ -125,13 +125,18 @@ fn validate_project(
                 continue;
             }
             let target = ResourceRef::new(kind, name.clone());
-            let in_workspace = workspace_refs.contains(&target);
-            if !in_workspace {
-                let cross_domain = kind.domain() != r.kind.domain();
-                if strict || !cross_domain {
+            if !workspace_refs.contains(&target) {
+                // The target may legitimately live outside rigg (pre-existing
+                // Azure resource). Warn by default; --strict makes it an error.
+                if strict {
                     problems.push(format!(
                         "[{display}] references {target} which does not exist in this workspace"
                     ));
+                } else {
+                    eprintln!(
+                        "{} [{display}] references {target} — not in this workspace (must already exist in Azure)",
+                        "warning:".yellow()
+                    );
                 }
             }
         }

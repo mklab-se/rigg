@@ -129,7 +129,7 @@ fn validate_placeholder_reference_fails() {
         .assert()
         .code(3)
         .stdout(predicate::str::contains("placeholder"))
-        .stdout(predicate::str::contains("missing-index"));
+        .stderr(predicate::str::contains("missing-index"));
 }
 
 #[test]

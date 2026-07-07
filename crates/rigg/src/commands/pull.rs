@@ -114,10 +114,9 @@ async fn pull_project(
         let local = store.read(r).ok();
         match state.classify(r, local.as_ref(), Some(doc)) {
             SyncClass::InSync => {
-                // content equal — ensure baseline exists (first pull of tracked file)
-                if state.baseline(r).is_none() {
-                    state.set_baseline(r, doc);
-                }
+                // Content equal — refresh the baseline unconditionally so a
+                // stale baseline (e.g. after both sides converged) self-heals.
+                state.set_baseline(r, doc);
             }
             SyncClass::RemoteAhead | SyncClass::RemoteOnly => {
                 if store.write(r, doc)? {
