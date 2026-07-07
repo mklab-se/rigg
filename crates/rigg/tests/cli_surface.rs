@@ -372,10 +372,8 @@ fn validate_checks_webapi_skill_contract() {
     let mut spec: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&spec_path).unwrap()).unwrap();
     let schemas = &mut spec["components"]["schemas"];
-    schemas["EnrichmentRequest"]["properties"]["values"]["items"]["properties"]["data"] =
-        serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "additionalProperties": false});
-    schemas["EnrichmentResponse"]["properties"]["values"]["items"]["properties"]["data"] =
-        serde_json::json!({"type": "object", "properties": {"translation": {"type": "string"}}, "additionalProperties": false});
+    schemas["EnrichmentRequest"]["properties"]["values"]["items"]["properties"]["data"] = serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "additionalProperties": false});
+    schemas["EnrichmentResponse"]["properties"]["values"]["items"]["properties"]["data"] = serde_json::json!({"type": "object", "properties": {"translation": {"type": "string"}}, "additionalProperties": false});
     std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
 
     let dir = ws.path().join("projects/demo/search/skillsets");

@@ -190,8 +190,20 @@ async fn push_project(
             "name",
         );
         print!("{}", rigg_diff::output::format_text(&diff, &r.to_string()));
-        println!("  [l] push local  [r] keep remote (overwrites local file)  [s] skip");
-        match confirm::prompt_choice("resolve", &['l', 'r', 's'])? {
+        let ai = crate::commands::ai_assist::ai_on(ctx);
+        if ai {
+            println!(
+                "  [l] push local  [r] keep remote (overwrites local file)  [a] AI merge proposal  [s] skip"
+            );
+        } else {
+            println!("  [l] push local  [r] keep remote (overwrites local file)  [s] skip");
+        }
+        let options: &[char] = if ai {
+            &['l', 'r', 'a', 's']
+        } else {
+            &['l', 'r', 's']
+        };
+        match confirm::prompt_choice("resolve", options)? {
             'l' => to_push.push(PlanItem {
                 r: r.clone(),
                 body: local,
@@ -201,6 +213,48 @@ async fn push_project(
                 store.write(r, &remote_doc)?;
                 state.set_baseline(r, &remote_doc);
                 println!("  kept remote version for {r}");
+            }
+            'a' => {
+                println!("  asking ailloy for a merge proposal...");
+                match crate::commands::ai_assist::propose_merge(&r.to_string(), &local, &remote_doc)
+                    .await
+                {
+                    Ok(proposal) => {
+                        let vs_local = rigg_diff::semantic::diff(
+                            &normalize_for_push(r.kind, &local),
+                            &normalize_for_push(r.kind, &proposal),
+                            "name",
+                        );
+                        let vs_remote = rigg_diff::semantic::diff(
+                            &normalize_for_push(r.kind, &remote_doc),
+                            &normalize_for_push(r.kind, &proposal),
+                            "name",
+                        );
+                        println!("  proposal vs LOCAL:");
+                        print!(
+                            "{}",
+                            rigg_diff::output::format_text(&vs_local, &r.to_string())
+                        );
+                        println!("  proposal vs REMOTE:");
+                        print!(
+                            "{}",
+                            rigg_diff::output::format_text(&vs_remote, &r.to_string())
+                        );
+                        if confirm::prompt_yes_no(
+                            "  accept the proposal (writes the local file and pushes it)?",
+                        )? {
+                            store.write(r, &proposal)?;
+                            to_push.push(PlanItem {
+                                r: r.clone(),
+                                body: proposal,
+                                exists_remotely: true,
+                            });
+                        } else {
+                            println!("  discarded proposal; skipped {r}");
+                        }
+                    }
+                    Err(e) => println!("  AI merge failed ({e}); skipped {r}"),
+                }
             }
             _ => println!("  skipped {r}"),
         }

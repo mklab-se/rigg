@@ -1,6 +1,7 @@
 //! Command implementations and shared context.
 
 pub mod ai;
+pub mod ai_assist;
 pub mod auth;
 pub mod ci;
 pub mod completion;
@@ -102,6 +103,7 @@ pub struct GlobalContext {
     pub non_interactive: bool,
     #[allow(dead_code)] // reserved for quiet-mode output tuning
     pub quiet: bool,
+    pub no_ai: bool,
 }
 
 impl GlobalContext {
@@ -112,6 +114,7 @@ impl GlobalContext {
             yes: cli.yes,
             non_interactive: cli.non_interactive || !std::io::stdout().is_terminal(),
             quiet: cli.quiet,
+            no_ai: cli.no_ai,
         }
     }
 

@@ -40,7 +40,9 @@ pub fn parse(doc: &Value) -> Result<ApiSpec, String> {
     let mut response_data_props = Vec::new();
     let mut open_props = true;
     for item in paths_obj.values() {
-        let Some(post) = item.get("post") else { continue };
+        let Some(post) = item.get("post") else {
+            continue;
+        };
         let request_schema = post
             .pointer("/requestBody/content/application~1json/schema")
             .map(|s| resolve_ref(doc, s));
@@ -85,7 +87,11 @@ fn data_props(doc: &Value, envelope: &Value) -> (Vec<String>, bool) {
     let data = envelope
         .pointer("/properties/values/items")
         .map(|s| resolve_ref(doc, s))
-        .and_then(|items| items.pointer("/properties/data").map(|d| resolve_ref(doc, d)));
+        .and_then(|items| {
+            items
+                .pointer("/properties/data")
+                .map(|d| resolve_ref(doc, d))
+        });
     let Some(data) = data else {
         return (Vec::new(), true);
     };
