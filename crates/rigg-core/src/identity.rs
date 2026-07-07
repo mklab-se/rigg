@@ -97,29 +97,31 @@ pub fn identity_edges(ws: &Workspace) -> Vec<IdentityEdge> {
             let Ok(value) = store.read(&r) else { continue };
             match r.kind {
                 ResourceKind::DataSource => datasource_edges(&r.name, &value, &mut edges),
-                ResourceKind::KnowledgeBase => {
-                    if value.get("models").is_some_and(|m| !m.as_array().is_none_or(|a| a.is_empty()))
-                        || value.get("answerInstructions").is_some()
-                    {
-                        edges.push(IdentityEdge::rbac(
-                            Principal::SearchService,
-                            None,
-                            "Foundry account (model access)",
-                            roles::COGNITIVE_SERVICES_USER,
-                            format!("knowledge base '{}' uses a model for retrieval/synthesis", r.name),
-                        ));
-                    }
+                ResourceKind::KnowledgeBase
+                    if value
+                        .get("models")
+                        .is_some_and(|m| !m.as_array().is_none_or(|a| a.is_empty()))
+                        || value.get("answerInstructions").is_some() =>
+                {
+                    edges.push(IdentityEdge::rbac(
+                        Principal::SearchService,
+                        None,
+                        "Foundry account (model access)",
+                        roles::COGNITIVE_SERVICES_USER,
+                        format!(
+                            "knowledge base '{}' uses a model for retrieval/synthesis",
+                            r.name
+                        ),
+                    ));
                 }
-                ResourceKind::Skillset => {
-                    if value.to_string().contains("AzureOpenAI") {
-                        edges.push(IdentityEdge::rbac(
-                            Principal::SearchService,
-                            None,
-                            "Foundry account (model access)",
-                            roles::COGNITIVE_SERVICES_OPENAI_USER,
-                            format!("skillset '{}' calls Azure OpenAI", r.name),
-                        ));
-                    }
+                ResourceKind::Skillset if value.to_string().contains("AzureOpenAI") => {
+                    edges.push(IdentityEdge::rbac(
+                        Principal::SearchService,
+                        None,
+                        "Foundry account (model access)",
+                        roles::COGNITIVE_SERVICES_OPENAI_USER,
+                        format!("skillset '{}' calls Azure OpenAI", r.name),
+                    ));
                 }
                 ResourceKind::Index => {
                     let has_vectorizer = value
@@ -163,7 +165,11 @@ pub fn identity_edges(ws: &Workspace) -> Vec<IdentityEdge> {
                     None,
                     format!("Key Vault {uri}"),
                     roles::KEY_VAULT_SECRETS_USER,
-                    format!("{} '{}' uses customer-managed encryption", r.kind.display_name(), r.name),
+                    format!(
+                        "{} '{}' uses customer-managed encryption",
+                        r.kind.display_name(),
+                        r.name
+                    ),
                 ));
             }
         }
@@ -172,7 +178,10 @@ pub fn identity_edges(ws: &Workspace) -> Vec<IdentityEdge> {
 }
 
 fn datasource_edges(name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
-    let ds_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    let ds_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let conn = value
         .get("credentials")
         .and_then(|c| c.get("connectionString"))
@@ -291,7 +300,9 @@ mod tests {
         assert_eq!(e.role_name, "Storage Blob Data Reader");
         assert_eq!(
             e.scope.as_deref(),
-            Some("/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct")
+            Some(
+                "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct"
+            )
         );
     }
 
@@ -337,7 +348,10 @@ mod tests {
         let roles: Vec<&str> = edges.iter().map(|e| e.role_name.as_str()).collect();
         assert!(roles.contains(&"Cognitive Services User"), "{roles:?}");
         assert!(roles.contains(&"Search Index Data Reader"), "{roles:?}");
-        assert!(roles.contains(&"Cognitive Services OpenAI User"), "{roles:?}");
+        assert!(
+            roles.contains(&"Cognitive Services OpenAI User"),
+            "{roles:?}"
+        );
         let grounding = edges
             .iter()
             .find(|e| e.role_name == "Search Index Data Reader")

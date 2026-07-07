@@ -9,6 +9,7 @@ pub mod delete;
 pub mod describe;
 pub mod dev;
 pub mod diff;
+pub mod doctor;
 pub mod env;
 pub mod init;
 pub mod mcp_cmd;

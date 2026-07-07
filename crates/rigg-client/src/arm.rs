@@ -255,8 +255,22 @@ fn deterministic_uuid(input: &str) -> String {
     let bytes = [h1.to_be_bytes(), h2.to_be_bytes()].concat();
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
     )
 }
 
@@ -372,16 +386,12 @@ impl ArmClient {
         principal_id: &str,
         role_definition_guid: &str,
     ) -> Result<(), ClientError> {
-        let assignment_name = deterministic_uuid(&format!(
-            "{scope}|{principal_id}|{role_definition_guid}"
-        ));
+        let assignment_name =
+            deterministic_uuid(&format!("{scope}|{principal_id}|{role_definition_guid}"));
         let url = format!(
             "{ARM_BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}?api-version=2022-04-01"
         );
-        let sub = scope
-            .split('/')
-            .nth(2)
-            .unwrap_or_default();
+        let sub = scope.split('/').nth(2).unwrap_or_default();
         let body = serde_json::json!({
             "properties": {
                 "roleDefinitionId": format!(
@@ -401,6 +411,28 @@ impl ArmClient {
         let status = response.status();
         // 409 = already exists → fine
         if status.is_success() || status.as_u16() == 409 {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        Err(ClientError::from_response(status.as_u16(), &text))
+    }
+
+    /// Enable a system-assigned managed identity on a resource (PATCH).
+    pub async fn enable_system_identity(
+        &self,
+        resource_id: &str,
+        api_version: &str,
+    ) -> Result<(), ClientError> {
+        let url = format!("{ARM_BASE_URL}{resource_id}?api-version={api_version}");
+        let response = self
+            .http
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&serde_json::json!({"identity": {"type": "SystemAssigned"}}))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
             return Ok(());
         }
         let text = response.text().await?;
