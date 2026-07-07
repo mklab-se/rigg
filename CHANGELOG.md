@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.0] - 2026-07-07
+
+### Added
+
+- **OpenAPI contract validation** — `rigg validate` now checks WebApiSkills
+  linked via `x-rigg-api` against their spec in `apis/`: the skill URI must
+  match a spec path, and (for closed contracts) skill inputs/outputs must
+  exist in the request/response `data` schemas.
+- **AI diff summaries** — `rigg diff` (text format) appends a plain-language
+  summary of what pushing would do, including cost/risk callouts.
+- **AI conflict-merge proposals** — the interactive push conflict menu gains
+  `[a] AI merge proposal`: ailloy merges both versions, rigg shows the
+  proposal diffed against local AND remote, and only a confirmed proposal is
+  written and pushed.
+- **AI doctor advice** — `rigg auth doctor` failures get tailored remediation
+  notes when AI is enabled.
+- **`--no-ai` global flag** — disable AI assistance per invocation.
+
+### Fixed
+
+- ailloy calls no longer set a temperature override (gpt-5.x chat models
+  reject non-default temperatures).
+
 ## [0.19.0] - 2026-07-07
 
 ### Added
