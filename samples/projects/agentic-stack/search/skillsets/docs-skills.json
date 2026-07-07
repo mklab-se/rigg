@@ -1,0 +1,47 @@
+{
+  "name": "docs-skills",
+  "description": "Splits documents and enriches them via the doc-enrichment custom Web API (see apis/doc-enrichment.json).",
+  "skills": [
+    {
+      "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
+      "name": "split",
+      "context": "/document",
+      "textSplitMode": "pages",
+      "maximumPageLength": 2000,
+      "inputs": [
+        {
+          "name": "text",
+          "source": "/document/content"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "textItems",
+          "targetName": "pages"
+        }
+      ]
+    },
+    {
+      "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+      "name": "doc-enrichment",
+      "description": "Custom enrichment implemented by you (or your AI agent) from apis/doc-enrichment.json",
+      "x-rigg-api": "doc-enrichment",
+      "uri": "https://REPLACE-with-your-function-app.azurewebsites.net/api/enrich",
+      "httpMethod": "POST",
+      "timeout": "PT30S",
+      "context": "/document",
+      "inputs": [
+        {
+          "name": "data",
+          "source": "/document/content"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "data",
+          "targetName": "enriched"
+        }
+      ]
+    }
+  ]
+}

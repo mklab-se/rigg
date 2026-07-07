@@ -1,0 +1,20 @@
+{
+  "name": "hotel-reservations",
+  "type": "cosmosdb",
+  "credentials": {
+    "connectionString": "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.DocumentDB/databaseAccounts/<cosmos-account>;Database=hotels;IdentityAuthType=AccessToken"
+  },
+  "container": {
+    "name": "reservations",
+    "query": "SELECT c.id, c.guestName, c.roomType, c.checkIn, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+    "highWaterMarkColumnName": "_ts"
+  },
+  "dataDeletionDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.SoftDeleteColumnDeletionDetectionPolicy",
+    "softDeleteColumnName": "isDeleted",
+    "softDeleteMarkerValue": "true"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "docs-kb",
+  "description": "Agentic retrieval over the listed knowledge sources.",
+  "knowledgeSources": [
+    {
+      "name": "docs-ks"
+    }
+  ]
+}

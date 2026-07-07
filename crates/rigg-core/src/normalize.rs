@@ -58,10 +58,20 @@ pub fn normalize_for_push(kind: ResourceKind, value: &Value) -> Value {
     out
 }
 
+/// Normalize for comparison: like `normalize_for_push`, and additionally
+/// strips write-only fields (which the server never echoes back).
+pub fn normalize_for_compare(kind: ResourceKind, value: &Value) -> Value {
+    let mut out = normalize_for_push(kind, value);
+    for field in crate::registry::meta(kind).write_only_fields {
+        strip_field(&mut out, field);
+    }
+    out
+}
+
 /// Are two documents semantically equal for this kind (after normalization)?
 pub fn semantic_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
-    let na = normalize_for_push(kind, a);
-    let nb = normalize_for_push(kind, b);
+    let na = normalize_for_compare(kind, a);
+    let nb = normalize_for_compare(kind, b);
     rigg_diff::semantic::diff(&na, &nb, "name").is_equal
 }
 

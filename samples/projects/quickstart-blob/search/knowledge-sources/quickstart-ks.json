@@ -1,0 +1,8 @@
+{
+  "name": "quickstart-ks",
+  "kind": "searchIndex",
+  "description": "Explicit knowledge source over an existing index.",
+  "searchIndexParameters": {
+    "searchIndexName": "quickstart-index"
+  }
+}

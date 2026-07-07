@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-07-07
+
+The first stable release. Rigg 1.0 completes the redesign begun in 0.18
+(see docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md):
+workspaces and projects, explicit resources on GA APIs, no secrets on disk,
+identity tooling, CI/CD workflows, OpenAPI-validated custom skills, and
+AI assistance — verified end-to-end against live Azure AI Search and
+Microsoft Foundry (full agentic-stack deploy, drift cycle, blob ingestion,
+agent round-trip, reverse-order teardown).
+
+### Added
+
+- **`samples/`** — one workspace, three documented projects:
+  `quickstart-blob` (minimal explicit pipeline), `agentic-stack` (skillset
+  with OpenAPI-linked custom Web API skill, knowledge base, Foundry agent +
+  deployment + guardrail), `cosmos-sql-patterns` (Cosmos DB / Azure SQL
+  change- and deletion-detection done right).
+- Rewritten docs (README, GETTING_STARTED, MCP, SKILLS) and agent skills
+  (`rigg-guide`, `/rigg-pull`, `/rigg-push`, `/rigg-status`).
+
+### Fixed
+
+- Write-only fields (data source connection strings) survive push
+  canonicalization and are excluded from drift comparison — Azure redacts
+  them in GET responses.
+- Foundry agent version-create responses are flattened correctly (top-level
+  `definition` shape); agents canonicalize losslessly.
+- `x-rigg-ref` endpoint injection is authoritative per environment (URLs are
+  recomputed on every push, enabling clean environment promotion).
+
 ## [0.20.0] - 2026-07-07
 
 ### Added

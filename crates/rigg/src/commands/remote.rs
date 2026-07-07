@@ -200,21 +200,19 @@ fn resolve_walk(search_service: &str, value: &mut Value) -> Result<()> {
                 .filter(|(dir, _)| *dir == "knowledge-bases")
                 .map(|(_, name)| name.to_string());
             if let Some(kb) = kb_ref {
-                // The knowledge base exposes an MCP endpoint for agent grounding.
+                // The knowledge base exposes an MCP endpoint for agent
+                // grounding. The x-rigg-ref annotation is authoritative:
+                // the URL is (re)computed for the target environment on
+                // every push, so one file set promotes across environments.
                 let mcp_url = format!(
                     "https://{search_service}.search.windows.net/knowledgeBases('{kb}')/mcp?api-version={}",
                     registry::SEARCH_STABLE_API_VERSION
                 );
-                for field in ["server_url", "url", "endpoint"] {
-                    let empty = map
-                        .get(field)
-                        .map(|v| v.as_str().is_none_or(str::is_empty))
-                        .unwrap_or(field == "server_url");
-                    if empty {
-                        map.insert(field.to_string(), Value::String(mcp_url.clone()));
-                        break;
-                    }
-                }
+                let field = ["server_url", "url", "endpoint"]
+                    .into_iter()
+                    .find(|f| map.contains_key(*f))
+                    .unwrap_or("server_url");
+                map.insert(field.to_string(), Value::String(mcp_url));
             }
             for (_, v) in map.iter_mut() {
                 resolve_walk(search_service, v)?;

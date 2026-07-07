@@ -1,0 +1,16 @@
+{
+  "name": "docs-agent",
+  "kind": "prompt",
+  "model": "docs-model",
+  "instructions": {
+    "$file": "docs-agent.instructions.md"
+  },
+  "tools": [
+    {
+      "type": "mcp",
+      "server_label": "knowledge",
+      "x-rigg-ref": "knowledge-bases/docs-kb",
+      "server_url": ""
+    }
+  ]
+}

@@ -69,6 +69,9 @@ pub struct KindMeta {
     /// Paths that may carry key material — validation rejects files where
     /// these contain anything but identity-based placeholders.
     pub secret_fields: &'static [&'static str],
+    /// Fields the server accepts on PUT but never returns on GET (redacted).
+    /// Kept in local files, sent on push, excluded from comparisons.
+    pub write_only_fields: &'static [&'static str],
     /// String fields extracted to Markdown sidecars on pull by default.
     pub sidecar_fields: &'static [&'static str],
     /// How this kind references other resources.
@@ -87,6 +90,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &[],
         secret_fields: &["credentials.connectionString"],
+        write_only_fields: &["credentials.connectionString"],
         sidecar_fields: &[],
         reference_fields: &[],
     },
@@ -102,6 +106,7 @@ static KINDS: &[KindMeta] = &[
             "encryptionKey.accessCredentials.applicationSecret",
             "vectorSearch.vectorizers[].azureOpenAIParameters.apiKey",
         ],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
     },
@@ -118,6 +123,7 @@ static KINDS: &[KindMeta] = &[
             "skills[].apiKey",
             "encryptionKey.accessCredentials.applicationSecret",
         ],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[
             // SearchIndexKnowledgeStore / index projections target the index by name.
@@ -136,6 +142,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &["status", "lastResult", "executionHistory", "limits"],
         secret_fields: &[],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[
             RefField {
@@ -161,6 +168,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &[],
         secret_fields: &["encryptionKey.accessCredentials.applicationSecret"],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
     },
@@ -173,6 +181,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &[],
         secret_fields: &[],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
             path: "indexes[]",
@@ -189,6 +198,7 @@ static KINDS: &[KindMeta] = &[
         // Explicit-only model: Rigg never manages Azure-created sub-resources.
         read_only_fields: &["createdResources", "ingestionPermissionOptions"],
         secret_fields: &["searchIndexParameters.apiKey"],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
             path: "searchIndexParameters.searchIndexName",
@@ -204,6 +214,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &[],
         secret_fields: &["models[].apiKey", "models[].azureOpenAIParameters.apiKey"],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
             path: "knowledgeSources[].name",
@@ -227,6 +238,7 @@ static KINDS: &[KindMeta] = &[
         ],
         read_only_fields: &[],
         secret_fields: &[],
+        write_only_fields: &[],
         sidecar_fields: &["instructions"],
         reference_fields: &[RefField {
             path: "model",
@@ -251,6 +263,7 @@ static KINDS: &[KindMeta] = &[
         ],
         read_only_fields: &[],
         secret_fields: &[],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
             path: "properties.raiPolicyName",
@@ -280,6 +293,7 @@ static KINDS: &[KindMeta] = &[
             "properties.credentials.pat",
             "properties.credentials.sas",
         ],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
     },
@@ -292,6 +306,7 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: &["id", "type", "systemData", "etag"],
         read_only_fields: &[],
         secret_fields: &[],
+        write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
     },

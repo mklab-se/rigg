@@ -1,0 +1,23 @@
+{
+  "name": "default-guardrail",
+  "properties": {
+    "mode": "Blocking",
+    "basePolicyName": "Microsoft.DefaultV2",
+    "contentFilters": [
+      {
+        "name": "Violence",
+        "blocking": true,
+        "enabled": true,
+        "severityThreshold": "Medium",
+        "source": "Prompt"
+      },
+      {
+        "name": "Violence",
+        "blocking": true,
+        "enabled": true,
+        "severityThreshold": "Medium",
+        "source": "Completion"
+      }
+    ]
+  }
+}

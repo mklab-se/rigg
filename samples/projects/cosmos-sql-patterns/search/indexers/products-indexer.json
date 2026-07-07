@@ -1,0 +1,12 @@
+{
+  "name": "products-indexer",
+  "dataSourceName": "product-catalog",
+  "targetIndexName": "products-index",
+  "skillsetName": null,
+  "schedule": {
+    "interval": "PT1H"
+  },
+  "parameters": {
+    "configuration": {}
+  }
+}
