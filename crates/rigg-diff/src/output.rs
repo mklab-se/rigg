@@ -281,3 +281,74 @@ mod tests {
         assert!(!output.contains("->"));
     }
 }
+
+/// Format a full diff report as Markdown (for PR comments).
+///
+/// Layout: `### <resource>` per changed resource with a fenced +/~/- hunk list.
+pub fn format_markdown(diffs: &[(String, DiffResult)]) -> String {
+    let changed: Vec<_> = diffs.iter().filter(|(_, d)| !d.is_equal).collect();
+    if changed.is_empty() {
+        return "✅ No differences.\n".to_string();
+    }
+    let mut out = String::new();
+    out.push_str(&format!(
+        "## rigg diff — {} resource(s) differ\n\n",
+        changed.len()
+    ));
+    for (name, result) in changed {
+        out.push_str(&format!(
+            "### `{}` — {} change(s)\n\n",
+            name,
+            result.changes.len()
+        ));
+        out.push_str("```diff\n");
+        for change in &result.changes {
+            match change.kind {
+                ChangeKind::Added => out.push_str(&format!(
+                    "+ {}: {}\n",
+                    change.path,
+                    format_value_preview(change.new_value.as_ref())
+                )),
+                ChangeKind::Removed => out.push_str(&format!(
+                    "- {}: {}\n",
+                    change.path,
+                    format_value_preview(change.old_value.as_ref())
+                )),
+                ChangeKind::Modified => out.push_str(&format!(
+                    "! {}: {} -> {}\n",
+                    change.path,
+                    format_value_preview(change.old_value.as_ref()),
+                    format_value_preview(change.new_value.as_ref())
+                )),
+            }
+        }
+        out.push_str("```\n\n");
+    }
+    out
+}
+
+#[cfg(test)]
+mod markdown_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn markdown_report_renders_hunks() {
+        let d = crate::semantic::diff(
+            &json!({"name": "i", "a": 1}),
+            &json!({"name": "i", "a": 2, "b": true}),
+            "name",
+        );
+        let md = format_markdown(&[("indexes/i".to_string(), d)]);
+        assert!(md.contains("### `indexes/i`"));
+        assert!(md.contains("```diff"));
+        assert!(md.contains("+ b: true"));
+        assert!(md.contains("! a: 1 -> 2"));
+    }
+
+    #[test]
+    fn markdown_report_clean() {
+        let d = crate::semantic::diff(&json!({"a": 1}), &json!({"a": 1}), "name");
+        assert_eq!(format_markdown(&[("x".into(), d)]), "✅ No differences.\n");
+    }
+}

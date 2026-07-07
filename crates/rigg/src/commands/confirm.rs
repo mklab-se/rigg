@@ -34,6 +34,36 @@ pub fn prompt_yes_default(message: &str) -> Result<bool> {
     ))
 }
 
+/// Prompt for a single-character choice from `options` (case-insensitive).
+/// Re-asks until a valid option is entered.
+pub fn prompt_choice(message: &str, options: &[char]) -> Result<char> {
+    let choices: String = options
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    loop {
+        print!("{} [{}] ", message, choices);
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+        if let Some(c) = input.trim().chars().next().map(|c| c.to_ascii_lowercase()) {
+            if options.contains(&c) {
+                return Ok(c);
+            }
+        }
+    }
+}
+
+/// Prompt for a free-text line.
+pub fn prompt_line(prompt: &str) -> Result<String> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input)?;
+    Ok(input.trim_end_matches(['\r', '\n']).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

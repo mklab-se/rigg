@@ -1,251 +1,122 @@
-//! Show project status
+//! `rigg status` — per-project sync classification + unmanaged remote resources.
+
+use std::collections::BTreeSet;
 
 use anyhow::Result;
+use colored::Colorize;
 use serde_json::json;
 
-use rigg_core::resources::ResourceKind;
-use rigg_core::state::LocalState;
+use rigg_core::store::{ProjectState, Store, SyncClass};
+use rigg_core::workspace::Workspace;
 
-use crate::cli::OutputFormat;
-use crate::commands::load_config_and_env;
+use crate::cli::StatusArgs;
+use crate::commands::remote::Remote;
+use crate::commands::{GlobalContext, load_workspace, resolve_env};
 
-fn count_resources(dir: &std::path::Path) -> usize {
-    if !dir.exists() {
-        return 0;
-    }
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-/// Count knowledge source directories (each subdirectory is one KS with its managed resources)
-fn count_ks_dirs(dir: &std::path::Path) -> usize {
-    if !dir.exists() {
-        return 0;
-    }
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-/// Count agent YAML files
-fn count_agent_files(dir: &std::path::Path) -> usize {
-    if !dir.exists() {
-        return 0;
-    }
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("yaml"))
-                .count()
-        })
-        .unwrap_or(0)
-}
-
-pub async fn run(output: OutputFormat, env_override: Option<&str>) -> Result<()> {
-    let (project_root, config, env) = load_config_and_env(env_override)?;
-    let files_root = config.files_root(&project_root);
-
-    // Load state
-    let state = LocalState::load_env(&project_root, &env.name)?;
-
-    // Count resources by type (across all search services)
-    let mut resource_counts = serde_json::Map::new();
-    let mut total = 0;
-
-    for search_svc in &env.search {
-        let search_base = env.search_service_dir(&files_root, search_svc);
-
-        for kind in ResourceKind::stable() {
-            let dir = search_base.join(kind.directory_name());
-            let count = count_resources(&dir);
-            let entry = resource_counts
-                .entry(kind.display_name().to_string())
-                .or_insert(json!(0));
-            *entry = json!(entry.as_u64().unwrap_or(0) + count as u64);
-            total += count;
-        }
-
-        if env.sync.include_preview {
-            // Knowledge bases are flat JSON files
-            let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
-            let kb_count = count_resources(&kb_dir);
-            let kb_entry = resource_counts
-                .entry(ResourceKind::KnowledgeBase.display_name().to_string())
-                .or_insert(json!(0));
-            *kb_entry = json!(kb_entry.as_u64().unwrap_or(0) + kb_count as u64);
-            total += kb_count;
-
-            // Knowledge sources are directories (each subdir = one KS with managed resources)
-            let ks_dir = search_base.join(ResourceKind::KnowledgeSource.directory_name());
-            let ks_count = count_ks_dirs(&ks_dir);
-            let ks_entry = resource_counts
-                .entry(ResourceKind::KnowledgeSource.display_name().to_string())
-                .or_insert(json!(0));
-            *ks_entry = json!(ks_entry.as_u64().unwrap_or(0) + ks_count as u64);
-            total += ks_count;
-        }
-    }
-
-    // Count Foundry agents
-    if env.has_foundry() {
-        let mut agent_total = 0;
-        for foundry_config in &env.foundry {
-            let agents_dir = env
-                .foundry_service_dir(&files_root, foundry_config)
-                .join("agents");
-            agent_total += count_agent_files(&agents_dir);
-        }
-        resource_counts.insert("Agent".to_string(), json!(agent_total));
-        total += agent_total;
-    }
-
-    // Get auth status
-    let auth_status = match rigg_client::auth::get_auth_provider() {
-        Ok(provider) => match provider.get_token() {
-            Ok(_) => format!("OK ({})", provider.method_name()),
-            Err(e) => format!("Failed - {}", e),
-        },
-        Err(e) => format!("Not configured - {}", e),
+pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
+    let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
+    let projects: Vec<_> = match args.project.as_deref() {
+        Some(name) => vec![ws.project(name)?],
+        None => ws.projects.iter().collect(),
     };
 
-    let last_sync = state
-        .last_sync
-        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-
-    let primary = env.primary_search_service();
-    let service_name = primary.map(|s| s.name.as_str()).unwrap_or("(none)");
-
-    match output {
-        OutputFormat::Json => {
-            let mut status = json!({
-                "project_root": project_root.display().to_string(),
-                "environment": env.name,
-                "service_name": service_name,
-                "include_preview": env.sync.include_preview,
-                "last_sync": last_sync,
-                "resources": resource_counts,
-                "total_resources": total,
-                "authentication": auth_status,
-            });
-            if let Some(svc) = primary {
-                status["service_url"] = json!(svc.service_url());
-                status["api_version"] = json!(&svc.api_version);
-                status["preview_api_version"] = json!(&svc.preview_api_version);
-            }
-            println!("{}", serde_json::to_string_pretty(&status)?);
+    // All owned keys across the workspace, for unmanaged detection.
+    let mut owned_by_any: BTreeSet<String> = BTreeSet::new();
+    for project in &ws.projects {
+        for (r, _) in Store::new(project).list()? {
+            owned_by_any.insert(r.key());
         }
-        OutputFormat::Text => {
-            println!("Project Status");
-            println!("==============");
-            println!();
-            println!("Project root: {}", project_root.display());
-            println!("Environment: {}", env.name);
-            if let Some(svc) = primary {
-                println!("Service: {}", svc.name);
-                println!("Service URL: {}", svc.service_url());
-                println!("API version: {}", svc.api_version);
-                if env.sync.include_preview {
-                    println!("Preview API: {} (enabled)", svc.preview_api_version);
-                }
-            }
-            println!();
-
-            if let Some(ref sync_time) = last_sync {
-                println!("Last sync: {}", sync_time);
-            } else {
-                println!("Last sync: never");
-            }
-            println!();
-
-            println!("Local Resources:");
-            println!("----------------");
-
-            for search_svc in &env.search {
-                let search_base = env.search_service_dir(&files_root, search_svc);
-                println!("  Search service: {}", search_svc.name);
-
-                for kind in ResourceKind::stable() {
-                    let dir = search_base.join(kind.directory_name());
-                    if !dir.exists() {
-                        println!("    {}: (none pulled)", kind.display_name());
-                    } else {
-                        let count = count_resources(&dir);
-                        println!("    {}: {}", kind.display_name(), count);
-                    }
-                }
-
-                if env.sync.include_preview {
-                    println!();
-                    println!("  Preview Resources:");
-
-                    // Knowledge bases are flat JSON files
-                    let kb_dir = search_base.join(ResourceKind::KnowledgeBase.directory_name());
-                    if !kb_dir.exists() {
-                        println!(
-                            "    {}: (none pulled)",
-                            ResourceKind::KnowledgeBase.display_name()
-                        );
-                    } else {
-                        let count = count_resources(&kb_dir);
-                        println!(
-                            "    {}: {}",
-                            ResourceKind::KnowledgeBase.display_name(),
-                            count
-                        );
-                    }
-
-                    // Knowledge sources are directories
-                    let ks_dir = search_base.join(ResourceKind::KnowledgeSource.directory_name());
-                    if !ks_dir.exists() {
-                        println!(
-                            "    {}: (none pulled)",
-                            ResourceKind::KnowledgeSource.display_name()
-                        );
-                    } else {
-                        let count = count_ks_dirs(&ks_dir);
-                        println!(
-                            "    {}: {}",
-                            ResourceKind::KnowledgeSource.display_name(),
-                            count
-                        );
-                    }
-                }
-            }
-
-            if env.has_foundry() {
-                println!();
-                println!("Foundry Resources:");
-                for foundry_config in &env.foundry {
-                    println!(
-                        "  Service: {}/{}",
-                        foundry_config.name, foundry_config.project
-                    );
-                }
-                let agent_count = resource_counts
-                    .get("Agent")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                println!("  Agent: {}", agent_count);
-            }
-
-            println!();
-            println!("Total: {} resource(s)", total);
-            println!();
-            println!("Authentication: {}", auth_status);
-        }
+        let state = ProjectState::load(&ws, &env.name, &project.name);
+        owned_by_any.extend(state.baselines.keys().cloned());
     }
 
+    let mut report = Vec::new();
+    for project in &projects {
+        let store = Store::new(project);
+        let remote = Remote::for_project(&env, project);
+        let state = ProjectState::load(&ws, &env.name, &project.name);
+
+        let mut rows = Vec::new();
+        let mut unmanaged = Vec::new();
+
+        if remote.has_search() || remote.has_foundry() {
+            let snapshot = remote.snapshot().await?;
+            let remote_map: std::collections::BTreeMap<String, &serde_json::Value> =
+                snapshot.iter().map(|(r, v)| (r.key(), v)).collect();
+
+            for (r, _) in store.list()? {
+                let local = store.read(&r).ok();
+                let remote_doc = remote_map.get(&r.key()).copied().cloned();
+                let class = state.classify(&r, local.as_ref(), remote_doc.as_ref());
+                rows.push((r, class));
+            }
+            for (r, _) in &snapshot {
+                if !owned_by_any.contains(&r.key()) {
+                    unmanaged.push(r.clone());
+                }
+            }
+        } else {
+            for (r, _) in store.list()? {
+                rows.push((r, SyncClass::LocalOnly));
+            }
+        }
+
+        report.push((project.name.clone(), rows, unmanaged));
+    }
+
+    if ctx.json() {
+        let value = json!(
+            report
+                .iter()
+                .map(|(name, rows, unmanaged)| json!({
+                    "project": name,
+                    "resources": rows.iter().map(|(r, c)| json!({
+                        "resource": r.key(),
+                        "state": c,
+                    })).collect::<Vec<_>>(),
+                    "unmanaged": unmanaged.iter().map(|r| r.key()).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>()
+        );
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
+    for (name, rows, unmanaged) in &report {
+        println!("{} (env: {})", name.bold(), env.name);
+        if rows.is_empty() {
+            println!("  (no resources)");
+        }
+        for (r, class) in rows {
+            let label = match class {
+                SyncClass::InSync => "in sync".green(),
+                SyncClass::LocalAhead => "local ahead (push pending)".yellow(),
+                SyncClass::RemoteAhead => "remote ahead (pull pending)".yellow(),
+                SyncClass::Conflict => "CONFLICT".red().bold(),
+                SyncClass::LocalOnly => "local only (push to create)".cyan(),
+                SyncClass::RemoteOnly => "remote only".cyan(),
+                SyncClass::Untracked => "untracked (never synced)".dimmed(),
+            };
+            println!("  {:<50} {label}", r.to_string());
+        }
+        if !unmanaged.is_empty() {
+            println!(
+                "  {} unmanaged remote resource(s): {}",
+                unmanaged.len(),
+                unmanaged
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!("    adopt with: rigg pull <project> --adopt <project>");
+        }
+        println!();
+    }
     Ok(())
 }
+
+// keep Workspace import used in signature evolution
+#[allow(unused)]
+fn _t(_: &Workspace) {}

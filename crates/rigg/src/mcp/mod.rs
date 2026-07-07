@@ -5,11 +5,11 @@ pub mod tools;
 use anyhow::Result;
 use rmcp::ServiceExt;
 
-use crate::cli::McpCommands;
+use crate::cli::{McpArgs, McpCommands};
 
 /// Run MCP subcommands
-pub async fn run(cmd: McpCommands) -> Result<()> {
-    match cmd {
+pub async fn run(args: McpArgs) -> Result<()> {
+    match args.command {
         McpCommands::Serve => serve().await,
         McpCommands::Install { target, scope } => install(target, scope),
     }
@@ -36,15 +36,13 @@ async fn serve() -> Result<()> {
 }
 
 /// Install rigg as an MCP server with AI tools
-fn install(target: crate::cli::McpInstallTarget, scope: crate::cli::McpInstallScope) -> Result<()> {
-    use crate::cli::{McpInstallScope, McpInstallTarget};
+fn install(target: crate::cli::McpTarget, scope: crate::cli::McpScope) -> Result<()> {
+    use crate::cli::{McpScope, McpTarget};
     match (target, scope) {
-        (McpInstallTarget::ClaudeCode, McpInstallScope::Workspace) => {
-            install_claude_code("project")
-        }
-        (McpInstallTarget::ClaudeCode, McpInstallScope::Global) => install_claude_code("user"),
-        (McpInstallTarget::VsCode, McpInstallScope::Workspace) => install_vscode_workspace(),
-        (McpInstallTarget::VsCode, McpInstallScope::Global) => install_vscode_global(),
+        (McpTarget::ClaudeCode, McpScope::Workspace) => install_claude_code("project"),
+        (McpTarget::ClaudeCode, McpScope::Global) => install_claude_code("user"),
+        (McpTarget::VsCode, McpScope::Workspace) => install_vscode_workspace(),
+        (McpTarget::VsCode, McpScope::Global) => install_vscode_global(),
     }
 }
 

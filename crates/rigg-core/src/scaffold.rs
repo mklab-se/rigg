@@ -1,301 +1,356 @@
-//! Resource scaffolding — generate clean template files for new resources
+//! Resource scaffolding: identity-first starter definitions for every kind.
 //!
-//! Each function returns a `serde_json::Value` representing a valid Azure resource
-//! definition with sensible defaults. No Azure connection required.
+//! Scaffolds NEVER contain key-based credentials. Data sources use managed
+//! identity via ResourceId connection strings; connections use
+//! ProjectManagedIdentity; model access relies on RBAC.
 
 use serde_json::{Value, json};
 
-/// Scaffold an Azure AI Search index definition.
+use crate::registry::{self, Channel};
+use crate::resources::traits::ResourceKind;
+
+/// Scaffold a starter definition for a resource kind.
 ///
-/// Basic: `id` (key) + `content` field.
-/// With `vector`: adds `contentVector` field + `vectorSearch` HNSW config.
-/// With `semantic`: adds `semantic` configuration referencing `content`.
-pub fn scaffold_index(name: &str, vector: bool, semantic: bool) -> Value {
-    let mut fields = vec![
-        json!({
-            "name": "id",
-            "type": "Edm.String",
-            "key": true,
-            "filterable": true
-        }),
-        json!({
-            "name": "content",
-            "type": "Edm.String",
-            "searchable": true
-        }),
-    ];
-
-    if vector {
-        fields.push(json!({
-            "name": "contentVector",
-            "type": "Collection(Edm.Single)",
-            "searchable": true,
-            "dimensions": 1536,
-            "vectorSearchProfile": "default-vector-profile"
-        }));
-    }
-
-    let mut index = json!({
-        "name": name,
-        "fields": fields
-    });
-
-    if vector {
-        index["vectorSearch"] = json!({
-            "algorithms": [{
-                "name": "default-hnsw",
-                "kind": "hnsw",
-                "hnswParameters": {
-                    "metric": "cosine",
-                    "m": 4,
-                    "efConstruction": 400,
-                    "efSearch": 500
-                }
-            }],
-            "profiles": [{
-                "name": "default-vector-profile",
-                "algorithm": "default-hnsw"
-            }]
-        });
-    }
-
-    if semantic {
-        index["semantic"] = json!({
-            "configurations": [{
-                "name": "default-semantic-config",
-                "prioritizedFields": {
-                    "contentFields": [{
-                        "fieldName": "content"
-                    }]
-                }
-            }]
-        });
-    }
-
-    index
-}
-
-/// Scaffold an Azure AI Search data source definition.
-pub fn scaffold_datasource(name: &str, ds_type: &str, container: &str) -> Value {
-    let mut container_block = json!({ "name": container });
-    if ds_type == "cosmosdb" {
-        container_block["query"] = json!("SELECT * FROM c");
-    }
-
-    let mut ds = json!({
-        "name": name,
-        "type": ds_type,
-        "credentials": {
-            "connectionString": ""
-        },
-        "container": container_block
-    });
-
-    if ds_type == "cosmosdb" {
-        ds["dataChangeDetectionPolicy"] = json!({
-            "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
-            "highWaterMarkColumnName": "_ts"
-        });
-    }
-
-    ds
-}
-
-/// Scaffold an Azure AI Search indexer definition.
-pub fn scaffold_indexer(
-    name: &str,
-    datasource: &str,
-    index: &str,
-    skillset: Option<&str>,
-    schedule: &str,
-) -> Value {
-    let mut indexer = json!({
-        "name": name,
-        "dataSourceName": datasource,
-        "targetIndexName": index,
-        "schedule": {
-            "interval": schedule
-        },
-        "parameters": {
-            "batchSize": 1000
-        }
-    });
-
-    if let Some(ss) = skillset {
-        indexer["skillsetName"] = json!(ss);
-    }
-
-    indexer
-}
-
-/// Scaffold an Azure AI Search skillset definition.
-pub fn scaffold_skillset(name: &str) -> Value {
-    json!({
-        "name": name,
-        "skills": []
+/// `ds_type` applies to `DataSource` (default `azureblob`).
+/// Returns an error message when inputs are invalid (unknown ds type).
+pub fn scaffold(kind: ResourceKind, name: &str, ds_type: Option<&str>) -> Result<Value, String> {
+    Ok(match kind {
+        ResourceKind::DataSource => scaffold_datasource(name, ds_type.unwrap_or("azureblob"))?,
+        ResourceKind::Index => scaffold_index(name),
+        ResourceKind::Skillset => scaffold_skillset(name),
+        ResourceKind::Indexer => scaffold_indexer(name),
+        ResourceKind::SynonymMap => scaffold_synonym_map(name),
+        ResourceKind::Alias => scaffold_alias(name),
+        ResourceKind::KnowledgeSource => scaffold_knowledge_source(name),
+        ResourceKind::KnowledgeBase => scaffold_knowledge_base(name),
+        ResourceKind::Agent => scaffold_agent(name),
+        ResourceKind::Deployment => scaffold_deployment(name),
+        ResourceKind::Connection => scaffold_connection(name),
+        ResourceKind::Guardrail => scaffold_guardrail(name),
     })
 }
 
-/// Scaffold an Azure AI Search synonym map definition.
-pub fn scaffold_synonym_map(name: &str) -> Value {
+/// Validate a data source `type` string. Returns `Ok(warning)` where the
+/// warning is set for preview-only types.
+pub fn check_datasource_type(ds_type: &str) -> Result<Option<String>, String> {
+    let preview = registry::valid_datasource_types(Channel::Preview);
+    if !preview.contains(&ds_type) {
+        return Err(format!(
+            "unknown data source type '{ds_type}' (valid: {})",
+            preview.join(", ")
+        ));
+    }
+    if registry::preview_only_datasource_types().contains(&ds_type) {
+        return Ok(Some(format!(
+            "data source type '{ds_type}' requires a preview api-version; \
+             pin `preview-api-version` on the search connection if pushes fail \
+             (note: Azure spells Azure Files 'azurefile' in stable and 'azurefiles' in preview)"
+        )));
+    }
+    Ok(None)
+}
+
+fn scaffold_datasource(name: &str, ds_type: &str) -> Result<Value, String> {
+    check_datasource_type(ds_type)?;
+    let (connection_string, container) = match ds_type {
+        "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" | "azuretable" => (
+            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>;",
+            json!({"name": "<container-name>"}),
+        ),
+        "cosmosdb" => (
+            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.DocumentDB/databaseAccounts/<cosmos-account>;Database=<database>;IdentityAuthType=AccessToken",
+            json!({"name": "<collection-name>"}),
+        ),
+        "azuresql" => (
+            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Sql/servers/<server>;Database=<database>;Connection Timeout=30;",
+            json!({"name": "[dbo].[<table-name>]"}),
+        ),
+        "onelake" => (
+            "ResourceId=<fabric-workspace-guid>;",
+            json!({"name": "<lakehouse-guid>"}),
+        ),
+        _ => (
+            "ResourceId=<resource-id-of-the-data-store>;",
+            json!({"name": "<container-or-table>"}),
+        ),
+    };
+    Ok(json!({
+        "name": name,
+        "type": ds_type,
+        "credentials": {"connectionString": connection_string},
+        "container": container,
+        "dataChangeDetectionPolicy": null,
+        "dataDeletionDetectionPolicy": null
+    }))
+}
+
+fn scaffold_index(name: &str) -> Value {
+    json!({
+        "name": name,
+        "fields": [
+            {"name": "id", "type": "Edm.String", "key": true, "filterable": true},
+            {"name": "content", "type": "Edm.String", "searchable": true, "analyzer": "standard.lucene"},
+            {"name": "title", "type": "Edm.String", "searchable": true, "sortable": true},
+            {"name": "url", "type": "Edm.String", "retrievable": true}
+        ],
+        "semantic": {
+            "configurations": [{
+                "name": "default",
+                "prioritizedFields": {
+                    "titleField": {"fieldName": "title"},
+                    "prioritizedContentFields": [{"fieldName": "content"}]
+                }
+            }]
+        }
+    })
+}
+
+fn scaffold_skillset(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "Enrichment pipeline. Add built-in skills or a WebApiSkill implementing a spec from apis/ (link it with \"x-rigg-api\").",
+        "skills": [
+            {
+                "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
+                "name": "split",
+                "context": "/document",
+                "textSplitMode": "pages",
+                "maximumPageLength": 2000,
+                "inputs": [{"name": "text", "source": "/document/content"}],
+                "outputs": [{"name": "textItems", "targetName": "pages"}]
+            }
+        ]
+    })
+}
+
+fn scaffold_indexer(name: &str) -> Value {
+    json!({
+        "name": name,
+        "dataSourceName": "<data-source-name>",
+        "targetIndexName": "<index-name>",
+        "skillsetName": null,
+        "schedule": null,
+        "parameters": {
+            "configuration": {}
+        }
+    })
+}
+
+fn scaffold_synonym_map(name: &str) -> Value {
     json!({
         "name": name,
         "format": "solr",
-        "synonyms": ""
+        "synonyms": "car, automobile\nlaptop, notebook => computer"
     })
 }
 
-/// Scaffold an Azure AI Search alias definition.
-pub fn scaffold_alias(name: &str, index: &str) -> Value {
+fn scaffold_alias(name: &str) -> Value {
     json!({
         "name": name,
-        "indexes": [index]
+        "indexes": ["<index-name>"]
     })
 }
 
-/// Scaffold an Azure AI Search knowledge base definition.
-pub fn scaffold_knowledge_base(name: &str) -> Value {
+fn scaffold_knowledge_source(name: &str) -> Value {
     json!({
         "name": name,
-        "description": ""
+        "kind": "searchIndex",
+        "description": "Explicit knowledge source over an existing index.",
+        "searchIndexParameters": {
+            "searchIndexName": "<index-name>"
+        }
     })
 }
 
-/// Scaffold an Azure AI Search knowledge source definition.
-pub fn scaffold_knowledge_source(name: &str, index: &str, knowledge_base: Option<&str>) -> Value {
-    let mut ks = json!({
+fn scaffold_knowledge_base(name: &str) -> Value {
+    json!({
         "name": name,
-        "indexName": index
-    });
-
-    if let Some(kb) = knowledge_base {
-        ks["knowledgeBaseName"] = json!(kb);
-    }
-
-    ks
+        "description": "Agentic retrieval over the listed knowledge sources.",
+        "knowledgeSources": [
+            {"name": "<knowledge-source-name>"}
+        ]
+    })
 }
 
-/// Scaffold a Knowledge Source with an explicit data-source `kind` (e.g.,
-/// `"azureBlob"`, `"azureCosmosDB"`).
-///
-/// When `container` is `Some`, a `<kind>Parameters` block is emitted with
-/// `containerName`. The `kind` value is used verbatim — pass the same casing
-/// Azure expects (`azureBlob`, `azureCosmosDB`, etc.).
-pub fn scaffold_knowledge_source_typed(
-    name: &str,
-    index: &str,
-    knowledge_base: Option<&str>,
-    kind: &str,
-    container: Option<&str>,
-) -> Value {
-    let mut ks = json!({
-        "name": name,
-        "indexName": index,
-        "kind": kind,
-    });
-
-    if let Some(kb) = knowledge_base {
-        ks["knowledgeBaseName"] = json!(kb);
-    }
-
-    if let Some(c) = container {
-        let params_key = format!("{kind}Parameters");
-        ks[params_key] = json!({ "containerName": c });
-    }
-
-    ks
-}
-
-/// Scaffold a Foundry agent definition as a JSON value.
-///
-/// The returned value can be passed to `agent_to_yaml()` to produce the
-/// on-disk YAML format.
-pub fn scaffold_agent(name: &str, model: &str) -> Value {
+fn scaffold_agent(name: &str) -> Value {
     json!({
         "name": name,
         "kind": "prompt",
-        "model": model,
-        "instructions": "You are a helpful AI assistant.",
+        "model": "<deployment-name>",
+        "instructions": format!("You are {name}. Describe the agent's task, tone and constraints here."),
         "tools": []
     })
 }
 
-/// Result of scaffolding a complete Agentic RAG system.
-///
-/// Contains all interconnected resource definitions ready to be written to disk.
-pub struct AgenticRagScaffold {
-    /// Knowledge base definition
-    pub knowledge_base: Value,
-    pub knowledge_base_name: String,
-    /// Knowledge source definition
-    pub knowledge_source: Value,
-    pub knowledge_source_name: String,
-    /// Agent definition (pass to `agent_to_yaml()` for on-disk format)
-    pub agent: Value,
-    pub agent_name: String,
+fn scaffold_deployment(name: &str) -> Value {
+    json!({
+        "name": name,
+        "sku": {"name": "GlobalStandard", "capacity": 1},
+        "properties": {
+            "model": {"format": "OpenAI", "name": name, "version": "<model-version>"},
+            "versionUpgradeOption": "OnceNewDefaultVersionAvailable",
+            "raiPolicyName": "Microsoft.DefaultV2"
+        }
+    })
 }
 
-/// Scaffold a complete Agentic RAG system: agent + knowledge base + knowledge source.
-///
-/// The agent is pre-wired with an MCP tool pointing to the knowledge base.
-/// The knowledge source references the knowledge base.
-/// All naming follows the convention `<base>`, `<base>-kb`, `<base>-ks`.
-pub fn scaffold_agentic_rag(
-    base_name: &str,
-    model: &str,
-    search_service: &str,
-    datasource_type: &str,
-    container: &str,
-) -> AgenticRagScaffold {
-    let kb_name = format!("{}-kb", base_name);
-    let ks_name = format!("{}-ks", base_name);
-    let index_name = format!("{}-ks-index", base_name);
+fn scaffold_connection(name: &str) -> Value {
+    json!({
+        "name": name,
+        "properties": {
+            "category": "RemoteTool",
+            "target": "<endpoint-url>",
+            "authType": "ProjectManagedIdentity",
+            "metadata": {}
+        }
+    })
+}
 
-    let knowledge_base = json!({
-        "name": kb_name,
-        "description": "",
-        "retrievalInstructions": "",
-        "outputMode": "extractiveData"
-    });
+fn scaffold_guardrail(name: &str) -> Value {
+    json!({
+        "name": name,
+        "properties": {
+            "mode": "Blocking",
+            "basePolicyName": "Microsoft.DefaultV2",
+            "contentFilters": [
+                {"name": "Violence", "blocking": true, "enabled": true, "severityThreshold": "Medium", "source": "Prompt"},
+                {"name": "Violence", "blocking": true, "enabled": true, "severityThreshold": "Medium", "source": "Completion"}
+            ]
+        }
+    })
+}
 
-    let knowledge_source = json!({
-        "name": ks_name,
-        "indexName": index_name,
-        "knowledgeBaseName": kb_name,
-        "kind": datasource_type,
-        "description": "",
-        format!("{}Parameters", datasource_type): {
-            "containerName": container
+/// The explicit pipeline scaffold: data source → index → skillset → indexer →
+/// knowledge source → knowledge base, cross-referenced by name.
+pub fn scaffold_pipeline(
+    name: &str,
+    ds_type: &str,
+    with_skillset: bool,
+) -> Result<Vec<(ResourceKind, String, Value)>, String> {
+    let ds_name = format!("{name}-ds");
+    let index_name = format!("{name}-index");
+    let skillset_name = format!("{name}-skills");
+    let indexer_name = format!("{name}-indexer");
+    let ks_name = format!("{name}-ks");
+    let kb_name = format!("{name}-kb");
+
+    let mut out = Vec::new();
+    out.push((
+        ResourceKind::DataSource,
+        ds_name.clone(),
+        scaffold_datasource(&ds_name, ds_type)?,
+    ));
+    out.push((
+        ResourceKind::Index,
+        index_name.clone(),
+        scaffold_index(&index_name),
+    ));
+    if with_skillset {
+        out.push((
+            ResourceKind::Skillset,
+            skillset_name.clone(),
+            scaffold_skillset(&skillset_name),
+        ));
+    }
+    let mut indexer = scaffold_indexer(&indexer_name);
+    indexer["dataSourceName"] = json!(ds_name);
+    indexer["targetIndexName"] = json!(index_name);
+    if with_skillset {
+        indexer["skillsetName"] = json!(skillset_name);
+    }
+    out.push((ResourceKind::Indexer, indexer_name, indexer));
+
+    let mut ks = scaffold_knowledge_source(&ks_name);
+    ks["searchIndexParameters"]["searchIndexName"] = json!(index_name);
+    out.push((ResourceKind::KnowledgeSource, ks_name.clone(), ks));
+
+    let mut kb = scaffold_knowledge_base(&kb_name);
+    kb["knowledgeSources"] = json!([{"name": ks_name}]);
+    out.push((ResourceKind::KnowledgeBase, kb_name, kb));
+    Ok(out)
+}
+
+/// OpenAPI 3.1 spec scaffold shaped to the Azure custom WebApiSkill contract.
+pub fn scaffold_api_spec(name: &str) -> Value {
+    let operation = json!({
+        "post": {
+            "operationId": name,
+            "summary": "Enrich a batch of documents",
+            "requestBody": {
+                "required": true,
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnrichmentRequest"}}}
+            },
+            "responses": {
+                "200": {
+                    "description": "Enriched values",
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnrichmentResponse"}}}
+                }
+            }
         }
     });
-
-    let mcp_url = format!(
-        "https://{}.search.windows.net/knowledgebases/{}/mcp",
-        search_service, kb_name
+    let description = format!(
+        "Custom Web API skill contract. Implement this API (e.g. as an Azure Function) \
+         and point a skillset WebApiSkill at it with \"x-rigg-api\": \"{name}\"."
     );
-
-    let agent = json!({
-        "name": base_name,
-        "kind": "prompt",
-        "model": model,
-        "instructions": "You are a helpful AI assistant.",
-        "tools": [
-            {
-                "type": "mcp",
-                "server_label": kb_name,
-                "server_url": mcp_url
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": name,
+            "version": "1.0.0",
+            "description": description
+        },
+        "paths": {
+            "/api/enrich": operation
+        },
+        "components": {
+            "schemas": {
+                "EnrichmentRequest": {
+                    "type": "object",
+                    "required": ["values"],
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["recordId", "data"],
+                                "properties": {
+                                    "recordId": {"type": "string"},
+                                    "data": {
+                                        "type": "object",
+                                        "description": "Skill inputs — replace with your input fields",
+                                        "additionalProperties": true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "EnrichmentResponse": {
+                    "type": "object",
+                    "required": ["values"],
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["recordId", "data"],
+                                "properties": {
+                                    "recordId": {"type": "string"},
+                                    "data": {
+                                        "type": "object",
+                                        "description": "Skill outputs — replace with your output fields",
+                                        "additionalProperties": true
+                                    },
+                                    "errors": {"type": "array", "items": {"type": "object"}},
+                                    "warnings": {"type": "array", "items": {"type": "object"}}
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        ]
-    });
-
-    AgenticRagScaffold {
-        knowledge_base,
-        knowledge_base_name: kb_name,
-        knowledge_source,
-        knowledge_source_name: ks_name,
-        agent,
-        agent_name: base_name.to_string(),
-    }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -303,328 +358,101 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scaffold_index_basic() {
-        let idx = scaffold_index("my-index", false, false);
-        assert_eq!(idx["name"], "my-index");
-        let fields = idx["fields"].as_array().unwrap();
-        assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0]["name"], "id");
-        assert!(fields[0]["key"].as_bool().unwrap());
-        assert_eq!(fields[1]["name"], "content");
-        assert!(idx.get("vectorSearch").is_none());
-        assert!(idx.get("semantic").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_index_vector() {
-        let idx = scaffold_index("vec-index", true, false);
-        let fields = idx["fields"].as_array().unwrap();
-        assert_eq!(fields.len(), 3);
-        assert_eq!(fields[2]["name"], "contentVector");
-        assert_eq!(fields[2]["dimensions"], 1536);
-        assert!(idx.get("vectorSearch").is_some());
-        assert_eq!(idx["vectorSearch"]["algorithms"][0]["kind"], "hnsw");
-        assert!(idx.get("semantic").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_index_semantic() {
-        let idx = scaffold_index("sem-index", false, true);
-        let fields = idx["fields"].as_array().unwrap();
-        assert_eq!(fields.len(), 2);
-        assert!(idx.get("semantic").is_some());
-        assert_eq!(
-            idx["semantic"]["configurations"][0]["prioritizedFields"]["contentFields"][0]["fieldName"],
-            "content"
-        );
-        assert!(idx.get("vectorSearch").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_index_vector_and_semantic() {
-        let idx = scaffold_index("full-index", true, true);
-        let fields = idx["fields"].as_array().unwrap();
-        assert_eq!(fields.len(), 3);
-        assert!(idx.get("vectorSearch").is_some());
-        assert!(idx.get("semantic").is_some());
-    }
-
-    #[test]
-    fn test_scaffold_datasource() {
-        let ds = scaffold_datasource("my-ds", "azureblob", "documents");
-        assert_eq!(ds["name"], "my-ds");
-        assert_eq!(ds["type"], "azureblob");
-        assert_eq!(ds["container"]["name"], "documents");
-        assert_eq!(ds["credentials"]["connectionString"], "");
-    }
-
-    #[test]
-    fn test_scaffold_indexer_basic() {
-        let ixer = scaffold_indexer("my-indexer", "my-ds", "my-index", None, "PT5M");
-        assert_eq!(ixer["name"], "my-indexer");
-        assert_eq!(ixer["dataSourceName"], "my-ds");
-        assert_eq!(ixer["targetIndexName"], "my-index");
-        assert_eq!(ixer["schedule"]["interval"], "PT5M");
-        assert_eq!(ixer["parameters"]["batchSize"], 1000);
-        assert!(ixer.get("skillsetName").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_indexer_with_skillset() {
-        let ixer = scaffold_indexer(
-            "my-indexer",
-            "my-ds",
-            "my-index",
-            Some("my-skillset"),
-            "PT1H",
-        );
-        assert_eq!(ixer["skillsetName"], "my-skillset");
-        assert_eq!(ixer["schedule"]["interval"], "PT1H");
-    }
-
-    #[test]
-    fn test_scaffold_skillset() {
-        let ss = scaffold_skillset("my-skillset");
-        assert_eq!(ss["name"], "my-skillset");
-        assert!(ss["skills"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_scaffold_synonym_map() {
-        let sm = scaffold_synonym_map("my-synonyms");
-        assert_eq!(sm["name"], "my-synonyms");
-        assert_eq!(sm["format"], "solr");
-        assert_eq!(sm["synonyms"], "");
-    }
-
-    #[test]
-    fn test_scaffold_alias() {
-        let alias = scaffold_alias("my-alias", "my-index");
-        assert_eq!(alias["name"], "my-alias");
-        let indexes = alias["indexes"].as_array().unwrap();
-        assert_eq!(indexes.len(), 1);
-        assert_eq!(indexes[0], "my-index");
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_base() {
-        let kb = scaffold_knowledge_base("my-kb");
-        assert_eq!(kb["name"], "my-kb");
-        assert_eq!(kb["description"], "");
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_source_basic() {
-        let ks = scaffold_knowledge_source("my-ks", "my-index", None);
-        assert_eq!(ks["name"], "my-ks");
-        assert_eq!(ks["indexName"], "my-index");
-        assert!(ks.get("knowledgeBaseName").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_source_with_kb() {
-        let ks = scaffold_knowledge_source("my-ks", "my-index", Some("my-kb"));
-        assert_eq!(ks["name"], "my-ks");
-        assert_eq!(ks["indexName"], "my-index");
-        assert_eq!(ks["knowledgeBaseName"], "my-kb");
-    }
-
-    #[test]
-    fn test_scaffold_agent() {
-        let agent = scaffold_agent("my-agent", "gpt-4o");
-        assert_eq!(agent["name"], "my-agent");
-        assert_eq!(agent["kind"], "prompt");
-        assert_eq!(agent["model"], "gpt-4o");
-        assert!(agent["instructions"].as_str().unwrap().len() > 0);
-        assert!(agent["tools"].as_array().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_scaffold_agent_custom_model() {
-        let agent = scaffold_agent("my-agent", "gpt-4.1-mini");
-        assert_eq!(agent["model"], "gpt-4.1-mini");
-    }
-
-    #[test]
-    fn test_scaffold_index_valid_json() {
-        // Verify the generated JSON can be serialized/deserialized cleanly
-        let idx = scaffold_index("test", true, true);
-        let json_str = serde_json::to_string_pretty(&idx).unwrap();
-        let parsed: Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(parsed["name"], "test");
-    }
-
-    #[test]
-    fn test_scaffold_datasource_types() {
-        for ds_type in &[
-            "azureblob",
-            "azuretable",
-            "azuresql",
-            "cosmosdb",
-            "adlsgen2",
-        ] {
-            let ds = scaffold_datasource("test", ds_type, "my-container");
-            assert_eq!(ds["type"].as_str().unwrap(), *ds_type);
+    fn scaffold_exists_for_every_kind() {
+        for kind in ResourceKind::all() {
+            let v = scaffold(*kind, "test-name", None).unwrap();
+            assert_eq!(v["name"], "test-name", "{kind:?}");
         }
     }
 
     #[test]
-    fn test_scaffold_agent_yaml_roundtrip() {
-        use crate::resources::agent::{agent_to_yaml, yaml_to_agent};
-
-        let agent = scaffold_agent("test-agent", "gpt-4o");
-        let yaml = agent_to_yaml(&agent);
-        let parsed = yaml_to_agent(&yaml).unwrap();
-
-        assert_eq!(parsed["kind"], "prompt");
-        assert_eq!(parsed["model"], "gpt-4o");
-        assert!(parsed["instructions"].as_str().unwrap().len() > 0);
-        // name is excluded from YAML (derived from filename)
-        assert!(parsed.get("name").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_agentic_rag_naming() {
-        let rag = scaffold_agentic_rag("my-system", "gpt-4o", "my-search", "azureBlob", "docs");
-        assert_eq!(rag.agent_name, "my-system");
-        assert_eq!(rag.knowledge_base_name, "my-system-kb");
-        assert_eq!(rag.knowledge_source_name, "my-system-ks");
-    }
-
-    #[test]
-    fn test_scaffold_agentic_rag_knowledge_base() {
-        let rag = scaffold_agentic_rag("my-system", "gpt-4o", "my-search", "azureBlob", "docs");
-        assert_eq!(rag.knowledge_base["name"], "my-system-kb");
-        assert_eq!(rag.knowledge_base["outputMode"], "extractiveData");
-    }
-
-    #[test]
-    fn test_scaffold_agentic_rag_knowledge_source() {
-        let rag = scaffold_agentic_rag("my-system", "gpt-4o", "my-search", "azureBlob", "docs");
-        assert_eq!(rag.knowledge_source["name"], "my-system-ks");
-        assert_eq!(rag.knowledge_source["indexName"], "my-system-ks-index");
-        assert_eq!(rag.knowledge_source["knowledgeBaseName"], "my-system-kb");
-        assert_eq!(rag.knowledge_source["kind"], "azureBlob");
-        assert_eq!(
-            rag.knowledge_source["azureBlobParameters"]["containerName"],
-            "docs"
-        );
-    }
-
-    #[test]
-    fn test_scaffold_agentic_rag_agent_has_mcp_tool() {
-        let rag = scaffold_agentic_rag("my-system", "gpt-4o", "my-search", "azureBlob", "docs");
-        assert_eq!(rag.agent["name"], "my-system");
-        assert_eq!(rag.agent["model"], "gpt-4o");
-        let tools = rag.agent["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["type"], "mcp");
-        assert_eq!(tools[0]["server_label"], "my-system-kb");
+    fn scaffolds_are_identity_first_no_secrets() {
+        for kind in ResourceKind::all() {
+            let v = scaffold(*kind, "x", None).unwrap();
+            let text = serde_json::to_string(&v).unwrap();
+            assert!(
+                !text.contains("AccountKey="),
+                "{kind:?} leaks a key pattern"
+            );
+            assert!(!text.contains("apiKey"), "{kind:?} contains apiKey");
+            assert!(!text.to_lowercase().contains("password"), "{kind:?}");
+        }
+        let ds = scaffold(ResourceKind::DataSource, "d", Some("azureblob")).unwrap();
         assert!(
-            tools[0]["server_url"]
+            ds["credentials"]["connectionString"]
                 .as_str()
                 .unwrap()
-                .contains("my-search.search.windows.net")
+                .starts_with("ResourceId=")
         );
+        let conn = scaffold(ResourceKind::Connection, "c", None).unwrap();
+        assert_eq!(conn["properties"]["authType"], "ProjectManagedIdentity");
+    }
+
+    #[test]
+    fn datasource_type_validation() {
+        assert!(check_datasource_type("cosmosdb").unwrap().is_none());
         assert!(
-            tools[0]["server_url"]
-                .as_str()
+            check_datasource_type("sharepoint").unwrap().is_some(),
+            "preview warns"
+        );
+        assert!(check_datasource_type("azurefiles").unwrap().is_some());
+        assert!(check_datasource_type("bogus").is_err());
+    }
+
+    #[test]
+    fn pipeline_cross_references_by_name() {
+        let parts = scaffold_pipeline("demo", "azureblob", true).unwrap();
+        assert_eq!(parts.len(), 6);
+        let get = |kind: ResourceKind| {
+            parts
+                .iter()
+                .find(|(k, _, _)| *k == kind)
+                .map(|(_, _, v)| v)
                 .unwrap()
-                .contains("my-system-kb")
-        );
+        };
+        let indexer = get(ResourceKind::Indexer);
+        assert_eq!(indexer["dataSourceName"], "demo-ds");
+        assert_eq!(indexer["targetIndexName"], "demo-index");
+        assert_eq!(indexer["skillsetName"], "demo-skills");
+        let ks = get(ResourceKind::KnowledgeSource);
+        assert_eq!(ks["searchIndexParameters"]["searchIndexName"], "demo-index");
+        let kb = get(ResourceKind::KnowledgeBase);
+        assert_eq!(kb["knowledgeSources"][0]["name"], "demo-ks");
+
+        // pipeline ordering works via the graph
+        let items: Vec<_> = parts
+            .iter()
+            .map(|(k, n, v)| {
+                (
+                    crate::resources::traits::ResourceRef::new(*k, n.clone()),
+                    v.clone(),
+                )
+            })
+            .collect();
+        let order = crate::graph::push_order(&items).unwrap();
+        assert_eq!(order.len(), 6);
     }
 
     #[test]
-    fn test_scaffold_agentic_rag_agent_yaml_roundtrip() {
-        use crate::resources::agent::{agent_to_yaml, yaml_to_agent};
-
-        let rag = scaffold_agentic_rag("test", "gpt-4o", "svc", "azureBlob", "docs");
-        let yaml = agent_to_yaml(&rag.agent);
-        let parsed = yaml_to_agent(&yaml).unwrap();
-
-        assert_eq!(parsed["kind"], "prompt");
-        assert_eq!(parsed["model"], "gpt-4o");
-        let tools = parsed["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["type"], "mcp");
-    }
-
-    #[test]
-    fn test_scaffold_agentic_rag_custom_model() {
-        let rag = scaffold_agentic_rag(
-            "my-system",
-            "gpt-4.1-mini",
-            "my-search",
-            "azureBlob",
-            "docs",
-        );
-        assert_eq!(rag.agent["model"], "gpt-4.1-mini");
-    }
-
-    #[test]
-    fn test_scaffold_datasource_cosmosdb_includes_query_and_change_detection() {
-        let ds = scaffold_datasource("my-cosmos", "cosmosdb", "my-container");
-        assert_eq!(ds["name"], "my-cosmos");
-        assert_eq!(ds["type"], "cosmosdb");
-        assert_eq!(ds["container"]["name"], "my-container");
-        assert_eq!(ds["container"]["query"], "SELECT * FROM c");
+    fn api_spec_matches_webapi_contract() {
+        let spec = scaffold_api_spec("doc-enrichment");
+        assert_eq!(spec["openapi"], "3.1.0");
+        let req = &spec["components"]["schemas"]["EnrichmentRequest"];
         assert_eq!(
-            ds["dataChangeDetectionPolicy"]["@odata.type"],
-            "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy"
-        );
-        assert_eq!(
-            ds["dataChangeDetectionPolicy"]["highWaterMarkColumnName"],
-            "_ts"
+            req["properties"]["values"]["items"]["required"][0],
+            "recordId"
         );
     }
 
     #[test]
-    fn test_scaffold_datasource_azureblob_unchanged() {
-        let ds = scaffold_datasource("my-blob", "azureblob", "documents");
-        assert_eq!(ds["name"], "my-blob");
-        assert_eq!(ds["type"], "azureblob");
-        assert_eq!(ds["container"]["name"], "documents");
-        assert!(ds.get("dataChangeDetectionPolicy").is_none());
-        assert!(ds["container"].get("query").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_source_typed_cosmosdb() {
-        let ks = scaffold_knowledge_source_typed(
-            "my-ks",
-            "my-ks-index",
-            None,
-            "azureCosmosDB",
-            Some("my-container"),
-        );
-        assert_eq!(ks["name"], "my-ks");
-        assert_eq!(ks["indexName"], "my-ks-index");
-        assert_eq!(ks["kind"], "azureCosmosDB");
-        assert_eq!(
-            ks["azureCosmosDBParameters"]["containerName"],
-            "my-container"
-        );
-        assert!(ks.get("knowledgeBaseName").is_none());
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_source_typed_with_kb() {
-        let ks = scaffold_knowledge_source_typed(
-            "my-ks",
-            "my-ks-index",
-            Some("my-kb"),
-            "azureCosmosDB",
-            Some("docs"),
-        );
-        assert_eq!(ks["knowledgeBaseName"], "my-kb");
-        assert_eq!(ks["azureCosmosDBParameters"]["containerName"], "docs");
-    }
-
-    #[test]
-    fn test_scaffold_knowledge_source_typed_no_container_omits_parameters() {
-        let ks =
-            scaffold_knowledge_source_typed("my-ks", "my-ks-index", None, "azureCosmosDB", None);
-        assert!(ks.get("azureCosmosDBParameters").is_none());
-        assert_eq!(ks["kind"], "azureCosmosDB");
+    fn without_skillset_pipeline_has_five_parts() {
+        let parts = scaffold_pipeline("p", "cosmosdb", false).unwrap();
+        assert_eq!(parts.len(), 5);
+        let indexer = parts
+            .iter()
+            .find(|(k, _, _)| *k == ResourceKind::Indexer)
+            .map(|(_, _, v)| v)
+            .unwrap();
+        assert!(indexer["skillsetName"].is_null());
     }
 }
