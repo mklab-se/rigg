@@ -1,0 +1,43 @@
+# Weekly check that rigg supports the newest Azure API versions.
+name: api watchdog
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  api-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run api-check
+        id: check
+        continue-on-error: true
+        run: |
+          set +e
+          cargo run -q --bin rigg -- dev api-check --output json > api-check.json
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          cat api-check.json
+      - name: Open or update issue when behind
+        if: steps.check.outputs.exit == '1'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('api-check.json', 'utf8');
+            const title = 'Azure API versions ahead of rigg';
+            const body = 'The weekly api-check found newer Azure API versions than rigg supports.\n\n```json\n' + report + '\n```\n\nUpdate `crates/rigg-core/src/registry.rs` (see `.claude/skills/api-watchdog/SKILL.md`).';
+            const issues = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'azure-api-versions'
+            });
+            if (issues.data.length > 0) {
+              await github.rest.issues.update({ ...context.repo, issue_number: issues.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body, labels: ['azure-api-versions'] });
+            }

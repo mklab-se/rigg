@@ -45,14 +45,23 @@ fn init(provider: &str, force: bool) -> Result<()> {
     }
 
     println!();
-    println!("{} GitHub workflows created. To finish setup:", "✓".green().bold());
+    println!(
+        "{} GitHub workflows created. To finish setup:",
+        "✓".green().bold()
+    );
     println!("  1. Create an Entra app registration with federated credentials for this repo");
     println!("     (workload identity federation — no client secrets):");
     println!("       az ad app create --display-name rigg-deploy");
-    println!("       az ad app federated-credential create ... (subject: repo:<owner>/<repo>:ref:refs/heads/main)");
+    println!(
+        "       az ad app federated-credential create ... (subject: repo:<owner>/<repo>:ref:refs/heads/main)"
+    );
     println!("  2. Grant it the data-plane roles rigg needs (Search Service Contributor,");
-    println!("     Search Index Data Contributor, Foundry Project Manager) — or run `rigg auth doctor`.");
-    println!("  3. Add repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID.");
+    println!(
+        "     Search Index Data Contributor, Foundry Project Manager) — or run `rigg auth doctor`."
+    );
+    println!(
+        "  3. Add repository variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID."
+    );
     Ok(())
 }
 
