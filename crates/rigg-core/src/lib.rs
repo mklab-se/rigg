@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod graph;
+pub mod identity;
 pub mod normalize;
 pub mod registry;
 pub mod resources;

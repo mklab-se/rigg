@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod ci;
 pub mod completion;
 pub mod confirm;
 pub mod copy;
@@ -9,6 +10,7 @@ pub mod delete;
 pub mod describe;
 pub mod dev;
 pub mod diff;
+pub mod doctor;
 pub mod env;
 pub mod init;
 pub mod mcp_cmd;

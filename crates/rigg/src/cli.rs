@@ -108,6 +108,12 @@ pub enum Commands {
     /// MCP server for AI agents
     Mcp(McpArgs),
 
+    /// CI/CD helpers
+    Ci {
+        #[command(subcommand)]
+        command: CiCommands,
+    },
+
     /// Developer utilities
     #[command(hide = true)]
     Dev {
@@ -399,6 +405,19 @@ pub enum McpScope {
 }
 
 #[derive(Subcommand)]
+pub enum CiCommands {
+    /// Scaffold CI workflows (validate on PR, deploy on merge, nightly drift)
+    Init {
+        /// CI provider
+        #[arg(default_value = "github")]
+        provider: String,
+        /// Overwrite existing workflow files
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum DevCommands {
     /// Check whether newer Azure API versions are available
     ApiCheck,
@@ -431,6 +450,7 @@ impl Cli {
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,
             Commands::Ai { command } => commands::ai::run(command).await,
             Commands::Mcp(args) => commands::mcp_cmd::run(&ctx, args).await,
+            Commands::Ci { command } => commands::ci::run(&ctx, command),
             Commands::Dev { command } => commands::dev::run(&ctx, command).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {

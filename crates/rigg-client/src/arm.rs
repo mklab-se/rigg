@@ -222,6 +222,58 @@ impl std::fmt::Display for ModelDeployment {
     }
 }
 
+/// A resource's managed identity block.
+#[derive(Debug, Clone)]
+pub struct ResourceIdentity {
+    /// `SystemAssigned`, `UserAssigned`, `SystemAssigned, UserAssigned`, or `None`.
+    pub kind: String,
+    /// System-assigned principal id, when enabled.
+    pub principal_id: Option<String>,
+    /// (resource id, principal id) of attached user-assigned identities.
+    pub user_assigned: Vec<(String, String)>,
+}
+
+impl ResourceIdentity {
+    /// All principal ids this resource can act as.
+    pub fn principal_ids(&self) -> Vec<&str> {
+        let mut ids: Vec<&str> = self.principal_id.iter().map(String::as_str).collect();
+        ids.extend(self.user_assigned.iter().map(|(_, p)| p.as_str()));
+        ids
+    }
+}
+
+/// Deterministic UUID-shaped name from a string (stable role-assignment names).
+fn deterministic_uuid(input: &str) -> String {
+    let mut h1: u64 = 0xcbf29ce484222325;
+    let mut h2: u64 = 0x9e3779b97f4a7c15;
+    for b in input.as_bytes() {
+        h1 ^= u64::from(*b);
+        h1 = h1.wrapping_mul(0x100000001b3);
+        h2 = h2.rotate_left(7) ^ u64::from(*b);
+        h2 = h2.wrapping_mul(0x2545f4914f6cdd1d);
+    }
+    let bytes = [h1.to_be_bytes(), h2.to_be_bytes()].concat();
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
 /// ARM list response envelope
 #[derive(Debug, Deserialize)]
 struct ArmListResponse<T> {
@@ -237,6 +289,169 @@ impl ArmClient {
             .build()?;
 
         Ok(Self { http, token })
+    }
+
+    /// Read a resource's managed identity block: `GET {id}?api-version=...`.
+    pub async fn get_resource_identity(
+        &self,
+        resource_id: &str,
+        api_version: &str,
+    ) -> Result<Option<ResourceIdentity>, ClientError> {
+        let url = format!("{ARM_BASE_URL}{resource_id}?api-version={api_version}");
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let value: serde_json::Value = response.json().await?;
+        let Some(identity) = value.get("identity") else {
+            return Ok(None);
+        };
+        let kind = identity
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("None")
+            .to_string();
+        let principal_id = identity
+            .get("principalId")
+            .and_then(|p| p.as_str())
+            .map(str::to_string);
+        let user_assigned = identity
+            .get("userAssignedIdentities")
+            .and_then(|u| u.as_object())
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(id, v)| {
+                        v.get("principalId")
+                            .and_then(|p| p.as_str())
+                            .map(|p| (id.clone(), p.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(ResourceIdentity {
+            kind,
+            principal_id,
+            user_assigned,
+        }))
+    }
+
+    /// Role definition IDs assigned to `principal_id` at (or inherited by) `scope`.
+    pub async fn list_role_assignments(
+        &self,
+        scope: &str,
+        principal_id: &str,
+    ) -> Result<Vec<String>, ClientError> {
+        let url = format!(
+            "{ARM_BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=principalId%20eq%20'{principal_id}'"
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let value: serde_json::Value = response.json().await?;
+        Ok(value
+            .get("value")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| {
+                        a.get("properties")
+                            .and_then(|p| p.get("roleDefinitionId"))
+                            .and_then(|r| r.as_str())
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Create a role assignment for a principal at a scope.
+    pub async fn create_role_assignment(
+        &self,
+        scope: &str,
+        principal_id: &str,
+        role_definition_guid: &str,
+    ) -> Result<(), ClientError> {
+        let assignment_name =
+            deterministic_uuid(&format!("{scope}|{principal_id}|{role_definition_guid}"));
+        let url = format!(
+            "{ARM_BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}?api-version=2022-04-01"
+        );
+        let sub = scope.split('/').nth(2).unwrap_or_default();
+        let body = serde_json::json!({
+            "properties": {
+                "roleDefinitionId": format!(
+                    "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{role_definition_guid}"
+                ),
+                "principalId": principal_id,
+                "principalType": "ServicePrincipal"
+            }
+        });
+        let response = self
+            .http
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&body)
+            .send()
+            .await?;
+        let status = response.status();
+        // 409 = already exists → fine
+        if status.is_success() || status.as_u16() == 409 {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        Err(ClientError::from_response(status.as_u16(), &text))
+    }
+
+    /// Enable a system-assigned managed identity on a resource (PATCH).
+    pub async fn enable_system_identity(
+        &self,
+        resource_id: &str,
+        api_version: &str,
+    ) -> Result<(), ClientError> {
+        let url = format!("{ARM_BASE_URL}{resource_id}?api-version={api_version}");
+        let response = self
+            .http
+            .patch(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(&serde_json::json!({"identity": {"type": "SystemAssigned"}}))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        Err(ClientError::from_response(status.as_u16(), &text))
+    }
+
+    /// Find the full ARM resource id of a search service by name.
+    pub async fn find_search_service_id(&self, name: &str) -> Result<String, ClientError> {
+        for sub in self.list_subscriptions().await? {
+            for svc in self.list_search_services(&sub.subscription_id).await? {
+                if svc.name.eq_ignore_ascii_case(name) && !svc.id.is_empty() {
+                    return Ok(svc.id);
+                }
+            }
+        }
+        Err(ClientError::NotFound {
+            kind: "search service".to_string(),
+            name: name.to_string(),
+        })
     }
 
     /// The ARM bearer token this client authenticated with.
@@ -708,5 +923,31 @@ mod tests {
         };
         assert_eq!(project.display_name(), "proj-default");
         assert_eq!(format!("{}", project), "proj-default (swedencentral)");
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_uuid_stable_and_shaped() {
+        let a = deterministic_uuid("scope|principal|role");
+        let b = deterministic_uuid("scope|principal|role");
+        let c = deterministic_uuid("scope|principal|other-role");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 36);
+        assert_eq!(a.chars().filter(|ch| *ch == '-').count(), 4);
+    }
+
+    #[test]
+    fn resource_identity_principal_ids() {
+        let id = ResourceIdentity {
+            kind: "SystemAssigned, UserAssigned".into(),
+            principal_id: Some("sys".into()),
+            user_assigned: vec![("id1".into(), "ua1".into())],
+        };
+        assert_eq!(id.principal_ids(), vec!["sys", "ua1"]);
     }
 }
