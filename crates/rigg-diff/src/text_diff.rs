@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn test_truncate_context_preserves_ends() {
         let s = "START middle padding that is quite long and should be truncated away END";
-        let truncated = truncate_context(s, 40);
+        let truncated = truncate_context(s.as_str(), 40);
         assert!(truncated.starts_with("START"));
         assert!(truncated.ends_with("END"));
         assert!(truncated.contains(" ... "));
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn test_truncate_context_unicode() {
         let s = "aaa\u{00e9}\u{00e9}\u{00e9}".repeat(20);
-        let truncated = truncate_context(s, 40);
+        let truncated = truncate_context(s.as_str(), 40);
         // Should not panic on unicode boundaries
         assert!(truncated.len() < s.len());
     }
