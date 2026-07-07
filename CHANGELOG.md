@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.0] - 2026-07-07
+
+### Added
+
+- **`rigg auth doctor [--fix]`** — derives the service-to-service identity
+  graph from workspace files (data source connection strings, knowledge-base
+  model wiring, agent→KB grounding, encryption keys), verifies managed
+  identities and RBAC role assignments via ARM, and repairs with `--fix`
+  (enable system identity, create role assignments) or prints exact `az`
+  commands. Cosmos/SQL data-plane permissions are reported with guidance.
+- **`rigg ci init github`** — scaffolds three workflows: PR validation with a
+  markdown diff comment, deploy-on-merge (OIDC federated login, no secrets),
+  and nightly drift detection that opens/updates an issue.
+- **`rigg dev api-check`** — compares rigg's pinned Azure api-versions against
+  the newest in Azure/azure-rest-api-specs; exit 1 when behind. Wired to a
+  session-start skill (`.claude/skills/api-watchdog`) and a weekly GitHub
+  Action that opens an issue on drift.
+
 ## [0.18.0] - 2026-07-07
 
 Complete re-architecture around the workspace/project model (first phase of the
