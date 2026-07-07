@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::normalize::{format_json, normalize_for_disk, normalize_for_push};
+use crate::normalize::{format_json, normalize_for_compare, normalize_for_disk};
 use crate::resources::traits::{ResourceKind, ResourceRef, validate_resource_name};
 use crate::service::ServiceDomain;
 use crate::sidecar::{self, SidecarError};
@@ -153,6 +153,7 @@ impl<'w> Store<'w> {
         if path.is_file() {
             if let Ok(existing) = self.read_path(&path) {
                 carry_over_x_rigg(&existing, &mut normalized);
+                carry_over_write_only(r.kind, &existing, &mut normalized);
                 if crate::normalize::semantic_eq(r.kind, &existing, &normalized) {
                     return Ok(false);
                 }
@@ -193,6 +194,40 @@ impl<'w> Store<'w> {
         }
         Ok(())
     }
+}
+
+/// Preserve write-only fields (server never echoes them) from the existing
+/// local file when the incoming document lacks them or has them as null.
+fn carry_over_write_only(kind: ResourceKind, from: &Value, to: &mut Value) {
+    for spec in crate::registry::meta(kind).write_only_fields {
+        let mut existing_value: Option<Value> = None;
+        crate::registry::collect_path(from, spec, &mut |v| {
+            if !v.is_null() {
+                existing_value = Some(v.clone());
+            }
+        });
+        let Some(existing_value) = existing_value else {
+            continue;
+        };
+        set_path(to, &spec.split('.').collect::<Vec<_>>(), existing_value);
+    }
+}
+
+/// Set a dot-path (no `[]` support — write-only fields are object paths),
+/// creating intermediate objects as needed.
+fn set_path(value: &mut Value, segments: &[&str], new_value: Value) {
+    let Some((head, rest)) = segments.split_first() else {
+        return;
+    };
+    let Value::Object(map) = value else { return };
+    if rest.is_empty() {
+        map.insert((*head).to_string(), new_value);
+        return;
+    }
+    let entry = map
+        .entry((*head).to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    set_path(entry, rest, new_value);
 }
 
 /// Copy `x-rigg-*` keys from `from` into `to` at the same paths (top-level and
@@ -300,7 +335,7 @@ impl ProjectState {
     /// GET and PUT responses never reads as a change — matching the semantics
     /// of the order-insensitive diff.
     pub fn checksum(kind: ResourceKind, value: &Value) -> String {
-        let normalized = canonical_form(&normalize_for_push(kind, value));
+        let normalized = canonical_form(&normalize_for_compare(kind, value));
         let canonical = serde_json::to_string(&normalized).unwrap_or_default();
         format!("{:x}", md5_like(&canonical))
     }
@@ -554,6 +589,38 @@ mod tests {
         state.save(&ws, "dev", "p").unwrap();
         let loaded = ProjectState::load(&ws, "dev", "p");
         assert_eq!(loaded.baseline(&r), state.baseline(&r));
+    }
+
+    #[test]
+    fn write_only_fields_survive_server_echo_and_compare() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap());
+        let r = ResourceRef::new(ResourceKind::DataSource, "ds");
+        let local = json!({
+            "name": "ds", "type": "azureblob",
+            "credentials": {"connectionString": "ResourceId=/subscriptions/s/x;"},
+            "container": {"name": "c"}
+        });
+        store.write(&r, &local).unwrap();
+        // Azure's GET echo: connection string redacted to null
+        let server_echo = json!({
+            "name": "ds", "type": "azureblob",
+            "credentials": {"connectionString": null},
+            "container": {"name": "c"}
+        });
+        // no semantic change → no rewrite, and the conn string survives
+        assert!(!store.write(&r, &server_echo).unwrap());
+        let read = store.read(&r).unwrap();
+        assert_eq!(
+            read["credentials"]["connectionString"],
+            json!("ResourceId=/subscriptions/s/x;")
+        );
+        // checksums ignore the write-only field (local vs redacted remote equal)
+        assert_eq!(
+            ProjectState::checksum(ResourceKind::DataSource, &local),
+            ProjectState::checksum(ResourceKind::DataSource, &server_echo)
+        );
     }
 
     #[test]

@@ -404,11 +404,20 @@ fn flatten_agent_response(agent: &Value) -> Value {
         flat.insert("name".to_string(), name.clone());
     }
 
-    // Extract from versions.latest
+    // Version-create responses put the definition at the top level
+    // (`{name, version, definition: {...}}`) instead of `versions.latest`.
+    let top_level = obj
+        .get("definition")
+        .is_some()
+        .then_some(obj)
+        .map(|o| o as &Map<String, Value>);
+
+    // Extract from versions.latest (GET/list shape) or the top level (POST shape)
     if let Some(latest) = obj
         .get("versions")
         .and_then(|v| v.get("latest"))
         .and_then(|l| l.as_object())
+        .or(top_level)
     {
         // Version-level fields
         if let Some(metadata) = latest.get("metadata") {
@@ -501,6 +510,27 @@ mod tests {
     fn test_auth_method() {
         let client = make_client();
         assert_eq!(client.auth_method(), "Fake");
+    }
+
+    #[test]
+    fn flatten_handles_version_create_response_shape() {
+        // POST /agents/{n}/versions returns the definition at the top level
+        let response = json!({
+            "object": "agent.version",
+            "name": "helper",
+            "version": "1",
+            "definition": {
+                "kind": "prompt",
+                "model": "gpt-4.1-mini",
+                "instructions": "Be nice.",
+                "tools": [{"type": "mcp"}]
+            }
+        });
+        let flat = flatten_agent_response(&response);
+        assert_eq!(flat["name"], "helper");
+        assert_eq!(flat["model"], "gpt-4.1-mini");
+        assert_eq!(flat["instructions"], "Be nice.");
+        assert_eq!(flat["tools"][0]["type"], "mcp");
     }
 
     #[test]
