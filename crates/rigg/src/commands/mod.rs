@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod ci;
 pub mod completion;
 pub mod confirm;
 pub mod copy;
