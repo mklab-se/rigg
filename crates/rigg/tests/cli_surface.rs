@@ -358,3 +358,71 @@ fn init_writes_workspace_files() {
         .assert()
         .code(1);
 }
+
+#[test]
+fn validate_checks_webapi_skill_contract() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["new", "api", "translate"])
+        .assert()
+        .success();
+    // close the contract: no additionalProperties, specific props
+    let spec_path = ws.path().join("apis/translate.json");
+    let mut spec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&spec_path).unwrap()).unwrap();
+    let schemas = &mut spec["components"]["schemas"];
+    schemas["EnrichmentRequest"]["properties"]["values"]["items"]["properties"]["data"] =
+        serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "additionalProperties": false});
+    schemas["EnrichmentResponse"]["properties"]["values"]["items"]["properties"]["data"] =
+        serde_json::json!({"type": "object", "properties": {"translation": {"type": "string"}}, "additionalProperties": false});
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+    let dir = ws.path().join("projects/demo/search/skillsets");
+    std::fs::create_dir_all(&dir).unwrap();
+    // conforming skill passes
+    std::fs::write(
+        dir.join("good.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "good",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "x-rigg-api": "translate",
+                "uri": "https://fn.example.com/api/enrich",
+                "inputs": [{"name": "text", "source": "/document/content"}],
+                "outputs": [{"name": "translation", "targetName": "translation"}]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "demo"])
+        .assert()
+        .success();
+
+    // wrong input name + wrong uri path fails with exit 3
+    std::fs::write(
+        dir.join("good.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "good",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "x-rigg-api": "translate",
+                "uri": "https://fn.example.com/api/wrong-path",
+                "inputs": [{"name": "nonexistent", "source": "/document/content"}],
+                "outputs": [{"name": "translation", "targetName": "t"}]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "demo"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("wrong-path"))
+        .stdout(predicate::str::contains("nonexistent"));
+}
