@@ -26,7 +26,7 @@
       "name": "doc-enrichment",
       "description": "Custom enrichment implemented by you (or your AI agent) from apis/doc-enrichment.json",
       "x-rigg-api": "doc-enrichment",
-      "uri": "https://<your-function-app>.azurewebsites.net/api/enrich",
+      "uri": "https://REPLACE-with-your-function-app.azurewebsites.net/api/enrich",
       "httpMethod": "POST",
       "timeout": "PT30S",
       "context": "/document",

@@ -1,7 +1,7 @@
 {
   "name": "docs-agent",
   "kind": "prompt",
-  "model": "gpt-4.1-mini",
+  "model": "docs-model",
   "instructions": {
     "$file": "docs-agent.instructions.md"
   },

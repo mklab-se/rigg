@@ -1,73 +1,64 @@
 ---
 name: rigg-guide
-description: Reference guide for rigg CLI — configuration-as-code for Azure AI Search and Microsoft Foundry. Auto-loaded when working with rigg.yaml, search indexes, Foundry agents, or Azure AI Search configuration.
+description: Reference guide for rigg CLI — configuration-as-code for Azure AI Search and Microsoft Foundry. Auto-loaded when working with rigg.yaml, rigg workspaces/projects, search indexes, knowledge bases, or Foundry agents.
 user-invocable: false
 ---
 
 ## rigg overview
-rigg manages Azure AI Search and Microsoft Foundry configuration as code.
-Resources are stored as local JSON/YAML files and synced with Azure.
+
+rigg manages Azure AI Search and Microsoft Foundry configuration as code. A
+**workspace** (`rigg.yaml`) defines environments and service connections; each
+**project** under `projects/<name>/` owns its resource definitions as JSON
+files. A resource belongs to exactly ONE project, and `pull`/`push`/`diff`
+always operate on whole projects — that is what keeps local and cloud
+consistent.
 
 ## Getting oriented quickly
-Use `rigg_describe` MCP tool first — it returns a complete project summary including
-all resources, their dependencies, agent configurations, and knowledge base flows.
-This is the fastest way for an AI agent to understand the full project context.
 
-Use `rigg_status` for environment info, auth state, and resource counts.
-Use `rigg_env_list` to see all configured environments.
+1. `rigg_describe` (MCP) or `rigg describe --output json` — projects, every
+   resource with its file path, the dependency graph, and "APIs to implement".
+2. `rigg_status` — per-resource sync state (in sync / local ahead / remote
+   ahead / conflict) plus unmanaged remote resources.
+3. `rigg_env_list` — configured environments.
 
-## File structure
-- `rigg.yaml` — project config with named environments
-- `search/search-management/indexes/` — search index definitions (JSON)
-- `search/agentic-retrieval/knowledge-sources/` — knowledge source definitions
-- `search/agentic-retrieval/knowledge-bases/` — knowledge base definitions
-- `foundry/agents/` — Foundry agent definitions (YAML, matches portal format)
+## Workspace layout
+
+```
+rigg.yaml                     # environments + service connections (YAML)
+apis/<name>.json              # shared OpenAPI specs for custom Web API skills
+projects/<name>/
+  project.yaml                # metadata only — the directory IS the membership
+  search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
+          knowledge-sources,knowledge-bases}/<name>.json
+  foundry/{agents,deployments,connections,guardrails}/<name>.json
+  foundry/agents/<name>.instructions.md   # $file sidecar for long text
+```
 
 ## Key workflows
-- Pull: `rigg_pull` MCP tool (preview first without force, then force to execute)
-- Push: always validate, diff, then push (use the `/rigg-push` skill)
-- Diff: `rigg_diff` MCP tool for comparing local vs remote
-- Environments: `rigg_env_list` to see all, pass `env` param to target specific one
 
-## Safety rules
-- Always validate before pushing
-- Always diff before pushing
-- Pull before push to detect conflicts
-- Knowledge source changes cascade to managed sub-resources (index, indexer, datasource, skillset)
+- **Understand** → `rigg_describe`; **check state** → `rigg_status` / `rigg_diff`.
+- **Change**: edit the JSON file (or `rigg new <kind> <name> -p <project>`),
+  then `rigg_validate`, then `rigg_push` (preview first, `force: true` to apply).
+  Push only touches semantically-changed resources, in dependency order.
+- **Adopt existing Azure resources**: `rigg_pull` with `adopt: true`.
+- **Delete one resource**: delete its file, then push with `prune: true`.
+- **Delete a whole project remotely**: `rigg_delete` (preview → `force: true`).
+- **Identity/RBAC problems**: `rigg auth doctor` (add `--fix` to repair).
 
-## Knowledge sources — managed sub-resources (IMPORTANT)
-Knowledge sources automatically provision and manage sub-resources: an index, indexer,
-data source, and skillset. These are created by Azure as part of the knowledge source lifecycle.
+## Rules
 
-**Do NOT create or push managed sub-resources separately.** When pushing knowledge sources,
-use `--knowledgesources` (or resource_type='knowledgesources' in MCP). rigg handles the
-entire cascade automatically — KS definition plus all managed sub-resources in the correct order.
-
-If you push the sub-resources (index, skillset, etc.) manually before pushing the knowledge
-source, the KS creation will fail because those resources already exist.
-
-### Knowledge source updates (known Azure limitation)
-Azure has a known bug where updating a knowledge source triggers recreation of its managed
-sub-resources (index, indexer, data source, skillset). This fails if sub-resources already exist.
-
-Workaround (via MCP):
-1. `rigg_delete` with `resource_type='knowledgesources'`, `name='<name>'`, `target='remote'`, `force=true`
-   (pass `env='<name>'` to target a specific environment, e.g. `env='prod'`)
-2. `rigg_push` with `resource_type='knowledgesources'`, `force=true`
-
-Workaround (via CLI):
-1. `rigg delete --knowledgesource <name> --target remote` (use `--env <name>` for specific env)
-2. `rigg push --knowledgesources`
-
-### Deleting resources
-`rigg delete` (CLI) and `rigg_delete` (MCP) require specifying where to operate:
-- `--target remote` / `target='remote'` — deletes from the Azure service only. Local files are NOT affected.
-- `--target local` / `target='local'` — removes local files only. Azure resources are NOT affected.
-  Local files are shared across all environments — removing them affects all envs.
-
-After deleting, use push or pull to sync the other side.
-
-WARNING: Deleting a knowledge source from Azure removes the search index and all its data.
-Re-indexing occurs automatically but takes time and may incur costs. To change managed
-sub-resources (index schema, skillset skills), edit those files directly and push with
-`--indexes`, `--skillsets`, etc.
+- NEVER put keys/secrets in resource files — validation rejects them. Data
+  sources use `ResourceId=` connection strings + managed identity; grant roles
+  with `rigg auth doctor --fix`.
+- `x-rigg-*` keys are rigg-local annotations (stripped before push):
+  `x-rigg-api: <spec>` links a WebApiSkill to `apis/<spec>.json` (validated);
+  `x-rigg-ref: knowledge-bases/<kb>` on an agent tool injects the KB's MCP
+  endpoint for the target environment at push time.
+- Long text (agent instructions) lives in `.md` sidecars via
+  `{"$file": "<name>.instructions.md"}` — edit the Markdown, not the JSON.
+- Knowledge sources are explicit: they point at an existing index
+  (`searchIndex` kind). Build data source → index → (skillset) → indexer →
+  knowledge source → knowledge base step by step, pushing and testing per step.
+- Index fields cannot be removed in Azure — pushing a field removal fails with
+  a clear API error; to recreate: delete the file, `push --prune`, restore, push.
+- Exit codes: 0 ok · 1 error · 2 usage · 3 validation · 4 auth · 5 drift/conflict.

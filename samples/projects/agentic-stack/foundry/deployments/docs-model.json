@@ -1,5 +1,5 @@
 {
-  "name": "gpt-4.1-mini",
+  "name": "docs-model",
   "sku": {
     "name": "GlobalStandard",
     "capacity": 1
