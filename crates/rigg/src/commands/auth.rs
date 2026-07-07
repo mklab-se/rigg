@@ -5,8 +5,9 @@ use anyhow::Result;
 use rigg_client::auth::{AzCliAuth, EnvAuth};
 
 use crate::cli::AuthCommands;
+use crate::commands::GlobalContext;
 
-pub async fn run(cmd: AuthCommands) -> Result<()> {
+pub async fn run(_ctx: &GlobalContext, cmd: AuthCommands) -> Result<()> {
     match cmd {
         AuthCommands::Login {
             service_principal,
@@ -14,6 +15,12 @@ pub async fn run(cmd: AuthCommands) -> Result<()> {
         } => login(service_principal, identity).await,
         AuthCommands::Status => status().await,
         AuthCommands::Logout => logout().await,
+        AuthCommands::Doctor { fix: _ } => {
+            // Full identity-graph verification ships in rigg 0.19.
+            println!("rigg auth doctor is coming in rigg 0.19.");
+            println!("It will verify service-to-service identities and RBAC for the workspace.");
+            Ok(())
+        }
     }
 }
 

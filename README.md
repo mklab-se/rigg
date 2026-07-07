@@ -72,17 +72,25 @@ brew install mklab-se/tap/rigg
 See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, and shell completions.
 
 ```bash
-# Initialize a project (discovers your services via Azure CLI)
+# Initialize a workspace (discovers your services via Azure CLI)
 rigg init .
 
-# Pull all resources as local files
-rigg pull --all
+# Create a project — the unit rigg syncs
+rigg new project my-rag
 
-# Edit locally, then push changes back
-rigg push --all
+# Adopt existing Azure resources into it…
+rigg pull my-rag --adopt my-rag
+
+# …or scaffold an explicit RAG pipeline from scratch
+rigg new pipeline docs -p my-rag
+
+# Validate, review, push
+rigg validate my-rag
+rigg push my-rag --dry-run
+rigg push my-rag
 ```
 
-During `init`, rigg discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. It creates a named environment (default: `prod`) and sets up the directory structure. If you're not logged in to Azure CLI, you can enter service names manually.
+A workspace (`rigg.yaml`) defines environments and service connections; each **project** under `projects/` owns its resource definitions exclusively, and `pull`/`push`/`diff` always operate on whole projects — no more half-synced states. During `init`, rigg discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. If you're not logged in to Azure CLI, you can enter service names manually.
 
 For a complete greenfield walkthrough — building an Agentic RAG system from scratch — see **[Getting Started](GETTING_STARTED.md)**.
 

@@ -239,6 +239,11 @@ impl ArmClient {
         Ok(Self { http, token })
     }
 
+    /// The ARM bearer token this client authenticated with.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
     /// List subscriptions the user has access to
     pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>, ClientError> {
         let url = format!("{}/subscriptions?api-version=2022-12-01", ARM_BASE_URL);

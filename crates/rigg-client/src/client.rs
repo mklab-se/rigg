@@ -34,11 +34,37 @@ pub struct AzureSearchClient {
     http: Client,
     auth: Box<dyn AuthProvider>,
     base_url: String,
+    api_version: String,
     preview_api_version: String,
 }
 
 impl AzureSearchClient {
-    /// Create client from a specific search service config
+    /// Create client from a workspace search connection.
+    pub fn from_connection(
+        conn: &rigg_core::workspace::SearchConnection,
+    ) -> Result<Self, ClientError> {
+        let auth = get_auth_provider()?;
+        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        Ok(Self {
+            http,
+            auth,
+            base_url: conn
+                .endpoint
+                .clone()
+                .map(|e| e.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| format!("https://{}.search.windows.net", conn.service)),
+            api_version: conn
+                .api_version
+                .clone()
+                .unwrap_or_else(|| rigg_core::registry::SEARCH_STABLE_API_VERSION.to_string()),
+            preview_api_version: conn
+                .preview_api_version
+                .clone()
+                .unwrap_or_else(|| rigg_core::registry::SEARCH_PREVIEW_API_VERSION.to_string()),
+        })
+    }
+
+    /// Create client from a specific search service config (legacy).
     pub fn from_service_config(service: &SearchServiceConfig) -> Result<Self, ClientError> {
         let auth = get_auth_provider()?;
         let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
@@ -47,13 +73,15 @@ impl AzureSearchClient {
             http,
             auth,
             base_url: service.service_url(),
+            api_version: rigg_core::registry::SEARCH_STABLE_API_VERSION.to_string(),
             preview_api_version: service.preview_api_version.clone(),
         })
     }
 
-    /// Create with a custom auth provider (for testing)
+    /// Create with a custom auth provider and explicit versions (tests).
     pub fn with_auth(
         base_url: String,
+        api_version: String,
         preview_api_version: String,
         auth: Box<dyn AuthProvider>,
     ) -> Result<Self, ClientError> {
@@ -65,16 +93,20 @@ impl AzureSearchClient {
             http,
             auth,
             base_url,
+            api_version,
             preview_api_version,
         })
     }
 
-    /// Get the API version to use for a resource kind.
-    /// Always uses the preview API version — it is a superset of the stable API
-    /// and avoids failures when stable resources contain preview-only features
-    /// (e.g. a skillset with ChatCompletionSkill).
-    fn api_version_for(&self, _kind: ResourceKind) -> &str {
-        &self.preview_api_version
+    /// Get the API version to use for a resource kind, per the registry
+    /// channel: stable kinds use the stable api-version, preview-gated kinds
+    /// the preview one. (Pre-0.18 the client always used preview; GA of
+    /// agentic retrieval in 2026-04-01 makes stable the default.)
+    fn api_version_for(&self, kind: ResourceKind) -> &str {
+        match rigg_core::registry::meta(kind).channel {
+            rigg_core::registry::Channel::Stable => &self.api_version,
+            rigg_core::registry::Channel::Preview => &self.preview_api_version,
+        }
     }
 
     /// Build URL for a resource collection
@@ -282,89 +314,53 @@ mod tests {
     fn make_client() -> AzureSearchClient {
         AzureSearchClient::with_auth(
             "https://test-svc.search.windows.net".to_string(),
-            "2025-11-01-preview".to_string(),
+            "2026-04-01".to_string(),
+            "2026-05-01-preview".to_string(),
             Box::new(FakeAuth),
         )
         .unwrap()
     }
 
     #[test]
-    fn test_collection_url_uses_preview_version() {
+    fn stable_kinds_use_stable_version() {
         let client = make_client();
         let url = client.collection_url(ResourceKind::Index);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/indexes?api-version=2025-11-01-preview"
+            "https://test-svc.search.windows.net/indexes?api-version=2026-04-01"
         );
-    }
-
-    #[test]
-    fn test_collection_url_knowledge_base_uses_preview_version() {
-        let client = make_client();
+        // agentic retrieval is GA in 2026-04-01
         let url = client.collection_url(ResourceKind::KnowledgeBase);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgebases?api-version=2025-11-01-preview"
+            "https://test-svc.search.windows.net/knowledgeBases?api-version=2026-04-01"
         );
-    }
-
-    #[test]
-    fn test_collection_url_knowledge_source_uses_preview_version() {
-        let client = make_client();
-        let url = client.collection_url(ResourceKind::KnowledgeSource);
+        let url = client.resource_url(ResourceKind::KnowledgeSource, "ks");
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgesources?api-version=2025-11-01-preview"
+            "https://test-svc.search.windows.net/knowledgeSources/ks?api-version=2026-04-01"
         );
     }
 
     #[test]
-    fn test_resource_url_uses_preview_version() {
+    fn resource_url_percent_encodes_name() {
         let client = make_client();
-        let url = client.resource_url(ResourceKind::Index, "my-index");
-        assert_eq!(
-            url,
-            "https://test-svc.search.windows.net/indexes/my-index?api-version=2025-11-01-preview"
-        );
+        let url = client.resource_url(ResourceKind::Index, "my index");
+        assert!(url.contains("/indexes/my%20index?"));
     }
 
     #[test]
-    fn test_resource_url_knowledge_base_uses_preview_version() {
+    fn search_kinds_route_via_registry_channel() {
         let client = make_client();
-        let url = client.resource_url(ResourceKind::KnowledgeBase, "my-kb");
-        assert_eq!(
-            url,
-            "https://test-svc.search.windows.net/knowledgebases/my-kb?api-version=2025-11-01-preview"
-        );
-    }
-
-    #[test]
-    fn test_new_for_server_produces_correct_base_url() {
-        // We can't easily test new_for_server directly since it calls get_auth_provider,
-        // but we can verify the URL format through with_auth
-        let client = AzureSearchClient::with_auth(
-            "https://other-svc.search.windows.net".to_string(),
-            "2025-11-01-preview".to_string(),
-            Box::new(FakeAuth),
-        )
-        .unwrap();
-        let url = client.collection_url(ResourceKind::Index);
-        assert_eq!(
-            url,
-            "https://other-svc.search.windows.net/indexes?api-version=2025-11-01-preview"
-        );
-    }
-
-    #[test]
-    fn test_all_kinds_use_preview_version() {
-        let client = make_client();
-        for kind in ResourceKind::all() {
-            let url = client.collection_url(*kind);
+        for kind in ResourceKind::search_kinds() {
+            let url = client.collection_url(kind);
+            let expected = match rigg_core::registry::meta(kind).channel {
+                rigg_core::registry::Channel::Stable => "2026-04-01",
+                rigg_core::registry::Channel::Preview => "2026-05-01-preview",
+            };
             assert!(
-                url.contains("2025-11-01-preview"),
-                "{:?} should use preview API version, got: {}",
-                kind,
-                url
+                url.contains(expected),
+                "{kind:?} should use {expected}, got: {url}"
             );
         }
     }

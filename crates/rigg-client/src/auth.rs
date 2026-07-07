@@ -307,8 +307,29 @@ pub fn get_cognitive_services_auth() -> Result<Box<dyn AuthProvider>, AuthError>
     get_auth_provider_for_scope("https://cognitiveservices.azure.com")
 }
 
+/// Static bearer token from the environment (`RIGG_ACCESS_TOKEN`).
+/// Useful for CI systems that mint tokens out-of-band, and for tests.
+pub struct StaticTokenAuth {
+    token: String,
+}
+
+impl AuthProvider for StaticTokenAuth {
+    fn get_token(&self) -> Result<String, AuthError> {
+        Ok(self.token.clone())
+    }
+    fn method_name(&self) -> &'static str {
+        "Static token (RIGG_ACCESS_TOKEN)"
+    }
+}
+
 /// Get the best available authentication provider for a specific resource scope
 fn get_auth_provider_for_scope(scope: &'static str) -> Result<Box<dyn AuthProvider>, AuthError> {
+    // A pre-minted token wins over everything.
+    if let Ok(token) = std::env::var("RIGG_ACCESS_TOKEN") {
+        if !token.is_empty() {
+            return Ok(Box::new(StaticTokenAuth { token }));
+        }
+    }
     // First try environment variables
     if EnvAuth::is_configured() {
         return Ok(Box::new(EnvAuth::from_env_for_scope(scope)?));

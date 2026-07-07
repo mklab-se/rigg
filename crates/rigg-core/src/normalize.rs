@@ -2,6 +2,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::resources::traits::ResourceKind;
+
 /// Normalize a JSON value for consistent Git diffs
 ///
 /// This performs:
@@ -33,6 +35,110 @@ fn normalize_value(value: &Value, volatile_fields: &[&str]) -> Value {
             Value::Array(normalized)
         }
         _ => value.clone(),
+    }
+}
+
+/// Normalize a resource for storage on disk: strips the kind's volatile and
+/// read-only fields (registry-driven) while preserving Azure's property order.
+/// Rigg-local `x-rigg-*` annotations are kept.
+pub fn normalize_for_disk(kind: ResourceKind, value: &Value) -> Value {
+    let meta = crate::registry::meta(kind);
+    let mut out = value.clone();
+    for field in meta.volatile_fields.iter().chain(meta.read_only_fields) {
+        strip_field(&mut out, field);
+    }
+    out
+}
+
+/// Normalize a resource for pushing to Azure: everything `normalize_for_disk`
+/// strips, plus all `x-rigg-*` annotation keys at any depth.
+pub fn normalize_for_push(kind: ResourceKind, value: &Value) -> Value {
+    let mut out = normalize_for_disk(kind, value);
+    strip_x_rigg_keys(&mut out);
+    out
+}
+
+/// Are two documents semantically equal for this kind (after normalization)?
+pub fn semantic_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
+    let na = normalize_for_push(kind, a);
+    let nb = normalize_for_push(kind, b);
+    rigg_diff::semantic::diff(&na, &nb, "name").is_equal
+}
+
+/// Strip one registry field spec from a document.
+///
+/// - Specs containing `.` or `[]` are paths from the root (e.g.
+///   `properties.provisioningState`, `models[].apiKey`).
+/// - Bare names are removed at any depth (e.g. `@odata.etag` — note the
+///   leading `@` key itself contains dots but is matched as a literal key).
+fn strip_field(value: &mut Value, spec: &str) {
+    let is_literal_key = spec.starts_with('@') || (!spec.contains('.') && !spec.contains("[]"));
+    if is_literal_key {
+        remove_key_recursive(value, spec);
+    } else {
+        remove_path(value, &spec.split('.').collect::<Vec<_>>());
+    }
+}
+
+fn remove_key_recursive(value: &mut Value, key: &str) {
+    match value {
+        Value::Object(map) => {
+            map.remove(key);
+            for (_, v) in map.iter_mut() {
+                remove_key_recursive(v, key);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                remove_key_recursive(item, key);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn remove_path(value: &mut Value, segments: &[&str]) {
+    let Some((head, rest)) = segments.split_first() else {
+        return;
+    };
+    if let Some(key) = head.strip_suffix("[]") {
+        let target = if key.is_empty() {
+            Some(value)
+        } else {
+            value.get_mut(key)
+        };
+        if let Some(Value::Array(arr)) = target {
+            for item in arr {
+                if rest.is_empty() {
+                    continue; // removing whole array elements is not a thing
+                }
+                remove_path(item, rest);
+            }
+        }
+    } else if rest.is_empty() {
+        if let Value::Object(map) = value {
+            map.remove(*head);
+        }
+    } else if let Some(next) = value.get_mut(*head) {
+        remove_path(next, rest);
+    }
+}
+
+/// Remove every `x-rigg-*` key at any depth (Rigg-local annotations).
+pub fn strip_x_rigg_keys(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|k, _| !k.starts_with("x-rigg-"));
+            for (_, v) in map.iter_mut() {
+                strip_x_rigg_keys(v);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                strip_x_rigg_keys(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -83,6 +189,68 @@ pub fn redact_credentials(value: &mut Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn disk_normalization_strips_volatile_and_read_only() {
+        let indexer = json!({
+            "@odata.etag": "0x123",
+            "name": "idxr",
+            "dataSourceName": "ds",
+            "status": "running",
+            "lastResult": {"status": "success"},
+            "nested": {"@odata.etag": "0x456", "keep": true}
+        });
+        let out = normalize_for_disk(ResourceKind::Indexer, &indexer);
+        assert!(out.get("@odata.etag").is_none());
+        assert!(out.get("status").is_none(), "read-only stripped");
+        assert!(out.get("lastResult").is_none());
+        assert!(
+            out["nested"].get("@odata.etag").is_none(),
+            "etag stripped at depth"
+        );
+        assert_eq!(out["nested"]["keep"], json!(true));
+        assert_eq!(out["dataSourceName"], json!("ds"));
+    }
+
+    #[test]
+    fn dotted_path_stripping_for_arm_kinds() {
+        let dep = json!({
+            "name": "gpt-5-mini",
+            "properties": {
+                "model": {"name": "gpt-5-mini", "callRateLimit": {"count": 1}},
+                "provisioningState": "Succeeded",
+                "raiPolicyName": "default"
+            },
+            "systemData": {"createdAt": "2026-01-01"}
+        });
+        let out = normalize_for_disk(ResourceKind::Deployment, &dep);
+        assert!(out.get("systemData").is_none());
+        assert!(out["properties"].get("provisioningState").is_none());
+        assert!(out["properties"]["model"].get("callRateLimit").is_none());
+        assert_eq!(out["properties"]["raiPolicyName"], json!("default"));
+    }
+
+    #[test]
+    fn push_normalization_strips_x_rigg_but_disk_keeps() {
+        let agent = json!({
+            "name": "a",
+            "tools": [{"type": "mcp", "x-rigg-ref": "knowledge-bases/kb", "server_url": ""}]
+        });
+        let disk = normalize_for_disk(ResourceKind::Agent, &agent);
+        assert_eq!(disk["tools"][0]["x-rigg-ref"], json!("knowledge-bases/kb"));
+        let push = normalize_for_push(ResourceKind::Agent, &agent);
+        assert!(push["tools"][0].get("x-rigg-ref").is_none());
+        assert_eq!(push["tools"][0]["type"], json!("mcp"));
+    }
+
+    #[test]
+    fn semantic_eq_ignores_volatile_and_order() {
+        let a = json!({"name": "i", "@odata.etag": "1", "fields": [{"name": "f1"}]});
+        let b = json!({"@odata.etag": "2", "fields": [{"name": "f1"}], "name": "i"});
+        assert!(semantic_eq(ResourceKind::Index, &a, &b));
+        let c = json!({"name": "i", "fields": [{"name": "f2"}]});
+        assert!(!semantic_eq(ResourceKind::Index, &a, &c));
+    }
 
     #[test]
     fn test_strips_volatile_fields() {
@@ -302,54 +470,5 @@ mod tests {
         let input = json!({});
         let output = format_json(&input);
         assert_eq!(output, "{}\n");
-    }
-
-    #[test]
-    fn test_normalize_preserves_tool_permission_fields() {
-        use crate::resources::agent::agent_volatile_fields;
-
-        let input = json!({
-            "kind": "prompt",
-            "model": "gpt-4o",
-            "id": "should-be-stripped",
-            "created_at": 1234567890,
-            "tools": [
-                {
-                    "type": "mcp",
-                    "server_label": "kb_test",
-                    "require_approval": "never",
-                    "allowed_tools": ["tool_a", "tool_b"]
-                },
-                {
-                    "type": "mcp",
-                    "server_label": "kb_other",
-                    "require_approval": {
-                        "never": {"tool_names": ["safe"]},
-                        "always": {"tool_names": ["risky"]}
-                    }
-                }
-            ]
-        });
-
-        let result = normalize(&input, agent_volatile_fields());
-
-        // Volatile fields stripped at top level
-        assert!(result.get("id").is_none());
-        assert!(result.get("created_at").is_none());
-
-        // Non-volatile fields preserved
-        assert_eq!(result["kind"], "prompt");
-        assert_eq!(result["model"], "gpt-4o");
-
-        // Tool permission fields preserved (no name collision with volatile fields)
-        let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools[0]["require_approval"], "never");
-        assert_eq!(tools[0]["allowed_tools"][0], "tool_a");
-        assert_eq!(tools[0]["allowed_tools"][1], "tool_b");
-
-        // Object-form require_approval preserved
-        let ra = &tools[1]["require_approval"];
-        assert_eq!(ra["never"]["tool_names"][0], "safe");
-        assert_eq!(ra["always"]["tool_names"][0], "risky");
     }
 }

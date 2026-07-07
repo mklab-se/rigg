@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.17.0"
+version = "0.18.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -19,7 +19,7 @@ rust-version = "1.85"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-serde_yaml = "0.9"
+serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
@@ -76,6 +76,6 @@ tempfile = "3.10"
 ailloy = { version = "0.7", default-features = false, features = ["config-tui"] }
 
 # Internal crates
-rigg-core = { version = "0.17.0", path = "crates/rigg-core" }
-rigg-client = { version = "0.17.0", path = "crates/rigg-client" }
-rigg-diff = { version = "0.17.0", path = "crates/rigg-diff" }
+rigg-core = { version = "0.18.0", path = "crates/rigg-core" }
+rigg-client = { version = "0.18.0", path = "crates/rigg-client" }
+rigg-diff = { version = "0.18.0", path = "crates/rigg-diff" }

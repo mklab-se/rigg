@@ -1,254 +1,85 @@
-//! Delete resources from Azure or remove local files
+//! `rigg delete <project> --remote` — remove a project's resources from Azure.
+//!
+//! Local files are never touched by this command (delete files + `rigg push
+//! --prune` for single resources; `rm -r` for local project removal).
 
-use std::io::{self, Write};
-
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use colored::Colorize;
 
-use rigg_client::AzureSearchClient;
-use rigg_core::resources::ResourceKind;
-use rigg_core::resources::managed::{self, ManagedMap};
-use rigg_core::service::ServiceDomain;
-use rigg_core::state::{Checksums, LocalState};
+use rigg_core::graph;
+use rigg_core::store::{ProjectState, Store};
 
-use crate::cli::DeleteTarget;
-use crate::commands::confirm::prompt_yes_no;
-use crate::commands::load_config_and_env;
+use crate::cli::DeleteArgs;
+use crate::commands::remote::{Remote, ensure_any_connection};
+use crate::commands::{CommandError, GlobalContext, confirm, load_workspace, resolve_env};
 
-pub async fn run(
-    kind: ResourceKind,
-    name: &str,
-    target: DeleteTarget,
-    force: bool,
-    env_override: Option<&str>,
-) -> Result<()> {
-    let (project_root, config, env) = load_config_and_env(env_override)?;
-    let files_root = config.files_root(&project_root);
+pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
+    if !args.remote {
+        return Err(anyhow!(CommandError::Usage(
+            "rigg delete removes remote resources and requires --remote; \
+             to remove local files just delete them (then `rigg push --prune`)"
+                .to_string()
+        )));
+    }
+    let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
+    let project = ws.project(&args.project)?;
+    let store = Store::new(project);
+    let remote = Remote::for_project(&env, project);
+    ensure_any_connection(&remote, project)?;
+    let mut state = ProjectState::load(&ws, &env.name, &project.name);
 
-    match target {
-        DeleteTarget::Remote => {
-            println!(
-                "Deleting {} '{}' from {} on Azure (environment '{}')",
-                kind.display_name(),
-                name,
-                env.primary_search_service()
-                    .map(|s| s.name.as_str())
-                    .unwrap_or("(unknown)"),
-                env.name
-            );
-            println!("  Local files will NOT be affected.");
-        }
-        DeleteTarget::Local => {
-            println!(
-                "Removing local files for {} '{}'",
-                kind.display_name(),
-                name,
-            );
-            println!("  Local files are shared across all environments.");
-            println!("  Azure resources are NOT affected in any environment.");
+    // Everything the project owns that exists remotely.
+    let mut items = Vec::new();
+    for (r, _) in store.list()? {
+        if remote.supported_kinds().contains(&r.kind) && remote.get(&r).await?.is_some() {
+            let body = store.read(&r)?;
+            items.push((r, body));
         }
     }
-
-    // Warn about managed sub-resources for knowledge sources
-    if kind == ResourceKind::KnowledgeSource {
-        println!();
-        match target {
-            DeleteTarget::Remote => {
-                println!(
-                    "{} Deleting a knowledge source from Azure will also delete its managed",
-                    "WARNING:".yellow().bold()
-                );
-                println!("  sub-resources (index, indexer, data source, skillset) on Azure.");
-                println!("  The search index and all its data will be lost.");
-            }
-            DeleteTarget::Local => {
-                println!(
-                    "{} This will remove the local KS directory including all managed",
-                    "NOTE:".yellow().bold()
-                );
-                println!("  sub-resource files (index, indexer, data source, skillset).");
-                println!("  The Azure resources are not affected. Run 'rigg pull' to restore.");
-            }
-        }
-    }
-
-    println!();
-
-    let action = match target {
-        DeleteTarget::Remote => format!("Delete {} '{}' from Azure?", kind.display_name(), name),
-        DeleteTarget::Local => {
-            format!("Remove local files for {} '{}'?", kind.display_name(), name)
-        }
-    };
-    if !force && !prompt_yes_no(&action)? {
-        println!("Aborted.");
+    if items.is_empty() {
+        println!(
+            "Nothing to delete: no remote resources found for project '{}'.",
+            project.name
+        );
         return Ok(());
     }
 
-    match target {
-        DeleteTarget::Remote => {
-            delete_from_azure(kind, name, &env).await?;
-        }
-        DeleteTarget::Local => {
-            remove_local_files(kind, name, &env, &files_root)?;
-        }
-    }
-
-    // Update state and checksums
-    let managed_map = ManagedMap::new();
-    let mut state = LocalState::load_env(&project_root, &env.name)?;
-    let mut checksums = Checksums::load_env(&project_root, &env.name)?;
-
-    state.remove_managed(kind, name, &managed_map);
-    checksums.remove_managed(kind, name, &managed_map);
-
-    // For knowledge sources, also remove managed sub-resource state
-    if kind == ResourceKind::KnowledgeSource {
-        let service_dir = if kind.domain() == ServiceDomain::Search {
-            let search_svc = env.primary_search_service().unwrap();
-            env.search_service_dir(&files_root, search_svc)
-        } else {
-            let foundry_config = env.foundry.first().unwrap();
-            env.foundry_service_dir(&files_root, foundry_config)
-        };
-        let ks_dir = service_dir
-            .join("agentic-retrieval/knowledge-sources")
-            .join(name);
-        let ks_file = ks_dir.join(format!("{}.json", name));
-        if let Ok(content) = std::fs::read_to_string(&ks_file) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                let ks_pairs = vec![(name.to_string(), value)];
-                let local_managed = managed::build_managed_map(&ks_pairs);
-                for (sub_kind, sub_name) in local_managed.keys() {
-                    state.remove_managed(*sub_kind, sub_name, &local_managed);
-                    checksums.remove_managed(*sub_kind, sub_name, &local_managed);
-                }
-            }
-        }
-    }
-
-    state.save_env(&project_root, &env.name)?;
-    checksums.save_env(&project_root, &env.name)?;
-
-    let target_desc = match target {
-        DeleteTarget::Remote => "from Azure",
-        DeleteTarget::Local => "locally",
-    };
-    println!();
     println!(
-        "Deleted {} '{}' {} successfully.",
-        kind.display_name(),
-        name,
-        target_desc,
+        "{} the following resources of project '{}' from {} (env: {}):",
+        "DELETING".red().bold(),
+        project.name.bold(),
+        "Azure".bold(),
+        env.name
     );
-
-    // Suggest next step
-    match target {
-        DeleteTarget::Remote => {
-            println!(
-                "  To also remove local files: rigg delete --{} {} --target local",
-                kind.cli_flag_name(),
-                name
-            );
-        }
-        DeleteTarget::Local => {
-            println!(
-                "  To restore from Azure: rigg pull --{}",
-                kind.cli_flag_name_plural()
-            );
-        }
+    let order = graph::delete_order(&items)?;
+    for r in &order {
+        println!("  {} {}", "delete".red(), r);
     }
 
-    Ok(())
-}
-
-/// Delete a resource from the remote Azure service.
-async fn delete_from_azure(
-    kind: ResourceKind,
-    name: &str,
-    env: &rigg_core::config::ResolvedEnvironment,
-) -> Result<()> {
-    if kind.domain() == ServiceDomain::Search {
-        let search_svc = env
-            .primary_search_service()
-            .ok_or_else(|| anyhow::anyhow!("No search service in environment '{}'", env.name))?;
-        let client = AzureSearchClient::from_service_config(search_svc)?;
-
-        print!(
-            "Deleting {} '{}' from {}... ",
-            kind.display_name(),
-            name,
-            search_svc.name
-        );
-        io::stdout().flush()?;
-
-        client.delete(kind, name).await?;
-        println!("done");
-    } else if kind.domain() == ServiceDomain::Foundry {
-        let foundry_config = env
-            .foundry
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("No Foundry service in environment '{}'", env.name))?;
-        let foundry_client = rigg_client::FoundryClient::new(foundry_config)?;
-
-        print!(
-            "Deleting {} '{}' from Foundry... ",
-            kind.display_name(),
-            name
-        );
-        io::stdout().flush()?;
-
-        foundry_client.delete_agent(name).await?;
-        println!("done");
+    if ctx.interactive() {
+        println!();
+        println!("Type the project name to confirm:");
+        let answer = confirm::prompt_line("> ")?;
+        if answer.trim() != project.name {
+            println!("aborted");
+            return Ok(());
+        }
+    } else if !ctx.yes {
+        return Err(anyhow!(CommandError::Usage(
+            "non-interactive delete requires --yes".to_string()
+        )));
     }
 
-    Ok(())
-}
-
-/// Remove local files for a resource.
-fn remove_local_files(
-    kind: ResourceKind,
-    name: &str,
-    env: &rigg_core::config::ResolvedEnvironment,
-    files_root: &std::path::Path,
-) -> Result<()> {
-    let service_dir = if kind.domain() == ServiceDomain::Search {
-        let search_svc = env.primary_search_service().unwrap();
-        env.search_service_dir(files_root, search_svc)
-    } else {
-        let foundry_config = env.foundry.first().unwrap();
-        env.foundry_service_dir(files_root, foundry_config)
-    };
-
-    if kind == ResourceKind::Agent {
-        let yaml_path = service_dir.join("agents").join(format!("{}.yaml", name));
-        if yaml_path.exists() {
-            std::fs::remove_file(&yaml_path)?;
-            println!("Removed {}", yaml_path.display());
-        } else {
-            println!("No local file found for Agent '{}'", name);
-        }
-    } else if kind == ResourceKind::KnowledgeSource {
-        let ks_dir = service_dir
-            .join("agentic-retrieval/knowledge-sources")
-            .join(name);
-        if ks_dir.exists() {
-            std::fs::remove_dir_all(&ks_dir)?;
-            println!("Removed {}", ks_dir.display());
-        } else {
-            println!("No local directory found for Knowledge Source '{}'", name);
-        }
-    } else {
-        let file_path = service_dir
-            .join(kind.directory_name())
-            .join(format!("{}.json", name));
-        if file_path.exists() {
-            std::fs::remove_file(&file_path)?;
-            println!("Removed {}", file_path.display());
-        } else {
-            println!("No local file found for {} '{}'", kind.display_name(), name);
-        }
+    for r in &order {
+        remote.delete(r).await?;
+        state.clear_baseline(r);
+        state.save(&ws, &env.name, &project.name)?;
+        println!("  {} deleted {}", "✓".green(), r);
     }
-
+    println!(
+        "{} local files kept; push the project to re-create everything",
+        "i".blue()
+    );
     Ok(())
 }

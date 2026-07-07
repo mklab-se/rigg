@@ -8,6 +8,7 @@
 
 pub mod ai;
 pub mod arm;
+pub mod arm_resources;
 pub mod auth;
 pub mod client;
 pub mod cosmos;

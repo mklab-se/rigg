@@ -31,8 +31,3 @@ pub async fn run(cmd: Option<AiCommands>) -> Result<()> {
         }
     }
 }
-
-/// Check if AI features are active (configured via ailloy + enabled for this tool).
-pub fn is_ai_active() -> bool {
-    config_tui::is_ai_active("rigg")
-}
