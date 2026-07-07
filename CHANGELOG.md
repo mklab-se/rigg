@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.0] - 2026-07-07
+
+Complete re-architecture around the workspace/project model (first phase of the
+Rigg 1.0 redesign — see docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md).
+**Breaking release: no backward compatibility with 0.17 workspaces.**
+Re-initialize with `rigg init` and adopt existing resources with `rigg pull --adopt`.
+
+### Added
+
+- **Workspaces & projects** — a `rigg.yaml` workspace holds environments and
+  service connections; resources live in `projects/<name>/` and belong to
+  exactly one project (enforced). Pull/push/diff operate on whole projects.
+- **Metadata registry** (`rigg-core::registry`) — one declarative table drives
+  API routing, volatile/read-only/secret fields, reference extraction, and
+  data-source type validity per api-version channel.
+- **New Foundry resource kinds**: model `deployments` (ARM, with LRO polling),
+  project `connections` (identity-auth only), `guardrails` (RAI policies).
+- **`$file` sidecars** — long text fields (agent instructions) live in
+  Markdown files next to the JSON and are inlined on push.
+- **`x-rigg-*` annotations** — rigg-local metadata (`x-rigg-api` links
+  skillsets to OpenAPI specs in `apis/`; `x-rigg-ref` names cross-service
+  references), stripped before push.
+- **Push canonicalization** — after every push the server document is fetched
+  back, normalized, and written to disk + baseline, eliminating false-positive
+  drift permanently. Baseline checksums are order- and null-insensitive.
+- **No-secrets enforcement** — `rigg validate` rejects key-based credentials;
+  scaffolds are identity-first (`ResourceId=` connection strings,
+  `ProjectManagedIdentity` connections).
+- **Standardized exit codes** — 0 ok, 1 error, 2 usage, 3 validation,
+  4 auth/permission, 5 drift/conflict; `--non-interactive` contract for CI.
+- **`rigg new pipeline`** — scaffolds the full explicit chain (data source →
+  index → skillset → indexer → knowledge source → knowledge base).
+- **`rigg new api`** — OpenAPI 3.1 spec scaffold matching the custom
+  WebApiSkill contract, shared workspace-wide in `apis/`.
+- **`diff --format markdown`** for PR comments; `--compare-env` for
+  environment-to-environment diffs; `--only <kind>/<name>` lens.
+- **`endpoint:` connection override** (sovereign clouds, testing) and
+  `RIGG_ACCESS_TOKEN` static bearer auth for CI.
+
+### Changed
+
+- **Azure AI Search api-version: `2026-04-01` (stable)** — agentic retrieval
+  (knowledge sources/bases) is GA; preview `2026-05-01-preview` used only for
+  preview-gated features. Fixes the 0.17 behavior of routing everything
+  through the preview API.
+- **Microsoft Foundry: `v1` data plane** — replaces `2025-05-15-preview`;
+  the assistants API (retired by Microsoft on 2026-08-26) is gone.
+- Knowledge sources are **explicit-only**: they reference an existing index
+  (`searchIndex` kind); Azure-managed sub-resources are no longer supported.
+- Resource files are always JSON; `rigg.yaml`/`project.yaml` are YAML.
+- `serde_yaml` (archived) replaced with `serde_yaml_ng`.
+
+### Removed
+
+- Managed knowledge-source machinery (`createdResources` tracking, cascade
+  ordering, recreate workarounds).
+- Resource-selection flags (`--indexes`, `--index <name>`, `--search-only`,
+  …) — the project is the unit of sync.
+- `rigg config` (edit `rigg.yaml` directly), `rigg pull-watch`
+  (→ `rigg pull --watch`), the `agentic-rag` scaffold (→ `rigg new pipeline`),
+  drop-and-recreate prompts.
+
 ## [0.17.0] - 2026-07-01
 
 ### Added
