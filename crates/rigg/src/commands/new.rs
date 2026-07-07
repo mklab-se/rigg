@@ -6,7 +6,7 @@ use colored::Colorize;
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::scaffold;
 use rigg_core::store::Store;
-use rigg_core::workspace::{APIS_DIR, PROJECT_FILE, PROJECTS_DIR, Workspace};
+use rigg_core::workspace::{PROJECT_FILE, PROJECTS_DIR, Workspace};
 
 use crate::cli::NewArgs;
 use crate::commands::{CommandError, GlobalContext, load_workspace};

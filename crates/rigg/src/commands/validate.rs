@@ -12,7 +12,7 @@ use rigg_core::store::{Store, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, Workspace};
 
 use crate::cli::ValidateArgs;
-use crate::commands::{CommandError, GlobalContext, load_workspace, select_projects};
+use crate::commands::{CommandError, GlobalContext, load_workspace};
 
 pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
     let ws = load_workspace()?;

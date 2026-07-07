@@ -19,21 +19,6 @@ pub fn prompt_yes_no(message: &str) -> Result<bool> {
     ))
 }
 
-/// Prompt the user with a yes/no question. Default is "yes".
-/// Returns false only if the user types "n" or "no" (case-insensitive).
-pub fn prompt_yes_default(message: &str) -> Result<bool> {
-    print!("{} [Y/n] ", message);
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().lock().read_line(&mut input)?;
-
-    Ok(!matches!(
-        input.trim().to_ascii_lowercase().as_str(),
-        "n" | "no"
-    ))
-}
-
 /// Prompt for a single-character choice from `options` (case-insensitive).
 /// Re-asks until a valid option is entered.
 pub fn prompt_choice(message: &str, options: &[char]) -> Result<char> {

@@ -48,6 +48,7 @@ impl From<ExitCode> for std::process::ExitCode {
 
 /// Typed command failure that maps to a specific exit code.
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // AuthDenied is mapped from client errors today; kept for doctor (0.19)
 pub enum CommandError {
     #[error("{0}")]
     Validation(String),
@@ -97,6 +98,7 @@ pub struct GlobalContext {
     pub output: OutputFormat,
     pub yes: bool,
     pub non_interactive: bool,
+    #[allow(dead_code)] // reserved for quiet-mode output tuning
     pub quiet: bool,
 }
 

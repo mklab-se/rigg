@@ -129,7 +129,7 @@ impl Remote {
             }
             Domain::FoundryData => {
                 let client = self.foundry().await?;
-                let exists = matches!(client.get_agent(&r.name).await, Ok(_));
+                let exists = client.get_agent(&r.name).await.is_ok();
                 let result = if exists {
                     client.update_agent(&r.name, body).await?
                 } else {
