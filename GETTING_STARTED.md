@@ -1,176 +1,176 @@
 # Getting Started: Build an Agentic RAG System
 
-This walkthrough takes you from zero to a deployed Agentic RAG system using rigg, Azure AI Search, and Microsoft Foundry.
+This walkthrough takes you from zero to a deployed Agentic RAG system using rigg, Azure AI Search, and Microsoft Foundry. Every resource will be an explicit file you own, review, and push — no hidden auto-provisioning.
+
+For finished, working examples of everything built here, see the [`samples/`](samples/) workspace.
 
 ## How the Pieces Connect
 
-An Agentic RAG system has four layers, managed across two Azure services:
-
 ```
 Microsoft Foundry                    Azure AI Search
-─────────────────                    ────────────────
-Agent                                Knowledge Base
-  └─ tools: [mcp → KB]        ───►    └─ Knowledge Source
-                                           └─ Index (auto-provisioned)
-                                              Indexer (auto-provisioned)
-                                              Data Source (auto-provisioned)
-                                              Skillset (auto-provisioned)
+─────────────────                    ───────────────
+Agent ── model ─► Deployment         Knowledge Base
+  └─ tools: [mcp ────────────►]        └─ Knowledge Source
+                                            └─ Index ◄── Indexer ◄── Data Source
+                                                             └─ Skillset (optional)
 ```
 
-- **Agent** — the AI model with instructions and tools (Foundry)
-- **Knowledge Base** — defines retrieval rules and groups knowledge sources (Search)
-- **Knowledge Source** — connects a data source to a knowledge base (Search)
-- **Index + managed resources** — auto-provisioned by Azure when you create a knowledge source
+- **Data source → index → indexer** — the classic Search pipeline: where the data lives, how it's searchable, and how it flows
+- **Knowledge source** — exposes an existing index for agentic retrieval; it points at the index *you* define
+- **Knowledge base** — what agents query; routes across knowledge sources with retrieval instructions
+- **Deployment + agent** — the Foundry side: a model deployment and an agent whose MCP tool grounds on the knowledge base
 
-rigg manages all of these as local files, so you can version, review, and deploy them together.
+rigg manages all of these as JSON files in a **project**, so you version, review, and deploy them together.
 
-## 1. Install rigg
-
-```bash
-brew install mklab-se/tap/rigg
-```
-
-Or see [INSTALL.md](INSTALL.md) for other methods. Make sure you're logged in to Azure:
+## 1. Install and Log In
 
 ```bash
+brew install mklab-se/tap/rigg     # or: cargo install rigg — see INSTALL.md
 az login
 ```
 
-## 2. Initialize Your Project
+## 2. Initialize a Workspace
 
 ```bash
-mkdir my-rag-system && cd my-rag-system
-rigg init . --template agentic
+mkdir my-rag && cd my-rag
+rigg init .
 ```
 
-The `agentic` template sets up directories for all resource types, including preview agentic retrieval resources. rigg will discover your Azure services and create a `rigg.yaml` config.
-
-> **Shortcut:** If you want to scaffold everything at once, skip steps 3-5 and run:
-> ```bash
-> rigg new agentic-rag my-system --model gpt-4o --container documents
-> ```
-> This creates a pre-wired agent, knowledge base, and knowledge source in one command. Jump to [step 6](#6-deploy-to-azure).
-
-## 3. Create the Knowledge Base
+rigg discovers your Azure AI Search services and Foundry projects via ARM and writes `rigg.yaml` — environments and service connections. Resources live in projects:
 
 ```bash
-rigg new knowledge-base regulatory-kb
+rigg new project docs-rag
 ```
 
-Edit the generated file to add retrieval instructions:
+## 3. Scaffold the Retrieval Pipeline
+
+One command scaffolds the whole explicit chain — data source → index → skillset → indexer → knowledge source → knowledge base:
+
+```bash
+rigg new pipeline docs -p docs-rag --type azureblob
+```
+
+Prefer to build it up piece by piece? The individual scaffolds compose the same way:
+
+```bash
+rigg new data-source docs-ds -p docs-rag --type azureblob
+rigg new index docs-index -p docs-rag
+rigg new indexer docs-indexer -p docs-rag
+```
+
+Either way, you now edit the generated files:
+
+1. **`search/data-sources/docs-ds.json`** — point it at your storage account. Scaffolds are identity-first: fill in the `ResourceId=` connection string and container name. Never put keys in files — `rigg validate` will reject them.
+2. **`search/indexes/docs-index.json`** — shape the fields to your documents.
+3. **`search/indexers/docs-indexer.json`** — the pipeline scaffold wires `dataSourceName` and `targetIndexName` for you (fill them in yourself if you scaffolded piece by piece); adjust field mappings and the schedule. Remove the skillset reference (and its file) if you don't need enrichment.
+
+Validate as you go:
+
+```bash
+rigg validate docs-rag
+```
+
+## 4. Wire Up Identities
+
+Identity-based access means your search service needs RBAC roles on your data — for blob, **Storage Blob Data Reader** on the storage account. Let rigg check and fix it:
+
+```bash
+rigg auth doctor --fix
+```
+
+`auth doctor` reads your workspace files, derives which identity needs which role where, and creates the missing role assignments (or prints the exact `az` commands). If your stack spans several services, prefer a shared user-assigned managed identity — role assignments survive service re-creation.
+
+## 5. Push and Verify
+
+```bash
+rigg push docs-rag --dry-run    # review the dependency-ordered plan
+rigg push docs-rag
+```
+
+rigg creates the resources in dependency order, then fetches each one back and normalizes your local files against what Azure actually stored — so `rigg diff` stays clean.
+
+Run the indexer once from the portal (or wait for its schedule), then check:
+
+```bash
+rigg status docs-rag            # everything should be "in sync"
+rigg diff docs-rag              # no differences
+```
+
+## 6. Expose the Index for Agentic Retrieval
+
+Knowledge sources are explicit — they point at the index you just built:
+
+```bash
+rigg new knowledge-source docs-ks -p docs-rag
+```
+
+Edit `search/knowledge-sources/docs-ks.json` and set the index name (the `pipeline` scaffold has already done this):
 
 ```json
 {
-  "name": "regulatory-kb",
-  "description": "Regulatory and compliance documents",
-  "retrievalInstructions": "Find relevant regulatory passages. Prioritize exact legal text over summaries.",
-  "outputMode": "extractiveData"
+  "name": "docs-ks",
+  "kind": "searchIndex",
+  "searchIndexParameters": { "searchIndexName": "docs-index" }
 }
 ```
 
-## 4. Create a Knowledge Source
+Then the knowledge base — what agents actually query:
 
 ```bash
-rigg new knowledge-source regulatory --index regulatory-index --knowledge-base regulatory-kb
+rigg new knowledge-base docs-kb -p docs-rag
 ```
 
-This creates the knowledge source definition. After pushing, Azure will auto-provision managed sub-resources (index, indexer, data source, skillset) — you don't need to create them manually.
+Edit `search/knowledge-bases/docs-kb.json` to reference `docs-ks` and add retrieval instructions (e.g. "Find relevant passages; prefer exact text over summaries").
 
-Edit the generated file to configure your data connection:
+Push again — only what changed is sent:
+
+```bash
+rigg push docs-rag
+```
+
+## 7. Add the Foundry Agent
+
+First a model deployment, then the agent:
+
+```bash
+rigg new deployment docs-model -p docs-rag
+rigg new agent docs-agent -p docs-rag
+```
+
+The agent's instructions live in a Markdown sidecar — edit `foundry/agents/docs-agent.instructions.md`, not the JSON (the JSON references it via `{"$file": "docs-agent.instructions.md"}`).
+
+Ground the agent on your knowledge base by giving its MCP tool an `x-rigg-ref` annotation in `foundry/agents/docs-agent.json`:
 
 ```json
 {
-  "name": "regulatory",
-  "indexName": "regulatory-index",
-  "knowledgeBaseName": "regulatory-kb",
-  "kind": "azureBlob",
-  "description": "Regulatory PDFs and documents",
-  "azureBlobParameters": {
-    "containerName": "documents"
-  }
+  "type": "mcp",
+  "server_label": "knowledge",
+  "x-rigg-ref": "knowledge-bases/docs-kb",
+  "server_url": ""
 }
 ```
 
-## 5. Create the Agent
+`x-rigg-ref` is rigg-local: at push time rigg injects the knowledge base's MCP endpoint for the *target environment*, so the same file works in dev and prod. See [`samples/projects/agentic-stack/`](samples/projects/agentic-stack/) for a complete working agent.
+
+## 8. Deploy and Inspect
 
 ```bash
-rigg new agent research-assistant --model gpt-4o
+rigg validate docs-rag
+rigg push docs-rag --dry-run
+rigg push docs-rag
+rigg auth doctor --fix          # re-check: the agent layer added new edges
+rigg describe docs-rag          # the full dependency graph, agent to data source
 ```
 
-Edit the generated YAML to add instructions and connect to the knowledge base:
-
-```yaml
-kind: prompt
-model: gpt-4o
-instructions: |
-  You are a research assistant specialized in regulatory compliance.
-  Use the regulatory-kb knowledge base to find and cite relevant legal passages.
-  Always provide specific section references when answering questions.
-tools:
-  - type: mcp
-    server_label: regulatory-kb
-    server_url: https://<your-search-service>.search.windows.net/knowledgebases/regulatory-kb/mcp
-```
-
-Replace `<your-search-service>` with your actual Azure AI Search service name (visible in `rigg.yaml`).
-
-## 6. Deploy to Azure
-
-Preview what will be pushed, then deploy:
-
-```bash
-# Preview changes
-rigg push --all
-
-# Deploy (after confirming the preview)
-rigg push --all --force
-```
-
-## 7. Pull Back Managed Resources
-
-After pushing the knowledge source, Azure auto-provisions managed sub-resources. Pull them back to have the complete picture locally:
-
-```bash
-rigg pull --all
-```
-
-Your project now contains all the auto-provisioned resources:
-
-```
-search/
-  agentic-retrieval/
-    knowledge-bases/
-      regulatory-kb.json
-    knowledge-sources/
-      regulatory/
-        regulatory.json              # Your knowledge source
-        regulatory-index.json        # Auto-provisioned index
-        regulatory-indexer.json      # Auto-provisioned indexer
-        regulatory-datasource.json   # Auto-provisioned data source
-        regulatory-skillset.json     # Auto-provisioned skillset
-foundry/
-  agents/
-    research-assistant.yaml          # Your agent
-```
-
-## 8. Verify
-
-```bash
-# Check project status
-rigg status
-
-# See the full dependency graph
-rigg describe
-```
-
-`rigg describe` shows how everything connects — from the agent through the knowledge base to the index.
+Your Agentic RAG system is live, and its complete definition is a directory of reviewable files.
 
 ## Next Steps
 
-- **Version control**: `git init && git add -A && git commit -m "Initial RAG configuration"`
-- **Diff against Azure**: `rigg diff --all` shows what changed since last sync
-- **Add environments**: Configure `test` and `prod` environments in `rigg.yaml` for environment promotion
-- **Connect your AI tool**: `rigg mcp install claude-code` lets Claude Code see and manage your RAG stack
-- **CI/CD**: Use `rigg validate` in PR checks and `rigg push --all --force` on merge to main
+- **Version control** — `git init && git add -A && git commit -m "docs-rag v1"` (`.rigg/` is already gitignored)
+- **Environments** — `rigg env add prod`, then `rigg push docs-rag --env prod` to promote
+- **CI/CD** — `rigg ci init github` scaffolds validate-on-PR, deploy-on-merge (OIDC), and nightly drift detection
+- **Connect your AI tool** — `rigg mcp install claude-code` lets Claude Code see and manage the stack ([MCP.md](MCP.md))
+- **AI assistance** — `rigg ai enable` turns on diff summaries, conflict merging, and `--describe` drafting
+- **Existing resources?** — `rigg pull --adopt <project>` brings unmanaged Azure resources into a project
 
-See [README.md](README.md) for the full feature reference.
+See [README.md](README.md) for the full feature reference and [`samples/`](samples/) for three complete projects, including Cosmos DB and Azure SQL data source patterns.

@@ -4,23 +4,15 @@ rigg includes a built-in [MCP](https://modelcontextprotocol.io/) (Model Context 
 
 ## Why Connect Your AI Tool to Rigg?
 
-Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets and data sources. Understanding one piece in isolation isn't enough to make meaningful improvements — but that's all your AI coding tool can do when configuration lives behind Azure portals and REST APIs.
+Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which search indexes fed by indexers, skillsets, and data sources. Understanding one piece in isolation isn't enough to make meaningful improvements — but that's all your AI coding tool can do when configuration lives behind Azure portals and REST APIs.
 
 rigg changes this in two ways:
 
-1. **Every resource as a local file.** After `rigg pull`, your entire configuration is on disk — agent YAML, index schemas, skillset pipelines, knowledge base rules. Your AI tool can already read these directly. But files alone don't capture how everything connects.
+1. **Every resource as a local file.** Your entire configuration is on disk — agent definitions, index schemas, skillset pipelines, knowledge base rules — as JSON files under `projects/`. Your AI tool can already read these directly. But files alone don't capture how everything connects.
 
-2. **A structured API for the complete picture.** The MCP server's `rigg_describe` tool returns the full project graph in a single call — every resource, dependency chain, agent instruction (untruncated), and file path. The AI doesn't need to discover your project structure by reading files one at a time; it gets the complete system map instantly.
+2. **A structured API for the complete picture.** The `rigg_describe` tool returns the full workspace graph in a single call — every project, every resource with its definition and file path, the dependency graph, and the custom Web APIs your skillsets expect you to implement. The AI doesn't need to discover your project structure by reading files one at a time; it gets the complete system map instantly.
 
-With this context, your AI tool can help you:
-
-- **Optimize agent instructions** with knowledge of what indexes, fields, and retrieval strategies are actually available
-- **Debug retrieval quality** by understanding the full chain from agent query to knowledge source to index schema
-- **Plan schema changes** knowing which knowledge sources, skillsets, and indexers depend on an index
-- **Deploy across environments** using rigg's environment model and push/pull tools
-- **Detect configuration drift** by diffing local files against live services
-
-This is what makes rigg different from manually reading JSON files — the AI understands the *system*, not just individual resources.
+With this context, your AI tool can help you optimize agent instructions, debug retrieval quality end to end, plan schema changes knowing what depends on what, deploy across environments, and detect drift.
 
 ## Compatible Tools
 
@@ -35,171 +27,153 @@ Any MCP-compatible AI tool works with rigg, including:
 
 ## Setup
 
-### Automatic (project-level)
-
-If you cloned a rigg project that includes `.mcp.json` in the repo root, the MCP server is auto-discovered by Claude Code and VS Code when you open the project. No setup needed.
-
-To add auto-discovery to your own project, create `.mcp.json` in the repo root:
-
-```json
-{
-  "mcpServers": {
-    "rigg": {
-      "command": "rigg",
-      "args": ["mcp", "serve"]
-    }
-  }
-}
-```
-
-### Manual (user-level)
-
-To register rigg as an MCP server across all your projects (not just ones with `.mcp.json`):
-
 ```bash
-# Claude Code
+# Claude Code (delegates to `claude mcp add`)
 rigg mcp install claude-code
 
-# VS Code (GitHub Copilot)
+# VS Code (GitHub Copilot) — writes .vscode/mcp.json
 rigg mcp install vs-code
+
+# Register user-wide instead of per-workspace
+rigg mcp install claude-code --scope global
 ```
 
-For other MCP clients, configure them to run `rigg mcp serve` as a stdio server. The server communicates via JSON-RPC over stdin/stdout.
+With `--scope workspace` (the default), the configuration lives in the repo (`.mcp.json` for Claude Code, `.vscode/mcp.json` for VS Code) — commit it, and anyone who clones the workspace gets the MCP server auto-discovered when they open it.
+
+For other MCP clients, configure them to run `rigg mcp serve` as a stdio server — it speaks MCP JSON-RPC over stdin/stdout. It's not a separate binary: if you have rigg installed, you have the MCP server.
 
 ### Verify it's working
 
-In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report your project's environment, auth state, and resource inventory. If you see environment and resource details, MCP is working.
-
-In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with its tools listed.
+In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report sync state per project. In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with 8 tools.
 
 ## Available Tools
 
-The MCP server exposes 8 tools. All tools accept an optional `env` parameter to target a specific environment (uses default if omitted).
+The server exposes 8 project-scoped tools. Every tool that talks to Azure accepts an optional `env` (environment name; the default environment is used if omitted), and tools that operate on a project accept an optional `project` (may be omitted when the workspace has exactly one project).
 
-### Read-only tools
+Mutating tools (`rigg_pull`, `rigg_push`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 
-| Tool | What it does |
-|------|--------------|
-| `rigg_status` | Project status: environment info, auth state, resource counts, last sync time |
-| `rigg_describe` | Full project description with all resources, dependencies, agent configurations, and knowledge base flows. Includes file paths for every resource so the AI can read full definitions |
-| `rigg_env_list` | List all configured environments with their services |
-| `rigg_validate` | Validate local resource files for syntax errors and broken cross-references |
-| `rigg_list` | List resource names by type. Source can be `local` (fast disk scan), `remote` (Azure API), or `both` (find drift) |
-| `rigg_diff` | Compare local files against live Azure services. Shows field-level changes |
+### rigg_status
 
-### Mutating tools
-
-| Tool | What it does |
-|------|--------------|
-| `rigg_pull` | Pull resource definitions from Azure to local files |
-| `rigg_push` | Push local changes to Azure |
-
-Mutating tools use a **safe-by-default** pattern:
-- **Without `force`**: returns a preview of what would change, but doesn't execute
-- **With `force: true`**: executes the operation
-
-This means the AI always shows you what will happen before making changes.
-
-### Tool parameters
-
-**Common parameters** (all tools):
+Sync status per project: which resources are in sync, local-ahead, remote-ahead, or conflicted, plus unmanaged remote resources.
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
-| `env` | string | Target environment name. Uses default if omitted |
+|---|---|---|
+| `project` | string? | Project name (omit when the workspace has exactly one project) |
+| `env` | string? | Environment name |
 
-**Resource filtering** (diff, pull, push):
+### rigg_describe
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `resource_type` | string | Filter by type: `indexes`, `agents`, `datasources`, `skillsets`, `indexers`, `synonymmaps`, `aliases`, `knowledgebases`, `knowledgesources` |
-| `name` | string | Filter to a single resource by name (requires `resource_type`) |
-
-**Validation options** (validate):
+Full workspace description: projects, all resources with definitions and file paths, the dependency graph, and "APIs to implement" (OpenAPI specs in `apis/` that skillsets reference). The fastest way to understand the workspace.
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
-| `strict` | bool | Treat warnings as errors |
-| `check_references` | bool | Validate cross-resource references (e.g., indexer references valid index) |
+|---|---|---|
+| `project` | string? | Project name |
+| `env` | string? | Environment name |
 
-**List options** (list):
+### rigg_env_list
+
+List all configured deployment environments from `rigg.yaml`. No parameters.
+
+### rigg_validate
+
+Validate local files: JSON structure, name/filename consistency, exclusive ownership across projects, reference resolution, no-secrets enforcement, data source types, and OpenAPI contracts for linked WebApiSkills.
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
-| `resource_type` | string | Filter by type (same values as above) |
-| `source` | string | Where to list from: `local` (disk), `remote` (Azure), or `both` |
+|---|---|---|
+| `project` | string? | Project name (omit to validate all projects) |
+| `strict` | bool? | Enable stricter checks (cross-service reference resolution) |
+
+### rigg_diff
+
+Semantic diff of local project files vs live Azure (or one environment vs another). Volatile server fields are ignored; array order doesn't matter.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string? | Project name |
+| `env` | string? | Environment name |
+| `only` | string? | Restrict to one resource: `<kind-dir>/<name>` (e.g. `indexes/my-index`) |
+| `compare_env` | string? | Compare `env` against this environment instead of local files |
+
+### rigg_pull
+
+Pull remote resource definitions into the project's files.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string? | Project name |
+| `env` | string? | Environment name |
+| `adopt` | bool? | Adopt unmanaged remote resources into the project (requires an explicit `project`) |
+| `force` | bool? | Without force: returns the local-vs-remote diff as a preview. With `force: true`: executes the pull |
+
+### rigg_push
+
+Push local project files to Azure in dependency order. Only semantically-changed resources are touched.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string? | Project name |
+| `env` | string? | Environment name |
+| `prune` | bool? | Also delete remote resources whose local files were removed |
+| `force` | bool? | Without force: returns the push plan (dry run). With `force: true`: executes |
+
+Run `rigg_validate` first — the tool description tells the AI to, and well-behaved agents will.
+
+### rigg_delete
+
+Delete ALL of a project's resources from Azure. Local files are kept, so pushing re-creates everything. To delete a single resource instead: delete its local file, then `rigg_push` with `prune: true`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string | Project whose remote resources should be deleted (required) |
+| `env` | string? | Environment name |
+| `force` | bool? | Without force: returns a preview of what would be removed. With `force: true`: executes |
 
 ## Example Workflows
 
-### "What does my project look like?"
+### "What does my workspace look like?"
 
-Ask the AI to describe your project. It will call `rigg_describe` and give you a structured overview of all resources, how they connect, and where the files are:
-
-```
-> Describe my rigg project
-
-Your project "My RAG System" has:
-- 1 Foundry agent (research-assistant, gpt-4o) connected to regulatory-kb
-- 1 knowledge base (regulatory-kb) with extractive retrieval
-- 1 knowledge source (regulatory) indexing Azure Blob Storage
-- 1 index (regulatory-index, 13 fields with vector search and semantic config)
-...
-```
-
-### "Pull the latest from Azure"
+Ask the AI to describe your workspace. It calls `rigg_describe` and reasons over the graph:
 
 ```
-> /rigg-pull
+> Describe my rigg workspace
 
-Previewing pull from prod...
-- regulatory-index.json: 2 fields changed
-- research-assistant.yaml: instructions updated
-
-Proceed? [confirm]
-
-Pulled 2 resources from prod.
+Your project "docs-rag" has a complete pipeline:
+- docs-ds (blob) → docs-index ← docs-indexer (+ docs-skills)
+- docs-ks exposes docs-index; docs-kb routes retrieval to it
+- docs-agent (docs-model deployment) grounds on docs-kb via MCP
+- One API to implement: doc-enrichment (referenced by docs-skills)
 ```
 
-### "Help me optimize my agent"
-
-The AI can read your agent's full instructions, tools, model, and connected knowledge sources via `rigg_describe`, then suggest changes:
+### "Push my changes"
 
 ```
-> How can I improve my research-assistant agent?
+> /rigg-push
 
-Looking at your agent configuration...
-[reads full instructions, tools, knowledge base config, index schema]
+Validating... OK
+Push plan for docs-rag (dry run):
+  ~ indexes/docs-index    2 fields added
+  ~ agents/docs-agent     instructions updated
 
-Suggestions:
-1. Your retrieval instructions could be more specific about...
-2. Consider adding a file_search tool for...
-3. The index has a semantic config but the agent isn't using...
+Push 2 resources to dev? [confirm]
 ```
 
-### "Deploy to a new environment"
+The AI calls `rigg_validate`, then `rigg_push` without `force` to show the plan, asks you, and only then calls `rigg_push` with `force: true`.
+
+### "Has anything drifted?"
 
 ```
-> /rigg-push test
+> Did anyone change our search config in the portal?
 
-Validating local files... 0 errors, 0 warnings
-Diffing against test environment...
-+ Index 'regulatory-index' (new)
-+ Agent 'research-assistant' (new)
+[rigg_status → conflict on indexes/docs-index]
+[rigg_diff only: "indexes/docs-index"]
 
-Push 2 resources to test? [confirm]
+Someone added a field 'reviewedBy' directly in Azure. Options: pull it
+into the file, or push to overwrite it.
 ```
 
 ## How It Works
 
-The MCP server runs as a subcommand of the rigg CLI itself (`rigg mcp serve`). It's not a separate binary — if you have rigg installed, you have the MCP server. It communicates over stdio using the MCP JSON-RPC protocol.
-
-When an AI tool calls an MCP tool, rigg:
-1. Loads your `rigg.yaml` configuration
-2. Resolves the target environment
-3. Performs the requested operation (using the same code as the CLI)
-4. Returns structured JSON that the AI can reason about
-
-The `rigg_describe` tool is particularly important for AI agents — it returns the complete project graph in a single call, including file paths for every resource. This lets the AI understand your entire Agentic RAG stack without reading individual files.
+Every MCP tool shells out to the rigg CLI itself (`rigg … --output json`), so tool behavior is *exactly* CLI behavior — same validation, same normalization, same exit codes. Non-zero exit codes are surfaced to the AI with their meaning (exit 3 = validation failed, 4 = auth denied, 5 = drift/conflict), so it can react appropriately.
 
 ## See Also
 

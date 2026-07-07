@@ -45,8 +45,8 @@ Whether you use both services together for a full RAG stack, or either one indep
 - **Version control** — track who changed what, when, and why via Git history across both your retrieval and agent layers
 - **Code review** — review agent instructions, knowledge base retrieval rules, index schema changes, and skillset updates in pull requests before they go live
 - **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
-- **Environment promotion** — copy resources between services (dev to staging to prod) with automatic reference rewriting
-- **CI/CD** — validate configuration in pull requests, push on merge, detect drift on a schedule, all with service principal auth
+- **Environment promotion** — push the same project to dev, staging, and prod; environment-specific references (like knowledge-base MCP endpoints) are injected at push time
+- **CI/CD** — validate configuration in pull requests, deploy on merge, detect drift on a schedule — with OIDC federated login and no stored secrets
 
 **For your AI coding tools:**
 
@@ -106,327 +106,275 @@ rigg mcp install vs-code
 
 Now your AI tool can see your entire RAG stack — run `/rigg-status` to try it. See [MCP.md](MCP.md) for the full reference.
 
-After pulling, your project contains normalized, version-control-friendly representations of every resource:
+## Workspace Layout
+
+After scaffolding or pulling, a workspace looks like this:
 
 ```
-rigg.yaml                                     # Project configuration
-.rigg/                                        # Per-environment sync state (gitignored)
-
-search/
-  search-management/                          # Stable search resources
-    indexes/
-      regulatory-index.json                   # Index schema (fields, vector search, semantic config)
-    indexers/
-      regulatory-indexer.json                 # Indexer schedule and mapping
-    data-sources/
-      regulatory-datasource.json              # Data source connection
-    skillsets/
-      regulatory-skillset.json                # AI enrichment pipeline
-    synonym-maps/
-      terms.json
-  agentic-retrieval/                          # Preview agentic retrieval resources
-    knowledge-bases/
-      regulatory-kb.json                      # KB description, retrieval instructions, linked sources
-    knowledge-sources/
-      regulatory/
-        regulatory.json                       # KS definition, ingestion config, created resources
-        regulatory-index.json                 # Managed index (auto-provisioned by Azure)
-        regulatory-indexer.json               # Managed indexer
-        regulatory-datasource.json            # Managed data source
-        regulatory-skillset.json              # Managed skillset
-
-foundry/
-  agents/
-    research-assistant.yaml                   # Agent definition (single YAML file, matches portal)
+rigg.yaml                        # workspace: environments + service connections (YAML)
+apis/
+  doc-enrichment.json            # shared OpenAPI specs for custom Web API skills
+projects/
+  my-rag/
+    project.yaml                 # metadata only — the directory IS the membership
+    search/
+      data-sources/docs-ds.json
+      indexes/docs-index.json
+      skillsets/docs-skills.json
+      indexers/docs-indexer.json
+      knowledge-sources/docs-ks.json
+      knowledge-bases/docs-kb.json
+    foundry/
+      deployments/docs-model.json
+      agents/docs-agent.json
+      agents/docs-agent.instructions.md   # $file sidecar for long text
+.rigg/                           # per-environment sync state (gitignored)
 ```
 
-Each JSON file is normalized and deterministic — credentials stripped, properties in Azure's canonical order, arrays sorted by identity key. Foundry agents are stored as single YAML files matching the Foundry portal format.
+Every resource is a normalized, deterministic JSON file that belongs to exactly one project — rigg enforces this. Long text fields like agent instructions live in Markdown sidecars (`{"$file": "docs-agent.instructions.md"}`) so they diff and review like prose. Credentials are never written to disk; write-only fields (like data source connection strings) are preserved locally and never echoed back by Azure.
 
-Use `rigg describe` to see how everything connects:
+Use `rigg describe` to see how everything connects — every resource, its dependencies, and the custom APIs your skillsets expect you to implement:
 
 ```
-My RAG System
-=============
+my-rag
+  data-sources/docs-ds
+  indexes/docs-index
+  skillsets/docs-skills
+  indexers/docs-indexer -> data-sources/docs-ds, indexes/docs-index, skillsets/docs-skills
+  knowledge-sources/docs-ks -> indexes/docs-index
+  knowledge-bases/docs-kb -> knowledge-sources/docs-ks
+  agents/docs-agent -> knowledge-bases/docs-kb, deployments/docs-model
+  deployments/docs-model -> guardrails/default-guardrail
+  guardrails/default-guardrail
 
-Services:
-  Environment: prod (default)
-  Azure AI Search: my-search-service
-  Microsoft Foundry: my-ai-service/my-project
-
-Foundry Agents (1):
-
-  research-assistant (gpt-4o)
-    Tools: mcp -> regulatory-kb
-    Instructions: You are a research assistant specialized in regulatory compliance...
-
-Agentic RAG Flows:
-
-  research-assistant
-  └─ Knowledge Base: regulatory-kb
-        Description:
-        Official regulatory and legal texts for EU digital law...
-        Output: extractiveData
-        Retrieval instructions:
-        You are a legal evidence retriever. Find and return relevant legal passages...
-        └─ Knowledge Source: regulatory (azureBlob)
-              Regulatory PDFs with structured metadata and vector search...
-              └─ Index: regulatory-index (13 fields, key: uid)
-                 1 vector profile(s), semantic search
-
-Indexes (1):
-  regulatory-index (13 fields, key: uid)
-    ...
+  APIs to implement (specs in apis/):
+    doc-enrichment (used by skillsets/docs-skills)
 ```
+
+`rigg describe --output json` returns the same graph with full definitions and file paths — the fastest way for an AI tool to understand the workspace.
 
 ## Features
 
-### Pull & Push
+### Projects Are the Unit of Sync
 
-Download resource definitions from Azure and upload local changes back:
+Pull, push, and diff always operate on whole projects — local and remote can never end up half-synced:
 
 ```bash
-# Pull everything (search + foundry)
-rigg pull --all
+rigg pull my-rag                # pull the project's resources from Azure
+rigg pull --adopt my-rag        # adopt unmanaged remote resources into the project
+rigg pull my-rag --watch        # keep polling for remote changes
 
-# Pull specific resource types
-rigg pull --indexes --skillsets
-rigg pull --agents
+rigg push my-rag --dry-run      # show the dependency-ordered plan, change nothing
+rigg push my-rag                # create/update, in dependency order
+rigg push my-rag --prune        # also delete remote resources whose files were removed
 
-# Pull a single resource by name
-rigg pull --index hotels
-rigg pull --agent research-assistant
-
-# Scope to one service domain
-rigg pull --search-only
-rigg pull --foundry-only
-
-# Push (shows preview, asks for confirmation)
-rigg push --all
-
-# Push without confirmation
-rigg push --all --force
-
-# Push a single resource
-rigg push --indexer hotels-indexer
+rigg delete my-rag --remote     # delete the project's resources from Azure (files kept)
+rigg status                     # per-resource sync state across all projects
 ```
+
+After every successful push, rigg fetches the document back from Azure, normalizes it, and updates the local file and sync baseline — so server-side defaults never show up as false drift.
 
 ### Semantic Diff
 
-Compare local files against the live service with field-level change descriptions:
+Compare local files against the live service with field-level change descriptions. Volatile server fields are ignored and array order doesn't matter:
 
 ```bash
-rigg diff --all
+rigg diff my-rag
 ```
 
 ```
-~ Index 'hotels' (modified)
+~ Index 'docs-index' (modified)
     fields[3].type: Edm.String → Edm.Int32
     fields[7]: added 'rating'
     scoringProfiles[0].functions: 2 → 3 items
 ```
 
-### Copy
-
-Copy resources locally under new names, then push separately:
-
 ```bash
-# Copy a knowledge source and all its managed sub-resources
-rigg copy my-ks my-new-ks --knowledgesource
-
-# Copy a standalone index
-rigg copy hotels hotels-v2 --index
-
-# Then push the copy
-rigg push --knowledgesources
+rigg diff --all --exit-code                    # CI: exit 5 when drift is found
+rigg diff my-rag --format markdown             # PR-comment friendly output
+rigg diff my-rag --only indexes/docs-index     # one resource only
+rigg diff my-rag -e test --compare-env prod    # environment vs environment
 ```
-
-Knowledge source copy automatically renames all managed sub-resources (index, indexer, data source, skillset) and rewrites cross-references. No network calls — files are created locally for review before pushing.
 
 ### Scaffolding
 
-Create new resource files from templates — no Azure connection required:
+Create projects, resources, pipelines, and API specs from identity-first templates — no Azure connection required:
 
 ```bash
-# Create individual resources
-rigg new index my-index --vector --semantic
-rigg new agent my-agent --model gpt-4o
-rigg new knowledge-source my-ks --index my-index
+rigg new project my-rag
 
-# Scaffold a complete Agentic RAG system in one command
-rigg new agentic-rag my-system --model gpt-4o --container documents
+# Full explicit retrieval chain: data source → index → skillset → indexer
+# → knowledge source → knowledge base
+rigg new pipeline docs -p my-rag --type azureblob
+
+# Individual resources (12 kinds across both services)
+rigg new index products -p my-rag
+rigg new data-source orders -p my-rag --type cosmosdb
+rigg new agent helper -p my-rag
+rigg new deployment gpt-4-1-mini -p my-rag
+
+# OpenAPI 3.1 spec for a custom WebApiSkill, shared workspace-wide in apis/
+rigg new api doc-enrichment
 ```
 
-The `agentic-rag` command creates a pre-wired agent, knowledge base, and knowledge source — all connected and ready to push.
-
-### Watch Mode
-
-Continuously poll for server-side changes:
+With [AI features](#ai-assistance) enabled, `--describe` drafts the definition for you:
 
 ```bash
-rigg pull-watch --all --interval 30
+rigg new index hotels -p my-rag --describe "hotel search with vector fields and semantic ranking"
+```
+
+### Copy
+
+Copy a resource file locally under a new name — within or across projects — then review and push:
+
+```bash
+rigg copy indexes/docs-index docs-index-v2
+rigg copy my-rag:agents/docs-agent other-project:docs-agent
 ```
 
 ### Validation
 
-Check local files for structural issues and referential integrity before pushing:
+Check local files before pushing — JSON structure, name/filename consistency, exclusive ownership, reference resolution, valid data source types, and **no-secrets enforcement** (key-based credentials are rejected; use `ResourceId=` connection strings and managed identity instead):
 
 ```bash
-rigg validate
+rigg validate                # all projects
+rigg validate my-rag --strict
 ```
 
-### CI/CD
+`validate` also checks WebApiSkills linked via `"x-rigg-api"` against their OpenAPI spec in `apis/` — skill URIs must match a spec path, and skill inputs/outputs must exist in the request/response schemas.
 
-Use rigg in your CI/CD pipeline to validate, deploy, and detect drift:
+### Samples
 
-```yaml
-# GitHub Actions example
-- name: Validate
-  run: rigg validate --strict
-  env:
-    AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-    AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-    AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
-- name: Push
-  if: github.ref == 'refs/heads/main'
-  run: rigg push --all --force
-```
-
-- **PR gate** — `rigg validate --strict` in CI catches schema errors and broken references before merge
-- **Auto-deploy** — `rigg push --all --force` on merge to `main` deploys changes automatically
-- **Drift detection** — schedule `rigg diff --all` to catch portal changes between deployments
-- **Service principal auth** — set `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_TENANT_ID` environment variables
-
-## Resource Types
-
-### Azure AI Search
-
-| Resource | Flag | Singular | API |
-|---|---|---|---|
-| Index | `--indexes` | `--index <NAME>` | Stable |
-| Indexer | `--indexers` | `--indexer <NAME>` | Stable |
-| Data Source | `--datasources` | `--datasource <NAME>` | Stable |
-| Skillset | `--skillsets` | `--skillset <NAME>` | Stable |
-| Synonym Map | `--synonymmaps` | `--synonymmap <NAME>` | Stable |
-| Alias | `--aliases` | `--alias <NAME>` | Preview |
-| Knowledge Base | `--knowledgebases` | `--knowledgebase <NAME>` | Preview |
-| Knowledge Source | `--knowledgesources` | `--knowledgesource <NAME>` | Preview |
-
-### Microsoft Foundry
-
-| Resource | Flag | Singular | API |
-|---|---|---|---|
-| Agent | `--agents` | `--agent <NAME>` | Preview (`2025-05-15-preview`) |
-
-Use `--search-only` or `--foundry-only` to scope operations to a single service domain. Preview resources require `include_preview = true` in config (enabled by default with the `agentic` init template).
-
-## Authentication
-
-`rigg` authenticates using the Azure CLI or service principal credentials:
-
-```bash
-# Option 1: Azure CLI (recommended for development)
-az login
-rigg pull --all
-
-# Option 2: Service principal (for CI/CD)
-export AZURE_CLIENT_ID=...
-export AZURE_CLIENT_SECRET=...
-export AZURE_TENANT_ID=...
-rigg pull --all
-```
-
-## Configuration
-
-Project settings live in `rigg.yaml`:
-
-```yaml
-project:
-  name: My RAG System
-
-sync:
-  include_preview: true
-
-environments:
-  prod:
-    default: true
-    search:
-      - name: my-search-service
-        api_version: "2024-07-01"                    # default
-        preview_api_version: "2025-11-01-preview"    # default
-    foundry:
-      - name: my-ai-service
-        project: my-project
-        api_version: "2025-05-15-preview"            # default
-
-  test:
-    search:
-      - name: my-search-test
-    foundry:
-      - name: my-ai-service-test
-        project: my-project-test
-```
-
-View and modify settings with the `config` command:
-
-```bash
-rigg config show
-rigg config set sync.include_preview false
-```
+The [`samples/`](samples/) directory is a complete working workspace with three projects: [`quickstart-blob`](samples/projects/quickstart-blob/) (the minimal explicit pipeline), [`agentic-stack`](samples/projects/agentic-stack/) (the full showcase — custom Web API skill, knowledge base, Foundry agent + deployment + guardrail), and [`cosmos-sql-patterns`](samples/projects/cosmos-sql-patterns/) (Cosmos DB and Azure SQL change/deletion-detection done right).
 
 ### Deployment Environments
 
 Manage the same resource definitions across multiple Azure targets:
 
 ```bash
-# Add a new environment
-rigg env add test
-
-# List environments
+rigg env add test --search-service my-search-test
 rigg env list
-
-# Pull from a specific environment
-rigg pull --all --env test
-
-# Push to a specific environment
-rigg push --all --env prod
-
-# Compare two environments
-rigg diff --all --env test --compare-env prod
-
-# Set the default environment
 rigg env set-default prod
+
+rigg push my-rag --env prod              # push to a specific environment
+rigg diff my-rag -e test --compare-env prod
 ```
 
-The `--env` flag (or `RIGG_ENV` environment variable) works with all commands. When omitted, rigg uses the environment marked `default: true` in the config.
+The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands. When omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
+
+```yaml
+environments:
+  dev:
+    default: true
+    search: { service: my-search-dev }
+    foundry: { account: my-foundry, project: my-project-dev }
+  prod:
+    search: { service: my-search-prod }
+    foundry: { account: my-foundry, project: my-project-prod }
+```
+
+### Authentication
+
+`rigg` is identity-first — no keys, no secrets in files, ever:
+
+```bash
+rigg auth login       # delegates to Azure CLI
+rigg auth status
+rigg auth doctor      # verify service-to-service identities and RBAC
+rigg auth doctor --fix
+```
+
+`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). Cosmos/SQL data-plane permissions are reported with guidance. For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation.
+
+In CI or automation, rigg also accepts service-principal environment variables (`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/…) or a static bearer token via `RIGG_ACCESS_TOKEN`. Sovereign clouds and test rigs can override the service endpoint with `endpoint:` on a connection in `rigg.yaml`.
+
+### CI/CD
+
+One command scaffolds a complete GitHub Actions setup:
+
+```bash
+rigg ci init github
+```
+
+This creates three workflows:
+
+- **Validate on PR** — `rigg validate --strict` plus a markdown diff posted as a PR comment, so reviewers see exactly what merging would change in Azure
+- **Deploy on merge** — `rigg push --all --yes` on `main`, authenticated with OIDC federated login (no stored secrets)
+- **Nightly drift detection** — `rigg diff --all --exit-code --format markdown`; opens or updates a GitHub issue when the portal has drifted from Git
+
+The target environment is baked into the workflows at scaffold time (pass `--env`, or your default environment is used). Finish the setup by creating an Entra app registration with federated credentials and adding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as repository variables — `rigg ci init` prints the exact steps.
+
+### AI Assistance
+
+rigg has opt-in AI features powered by [ailloy](https://crates.io/crates/ailloy) — bring your own provider:
+
+```bash
+rigg ai enable        # turn on AI features
+rigg ai config        # choose provider/model (interactive)
+rigg ai status
+```
+
+Once enabled:
+
+- **Diff summaries** — `rigg diff` appends a plain-language summary of what pushing would do, including cost/risk callouts
+- **Conflict merging** — the interactive push conflict menu gains an AI merge proposal, shown diffed against both local and remote before anything is written
+- **Doctor advice** — `rigg auth doctor` failures get tailored remediation notes
+- **Drafting** — `rigg new <kind> <name> --describe "…"` drafts resource definitions from natural language
+
+Pass `--no-ai` on any command to disable AI assistance for that invocation.
+
+## Resource Kinds
+
+rigg manages 12 resource kinds. All are served by stable APIs — Azure AI Search `2026-04-01` (agentic retrieval is GA), preview `2026-05-01-preview` only for preview-gated features, Microsoft Foundry `v1` data plane, ARM `2026-05-01`.
+
+| Azure AI Search | Microsoft Foundry |
+|---|---|
+| `index` | `agent` |
+| `indexer` | `deployment` (model deployments) |
+| `data-source` | `connection` |
+| `skillset` | `guardrail` (RAI policies) |
+| `synonym-map` | |
+| `alias` | |
+| `knowledge-source` | |
+| `knowledge-base` | |
+
+Knowledge sources are **explicit**: they point at an existing index you define and own, so the whole retrieval chain is visible, reviewable files — nothing is auto-provisioned behind your back.
 
 ## AI Agent Integration
 
-Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which index data through skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
+Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which search indexes fed by indexers and skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
 
-rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server that gives AI coding tools the complete picture. `rigg describe` returns the full project graph — every resource, dependency, agent instruction, and file path — in a single call. With this context, your AI tool can help you optimize agent instructions, debug retrieval pipelines, plan schema changes, and deploy across environments.
+rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server with 8 project-scoped tools. `rigg describe` returns the full workspace graph — every resource, dependency, agent instruction, and file path — in a single call. Mutating tools are safe by default: they return a preview until called with `force: true`.
 
 Any MCP-compatible AI tool works: Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI.
 
 ```bash
-# Register with Claude Code
-rigg mcp install claude-code
-
-# Or VS Code (GitHub Copilot)
-rigg mcp install vs-code
+rigg mcp install claude-code            # or vs-code
+rigg mcp install claude-code --scope global
 ```
-
-Projects with a `.mcp.json` file in the repo root are auto-discovered — no manual setup needed.
 
 Once connected, use slash commands for common workflows:
 
 | Command | What it does |
 |---------|--------------|
-| `/rigg-status` | Show environment info, auth state, and resource inventory |
+| `/rigg-status` | Sync state per project, environments, drift, unmanaged resources |
 | `/rigg-pull` | Pull from Azure with preview and confirmation |
-| `/rigg-push` | Safe push: validate, diff, confirm, then push |
+| `/rigg-push` | Safe push: validate, review the plan, confirm, then push |
 
-See [MCP.md](MCP.md) for the MCP tool reference, and [SKILLS.md](SKILLS.md) for the full list of agent skills and slash commands.
+See [MCP.md](MCP.md) for the MCP tool reference, and [SKILLS.md](SKILLS.md) for the full list of agent skills.
+
+## Exit Codes
+
+Standardized for scripting and CI (`--non-interactive` guarantees rigg never blocks on a prompt):
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Error |
+| 2 | Usage error |
+| 3 | Validation failed |
+| 4 | Auth / permission denied |
+| 5 | Drift or conflict detected |
 
 ## Architecture
 
@@ -436,15 +384,15 @@ Four crates with a clear dependency hierarchy:
 rigg  →  rigg-core
      ↓          ↑
 rigg-client ───┘
-rigg-diff  (standalone)
+rigg-diff  (used by rigg-core & rigg)
 ```
 
 | Crate | Purpose |
 |---|---|
-| `rigg-core` | Resource types, config, environment resolution, state tracking, JSON normalization, copy/rename logic |
-| `rigg-client` | Azure Search and Foundry REST API clients, ARM discovery, authentication |
+| `rigg-core` | Workspace/project model, the metadata registry (API routing, volatile/secret fields, references), normalization, sync-state baselines, dependency graph, scaffolds |
+| `rigg-client` | Azure AI Search, Foundry, and ARM REST clients; authentication chain |
 | `rigg-diff` | Semantic JSON diffing with identity-key-based array matching |
-| `rigg` | Clap-based CLI, command implementations |
+| `rigg` | Clap-based CLI, command implementations, MCP server |
 
 ## License
 
