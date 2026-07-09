@@ -1,5 +1,6 @@
 //! Command implementations and shared context.
 
+pub mod adopt;
 pub mod ai;
 pub mod ai_assist;
 pub mod auth;
