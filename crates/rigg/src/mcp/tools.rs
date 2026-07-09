@@ -224,7 +224,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Pull remote resource definitions into the project's files. Without force: returns the diff (preview). With force=true: executes the pull (--yes). adopt=true additionally claims unmanaged remote resources into the project."
+        description = "Pull remote resource definitions into the project's files. Without force: returns the diff (preview). With force=true: executes the pull (--yes). adopt=true instead adopts ALL unmanaged remote resources into the project (equivalent to `rigg adopt <project> all --yes`); for finer-grained adoption (a single kind or resource), use the `rigg adopt <project> <selector>` CLI directly."
     )]
     async fn rigg_pull(&self, Parameters(params): Parameters<PullParams>) -> String {
         if !params.force.unwrap_or(false) {
@@ -238,16 +238,17 @@ impl RiggMcpServer {
                 "PREVIEW (no changes made) — differences between local and remote:\n{preview}\nRun again with force=true to pull."
             );
         }
-        let mut args = vec!["pull"];
-        if let Some(p) = &params.project {
-            args.push(p);
-        }
         if params.adopt.unwrap_or(false) {
             let project = params.project.as_deref().unwrap_or_default();
             if project.is_empty() {
                 return "Error: adopt=true requires an explicit project".to_string();
             }
-            args.extend(["--adopt", project]);
+            let args = vec!["adopt", project, "all", "--yes"];
+            return rigg_cli(&with_common(args, &params.env, false));
+        }
+        let mut args = vec!["pull"];
+        if let Some(p) = &params.project {
+            args.push(p);
         }
         args.push("--yes");
         rigg_cli(&with_common(args, &params.env, false))

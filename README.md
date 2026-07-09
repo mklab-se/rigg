@@ -89,8 +89,10 @@ rigg init .
 # Create a project — the unit rigg syncs
 rigg new project my-rag
 
-# Adopt existing Azure resources into it…
-rigg pull my-rag --adopt my-rag
+# Adopt existing Azure resources into it — à la carte…
+rigg adopt my-rag all                 # everything unmanaged
+rigg adopt my-rag agents/my-agent     # just one resource
+rigg adopt my-rag indexes --with-deps # a whole kind + its dependencies
 
 # …or scaffold an explicit RAG pipeline from scratch
 rigg new pipeline docs -p my-rag
@@ -172,7 +174,7 @@ Pull, push, and diff always operate on whole projects (see [Concepts](#concepts)
 
 ```bash
 rigg pull my-rag                # pull the project's resources from Azure
-rigg pull --adopt my-rag        # adopt unmanaged remote resources into the project
+rigg adopt my-rag <selector>    # adopt selected unmanaged resources (all | <kind> | <kind>/<name>)
 rigg pull my-rag --watch        # keep polling for remote changes
 
 rigg push my-rag --dry-run      # show the dependency-ordered plan, change nothing

@@ -75,8 +75,15 @@ pub enum Commands {
 
     /// Download resource definitions from Azure into project files
     ///
-    /// See `rigg concepts` for the project model that pull and --adopt rely on.
+    /// Use `rigg adopt` to claim unmanaged remote resources into a project.
+    /// See `rigg concepts` for the project model.
     Pull(PullArgs),
+
+    /// Adopt selected unmanaged Azure resources into a project
+    ///
+    /// Selectors: `all`, a kind (e.g. `indexes`), or `<kind>/<name>`
+    /// (e.g. `agents/regulus`). See `rigg concepts` for the project model.
+    Adopt(AdoptArgs),
 
     /// Upload local project files to Azure (create/update, in dependency order)
     Push(PushArgs),
@@ -216,10 +223,6 @@ pub struct PullArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Adopt unmanaged remote resources into the given project
-    #[arg(long, value_name = "PROJECT")]
-    pub adopt: Option<String>,
-
     /// Poll for remote changes and keep pulling
     #[arg(long)]
     pub watch: bool,
@@ -227,6 +230,24 @@ pub struct PullArgs {
     /// Poll interval in seconds for --watch
     #[arg(long, default_value_t = 20)]
     pub interval: u64,
+}
+
+#[derive(Args)]
+pub struct AdoptArgs {
+    /// Project to adopt the resources into
+    pub project: String,
+
+    /// What to adopt: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`). Repeatable.
+    #[arg(value_name = "SELECTOR")]
+    pub selectors: Vec<String>,
+
+    /// Preview what would be adopted; write nothing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Also adopt each selected resource's upstream dependencies
+    #[arg(long)]
+    pub with_deps: bool,
 }
 
 #[derive(Args)]
@@ -452,6 +473,7 @@ impl Cli {
             Commands::New(args) => commands::new::run(&ctx, args).await,
             Commands::Copy(args) => commands::copy::run(&ctx, args),
             Commands::Pull(args) => commands::pull::run(&ctx, args).await,
+            Commands::Adopt(args) => commands::adopt::run(&ctx, args).await,
             Commands::Push(args) => commands::push::run(&ctx, args).await,
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,

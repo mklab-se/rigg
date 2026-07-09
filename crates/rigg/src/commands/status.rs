@@ -115,7 +115,9 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            println!("    adopt with: rigg pull <project> --adopt <project>");
+            println!(
+                "    adopt with: rigg adopt <project> <selector>  (e.g. all, indexes, agents/name)"
+            );
         }
         println!();
     }

@@ -40,7 +40,9 @@ projects/<name>/
 - **Change**: edit the JSON file (or `rigg new <kind> <name> -p <project>`),
   then `rigg_validate`, then `rigg_push` (preview first, `force: true` to apply).
   Push only touches semantically-changed resources, in dependency order.
-- **Adopt existing Azure resources**: `rigg_pull` with `adopt: true`.
+- **Adopt existing Azure resources**: `rigg adopt <project> <selector>` CLI
+  (selectors: `all`, a kind, or `<kind>/<name>`); via MCP, `rigg_pull` with
+  `adopt: true` adopts ALL unmanaged resources into the project.
 - **Delete one resource**: delete its file, then push with `prune: true`.
 - **Delete a whole project remotely**: `rigg_delete` (preview → `force: true`).
 - **Identity/RBAC problems**: `rigg auth doctor` (add `--fix` to repair).

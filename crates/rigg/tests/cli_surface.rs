@@ -46,7 +46,7 @@ fn removed_flags_are_gone() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--indexes").not())
-        .stdout(predicate::str::contains("--adopt"));
+        .stdout(predicate::str::contains("--adopt").not());
     // old resource-selection flag now errors
     rigg()
         .args(["pull", "--indexes"])
@@ -90,6 +90,37 @@ fn validate_duplicate_ownership_exits_3() {
         .assert()
         .code(3)
         .stdout(predicate::str::contains("exactly one project"));
+}
+
+#[test]
+fn adopt_help_lists_selectors() {
+    rigg()
+        .args(["adopt", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SELECTOR"))
+        .stdout(predicate::str::contains("agents/regulus"));
+}
+
+#[test]
+fn adopt_requires_a_selector() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["adopt", "demo"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn adopt_rejects_unknown_kind() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["adopt", "demo", "widgets"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown resource kind"));
 }
 
 #[test]
@@ -572,4 +603,9 @@ fn describe_empty_workspace_json_stays_empty_array() {
         .assert()
         .success()
         .stdout(predicate::str::is_match(r"^\s*\[\s*\]\s*$").unwrap());
+}
+
+#[test]
+fn pull_adopt_flag_is_gone() {
+    rigg().args(["pull", "--adopt", "demo"]).assert().code(2);
 }
