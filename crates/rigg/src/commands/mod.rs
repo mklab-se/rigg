@@ -16,6 +16,7 @@ pub mod diff;
 pub mod doctor;
 pub mod env;
 pub mod init;
+pub mod interactive;
 pub mod mcp_cmd;
 pub mod new;
 pub mod pull;

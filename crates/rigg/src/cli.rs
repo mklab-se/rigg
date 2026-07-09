@@ -189,7 +189,8 @@ pub struct NewArgs {
     /// knowledge-source, knowledge-base, agent, deployment, connection, guardrail)
     pub kind: String,
 
-    /// Name of the new project/resource/spec
+    /// Name of the new project/resource/spec. Tip: name a project after the
+    /// thing it owns (e.g. the agent's name). No `/` or `\`, max 260 chars.
     pub name: String,
 
     /// Project to place the resource in (required for resources and pipelines
@@ -234,8 +235,8 @@ pub struct PullArgs {
 
 #[derive(Args)]
 pub struct AdoptArgs {
-    /// Project to adopt the resources into
-    pub project: String,
+    /// Project to adopt the resources into (omit on a TTY for an interactive wizard)
+    pub project: Option<String>,
 
     /// What to adopt: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`). Repeatable.
     #[arg(value_name = "SELECTOR")]

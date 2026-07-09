@@ -124,6 +124,17 @@ fn adopt_rejects_unknown_kind() {
 }
 
 #[test]
+fn adopt_without_project_non_interactive_is_usage_error() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .arg("adopt")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("interactive").or(predicate::str::contains("project")));
+}
+
+#[test]
 fn validate_rejects_secrets_exit_3() {
     let ws = workspace();
     let dir = ws.path().join("projects/demo/search/data-sources");
@@ -608,4 +619,41 @@ fn describe_empty_workspace_json_stays_empty_array() {
 #[test]
 fn pull_adopt_flag_is_gone() {
     rigg().args(["pull", "--adopt", "demo"]).assert().code(2);
+}
+
+#[test]
+fn init_next_steps_reference_live_commands() {
+    // Regression guard: init's "Next steps" must never point at removed flags
+    // (it once suggested the deleted `pull --adopt`).
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["init", ".", "--search-service", "unit-test-svc"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg adopt"))
+        .stdout(predicate::str::contains("--adopt").not());
+}
+
+#[test]
+fn new_project_signposts_adopt_path() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["new", "project", "p2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg adopt p2"))
+        .stdout(predicate::str::contains("rigg new"));
+}
+
+#[test]
+fn concepts_includes_naming_guidance() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("concepts")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Name a project after"));
 }

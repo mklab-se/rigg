@@ -53,6 +53,9 @@ colored = "2.1"
 # Terminal markdown rendering
 termimad = "0.31"
 
+# Interactive prompts (already in-tree via ailloy config-tui)
+inquire = "0.7"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
