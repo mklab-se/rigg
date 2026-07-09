@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 
+use rigg_core::registry;
 use rigg_core::resources::ResourceRef;
 use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
@@ -98,7 +99,9 @@ async fn pull_project(
             continue; // another project's resource
         }
         if !owned_by_this {
-            unmanaged += 1;
+            if !registry::is_platform_managed(r.kind, doc) {
+                unmanaged += 1;
+            }
             continue;
         }
 

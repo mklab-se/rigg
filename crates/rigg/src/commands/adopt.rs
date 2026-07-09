@@ -244,7 +244,20 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                     }
                     // swept in by a kind/all selector → silently skip another project's resource
                 }
-                None => to_adopt.push((r.clone(), doc.clone())),
+                None => {
+                    if registry::is_platform_managed(r.kind, doc) {
+                        if explicit.contains(key) {
+                            skipped.push((
+                                key.clone(),
+                                "platform-managed (provided by Microsoft) — reference it, don't adopt it"
+                                    .to_string(),
+                            ));
+                        }
+                        // swept in by a kind/all selector → silently skip
+                    } else {
+                        to_adopt.push((r.clone(), doc.clone()));
+                    }
+                }
             },
         }
     }
@@ -370,7 +383,9 @@ fn wizard_candidates(
 
     let mut items: Vec<(ResourceRef, String)> = snapshot
         .iter()
-        .filter(|(r, _)| !owned_by_any.contains_key(&r.key()))
+        .filter(|(r, doc)| {
+            !owned_by_any.contains_key(&r.key()) && !registry::is_platform_managed(r.kind, doc)
+        })
         .map(|(r, _)| {
             let label = format!("{} {}/{}", prefix(r.kind), r.kind.directory_name(), r.name);
             (r.clone(), label)
@@ -412,6 +427,9 @@ fn expand_deps(
                 continue; // already selected, or owned by someone → not an unmanaged dep
             }
             if let Some((rr, dv)) = snap_map.get(&key) {
+                if registry::is_platform_managed(rr.kind, dv) {
+                    continue; // platform-managed → never adopted, not even as a dep
+                }
                 in_set.insert(key.clone());
                 dep_keys.insert(key.clone());
                 additions.push((rr.clone(), dv.clone()));
@@ -550,6 +568,55 @@ mod tests {
             labels,
             vec!["[Foundry] agents/regulus", "[Search] indexes/docs"]
         );
+    }
+
+    #[test]
+    fn wizard_candidates_excludes_platform_managed_guardrail() {
+        let owned = BTreeMap::new();
+        let snap = vec![
+            (
+                ResourceRef::new(ResourceKind::Index, "docs".to_string()),
+                json!({"name": "docs"}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Guardrail, "Microsoft.DefaultV2".to_string()),
+                json!({"name": "Microsoft.DefaultV2", "properties": {"type": "SystemManaged"}}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Guardrail, "my-policy".to_string()),
+                json!({"name": "my-policy", "properties": {"type": "UserManaged"}}),
+            ),
+        ];
+        let items = wizard_candidates(&snap, &owned);
+        let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["[Foundry] guardrails/my-policy", "[Search] indexes/docs"]
+        );
+    }
+
+    #[test]
+    fn expand_deps_skips_platform_managed_guardrail_dependency() {
+        let deployment = json!({
+            "name": "gpt-5-mini",
+            "properties": {"raiPolicyName": "Microsoft.DefaultV2"}
+        });
+        let to_adopt = vec![(
+            ResourceRef::new(ResourceKind::Deployment, "gpt-5-mini".to_string()),
+            deployment,
+        )];
+        let owned_by_any: BTreeMap<String, String> = BTreeMap::new();
+        let mut snap_map: BTreeMap<String, (ResourceRef, Value)> = BTreeMap::new();
+        snap_map.insert(
+            "guardrails/Microsoft.DefaultV2".to_string(),
+            (
+                ResourceRef::new(ResourceKind::Guardrail, "Microsoft.DefaultV2".to_string()),
+                json!({"name": "Microsoft.DefaultV2", "properties": {"type": "SystemManaged"}}),
+            ),
+        );
+        let (adds, dep_keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        assert!(adds.is_empty(), "expected no deps adopted, got {adds:?}");
+        assert!(dep_keys.is_empty());
     }
 
     #[test]

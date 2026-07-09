@@ -401,6 +401,27 @@ pub fn extract_references(kind: ResourceKind, body: &Value) -> Vec<(ResourceKind
     out
 }
 
+/// Platform-provided resource instances (e.g. Microsoft's built-in guardrail
+/// policies) cannot be modified or deleted by the user. They are excluded
+/// from adoption and from "unmanaged" reporting: local files should only
+/// track configuration the user actually controls. References to them (e.g.
+/// a deployment's `raiPolicyName`) live in the referencing resource's file.
+pub fn is_platform_managed(kind: ResourceKind, body: &Value) -> bool {
+    match kind {
+        ResourceKind::Guardrail => {
+            let system = body
+                .pointer("/properties/type")
+                .and_then(Value::as_str)
+                .map(|t| t.eq_ignore_ascii_case("SystemManaged"))
+                .unwrap_or(false);
+            // Name-prefix fallback for docs that omit properties.type.
+            let name = body.get("name").and_then(Value::as_str).unwrap_or("");
+            system || name.starts_with("Microsoft.")
+        }
+        _ => false,
+    }
+}
+
 fn collect_x_rigg_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
     match v {
         Value::Object(map) => {
@@ -520,6 +541,36 @@ mod tests {
         let refs = extract_references(ResourceKind::Agent, &agent);
         assert!(refs.contains(&(ResourceKind::KnowledgeBase, "support-kb".into())));
         assert!(refs.contains(&(ResourceKind::Deployment, "gpt-5-mini".into())));
+    }
+
+    #[test]
+    fn is_platform_managed_true_for_system_managed_guardrail() {
+        let doc = json!({"name": "Microsoft.DefaultV2", "properties": {"type": "SystemManaged"}});
+        assert!(is_platform_managed(ResourceKind::Guardrail, &doc));
+    }
+
+    #[test]
+    fn is_platform_managed_false_for_user_managed_guardrail() {
+        let doc = json!({"name": "my-policy", "properties": {"type": "UserManaged"}});
+        assert!(!is_platform_managed(ResourceKind::Guardrail, &doc));
+    }
+
+    #[test]
+    fn is_platform_managed_falls_back_to_name_prefix_without_properties() {
+        let doc = json!({"name": "Microsoft.Default"});
+        assert!(is_platform_managed(ResourceKind::Guardrail, &doc));
+    }
+
+    #[test]
+    fn is_platform_managed_false_for_user_named_guardrail_without_properties() {
+        let doc = json!({"name": "my-policy"});
+        assert!(!is_platform_managed(ResourceKind::Guardrail, &doc));
+    }
+
+    #[test]
+    fn is_platform_managed_only_applies_to_guardrail_kind() {
+        let doc = json!({"name": "Microsoft.whatever"});
+        assert!(!is_platform_managed(ResourceKind::Index, &doc));
     }
 
     #[test]

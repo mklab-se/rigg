@@ -6,6 +6,7 @@ use anyhow::Result;
 use colored::Colorize;
 use serde_json::json;
 
+use rigg_core::registry;
 use rigg_core::store::{ProjectState, Store, SyncClass};
 use rigg_core::workspace::Workspace;
 
@@ -56,8 +57,8 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
                 let class = state.classify(&r, local.as_ref(), remote_doc.as_ref());
                 rows.push((r, class));
             }
-            for (r, _) in &snapshot {
-                if !owned_by_any.contains(&r.key()) {
+            for (r, doc) in &snapshot {
+                if !owned_by_any.contains(&r.key()) && !registry::is_platform_managed(r.kind, doc) {
                     unmanaged.push(r.clone());
                 }
             }
