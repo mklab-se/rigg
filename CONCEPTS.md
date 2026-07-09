@@ -71,7 +71,10 @@ projects/<name>/
 
 Platform-provided resources (such as Microsoft's built-in guardrail policies)
 are never adopted or listed as unmanaged — rigg only tracks configuration you
-can actually change. Your resources reference them by name instead.
+can actually change. Your resources reference them by name instead. The same
+applies to sub-resources that Azure creates automatically (for example the
+index and indexer behind a managed-ingestion knowledge source) — manage the
+knowledge source; Azure manages what it generates.
 
 ## See also
 
