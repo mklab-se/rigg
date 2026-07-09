@@ -3,7 +3,7 @@
 //! Ownership rules (spec §5.3):
 //! - a project pulls only resources it owns (file or baseline exists)
 //! - remote resources owned by no project are reported as *unmanaged*;
-//!   `--adopt <project>` claims them into that project
+//!   `rigg adopt <project> <selector>` claims them into that project
 //! - remote-deleted resources ask (interactive) or exit 5 (non-interactive)
 
 use std::collections::BTreeSet;
@@ -49,7 +49,7 @@ async fn pull_once(ctx: &GlobalContext, args: &PullArgs) -> Result<()> {
 
     let mut any_conflict = false;
     for project in projects {
-        any_conflict |= pull_project(ctx, &ws, &env, project, args, &owned_by_any).await?;
+        any_conflict |= pull_project(ctx, &ws, &env, project, &owned_by_any).await?;
     }
     if any_conflict {
         return Err(anyhow!(CommandError::DriftOrConflict(
@@ -64,7 +64,6 @@ async fn pull_project(
     ws: &Workspace,
     env: &ResolvedEnv,
     project: &Project,
-    args: &PullArgs,
     owned_by_any: &BTreeSet<String>,
 ) -> Result<bool> {
     let store = Store::new(project);
@@ -87,7 +86,6 @@ async fn pull_project(
     let mut owned_here: BTreeSet<String> = local_files.iter().map(|(r, _)| r.key()).collect();
     owned_here.extend(state.baselines.keys().cloned());
 
-    let adopting = args.adopt.as_deref() == Some(project.name.as_str());
     let mut any_conflict = false;
     let mut unmanaged = 0usize;
     let mut written = 0usize;
@@ -100,14 +98,7 @@ async fn pull_project(
             continue; // another project's resource
         }
         if !owned_by_this {
-            if adopting {
-                store.write(r, doc)?;
-                state.set_baseline(r, doc);
-                println!("  {} adopted {}", "+".green(), r);
-                written += 1;
-            } else {
-                unmanaged += 1;
-            }
+            unmanaged += 1;
             continue;
         }
 
@@ -193,10 +184,9 @@ async fn pull_project(
     state.save(ws, &env.name, &project.name)?;
     if unmanaged > 0 {
         println!(
-            "  {} {unmanaged} unmanaged remote resource(s) — adopt with `rigg pull {} --adopt {}`",
+            "  {} {unmanaged} unmanaged remote resource(s) — adopt with `rigg adopt {} <selector>` (e.g. `all`, `indexes`, `agents/name`)",
             "i".blue(),
             project.name,
-            project.name
         );
     }
     if written == 0 {

@@ -82,9 +82,9 @@ async fn pull_writes_normalized_files_and_skips_volatile_noise() {
     mock_empty_lists(&server).await;
 
     let ws = workspace(&server.uri());
-    // pull with adopt (resource is unmanaged before adoption)
+    // adopt the resource (it is unmanaged before adoption)
     rigg(ws.path())
-        .args(["pull", "demo", "--adopt", "demo", "--yes"])
+        .args(["adopt", "demo", "indexes/docs"])
         .assert()
         .success();
 

@@ -46,7 +46,7 @@ fn removed_flags_are_gone() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--indexes").not())
-        .stdout(predicate::str::contains("--adopt"));
+        .stdout(predicate::str::contains("--adopt").not());
     // old resource-selection flag now errors
     rigg()
         .args(["pull", "--indexes"])
@@ -603,4 +603,9 @@ fn describe_empty_workspace_json_stays_empty_array() {
         .assert()
         .success()
         .stdout(predicate::str::is_match(r"^\s*\[\s*\]\s*$").unwrap());
+}
+
+#[test]
+fn pull_adopt_flag_is_gone() {
+    rigg().args(["pull", "--adopt", "demo"]).assert().code(2);
 }

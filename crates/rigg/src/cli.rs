@@ -75,7 +75,8 @@ pub enum Commands {
 
     /// Download resource definitions from Azure into project files
     ///
-    /// See `rigg concepts` for the project model that pull and --adopt rely on.
+    /// Use `rigg adopt` to claim unmanaged remote resources into a project.
+    /// See `rigg concepts` for the project model.
     Pull(PullArgs),
 
     /// Adopt selected unmanaged Azure resources into a project
@@ -221,10 +222,6 @@ pub struct PullArgs {
     /// Pull all projects
     #[arg(long)]
     pub all: bool,
-
-    /// Adopt unmanaged remote resources into the given project
-    #[arg(long, value_name = "PROJECT")]
-    pub adopt: Option<String>,
 
     /// Poll for remote changes and keep pulling
     #[arg(long)]
