@@ -459,6 +459,39 @@ async fn adopt_kind_selector_needs_confirmation_and_yes_adopts_all_of_kind() {
 }
 
 #[tokio::test]
+async fn adopt_all_selector_adopts_everything_unmanaged() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "a", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "b", "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+
+    rigg(ws.path())
+        .args(["adopt", "demo", "all", "--yes"])
+        .assert()
+        .success();
+
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/a.json")
+            .exists()
+    );
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/b.json")
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn adopt_dry_run_writes_nothing() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
