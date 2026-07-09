@@ -82,7 +82,10 @@ pub enum Commands {
     /// Adopt selected unmanaged Azure resources into a project
     ///
     /// Selectors: `all`, a kind (e.g. `indexes`), or `<kind>/<name>`
-    /// (e.g. `agents/regulus`). See `rigg concepts` for the project model.
+    /// (e.g. `agents/regulus`). Naming a resource the project already manages
+    /// together with --with-deps adopts its missing dependencies — useful
+    /// after new references appear (e.g. added via the portal).
+    /// See `rigg concepts` for the project model.
     Adopt(AdoptArgs),
 
     /// Upload local project files to Azure (create/update, in dependency order)
