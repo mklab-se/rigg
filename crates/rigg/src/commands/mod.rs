@@ -5,6 +5,7 @@ pub mod ai_assist;
 pub mod auth;
 pub mod ci;
 pub mod completion;
+pub mod concepts;
 pub mod confirm;
 pub mod copy;
 pub mod delete;
@@ -101,6 +102,7 @@ pub struct GlobalContext {
     pub output: OutputFormat,
     pub yes: bool,
     pub non_interactive: bool,
+    pub no_color: bool,
     #[allow(dead_code)] // reserved for quiet-mode output tuning
     pub quiet: bool,
     pub no_ai: bool,
@@ -113,6 +115,7 @@ impl GlobalContext {
             output: cli.output,
             yes: cli.yes,
             non_interactive: cli.non_interactive || !std::io::stdout().is_terminal(),
+            no_color: cli.no_color,
             quiet: cli.quiet,
             no_ai: cli.no_ai,
         }

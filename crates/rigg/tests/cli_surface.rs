@@ -471,3 +471,39 @@ fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missin
         .success()
         .stderr(predicate::str::contains("no deletion tracking"));
 }
+
+#[test]
+fn concepts_explains_the_model() {
+    // Runs anywhere — no workspace required.
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("concepts")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workspace"))
+        .stdout(predicate::str::contains("exactly one project"));
+}
+
+#[test]
+fn concepts_no_color_emits_no_ansi() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["concepts", "--no-color"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{1b}[").not());
+}
+
+#[test]
+fn concepts_json_returns_markdown_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["concepts", "--output", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"concepts\""))
+        .stdout(predicate::str::contains("exactly one project"));
+}

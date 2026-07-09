@@ -88,6 +88,9 @@ pub enum Commands {
     /// Describe the workspace: projects, resources, dependency graph
     Describe(DescribeArgs),
 
+    /// Explain rigg's core model: workspace, projects, and how to choose boundaries
+    Concepts,
+
     /// Validate local files: structure, references, ownership, secrets
     Validate(ValidateArgs),
 
@@ -449,6 +452,7 @@ impl Cli {
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,
             Commands::Describe(args) => commands::describe::run(&ctx, args),
+            Commands::Concepts => commands::concepts::run(&ctx),
             Commands::Validate(args) => commands::validate::run(&ctx, args),
             Commands::Env { command } => commands::env::run(&ctx, command),
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,
