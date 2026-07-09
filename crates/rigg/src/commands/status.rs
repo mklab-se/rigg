@@ -48,6 +48,7 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
 
         if remote.has_search() || remote.has_foundry() {
             let snapshot = remote.snapshot().await?;
+            let auto_created = registry::auto_created_by(&snapshot);
             let remote_map: std::collections::BTreeMap<String, &serde_json::Value> =
                 snapshot.iter().map(|(r, v)| (r.key(), v)).collect();
 
@@ -58,7 +59,10 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
                 rows.push((r, class));
             }
             for (r, doc) in &snapshot {
-                if !owned_by_any.contains(&r.key()) && !registry::is_platform_managed(r.kind, doc) {
+                if !owned_by_any.contains(&r.key())
+                    && !registry::is_platform_managed(r.kind, doc)
+                    && !auto_created.contains_key(&r.key())
+                {
                     unmanaged.push(r.clone());
                 }
             }

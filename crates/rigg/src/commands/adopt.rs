@@ -141,11 +141,12 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         .map(|(r, v)| (r.key(), (r.clone(), v.clone())))
         .collect();
     let supported = remote.supported_kinds();
+    let auto_created = registry::auto_created_by(&snapshot);
 
     // ---- Wizard step 2: resources ----
     let mut wizard_chosen: Vec<String> = Vec::new(); // keys, for the hint
     if selectors.is_empty() {
-        let candidates = wizard_candidates(&snapshot, &owned_by_any, &project.name);
+        let candidates = wizard_candidates(&snapshot, &owned_by_any, &auto_created, &project.name);
         if candidates.is_empty() {
             println!("Nothing to adopt — everything visible is already managed.");
             return Ok(());
@@ -250,7 +251,17 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                     // swept in by a kind/all selector → silently skip another project's resource
                 }
                 None => {
-                    if registry::is_platform_managed(r.kind, doc) {
+                    if let Some(ks) = auto_created.get(key) {
+                        if explicit.contains(key) {
+                            skipped.push((
+                                key.clone(),
+                                format!(
+                                    "auto-created by knowledge source '{ks}' — manage it via the knowledge source"
+                                ),
+                            ));
+                        }
+                        // swept in by a kind/all selector → silently skip
+                    } else if registry::is_platform_managed(r.kind, doc) {
                         if explicit.contains(key) {
                             skipped.push((
                                 key.clone(),
@@ -273,14 +284,41 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     if with_deps {
         let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
         roots.extend(owned_seeds.iter().cloned());
-        let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
+        let (adds, keys, _owned_refs) =
+            expand_deps(&roots, &owned_by_any, &auto_created, &snap_map);
         to_adopt.extend(adds);
         dep_keys = keys;
     } else if wizard {
         let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
         roots.extend(owned_seeds.iter().cloned());
-        let (adds, _keys) = expand_deps(&roots, &owned_by_any, &snap_map);
-        if !adds.is_empty() {
+        let (adds, _keys, owned_refs) =
+            expand_deps(&roots, &owned_by_any, &auto_created, &snap_map);
+        let mine: Vec<&str> = owned_refs
+            .iter()
+            .filter(|(_, o)| o == &project.name)
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let theirs: Vec<String> = owned_refs
+            .iter()
+            .filter(|(_, o)| o != &project.name)
+            .map(|(k, o)| format!("{k} (managed by '{o}')"))
+            .collect();
+        let managed_list: Vec<String> = mine
+            .iter()
+            .map(|k| k.to_string())
+            .chain(theirs.iter().cloned())
+            .collect();
+        if adds.is_empty() {
+            if !managed_list.is_empty() {
+                println!(
+                    "All dependencies of your selection are already managed: {}",
+                    managed_list.join(", ")
+                );
+            }
+        } else {
+            if !managed_list.is_empty() {
+                println!("Already managed: {}", managed_list.join(", "));
+            }
             let labels: Vec<String> = adds.iter().map(|(r, _)| r.to_string()).collect();
             let picked = interactive::multi_select_checked(
                 "Upstream dependencies found — adopt these too? (all selected; space to drop)",
@@ -375,6 +413,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 fn wizard_candidates(
     snapshot: &[(ResourceRef, Value)],
     owned_by_any: &BTreeMap<String, String>,
+    auto_created: &BTreeMap<String, String>,
     target_project: &str,
 ) -> Vec<(ResourceRef, String)> {
     fn domain_rank(kind: ResourceKind) -> u8 {
@@ -395,7 +434,9 @@ fn wizard_candidates(
         .filter(|(r, doc)| {
             let owner = owned_by_any.get(&r.key());
             let owned_by_other = matches!(owner, Some(o) if o != target_project);
-            !owned_by_other && !registry::is_platform_managed(r.kind, doc)
+            !owned_by_other
+                && !registry::is_platform_managed(r.kind, doc)
+                && !auto_created.contains_key(&r.key())
         })
         .map(|(r, _)| {
             let managed = matches!(owned_by_any.get(&r.key()), Some(o) if o == target_project);
@@ -425,25 +466,49 @@ fn wizard_candidates(
     items
 }
 
+/// `(additions, dep_keys, owned_refs)` — see [`expand_deps`].
+type ExpandDepsResult = (
+    Vec<(ResourceRef, Value)>,
+    BTreeSet<String>,
+    Vec<(String, String)>,
+);
+
 /// Expand `to_adopt`'s upstream dependency graph. Returns the additions (not
-/// yet appended to `to_adopt`) and their keys. Same traversal as the
-/// `--with-deps` flag path; callers append the result themselves so both the
-/// flag path and the wizard's ask-first path share one algorithm.
+/// yet appended to `to_adopt`), their keys, and deduped `(key, owner)` pairs
+/// for references that were encountered but skipped because they're already
+/// owned by some project — so callers (the wizard) can surface "already
+/// managed" instead of silently dropping them. Auto-created/platform-managed
+/// refs are never recorded here (they aren't adoptable dependencies at all).
+/// Same traversal as the `--with-deps` flag path; callers append the result
+/// themselves so both the flag path and the wizard's ask-first path share one
+/// algorithm.
 fn expand_deps(
     to_adopt: &[(ResourceRef, Value)],
     owned_by_any: &BTreeMap<String, String>,
+    auto_created: &BTreeMap<String, String>,
     snap_map: &BTreeMap<String, (ResourceRef, Value)>,
-) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>) {
+) -> ExpandDepsResult {
     let mut in_set: BTreeSet<String> = to_adopt.iter().map(|(r, _)| r.key()).collect();
     let mut queue: Vec<(ResourceRef, Value)> = to_adopt.to_vec();
     let mut additions: Vec<(ResourceRef, Value)> = Vec::new();
     let mut dep_keys: BTreeSet<String> = BTreeSet::new();
+    let mut owned_refs: Vec<(String, String)> = Vec::new();
+    let mut owned_refs_seen: BTreeSet<String> = BTreeSet::new();
     while let Some((r, doc)) = queue.pop() {
         for (dk, dn) in registry::extract_references(r.kind, &doc) {
             let dref = ResourceRef::new(dk, dn);
             let key = dref.key();
-            if in_set.contains(&key) || owned_by_any.contains_key(&key) {
-                continue; // already selected, or owned by someone → not an unmanaged dep
+            if in_set.contains(&key) {
+                continue; // already selected → not an unmanaged dep
+            }
+            if auto_created.contains_key(&key) {
+                continue; // auto-created → never adopted, not even as a dep, and never reported
+            }
+            if let Some(owner) = owned_by_any.get(&key) {
+                if owned_refs_seen.insert(key.clone()) {
+                    owned_refs.push((key.clone(), owner.clone()));
+                }
+                continue; // owned by someone → not an unmanaged dep, but worth surfacing
             }
             if let Some((rr, dv)) = snap_map.get(&key) {
                 if registry::is_platform_managed(rr.kind, dv) {
@@ -456,7 +521,7 @@ fn expand_deps(
             }
         }
     }
-    (additions, dep_keys)
+    (additions, dep_keys, owned_refs)
 }
 
 /// Reconstruct the non-interactive command line equivalent to a wizard run,
@@ -581,7 +646,7 @@ mod tests {
     fn wizard_candidates_filters_owned_and_groups_foundry_first() {
         let mut owned = BTreeMap::new();
         owned.insert("agents/helper".to_string(), "other".to_string());
-        let items = wizard_candidates(&snap(), &owned, "demo");
+        let items = wizard_candidates(&snap(), &owned, &BTreeMap::new(), "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
@@ -606,7 +671,7 @@ mod tests {
                 json!({"name": "my-policy", "properties": {"type": "UserManaged"}}),
             ),
         ];
-        let items = wizard_candidates(&snap, &owned, "demo");
+        let items = wizard_candidates(&snap, &owned, &BTreeMap::new(), "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
@@ -633,7 +698,7 @@ mod tests {
                 serde_json::json!({"name": "newbie"}),
             ),
         ];
-        let items = wizard_candidates(&snap, &owned, "regulus");
+        let items = wizard_candidates(&snap, &owned, &BTreeMap::new(), "regulus");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert!(
             labels.contains(&"[Foundry] agents/regulus (managed)"),
@@ -665,9 +730,45 @@ mod tests {
                 json!({"name": "Microsoft.DefaultV2", "properties": {"type": "SystemManaged"}}),
             ),
         );
-        let (adds, dep_keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let (adds, dep_keys, owned_refs) =
+            expand_deps(&to_adopt, &owned_by_any, &BTreeMap::new(), &snap_map);
         assert!(adds.is_empty(), "expected no deps adopted, got {adds:?}");
         assert!(dep_keys.is_empty());
+        assert!(owned_refs.is_empty());
+    }
+
+    #[test]
+    fn expand_deps_reports_owned_references() {
+        let indexer = json!({
+            "name": "ix", "dataSourceName": "ds", "targetIndexName": "idx"
+        });
+        let ds = json!({"name": "ds", "type": "azureblob"});
+        let idx = json!({"name": "idx"});
+        let roots = vec![(
+            ResourceRef::new(ResourceKind::Indexer, "ix".to_string()),
+            indexer,
+        )];
+        let mut owned = BTreeMap::new();
+        owned.insert("indexes/idx".to_string(), "demo".to_string());
+        let snap_map: BTreeMap<String, (ResourceRef, serde_json::Value)> = [
+            (
+                ResourceRef::new(ResourceKind::DataSource, "ds".to_string()),
+                ds,
+            ),
+            (
+                ResourceRef::new(ResourceKind::Index, "idx".to_string()),
+                idx,
+            ),
+        ]
+        .into_iter()
+        .map(|(r, v)| (r.key(), (r, v)))
+        .collect();
+        let (adds, _keys, owned_refs) = expand_deps(&roots, &owned, &BTreeMap::new(), &snap_map);
+        assert_eq!(adds.len(), 1, "only the unmanaged data source is added");
+        assert!(
+            owned_refs.contains(&("indexes/idx".to_string(), "demo".to_string())),
+            "{owned_refs:?}"
+        );
     }
 
     #[test]

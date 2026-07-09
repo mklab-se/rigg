@@ -754,3 +754,76 @@ async fn adopt_with_deps_on_owned_resource_adopts_missing_deps() {
         "data source adopted as dep of owned seed"
     );
 }
+
+#[tokio::test]
+async fn auto_created_subresources_are_not_adoptable() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/knowledgeSources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "name": "regulatory",
+                "kind": "azureBlob",
+                "azureBlobParameters": {
+                    "containerName": "c",
+                    "createdResources": {"index": "regulatory-index"}
+                }
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "regulatory-index", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "normal-index", "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    for p in [
+        "datasources",
+        "skillsets",
+        "indexers",
+        "synonymmaps",
+        "aliases",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(&server)
+            .await;
+    }
+    let ws = workspace(&server.uri());
+
+    // kind sweep: auto-created index silently skipped, normal index adopted
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes", "--yes"])
+        .assert()
+        .success();
+    let base = ws.path().join("projects/demo/search");
+    assert!(base.join("indexes/normal-index.json").exists());
+    assert!(
+        !base.join("indexes/regulatory-index.json").exists(),
+        "auto-created not swept"
+    );
+
+    // explicit: reasoned skip naming the KS
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes/regulatory-index"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "auto-created by knowledge source 'regulatory'",
+        ));
+    assert!(!base.join("indexes/regulatory-index.json").exists());
+
+    // status: not listed as unmanaged (knowledge source itself + nothing else)
+    rigg(ws.path())
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("regulatory-index").not());
+}
