@@ -56,6 +56,17 @@ Whether you use both services together for a full RAG stack, or either one indep
 
 You can use rigg for **Azure AI Search alone**, **Microsoft Foundry alone**, or **both together**. The init flow lets you choose which services to manage, and you can add the other later.
 
+## Concepts
+
+rigg has two levels. A **workspace** (`rigg.yaml`) holds your environments and
+service connections; a **project** is a group of resource definitions you pull,
+push, review, and deploy as one unit — and every resource belongs to exactly one
+project. That single rule is what keeps sync unambiguous.
+
+New to the model, or unsure whether to use one project or several? Read
+**[CONCEPTS.md](CONCEPTS.md)** — or run `rigg concepts` for the same guide in
+your terminal.
+
 ## Quick Start
 
 ```bash
@@ -155,9 +166,9 @@ my-rag
 
 ## Features
 
-### Projects Are the Unit of Sync
+### Whole-Project Sync
 
-Pull, push, and diff always operate on whole projects — local and remote can never end up half-synced:
+Pull, push, and diff always operate on whole projects (see [Concepts](#concepts)), so local and remote can never end up half-synced:
 
 ```bash
 rigg pull my-rag                # pull the project's resources from Azure

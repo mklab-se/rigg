@@ -50,6 +50,9 @@ semver = "1.0"
 # Terminal colors
 colored = "2.1"
 
+# Terminal markdown rendering
+termimad = "0.31"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

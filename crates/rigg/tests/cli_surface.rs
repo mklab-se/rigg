@@ -471,3 +471,105 @@ fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missin
         .success()
         .stderr(predicate::str::contains("no deletion tracking"));
 }
+
+#[test]
+fn concepts_explains_the_model() {
+    // Runs anywhere — no workspace required.
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("concepts")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Workspace"))
+        .stdout(predicate::str::contains("exactly one project"));
+}
+
+#[test]
+fn concepts_no_color_emits_no_ansi() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["concepts", "--no-color"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\u{1b}[").not());
+}
+
+#[test]
+fn concepts_json_returns_markdown_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["concepts", "--output", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"concepts\""))
+        .stdout(predicate::str::contains("exactly one project"));
+}
+
+#[test]
+fn help_points_at_concepts() {
+    rigg()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg concepts"));
+    rigg()
+        .args(["new", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("concepts"));
+    rigg()
+        .args(["pull", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("concepts"));
+}
+
+/// A workspace with an environment but NO projects.
+fn empty_workspace() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: unit-test-svc }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("projects")).unwrap();
+    tmp
+}
+
+#[test]
+fn status_empty_workspace_hints_next_steps() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No projects yet"))
+        .stdout(predicate::str::contains("rigg concepts"))
+        .stdout(predicate::str::contains("rigg new project"));
+}
+
+#[test]
+fn describe_empty_workspace_hints_next_steps() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .arg("describe")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No projects yet"));
+}
+
+#[test]
+fn describe_empty_workspace_json_stays_empty_array() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["describe", "--output", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"^\s*\[\s*\]\s*$").unwrap());
+}

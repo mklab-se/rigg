@@ -12,7 +12,8 @@ use crate::commands::ExitCode;
     long_about = "Configuration-as-code for Azure AI Search and Microsoft Foundry.\n\n\
     A rigg workspace holds one or more projects; each project owns its resource\n\
     definitions (indexes, indexers, skillsets, knowledge bases, Foundry agents,\n\
-    deployments, ...) as JSON files. Pull, push, and diff operate on projects.",
+    deployments, ...) as JSON files. Pull, push, and diff operate on projects.\n\n\
+    New here? Run `rigg concepts` for the workspace/project model.",
     version,
     propagate_version = true
 )]
@@ -65,12 +66,16 @@ pub enum Commands {
     Init(InitArgs),
 
     /// Scaffold a new project, resource, pipeline, or API spec
+    ///
+    /// See `rigg concepts` for what a project is and when to use several.
     New(NewArgs),
 
     /// Copy a resource file locally under a new name
     Copy(CopyArgs),
 
     /// Download resource definitions from Azure into project files
+    ///
+    /// See `rigg concepts` for the project model that pull and --adopt rely on.
     Pull(PullArgs),
 
     /// Upload local project files to Azure (create/update, in dependency order)
@@ -87,6 +92,9 @@ pub enum Commands {
 
     /// Describe the workspace: projects, resources, dependency graph
     Describe(DescribeArgs),
+
+    /// Explain rigg's core model: workspace, projects, and how to choose boundaries
+    Concepts,
 
     /// Validate local files: structure, references, ownership, secrets
     Validate(ValidateArgs),
@@ -449,6 +457,7 @@ impl Cli {
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,
             Commands::Describe(args) => commands::describe::run(&ctx, args),
+            Commands::Concepts => commands::concepts::run(&ctx),
             Commands::Validate(args) => commands::validate::run(&ctx, args),
             Commands::Env { command } => commands::env::run(&ctx, command),
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,

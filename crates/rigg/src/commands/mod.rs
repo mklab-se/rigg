@@ -5,6 +5,7 @@ pub mod ai_assist;
 pub mod auth;
 pub mod ci;
 pub mod completion;
+pub mod concepts;
 pub mod confirm;
 pub mod copy;
 pub mod delete;
@@ -101,6 +102,7 @@ pub struct GlobalContext {
     pub output: OutputFormat,
     pub yes: bool,
     pub non_interactive: bool,
+    pub no_color: bool,
     #[allow(dead_code)] // reserved for quiet-mode output tuning
     pub quiet: bool,
     pub no_ai: bool,
@@ -113,6 +115,7 @@ impl GlobalContext {
             output: cli.output,
             yes: cli.yes,
             non_interactive: cli.non_interactive || !std::io::stdout().is_terminal(),
+            no_color: cli.no_color,
             quiet: cli.quiet,
             no_ai: cli.no_ai,
         }
@@ -137,6 +140,14 @@ pub fn load_workspace_from(start: &Path) -> Result<Workspace> {
     Workspace::discover(start).context(
         "not inside a rigg workspace (run `rigg init` to create one, or cd into a workspace)",
     )
+}
+
+/// Text-mode hint printed when the workspace has no projects yet.
+pub fn print_no_projects_hint() {
+    println!(
+        "No projects yet. A project groups the resources you manage together —\n\
+         see `rigg concepts`, then `rigg new project <name>`."
+    );
 }
 
 /// Resolve which projects a command operates on from `[PROJECT]` / `--all`.

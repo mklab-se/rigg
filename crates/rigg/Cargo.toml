@@ -32,6 +32,7 @@ dirs.workspace = true
 chrono.workspace = true
 
 colored.workspace = true
+termimad.workspace = true
 reqwest.workspace = true
 semver.workspace = true
 

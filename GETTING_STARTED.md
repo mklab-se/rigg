@@ -22,6 +22,8 @@ Agent ── model ─► Deployment         Knowledge Base
 
 rigg manages all of these as JSON files in a **project**, so you version, review, and deploy them together.
 
+> New to the workspace/project model? See **[CONCEPTS.md](CONCEPTS.md)** (or run `rigg concepts`).
+
 ## 1. Install and Log In
 
 ```bash
