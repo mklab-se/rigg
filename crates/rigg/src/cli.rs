@@ -247,6 +247,10 @@ pub struct AdoptArgs {
     /// Preview what would be adopted; write nothing
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Also adopt each selected resource's upstream dependencies
+    #[arg(long)]
+    pub with_deps: bool,
 }
 
 #[derive(Args)]

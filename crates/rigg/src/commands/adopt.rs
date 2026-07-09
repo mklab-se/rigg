@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
+use rigg_core::registry;
 use rigg_core::resources::{ResourceKind, ResourceRef, validate_resource_name};
 use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
@@ -162,6 +163,28 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         }
     }
 
+    // Optionally pull each candidate's upstream dependency graph.
+    let mut dep_keys: BTreeSet<String> = BTreeSet::new();
+    if args.with_deps {
+        let mut in_set: BTreeSet<String> = to_adopt.iter().map(|(r, _)| r.key()).collect();
+        let mut queue: Vec<(ResourceRef, Value)> = to_adopt.clone();
+        while let Some((r, doc)) = queue.pop() {
+            for (dk, dn) in registry::extract_references(r.kind, &doc) {
+                let dref = ResourceRef::new(dk, dn);
+                let key = dref.key();
+                if in_set.contains(&key) || owned_by_any.contains_key(&key) {
+                    continue; // already selected, or owned by someone → not an unmanaged dep
+                }
+                if let Some((rr, dv)) = snap_map.get(&key) {
+                    in_set.insert(key.clone());
+                    dep_keys.insert(key.clone());
+                    to_adopt.push((rr.clone(), dv.clone()));
+                    queue.push((rr.clone(), dv.clone()));
+                }
+            }
+        }
+    }
+
     // Confirmation for broad selections.
     let broad = selectors.iter().any(Selector::is_broad);
     if !to_adopt.is_empty() && broad && !ctx.yes && !args.dry_run {
@@ -187,7 +210,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
 
     if args.dry_run {
-        report(ctx, &to_adopt, &skipped, true)?;
+        report(ctx, &to_adopt, &skipped, &dep_keys, true)?;
         return Ok(());
     }
 
@@ -198,7 +221,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         state.set_baseline(r, doc);
     }
     state.save(&ws, &env.name, &project.name)?;
-    report(ctx, &to_adopt, &skipped, false)?;
+    report(ctx, &to_adopt, &skipped, &dep_keys, false)?;
     Ok(())
 }
 
@@ -206,12 +229,14 @@ fn report(
     ctx: &GlobalContext,
     to_adopt: &[(ResourceRef, Value)],
     skipped: &[(String, String)],
+    dep_keys: &BTreeSet<String>,
     dry_run: bool,
 ) -> Result<()> {
     if ctx.json() {
         let key = if dry_run { "would_adopt" } else { "adopted" };
         let value = json!({
             key: to_adopt.iter().map(|(r, _)| r.key()).collect::<Vec<_>>(),
+            "dependencies": dep_keys.iter().cloned().collect::<Vec<_>>(),
             "skipped": skipped
                 .iter()
                 .map(|(k, why)| json!({ "resource": k, "reason": why }))
@@ -224,10 +249,15 @@ fn report(
         println!("Nothing to adopt (no unmanaged resources matched).");
     }
     for (r, _) in to_adopt {
-        if dry_run {
-            println!("  would adopt {r}");
+        let tag = if dep_keys.contains(&r.key()) {
+            " (dependency)"
         } else {
-            println!("  + adopted {r}");
+            ""
+        };
+        if dry_run {
+            println!("  would adopt {r}{tag}");
+        } else {
+            println!("  + adopted {r}{tag}");
         }
     }
     for (k, why) in skipped {

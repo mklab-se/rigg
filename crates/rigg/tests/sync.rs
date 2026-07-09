@@ -574,3 +574,76 @@ async fn adopt_json_output_lists_adopted() {
         "skipped key present: {value:?}"
     );
 }
+
+#[tokio::test]
+async fn adopt_with_deps_pulls_upstream_chain_only() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "name": "docs-indexer",
+                "dataSourceName": "docs-ds",
+                "targetIndexName": "docs-index"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "docs-index", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "unrelated",  "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/datasources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "docs-ds", "type": "azureblob",
+                       "container": {"name": "c"},
+                       "credentials": {"connectionString": "ResourceId=/x;"}}]
+        })))
+        .mount(&server)
+        .await;
+    // remaining kinds empty
+    for p in [
+        "skillsets",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(&server)
+            .await;
+    }
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexers/docs-indexer", "--with-deps"])
+        .assert()
+        .success();
+
+    let base = ws.path().join("projects/demo/search");
+    assert!(
+        base.join("indexers/docs-indexer.json").exists(),
+        "the named resource"
+    );
+    assert!(
+        base.join("indexes/docs-index.json").exists(),
+        "referenced index (dependency)"
+    );
+    assert!(
+        base.join("data-sources/docs-ds.json").exists(),
+        "referenced data source (dependency)"
+    );
+    assert!(
+        !base.join("indexes/unrelated.json").exists(),
+        "unrelated resource NOT adopted"
+    );
+}
