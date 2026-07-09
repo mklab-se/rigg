@@ -80,6 +80,7 @@ async fn pull_project(
     );
 
     let snapshot = remote.snapshot().await?;
+    let auto_created = registry::auto_created_by(&snapshot);
     let remote_keys: BTreeSet<String> = snapshot.iter().map(|(r, _)| r.key()).collect();
 
     // Which of the remote resources does THIS project own?
@@ -99,7 +100,7 @@ async fn pull_project(
             continue; // another project's resource
         }
         if !owned_by_this {
-            if !registry::is_platform_managed(r.kind, doc) {
+            if !registry::is_platform_managed(r.kind, doc) && !auto_created.contains_key(&key) {
                 unmanaged += 1;
             }
             continue;

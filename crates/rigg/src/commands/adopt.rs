@@ -141,11 +141,12 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         .map(|(r, v)| (r.key(), (r.clone(), v.clone())))
         .collect();
     let supported = remote.supported_kinds();
+    let auto_created = registry::auto_created_by(&snapshot);
 
     // ---- Wizard step 2: resources ----
     let mut wizard_chosen: Vec<String> = Vec::new(); // keys, for the hint
     if selectors.is_empty() {
-        let candidates = wizard_candidates(&snapshot, &owned_by_any, &project.name);
+        let candidates = wizard_candidates(&snapshot, &owned_by_any, &auto_created, &project.name);
         if candidates.is_empty() {
             println!("Nothing to adopt — everything visible is already managed.");
             return Ok(());
@@ -250,7 +251,17 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                     // swept in by a kind/all selector → silently skip another project's resource
                 }
                 None => {
-                    if registry::is_platform_managed(r.kind, doc) {
+                    if let Some(ks) = auto_created.get(key) {
+                        if explicit.contains(key) {
+                            skipped.push((
+                                key.clone(),
+                                format!(
+                                    "auto-created by knowledge source '{ks}' — manage it via the knowledge source"
+                                ),
+                            ));
+                        }
+                        // swept in by a kind/all selector → silently skip
+                    } else if registry::is_platform_managed(r.kind, doc) {
                         if explicit.contains(key) {
                             skipped.push((
                                 key.clone(),
@@ -273,13 +284,13 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     if with_deps {
         let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
         roots.extend(owned_seeds.iter().cloned());
-        let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
+        let (adds, keys) = expand_deps(&roots, &owned_by_any, &auto_created, &snap_map);
         to_adopt.extend(adds);
         dep_keys = keys;
     } else if wizard {
         let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
         roots.extend(owned_seeds.iter().cloned());
-        let (adds, _keys) = expand_deps(&roots, &owned_by_any, &snap_map);
+        let (adds, _keys) = expand_deps(&roots, &owned_by_any, &auto_created, &snap_map);
         if !adds.is_empty() {
             let labels: Vec<String> = adds.iter().map(|(r, _)| r.to_string()).collect();
             let picked = interactive::multi_select_checked(
@@ -375,6 +386,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 fn wizard_candidates(
     snapshot: &[(ResourceRef, Value)],
     owned_by_any: &BTreeMap<String, String>,
+    auto_created: &BTreeMap<String, String>,
     target_project: &str,
 ) -> Vec<(ResourceRef, String)> {
     fn domain_rank(kind: ResourceKind) -> u8 {
@@ -395,7 +407,9 @@ fn wizard_candidates(
         .filter(|(r, doc)| {
             let owner = owned_by_any.get(&r.key());
             let owned_by_other = matches!(owner, Some(o) if o != target_project);
-            !owned_by_other && !registry::is_platform_managed(r.kind, doc)
+            !owned_by_other
+                && !registry::is_platform_managed(r.kind, doc)
+                && !auto_created.contains_key(&r.key())
         })
         .map(|(r, _)| {
             let managed = matches!(owned_by_any.get(&r.key()), Some(o) if o == target_project);
@@ -432,6 +446,7 @@ fn wizard_candidates(
 fn expand_deps(
     to_adopt: &[(ResourceRef, Value)],
     owned_by_any: &BTreeMap<String, String>,
+    auto_created: &BTreeMap<String, String>,
     snap_map: &BTreeMap<String, (ResourceRef, Value)>,
 ) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>) {
     let mut in_set: BTreeSet<String> = to_adopt.iter().map(|(r, _)| r.key()).collect();
@@ -446,8 +461,8 @@ fn expand_deps(
                 continue; // already selected, or owned by someone → not an unmanaged dep
             }
             if let Some((rr, dv)) = snap_map.get(&key) {
-                if registry::is_platform_managed(rr.kind, dv) {
-                    continue; // platform-managed → never adopted, not even as a dep
+                if registry::is_platform_managed(rr.kind, dv) || auto_created.contains_key(&key) {
+                    continue; // platform-managed / auto-created → never adopted, not even as a dep
                 }
                 in_set.insert(key.clone());
                 dep_keys.insert(key.clone());
@@ -581,7 +596,7 @@ mod tests {
     fn wizard_candidates_filters_owned_and_groups_foundry_first() {
         let mut owned = BTreeMap::new();
         owned.insert("agents/helper".to_string(), "other".to_string());
-        let items = wizard_candidates(&snap(), &owned, "demo");
+        let items = wizard_candidates(&snap(), &owned, &BTreeMap::new(), "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
@@ -606,7 +621,7 @@ mod tests {
                 json!({"name": "my-policy", "properties": {"type": "UserManaged"}}),
             ),
         ];
-        let items = wizard_candidates(&snap, &owned, "demo");
+        let items = wizard_candidates(&snap, &owned, &BTreeMap::new(), "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
@@ -633,7 +648,7 @@ mod tests {
                 serde_json::json!({"name": "newbie"}),
             ),
         ];
-        let items = wizard_candidates(&snap, &owned, "regulus");
+        let items = wizard_candidates(&snap, &owned, &BTreeMap::new(), "regulus");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert!(
             labels.contains(&"[Foundry] agents/regulus (managed)"),
@@ -665,7 +680,7 @@ mod tests {
                 json!({"name": "Microsoft.DefaultV2", "properties": {"type": "SystemManaged"}}),
             ),
         );
-        let (adds, dep_keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let (adds, dep_keys) = expand_deps(&to_adopt, &owned_by_any, &BTreeMap::new(), &snap_map);
         assert!(adds.is_empty(), "expected no deps adopted, got {adds:?}");
         assert!(dep_keys.is_empty());
     }
