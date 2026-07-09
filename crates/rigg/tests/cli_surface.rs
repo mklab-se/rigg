@@ -507,3 +507,22 @@ fn concepts_json_returns_markdown_source() {
         .stdout(predicate::str::contains("\"concepts\""))
         .stdout(predicate::str::contains("exactly one project"));
 }
+
+#[test]
+fn help_points_at_concepts() {
+    rigg()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg concepts"));
+    rigg()
+        .args(["new", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("concepts"));
+    rigg()
+        .args(["pull", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("concepts"));
+}

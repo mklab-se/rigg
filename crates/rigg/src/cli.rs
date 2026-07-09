@@ -12,7 +12,8 @@ use crate::commands::ExitCode;
     long_about = "Configuration-as-code for Azure AI Search and Microsoft Foundry.\n\n\
     A rigg workspace holds one or more projects; each project owns its resource\n\
     definitions (indexes, indexers, skillsets, knowledge bases, Foundry agents,\n\
-    deployments, ...) as JSON files. Pull, push, and diff operate on projects.",
+    deployments, ...) as JSON files. Pull, push, and diff operate on projects.\n\n\
+    New here? Run `rigg concepts` for the workspace/project model.",
     version,
     propagate_version = true
 )]
@@ -65,12 +66,16 @@ pub enum Commands {
     Init(InitArgs),
 
     /// Scaffold a new project, resource, pipeline, or API spec
+    ///
+    /// See `rigg concepts` for what a project is and when to use several.
     New(NewArgs),
 
     /// Copy a resource file locally under a new name
     Copy(CopyArgs),
 
     /// Download resource definitions from Azure into project files
+    ///
+    /// See `rigg concepts` for the project model that pull and --adopt rely on.
     Pull(PullArgs),
 
     /// Upload local project files to Azure (create/update, in dependency order)
