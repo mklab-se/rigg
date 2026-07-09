@@ -93,6 +93,37 @@ fn validate_duplicate_ownership_exits_3() {
 }
 
 #[test]
+fn adopt_help_lists_selectors() {
+    rigg()
+        .args(["adopt", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SELECTOR"))
+        .stdout(predicate::str::contains("agents/regulus"));
+}
+
+#[test]
+fn adopt_requires_a_selector() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["adopt", "demo"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn adopt_rejects_unknown_kind() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["adopt", "demo", "widgets"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown resource kind"));
+}
+
+#[test]
 fn validate_rejects_secrets_exit_3() {
     let ws = workspace();
     let dir = ws.path().join("projects/demo/search/data-sources");

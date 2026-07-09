@@ -378,3 +378,106 @@ async fn status_classifies_and_reports_unmanaged() {
         .stdout(predicate::str::contains("somebody-elses"))
         .stdout(predicate::str::contains("unmanaged"));
 }
+
+#[tokio::test]
+async fn adopt_named_selector_adopts_only_that_resource() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "hotels", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "cars",   "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes/hotels"])
+        .assert()
+        .success();
+
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists()
+    );
+    assert!(
+        !ws.path()
+            .join("projects/demo/search/indexes/cars.json")
+            .exists(),
+        "only the named resource is adopted"
+    );
+}
+
+#[tokio::test]
+async fn adopt_kind_selector_needs_confirmation_and_yes_adopts_all_of_kind() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "hotels", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "cars",   "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+
+    // broad selector, non-interactive (assert_cmd has no tty), no --yes → exit 2
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--yes").or(predicate::str::contains("--dry-run")));
+    assert!(
+        !ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists()
+    );
+
+    // with --yes → adopts all of the kind
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes", "--yes"])
+        .assert()
+        .success();
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists()
+    );
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/cars.json")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn adopt_dry_run_writes_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name":"hotels","fields":[{"name":"id","type":"Edm.String","key":true}]}]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes/hotels", "--dry-run"])
+        .assert()
+        .success();
+    assert!(
+        !ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists()
+    );
+}

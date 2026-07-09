@@ -78,6 +78,12 @@ pub enum Commands {
     /// See `rigg concepts` for the project model that pull and --adopt rely on.
     Pull(PullArgs),
 
+    /// Adopt selected unmanaged Azure resources into a project
+    ///
+    /// Selectors: `all`, a kind (e.g. `indexes`), or `<kind>/<name>`
+    /// (e.g. `agents/regulus`). See `rigg concepts` for the project model.
+    Adopt(AdoptArgs),
+
     /// Upload local project files to Azure (create/update, in dependency order)
     Push(PushArgs),
 
@@ -227,6 +233,20 @@ pub struct PullArgs {
     /// Poll interval in seconds for --watch
     #[arg(long, default_value_t = 20)]
     pub interval: u64,
+}
+
+#[derive(Args)]
+pub struct AdoptArgs {
+    /// Project to adopt the resources into
+    pub project: String,
+
+    /// What to adopt: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`). Repeatable.
+    #[arg(value_name = "SELECTOR")]
+    pub selectors: Vec<String>,
+
+    /// Preview what would be adopted; write nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args)]
@@ -452,6 +472,7 @@ impl Cli {
             Commands::New(args) => commands::new::run(&ctx, args).await,
             Commands::Copy(args) => commands::copy::run(&ctx, args),
             Commands::Pull(args) => commands::pull::run(&ctx, args).await,
+            Commands::Adopt(args) => commands::adopt::run(&ctx, args).await,
             Commands::Push(args) => commands::push::run(&ctx, args).await,
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
