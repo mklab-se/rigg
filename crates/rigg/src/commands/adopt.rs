@@ -221,6 +221,10 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // Classify each candidate.
     let mut to_adopt: Vec<(ResourceRef, Value)> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
+    // Explicitly-named resources already owned by THIS project — not adopted
+    // (they're already managed), but they seed dependency expansion below so
+    // `--with-deps` can still pull in their unmanaged deps.
+    let mut owned_seeds: Vec<(ResourceRef, Value)> = Vec::new();
     for key in &selected {
         match snap_map.get(key) {
             None => {
@@ -234,6 +238,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                 Some(owner) if owner == &project.name => {
                     if explicit.contains(key) {
                         skipped.push((key.clone(), "already managed by this project".to_string()));
+                        owned_seeds.push((r.clone(), doc.clone()));
                     }
                 }
                 Some(owner) => {
@@ -266,11 +271,15 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     let mut dep_keys: BTreeSet<String> = BTreeSet::new();
     let mut with_deps = args.with_deps;
     if with_deps {
-        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
+        roots.extend(owned_seeds.iter().cloned());
+        let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
         to_adopt.extend(adds);
         dep_keys = keys;
     } else if wizard {
-        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
+        roots.extend(owned_seeds.iter().cloned());
+        let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
         if !adds.is_empty() {
             // Show what a "yes" means before asking for it.
             if adds.len() == 1 {
