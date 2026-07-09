@@ -680,3 +680,77 @@ async fn adopt_with_deps_pulls_upstream_chain_only() {
         "unrelated resource NOT adopted"
     );
 }
+
+#[tokio::test]
+async fn adopt_with_deps_on_owned_resource_adopts_missing_deps() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexers"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "name": "docs-indexer",
+                "dataSourceName": "docs-ds",
+                "targetIndexName": "docs-index"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "docs-index", "fields": [{"name":"id","type":"Edm.String","key":true}]}]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/datasources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "docs-ds", "type": "azureblob",
+                       "container": {"name": "c"},
+                       "credentials": {"connectionString": "ResourceId=/x;"}}]
+        })))
+        .mount(&server)
+        .await;
+    for p in [
+        "skillsets",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(&server)
+            .await;
+    }
+
+    let ws = workspace(&server.uri());
+    // First: adopt ONLY the indexer (no deps).
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexers/docs-indexer"])
+        .assert()
+        .success();
+    let base = ws.path().join("projects/demo/search");
+    assert!(base.join("indexers/docs-indexer.json").exists());
+    assert!(
+        !base.join("indexes/docs-index.json").exists(),
+        "deps not adopted yet"
+    );
+
+    // Change of mind: same command with --with-deps must now adopt the missing deps.
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexers/docs-indexer", "--with-deps"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("indexes/docs-index"))
+        .stdout(predicate::str::contains("already managed"));
+    assert!(
+        base.join("indexes/docs-index.json").exists(),
+        "index adopted as dep of owned seed"
+    );
+    assert!(
+        base.join("data-sources/docs-ds.json").exists(),
+        "data source adopted as dep of owned seed"
+    );
+}

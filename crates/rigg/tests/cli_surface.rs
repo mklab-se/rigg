@@ -103,6 +103,15 @@ fn adopt_help_lists_selectors() {
 }
 
 #[test]
+fn adopt_help_documents_readoption() {
+    rigg()
+        .args(["adopt", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("missing dependencies"));
+}
+
+#[test]
 fn adopt_requires_a_selector() {
     let ws = workspace();
     rigg()

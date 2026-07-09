@@ -145,7 +145,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // ---- Wizard step 2: resources ----
     let mut wizard_chosen: Vec<String> = Vec::new(); // keys, for the hint
     if selectors.is_empty() {
-        let candidates = wizard_candidates(&snapshot, &owned_by_any);
+        let candidates = wizard_candidates(&snapshot, &owned_by_any, &project.name);
         if candidates.is_empty() {
             println!("Nothing to adopt — everything visible is already managed.");
             return Ok(());
@@ -221,6 +221,10 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // Classify each candidate.
     let mut to_adopt: Vec<(ResourceRef, Value)> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
+    // Explicitly-named resources already owned by THIS project — not adopted
+    // (they're already managed), but they seed dependency expansion below so
+    // `--with-deps` can still pull in their unmanaged deps.
+    let mut owned_seeds: Vec<(ResourceRef, Value)> = Vec::new();
     for key in &selected {
         match snap_map.get(key) {
             None => {
@@ -234,6 +238,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                 Some(owner) if owner == &project.name => {
                     if explicit.contains(key) {
                         skipped.push((key.clone(), "already managed by this project".to_string()));
+                        owned_seeds.push((r.clone(), doc.clone()));
                     }
                 }
                 Some(owner) => {
@@ -266,30 +271,30 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     let mut dep_keys: BTreeSet<String> = BTreeSet::new();
     let mut with_deps = args.with_deps;
     if with_deps {
-        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
+        roots.extend(owned_seeds.iter().cloned());
+        let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
         to_adopt.extend(adds);
         dep_keys = keys;
     } else if wizard {
-        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        let mut roots: Vec<(ResourceRef, Value)> = to_adopt.clone();
+        roots.extend(owned_seeds.iter().cloned());
+        let (adds, _keys) = expand_deps(&roots, &owned_by_any, &snap_map);
         if !adds.is_empty() {
-            // Show what a "yes" means before asking for it.
-            if adds.len() == 1 {
-                println!("1 unmanaged upstream dependency found:");
-            } else {
-                println!("{} unmanaged upstream dependencies found:", adds.len());
-            }
-            for (r, _) in &adds {
-                println!("  {r}");
-            }
-            let question = if adds.len() == 1 {
-                "Adopt this dependency too?"
-            } else {
-                "Adopt these dependencies too?"
-            };
-            if interactive::confirm_default_no(question, plain)? {
+            let labels: Vec<String> = adds.iter().map(|(r, _)| r.to_string()).collect();
+            let picked = interactive::multi_select_checked(
+                "Upstream dependencies found — adopt these too? (all selected; space to drop)",
+                labels,
+                true,
+                plain,
+            )?;
+            if !picked.is_empty() {
                 with_deps = true;
-                to_adopt.extend(adds);
-                dep_keys = keys;
+                for i in &picked {
+                    let (r, doc) = &adds[*i];
+                    dep_keys.insert(r.key());
+                    to_adopt.push((r.clone(), doc.clone()));
+                }
             }
         }
     }
@@ -363,10 +368,14 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 
 /// Unmanaged candidates for the wizard's multi-select, sorted Foundry-first
 /// then Search, by (kind directory, name) within domain. Label is
-/// `"[Foundry] agents/x"` / `"[Search] indexes/y"`.
+/// `"[Foundry] agents/x"` / `"[Search] indexes/y"`, with a `" (managed)"`
+/// suffix for entries already owned by `target_project` (re-adoption case:
+/// picking one seeds its missing dependencies without re-adopting itself).
+/// Entries owned by any OTHER project, or platform-managed, are excluded.
 fn wizard_candidates(
     snapshot: &[(ResourceRef, Value)],
     owned_by_any: &BTreeMap<String, String>,
+    target_project: &str,
 ) -> Vec<(ResourceRef, String)> {
     fn domain_rank(kind: ResourceKind) -> u8 {
         match registry::meta(kind).domain {
@@ -384,10 +393,20 @@ fn wizard_candidates(
     let mut items: Vec<(ResourceRef, String)> = snapshot
         .iter()
         .filter(|(r, doc)| {
-            !owned_by_any.contains_key(&r.key()) && !registry::is_platform_managed(r.kind, doc)
+            let owner = owned_by_any.get(&r.key());
+            let owned_by_other = matches!(owner, Some(o) if o != target_project);
+            !owned_by_other && !registry::is_platform_managed(r.kind, doc)
         })
         .map(|(r, _)| {
-            let label = format!("{} {}/{}", prefix(r.kind), r.kind.directory_name(), r.name);
+            let managed = matches!(owned_by_any.get(&r.key()), Some(o) if o == target_project);
+            let suffix = if managed { " (managed)" } else { "" };
+            let label = format!(
+                "{} {}/{}{}",
+                prefix(r.kind),
+                r.kind.directory_name(),
+                r.name,
+                suffix
+            );
             (r.clone(), label)
         })
         .collect();
@@ -562,7 +581,7 @@ mod tests {
     fn wizard_candidates_filters_owned_and_groups_foundry_first() {
         let mut owned = BTreeMap::new();
         owned.insert("agents/helper".to_string(), "other".to_string());
-        let items = wizard_candidates(&snap(), &owned);
+        let items = wizard_candidates(&snap(), &owned, "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
@@ -587,11 +606,43 @@ mod tests {
                 json!({"name": "my-policy", "properties": {"type": "UserManaged"}}),
             ),
         ];
-        let items = wizard_candidates(&snap, &owned);
+        let items = wizard_candidates(&snap, &owned, "demo");
         let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
         assert_eq!(
             labels,
             vec!["[Foundry] guardrails/my-policy", "[Search] indexes/docs"]
+        );
+    }
+
+    #[test]
+    fn wizard_candidates_marks_target_project_owned_as_managed() {
+        let mut owned = BTreeMap::new();
+        owned.insert("agents/regulus".to_string(), "regulus".to_string()); // target project
+        owned.insert("agents/helper".to_string(), "other".to_string()); // other project
+        let snap = vec![
+            (
+                ResourceRef::new(ResourceKind::Agent, "regulus".to_string()),
+                serde_json::json!({"name": "regulus"}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Agent, "helper".to_string()),
+                serde_json::json!({"name": "helper"}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Agent, "newbie".to_string()),
+                serde_json::json!({"name": "newbie"}),
+            ),
+        ];
+        let items = wizard_candidates(&snap, &owned, "regulus");
+        let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
+        assert!(
+            labels.contains(&"[Foundry] agents/regulus (managed)"),
+            "{labels:?}"
+        );
+        assert!(labels.contains(&"[Foundry] agents/newbie"), "{labels:?}");
+        assert!(
+            !labels.iter().any(|l| l.contains("helper")),
+            "other-project resources hidden: {labels:?}"
         );
     }
 

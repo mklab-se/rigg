@@ -95,6 +95,9 @@ rigg adopt my-rag all                 # everything unmanaged
 rigg adopt my-rag agents/my-agent     # just one resource
 rigg adopt my-rag indexes --with-deps # a whole kind + its dependencies
 
+# Later: capture newly-added dependencies of something you already manage
+rigg adopt my-rag agents/my-agent --with-deps
+
 # …or scaffold an explicit RAG pipeline from scratch
 rigg new pipeline docs -p my-rag
 
