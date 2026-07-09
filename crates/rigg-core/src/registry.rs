@@ -240,10 +240,16 @@ static KINDS: &[KindMeta] = &[
         secret_fields: &[],
         write_only_fields: &[],
         sidecar_fields: &["instructions"],
-        reference_fields: &[RefField {
-            path: "model",
-            to: ResourceKind::Deployment,
-        }],
+        reference_fields: &[
+            RefField {
+                path: "model",
+                to: ResourceKind::Deployment,
+            },
+            RefField {
+                path: "tools[].project_connection_id",
+                to: ResourceKind::Connection,
+            },
+        ],
     },
     KindMeta {
         kind: ResourceKind::Deployment,
@@ -260,6 +266,8 @@ static KINDS: &[KindMeta] = &[
             "properties.capabilities",
             "properties.rateLimits",
             "properties.model.callRateLimit",
+            "properties.currentCapacity",
+            "properties.deploymentState",
         ],
         read_only_fields: &[],
         secret_fields: &[],
@@ -396,9 +404,51 @@ pub fn extract_references(kind: ResourceKind, body: &Value) -> Vec<(ResourceKind
         });
     }
     collect_x_rigg_refs(body, &mut out);
+    if kind == ResourceKind::Agent {
+        collect_portal_agent_refs(body, &mut out);
+    }
     out.sort();
     out.dedup();
     out
+}
+
+/// Portal-authored agents reference Search knowledge bases by raw MCP URL
+/// (`https://<svc>.search.windows.net/knowledgebases/<name>/mcp?...`) rather
+/// than an `x-rigg-ref` annotation. Recognize the shape so dependency
+/// expansion can cross the service boundary.
+fn collect_portal_agent_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
+    match v {
+        Value::Object(map) => {
+            if let Some(url) = map.get("server_url").and_then(Value::as_str) {
+                if let Some(kb) = parse_kb_mcp_url(url) {
+                    out.push((ResourceKind::KnowledgeBase, kb));
+                }
+            }
+            for val in map.values() {
+                collect_portal_agent_refs(val, out);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                collect_portal_agent_refs(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `https://<host>.search.windows.net/knowledgebases/<name>/mcp[?...]` → name.
+fn parse_kb_mcp_url(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let (host, path) = rest.split_once('/')?;
+    if !host.to_ascii_lowercase().ends_with(".search.windows.net") {
+        return None;
+    }
+    let path = path.split('?').next().unwrap_or(path);
+    let mut segs = path.split('/').filter(|s| !s.is_empty());
+    let (a, name, c) = (segs.next()?, segs.next()?, segs.next()?);
+    (a.eq_ignore_ascii_case("knowledgebases") && c.eq_ignore_ascii_case("mcp"))
+        .then(|| name.to_string())
 }
 
 /// Platform-provided resource instances (e.g. Microsoft's built-in guardrail
@@ -541,6 +591,56 @@ mod tests {
         let refs = extract_references(ResourceKind::Agent, &agent);
         assert!(refs.contains(&(ResourceKind::KnowledgeBase, "support-kb".into())));
         assert!(refs.contains(&(ResourceKind::Deployment, "gpt-5-mini".into())));
+    }
+
+    #[test]
+    fn agent_extracts_portal_kb_url_and_connection_id() {
+        let agent = serde_json::json!({
+            "name": "Regulus",
+            "model": "gpt-5.2-chat",
+            "tools": [{
+                "type": "mcp",
+                "server_label": "kb_regulatory_kb",
+                "server_url": "https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2025-11-01-Preview",
+                "project_connection_id": "kb-regulatory-kb-9kdyn"
+            }]
+        });
+        let refs = extract_references(ResourceKind::Agent, &agent);
+        assert!(
+            refs.contains(&(ResourceKind::KnowledgeBase, "regulatory-kb".to_string())),
+            "{refs:?}"
+        );
+        assert!(
+            refs.contains(&(
+                ResourceKind::Connection,
+                "kb-regulatory-kb-9kdyn".to_string()
+            )),
+            "{refs:?}"
+        );
+        assert!(
+            refs.contains(&(ResourceKind::Deployment, "gpt-5.2-chat".to_string())),
+            "{refs:?}"
+        );
+    }
+
+    #[test]
+    fn agent_ignores_non_search_mcp_urls() {
+        let agent = serde_json::json!({
+            "name": "a",
+            "tools": [{"type": "mcp", "server_url": "https://example.com/knowledgebases/x/mcp"}]
+        });
+        let refs = extract_references(ResourceKind::Agent, &agent);
+        assert!(
+            !refs.iter().any(|(k, _)| *k == ResourceKind::KnowledgeBase),
+            "{refs:?}"
+        );
+    }
+
+    #[test]
+    fn deployment_runtime_state_is_volatile() {
+        let vf = meta(ResourceKind::Deployment).volatile_fields;
+        assert!(vf.contains(&"properties.currentCapacity"));
+        assert!(vf.contains(&"properties.deploymentState"));
     }
 
     #[test]
