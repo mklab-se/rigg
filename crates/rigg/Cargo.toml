@@ -33,6 +33,7 @@ chrono.workspace = true
 
 colored.workspace = true
 termimad.workspace = true
+inquire.workspace = true
 reqwest.workspace = true
 semver.workspace = true
 
