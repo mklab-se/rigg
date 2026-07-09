@@ -69,6 +69,10 @@ projects/<name>/
 .rigg/<env>/<project>/...     # per-environment sync state (gitignored)
 ```
 
+Platform-provided resources (such as Microsoft's built-in guardrail policies)
+are never adopted or listed as unmanaged — rigg only tracks configuration you
+can actually change. Your resources reference them by name instead.
+
 ## See also
 
 - **Getting Started** (`GETTING_STARTED.md`) — build a stack from scratch.
