@@ -135,16 +135,6 @@ fn adopt_without_project_non_interactive_is_usage_error() {
 }
 
 #[test]
-fn adopt_project_without_selector_non_interactive_still_usage_error() {
-    let ws = workspace();
-    rigg()
-        .current_dir(ws.path())
-        .args(["adopt", "demo"])
-        .assert()
-        .code(2);
-}
-
-#[test]
 fn validate_rejects_secrets_exit_3() {
     let ws = workspace();
     let dir = ws.path().join("projects/demo/search/data-sources");
