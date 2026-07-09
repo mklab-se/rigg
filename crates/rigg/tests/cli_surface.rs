@@ -609,3 +609,17 @@ fn describe_empty_workspace_json_stays_empty_array() {
 fn pull_adopt_flag_is_gone() {
     rigg().args(["pull", "--adopt", "demo"]).assert().code(2);
 }
+
+#[test]
+fn init_next_steps_reference_live_commands() {
+    // Regression guard: init's "Next steps" must never point at removed flags
+    // (it once suggested the deleted `pull --adopt`).
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["init", ".", "--search-service", "unit-test-svc"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg adopt"))
+        .stdout(predicate::str::contains("--adopt").not());
+}

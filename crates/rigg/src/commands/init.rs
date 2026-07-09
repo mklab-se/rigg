@@ -107,7 +107,7 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     println!("Next steps:");
     println!("  rigg new project <name>           # create your first project");
     println!("  rigg new pipeline <name> -p <p>   # scaffold an explicit RAG pipeline");
-    println!("  rigg pull <project> --adopt <p>   # or adopt existing Azure resources");
+    println!("  rigg adopt <project> <selector>   # or adopt existing Azure resources");
     Ok(())
 }
 
