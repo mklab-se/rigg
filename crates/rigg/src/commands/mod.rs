@@ -142,6 +142,14 @@ pub fn load_workspace_from(start: &Path) -> Result<Workspace> {
     )
 }
 
+/// Text-mode hint printed when the workspace has no projects yet.
+pub fn print_no_projects_hint() {
+    println!(
+        "No projects yet. A project groups the resources you manage together —\n\
+         see `rigg concepts`, then `rigg new project <name>`."
+    );
+}
+
 /// Resolve which projects a command operates on from `[PROJECT]` / `--all`.
 pub fn select_projects<'w>(
     ws: &'w Workspace,

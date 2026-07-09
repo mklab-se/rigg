@@ -21,6 +21,11 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
         None => ws.projects.iter().collect(),
     };
 
+    if ws.projects.is_empty() && args.project.is_none() && !ctx.json() {
+        crate::commands::print_no_projects_hint();
+        return Ok(());
+    }
+
     // All owned keys across the workspace, for unmanaged detection.
     let mut owned_by_any: BTreeSet<String> = BTreeSet::new();
     for project in &ws.projects {

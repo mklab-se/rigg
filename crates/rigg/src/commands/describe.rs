@@ -20,6 +20,11 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
         None => ws.projects.iter().collect(),
     };
 
+    if ws.projects.is_empty() && args.project.is_none() && !ctx.json() {
+        crate::commands::print_no_projects_hint();
+        return Ok(());
+    }
+
     let mut out_projects = Vec::new();
     for project in &projects {
         let store = Store::new(project);

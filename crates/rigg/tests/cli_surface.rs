@@ -526,3 +526,50 @@ fn help_points_at_concepts() {
         .success()
         .stdout(predicate::str::contains("concepts"));
 }
+
+/// A workspace with an environment but NO projects.
+fn empty_workspace() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: unit-test-svc }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("projects")).unwrap();
+    tmp
+}
+
+#[test]
+fn status_empty_workspace_hints_next_steps() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No projects yet"))
+        .stdout(predicate::str::contains("rigg concepts"))
+        .stdout(predicate::str::contains("rigg new project"));
+}
+
+#[test]
+fn describe_empty_workspace_hints_next_steps() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .arg("describe")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No projects yet"));
+}
+
+#[test]
+fn describe_empty_workspace_json_stays_empty_array() {
+    let ws = empty_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["describe", "--output", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"^\s*\[\s*\]\s*$").unwrap());
+}
