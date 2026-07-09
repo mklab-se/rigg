@@ -165,7 +165,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // Confirmation for broad selections.
     let broad = selectors.iter().any(Selector::is_broad);
     if !to_adopt.is_empty() && broad && !ctx.yes && !args.dry_run {
-        if ctx.interactive() {
+        if ctx.interactive() && !ctx.json() {
             println!(
                 "Would adopt {} resource(s) into '{}':",
                 to_adopt.len(),

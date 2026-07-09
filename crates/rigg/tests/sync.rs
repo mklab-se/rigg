@@ -481,3 +481,96 @@ async fn adopt_dry_run_writes_nothing() {
             .exists()
     );
 }
+
+#[tokio::test]
+async fn adopt_never_steals_another_projects_resource() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"name": "hotels", "fields": [{"name":"id","type":"Edm.String","key":true}]},
+                {"name": "cars",   "fields": [{"name":"id","type":"Edm.String","key":true}]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+
+    // Second project "other" already owns "hotels".
+    let other_indexes = ws.path().join("projects/other/search/indexes");
+    std::fs::create_dir_all(&other_indexes).unwrap();
+    std::fs::write(ws.path().join("projects/other/project.yaml"), "{}\n").unwrap();
+    std::fs::write(
+        other_indexes.join("hotels.json"),
+        serde_json::to_string_pretty(&json!({
+            "name": "hotels",
+            "fields": [{"name":"id","type":"Edm.String","key":true}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Explicitly naming another project's resource is a hard error (exit 1).
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes/hotels"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("owned by project 'other'"));
+    assert!(
+        !ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists()
+    );
+
+    // A broad selector sweeps in only the unowned resource, silently skipping the owned one.
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes", "--yes"])
+        .assert()
+        .success();
+    assert!(
+        ws.path()
+            .join("projects/demo/search/indexes/cars.json")
+            .exists()
+    );
+    assert!(
+        !ws.path()
+            .join("projects/demo/search/indexes/hotels.json")
+            .exists(),
+        "hotels is owned by 'other' and must not be adopted into 'demo'"
+    );
+}
+
+#[tokio::test]
+async fn adopt_json_output_lists_adopted() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name":"hotels","fields":[{"name":"id","type":"Edm.String","key":true}]}]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+
+    let output = rigg(ws.path())
+        .args(["adopt", "demo", "indexes/hotels", "--output", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: Value = serde_json::from_slice(&output).expect("stdout is valid JSON");
+    let adopted = value["adopted"].as_array().expect("adopted is an array");
+    assert!(
+        adopted.iter().any(|v| v.as_str() == Some("indexes/hotels")),
+        "adopted should contain 'indexes/hotels': {value:?}"
+    );
+    assert!(
+        value.get("skipped").is_some(),
+        "skipped key present: {value:?}"
+    );
+}
