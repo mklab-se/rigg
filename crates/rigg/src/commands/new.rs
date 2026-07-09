@@ -35,7 +35,11 @@ pub async fn run(ctx: &GlobalContext, args: NewArgs) -> Result<()> {
 fn new_project(name: &str) -> Result<()> {
     let ws = load_workspace()?;
     create_project(&ws, name)?;
-    println!("Add resources with: rigg new <kind> <name> -p {name}");
+    println!("Next steps:");
+    println!(
+        "  rigg adopt {name}                    # adopt existing Azure resources (interactive)"
+    );
+    println!("  rigg new <kind> <name> -p {name}     # or scaffold new ones");
     Ok(())
 }
 

@@ -644,3 +644,26 @@ fn init_next_steps_reference_live_commands() {
         .stdout(predicate::str::contains("rigg adopt"))
         .stdout(predicate::str::contains("--adopt").not());
 }
+
+#[test]
+fn new_project_signposts_adopt_path() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["new", "project", "p2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rigg adopt p2"))
+        .stdout(predicate::str::contains("rigg new"));
+}
+
+#[test]
+fn concepts_includes_naming_guidance() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("concepts")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Name a project after"));
+}

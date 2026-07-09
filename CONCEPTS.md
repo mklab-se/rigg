@@ -51,6 +51,11 @@ Because a resource lives in exactly one project, a *shared* resource goes in
 the project that owns it; other projects refer to it by name and environment
 rather than co-owning it.
 
+**Naming:** Name a project after the thing it owns — a project holding the
+`regulus` agent and its retrieval stack is naturally called `regulus`. Names
+follow the same rules as resource names (no `/` or `\`, at most 260
+characters).
+
 ## Workspace layout
 
 ```

@@ -90,6 +90,7 @@ rigg init .
 rigg new project my-rag
 
 # Adopt existing Azure resources into it — à la carte…
+rigg adopt my-rag                     # interactive: pick resources from a live menu
 rigg adopt my-rag all                 # everything unmanaged
 rigg adopt my-rag agents/my-agent     # just one resource
 rigg adopt my-rag indexes --with-deps # a whole kind + its dependencies
