@@ -258,15 +258,26 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         dep_keys = keys;
     } else if wizard {
         let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
-        if !adds.is_empty()
-            && interactive::confirm_default_no(
-                &format!("Also adopt their {} upstream dependency(ies)?", adds.len()),
-                plain,
-            )?
-        {
-            with_deps = true;
-            to_adopt.extend(adds);
-            dep_keys = keys;
+        if !adds.is_empty() {
+            // Show what a "yes" means before asking for it.
+            if adds.len() == 1 {
+                println!("1 unmanaged upstream dependency found:");
+            } else {
+                println!("{} unmanaged upstream dependencies found:", adds.len());
+            }
+            for (r, _) in &adds {
+                println!("  {r}");
+            }
+            let question = if adds.len() == 1 {
+                "Adopt this dependency too?"
+            } else {
+                "Adopt these dependencies too?"
+            };
+            if interactive::confirm_default_no(question, plain)? {
+                with_deps = true;
+                to_adopt.extend(adds);
+                dep_keys = keys;
+            }
         }
     }
 
