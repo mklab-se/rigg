@@ -5,13 +5,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
-use rigg_core::registry;
+use rigg_core::registry::{self, Domain};
 use rigg_core::resources::{ResourceKind, ResourceRef, validate_resource_name};
 use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
 use crate::cli::AdoptArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
-use crate::commands::{CommandError, GlobalContext, confirm, load_workspace, resolve_env};
+use crate::commands::{
+    CommandError, GlobalContext, confirm, interactive, load_workspace, new, resolve_env,
+};
 
 /// What the user asked to adopt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,22 +50,74 @@ impl Selector {
 }
 
 pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
-    if args.selectors.is_empty() {
-        return Err(anyhow!(CommandError::Usage(
-            "name at least one selector: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`)"
-                .to_string()
-        )));
-    }
-    let selectors = args
+    // Parse any given selectors first — cheap, and usage errors must not
+    // require a workspace or network.
+    let mut selectors = args
         .selectors
         .iter()
         .map(|s| Selector::parse(s).map_err(|e| anyhow!(CommandError::Usage(e.to_string()))))
         .collect::<Result<Vec<_>>>()?;
 
+    let wizard =
+        ctx.interactive() && !ctx.json() && (args.project.is_none() || selectors.is_empty());
+    if !wizard {
+        if args.project.is_none() {
+            return Err(anyhow!(CommandError::Usage(
+                "name a project (rigg adopt <project> <selector>...), or run on an interactive terminal for the wizard"
+                    .to_string()
+            )));
+        }
+        if selectors.is_empty() {
+            return Err(anyhow!(CommandError::Usage(
+                "name at least one selector: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`)"
+                    .to_string()
+            )));
+        }
+    }
+
     let ws = load_workspace()?;
     assert_exclusive_ownership(&ws)?;
     let env = resolve_env(&ws, ctx)?;
-    let project = ws.project(&args.project)?;
+    let plain = ctx.no_color;
+
+    // ---- Wizard step 1: project ----
+    let project_name = match &args.project {
+        Some(p) => p.clone(),
+        None => match ws.projects.len() {
+            0 => {
+                println!("No projects yet — a project groups the resources you manage together.");
+                if !interactive::confirm_default_yes("Create one now?", plain)? {
+                    return Err(anyhow!("aborted"));
+                }
+                let name =
+                    interactive::text("Project name (e.g. the agent or app it will own):", plain)?;
+                new::create_project(&ws, &name)?;
+                // Reload so ws.project() sees it.
+                drop(ws);
+                return Box::pin(run(
+                    ctx,
+                    AdoptArgs {
+                        project: Some(name),
+                        selectors: args.selectors.clone(),
+                        dry_run: args.dry_run,
+                        with_deps: args.with_deps,
+                    },
+                ))
+                .await;
+            }
+            1 => {
+                let name = ws.projects[0].name.clone();
+                println!("Using project '{name}' (the only project in this workspace).");
+                name
+            }
+            _ => interactive::select(
+                "Adopt into which project?",
+                ws.projects.iter().map(|p| p.name.clone()).collect(),
+                plain,
+            )?,
+        },
+    };
+    let project = ws.project(&project_name)?;
 
     // Every resource key already owned by ANY project → its owner's name.
     let mut owned_by_any: BTreeMap<String, String> = BTreeMap::new();
@@ -87,6 +141,38 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         .map(|(r, v)| (r.key(), (r.clone(), v.clone())))
         .collect();
     let supported = remote.supported_kinds();
+
+    // ---- Wizard step 2: resources ----
+    let mut wizard_chosen: Vec<String> = Vec::new(); // keys, for the hint
+    if selectors.is_empty() {
+        let candidates = wizard_candidates(&snapshot, &owned_by_any);
+        if candidates.is_empty() {
+            println!("Nothing to adopt — everything visible is already managed.");
+            return Ok(());
+        }
+        // Service legend
+        if remote.has_foundry() {
+            println!("Foundry: unmanaged resources from the configured account/project");
+        }
+        if remote.has_search() {
+            println!("Search:  unmanaged resources from the configured service");
+        }
+        let labels: Vec<String> = candidates.iter().map(|(_, l)| l.clone()).collect();
+        let picked = interactive::multi_select(
+            "Select resources to adopt (space toggles, type to filter):",
+            labels,
+            plain,
+        )?;
+        if picked.is_empty() {
+            println!("Nothing selected.");
+            return Ok(());
+        }
+        for i in picked {
+            let (r, _) = &candidates[i];
+            wizard_chosen.push(r.key());
+            selectors.push(Selector::One(r.clone()));
+        }
+    }
 
     // Resolve selectors → ordered, unique candidate keys; track explicitly-named ones.
     let mut selected: Vec<String> = Vec::new();
@@ -165,29 +251,46 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 
     // Optionally pull each candidate's upstream dependency graph.
     let mut dep_keys: BTreeSet<String> = BTreeSet::new();
-    if args.with_deps {
-        let mut in_set: BTreeSet<String> = to_adopt.iter().map(|(r, _)| r.key()).collect();
-        let mut queue: Vec<(ResourceRef, Value)> = to_adopt.clone();
-        while let Some((r, doc)) = queue.pop() {
-            for (dk, dn) in registry::extract_references(r.kind, &doc) {
-                let dref = ResourceRef::new(dk, dn);
-                let key = dref.key();
-                if in_set.contains(&key) || owned_by_any.contains_key(&key) {
-                    continue; // already selected, or owned by someone → not an unmanaged dep
-                }
-                if let Some((rr, dv)) = snap_map.get(&key) {
-                    in_set.insert(key.clone());
-                    dep_keys.insert(key.clone());
-                    to_adopt.push((rr.clone(), dv.clone()));
-                    queue.push((rr.clone(), dv.clone()));
-                }
-            }
+    let mut with_deps = args.with_deps;
+    if with_deps {
+        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        to_adopt.extend(adds);
+        dep_keys = keys;
+    } else if wizard {
+        let (adds, keys) = expand_deps(&to_adopt, &owned_by_any, &snap_map);
+        if !adds.is_empty()
+            && interactive::confirm_default_no(
+                &format!("Also adopt their {} upstream dependency(ies)?", adds.len()),
+                plain,
+            )?
+        {
+            with_deps = true;
+            to_adopt.extend(adds);
+            dep_keys = keys;
         }
     }
 
-    // Confirmation for broad selections.
+    // Confirmation.
     let broad = selectors.iter().any(Selector::is_broad);
-    if !to_adopt.is_empty() && broad && !ctx.yes && !args.dry_run {
+    if wizard && !to_adopt.is_empty() && !args.dry_run {
+        println!(
+            "Will adopt {} resource(s) into '{}':",
+            to_adopt.len(),
+            project.name
+        );
+        for (r, _) in &to_adopt {
+            let tag = if dep_keys.contains(&r.key()) {
+                " (dependency)"
+            } else {
+                ""
+            };
+            println!("  {r}{tag}");
+        }
+        if !interactive::confirm_default_yes("Proceed?", plain)? {
+            println!("Aborted.");
+            return Ok(());
+        }
+    } else if !to_adopt.is_empty() && broad && !ctx.yes && !args.dry_run {
         if ctx.interactive() && !ctx.json() {
             println!(
                 "Would adopt {} resource(s) into '{}':",
@@ -222,7 +325,100 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
     state.save(&ws, &env.name, &project.name)?;
     report(ctx, &to_adopt, &skipped, &dep_keys, false)?;
+
+    // ---- teach the scriptable form ----
+    if wizard && !wizard_chosen.is_empty() && !args.dry_run {
+        println!();
+        println!(
+            "hint: next time: {}",
+            equivalent_command(&project.name, &wizard_chosen, with_deps)
+        );
+    }
     Ok(())
+}
+
+/// Unmanaged candidates for the wizard's multi-select, sorted Foundry-first
+/// then Search, by (kind directory, name) within domain. Label is
+/// `"[Foundry] agents/x"` / `"[Search] indexes/y"`.
+fn wizard_candidates(
+    snapshot: &[(ResourceRef, Value)],
+    owned_by_any: &BTreeMap<String, String>,
+) -> Vec<(ResourceRef, String)> {
+    fn domain_rank(kind: ResourceKind) -> u8 {
+        match registry::meta(kind).domain {
+            Domain::FoundryData | Domain::FoundryArm => 0,
+            Domain::Search => 1,
+        }
+    }
+    fn prefix(kind: ResourceKind) -> &'static str {
+        match registry::meta(kind).domain {
+            Domain::FoundryData | Domain::FoundryArm => "[Foundry]",
+            Domain::Search => "[Search]",
+        }
+    }
+
+    let mut items: Vec<(ResourceRef, String)> = snapshot
+        .iter()
+        .filter(|(r, _)| !owned_by_any.contains_key(&r.key()))
+        .map(|(r, _)| {
+            let label = format!("{} {}/{}", prefix(r.kind), r.kind.directory_name(), r.name);
+            (r.clone(), label)
+        })
+        .collect();
+    items.sort_by(|(a, _), (b, _)| {
+        (
+            domain_rank(a.kind),
+            a.kind.directory_name(),
+            a.name.as_str(),
+        )
+            .cmp(&(
+                domain_rank(b.kind),
+                b.kind.directory_name(),
+                b.name.as_str(),
+            ))
+    });
+    items
+}
+
+/// Expand `to_adopt`'s upstream dependency graph. Returns the additions (not
+/// yet appended to `to_adopt`) and their keys. Same traversal as the
+/// `--with-deps` flag path; callers append the result themselves so both the
+/// flag path and the wizard's ask-first path share one algorithm.
+fn expand_deps(
+    to_adopt: &[(ResourceRef, Value)],
+    owned_by_any: &BTreeMap<String, String>,
+    snap_map: &BTreeMap<String, (ResourceRef, Value)>,
+) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>) {
+    let mut in_set: BTreeSet<String> = to_adopt.iter().map(|(r, _)| r.key()).collect();
+    let mut queue: Vec<(ResourceRef, Value)> = to_adopt.to_vec();
+    let mut additions: Vec<(ResourceRef, Value)> = Vec::new();
+    let mut dep_keys: BTreeSet<String> = BTreeSet::new();
+    while let Some((r, doc)) = queue.pop() {
+        for (dk, dn) in registry::extract_references(r.kind, &doc) {
+            let dref = ResourceRef::new(dk, dn);
+            let key = dref.key();
+            if in_set.contains(&key) || owned_by_any.contains_key(&key) {
+                continue; // already selected, or owned by someone → not an unmanaged dep
+            }
+            if let Some((rr, dv)) = snap_map.get(&key) {
+                in_set.insert(key.clone());
+                dep_keys.insert(key.clone());
+                additions.push((rr.clone(), dv.clone()));
+                queue.push((rr.clone(), dv.clone()));
+            }
+        }
+    }
+    (additions, dep_keys)
+}
+
+/// Reconstruct the non-interactive command line equivalent to a wizard run,
+/// e.g. `rigg adopt regulus agents/regulus --with-deps`.
+fn equivalent_command(project: &str, chosen: &[String], with_deps: bool) -> String {
+    let mut cmd = format!("rigg adopt {project} {}", chosen.join(" "));
+    if with_deps {
+        cmd.push_str(" --with-deps");
+    }
+    cmd
 }
 
 fn report(
@@ -278,6 +474,8 @@ fn unknown_kind_msg(dir: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn parses_all() {
@@ -312,5 +510,46 @@ mod tests {
         assert!(Selector::parse("all").unwrap().is_broad());
         assert!(Selector::parse("indexes").unwrap().is_broad());
         assert!(!Selector::parse("indexes/hotels").unwrap().is_broad());
+    }
+
+    fn snap() -> Vec<(ResourceRef, serde_json::Value)> {
+        vec![
+            (
+                ResourceRef::new(ResourceKind::Index, "docs".to_string()),
+                json!({"name": "docs"}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Agent, "regulus".to_string()),
+                json!({"name": "regulus"}),
+            ),
+            (
+                ResourceRef::new(ResourceKind::Agent, "helper".to_string()),
+                json!({"name": "helper"}),
+            ),
+        ]
+    }
+
+    #[test]
+    fn wizard_candidates_filters_owned_and_groups_foundry_first() {
+        let mut owned = BTreeMap::new();
+        owned.insert("agents/helper".to_string(), "other".to_string());
+        let items = wizard_candidates(&snap(), &owned);
+        let labels: Vec<&str> = items.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["[Foundry] agents/regulus", "[Search] indexes/docs"]
+        );
+    }
+
+    #[test]
+    fn equivalent_command_reconstructs_invocation() {
+        assert_eq!(
+            equivalent_command("regulus", &["agents/regulus".into()], true),
+            "rigg adopt regulus agents/regulus --with-deps"
+        );
+        assert_eq!(
+            equivalent_command("p", &["indexes/a".into(), "indexes/b".into()], false),
+            "rigg adopt p indexes/a indexes/b"
+        );
     }
 }

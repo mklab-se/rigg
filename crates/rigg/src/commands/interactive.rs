@@ -1,8 +1,5 @@
 //! Thin wrappers around `inquire` prompts: consistent styling, `--no-color`
 //! support, and clean abort (Esc/Ctrl-C → error, nothing written).
-//!
-//! TODO(adopt wizard task 2): remove this allow once `adopt` wires these in.
-#![allow(dead_code)]
 
 use anyhow::{Result, anyhow};
 use inquire::ui::RenderConfig;

@@ -234,8 +234,8 @@ pub struct PullArgs {
 
 #[derive(Args)]
 pub struct AdoptArgs {
-    /// Project to adopt the resources into
-    pub project: String,
+    /// Project to adopt the resources into (omit on a TTY for an interactive wizard)
+    pub project: Option<String>,
 
     /// What to adopt: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`). Repeatable.
     #[arg(value_name = "SELECTOR")]

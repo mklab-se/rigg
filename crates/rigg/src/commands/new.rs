@@ -34,6 +34,14 @@ pub async fn run(ctx: &GlobalContext, args: NewArgs) -> Result<()> {
 
 fn new_project(name: &str) -> Result<()> {
     let ws = load_workspace()?;
+    create_project(&ws, name)?;
+    println!("Add resources with: rigg new <kind> <name> -p {name}");
+    Ok(())
+}
+
+/// Create the project directory + manifest. Shared with the adopt wizard.
+pub fn create_project(ws: &Workspace, name: &str) -> Result<()> {
+    rigg_core::resources::validate_resource_name(name)?;
     let dir = ws.root.join(PROJECTS_DIR).join(name);
     if dir.exists() {
         bail!("project '{name}' already exists");
@@ -46,7 +54,6 @@ fn new_project(name: &str) -> Result<()> {
         ),
     )?;
     println!("Created project '{}' at {}", name.bold(), dir.display());
-    println!("Add resources with: rigg new <kind> <name> -p {name}");
     Ok(())
 }
 
