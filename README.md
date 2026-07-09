@@ -166,9 +166,9 @@ my-rag
 
 ## Features
 
-### Projects Are the Unit of Sync
+### Whole-Project Sync
 
-Pull, push, and diff always operate on whole projects — local and remote can never end up half-synced:
+Pull, push, and diff always operate on whole projects (see [Concepts](#concepts)), so local and remote can never end up half-synced:
 
 ```bash
 rigg pull my-rag                # pull the project's resources from Azure
