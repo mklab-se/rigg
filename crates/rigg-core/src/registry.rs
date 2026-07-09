@@ -11,7 +11,7 @@
 
 use serde_json::Value;
 
-use crate::resources::traits::ResourceKind;
+use crate::resources::traits::{ResourceKind, ResourceRef};
 
 /// Default data-plane api-versions. Overridable per connection in `rigg.yaml`.
 pub const SEARCH_STABLE_API_VERSION: &str = "2026-04-01";
@@ -472,6 +472,57 @@ pub fn is_platform_managed(kind: ResourceKind, body: &Value) -> bool {
     }
 }
 
+/// Managed-ingestion knowledge sources auto-create their backing pipeline
+/// (index, indexer, data source, skillset); Azure names them in the KS's
+/// `createdResources`. Rigg never manages these sub-resources — the knowledge
+/// source definition is their source of truth — so they are excluded from
+/// adoption and unmanaged reporting. Returns resource key → creating KS name.
+pub fn auto_created_by(
+    snapshot: &[(ResourceRef, Value)],
+) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for (r, doc) in snapshot {
+        if r.kind != ResourceKind::KnowledgeSource {
+            continue;
+        }
+        collect_created_resources(doc, &r.name, &mut out);
+    }
+    out
+}
+
+fn collect_created_resources(
+    v: &Value,
+    ks_name: &str,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
+    if let Value::Object(map) = v {
+        if let Some(Value::Object(created)) = map.get("createdResources") {
+            for (member, name) in created {
+                let kind = match member.as_str() {
+                    "datasource" => Some(ResourceKind::DataSource),
+                    "indexer" => Some(ResourceKind::Indexer),
+                    "skillset" => Some(ResourceKind::Skillset),
+                    "index" => Some(ResourceKind::Index),
+                    _ => None, // future member names: ignore
+                };
+                if let (Some(kind), Some(name)) = (kind, name.as_str()) {
+                    out.insert(
+                        ResourceRef::new(kind, name.to_string()).key(),
+                        ks_name.to_string(),
+                    );
+                }
+            }
+        }
+        for val in map.values() {
+            collect_created_resources(val, ks_name, out);
+        }
+    } else if let Value::Array(arr) = v {
+        for item in arr {
+            collect_created_resources(item, ks_name, out);
+        }
+    }
+}
+
 fn collect_x_rigg_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
     match v {
         Value::Object(map) => {
@@ -671,6 +722,69 @@ mod tests {
     fn is_platform_managed_only_applies_to_guardrail_kind() {
         let doc = json!({"name": "Microsoft.whatever"});
         assert!(!is_platform_managed(ResourceKind::Index, &doc));
+    }
+
+    #[test]
+    fn auto_created_by_finds_nested_created_resources() {
+        // Live shape: createdResources nests under azureBlobParameters.
+        let ks = serde_json::json!({
+            "name": "regulatory",
+            "kind": "azureBlob",
+            "azureBlobParameters": {
+                "containerName": "regulatory",
+                "createdResources": {
+                    "datasource": "regulatory-datasource",
+                    "indexer": "regulatory-indexer",
+                    "skillset": "regulatory-skillset",
+                    "index": "regulatory-index",
+                    "somethingFuture": "ignored-name"
+                }
+            }
+        });
+        let index_doc = serde_json::json!({"name": "regulatory-index"});
+        let snapshot = vec![
+            (
+                ResourceRef::new(ResourceKind::KnowledgeSource, "regulatory".to_string()),
+                ks,
+            ),
+            (
+                ResourceRef::new(ResourceKind::Index, "regulatory-index".to_string()),
+                index_doc,
+            ),
+        ];
+        let map = auto_created_by(&snapshot);
+        assert_eq!(
+            map.get("indexes/regulatory-index").map(String::as_str),
+            Some("regulatory")
+        );
+        assert_eq!(
+            map.get("indexers/regulatory-indexer").map(String::as_str),
+            Some("regulatory")
+        );
+        assert_eq!(
+            map.get("data-sources/regulatory-datasource")
+                .map(String::as_str),
+            Some("regulatory")
+        );
+        assert_eq!(
+            map.get("skillsets/regulatory-skillset").map(String::as_str),
+            Some("regulatory")
+        );
+        assert!(
+            !map.values().any(|v| v == "ignored-name"),
+            "unknown member names ignored: {map:?}"
+        );
+        assert_eq!(map.len(), 4);
+    }
+
+    #[test]
+    fn auto_created_by_ignores_non_knowledge_source_docs() {
+        let idx = serde_json::json!({
+            "name": "i",
+            "createdResources": {"index": "x"}
+        });
+        let snapshot = vec![(ResourceRef::new(ResourceKind::Index, "i".to_string()), idx)];
+        assert!(auto_created_by(&snapshot).is_empty());
     }
 
     #[test]
