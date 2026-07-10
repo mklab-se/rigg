@@ -176,8 +176,35 @@ impl<'w> Store<'w> {
         Ok(None)
     }
 
+    /// Path for a resource being CREATED: `<physical name>.json`, or — when
+    /// that stem is already occupied by a DIFFERENT resource (a renamed one
+    /// whose stem no longer matches its `name` field) — the first free
+    /// numbered stem (`<name>-2.json`, `<name>-3.json`, …). The create path
+    /// never points at an existing file, so creating can never overwrite a
+    /// renamed resource.
+    fn create_path_for(&self, r: &ResourceRef) -> PathBuf {
+        let dir = self.kind_dir(r.kind);
+        let base = dir.join(format!("{}.json", r.name));
+        if !base.exists() {
+            return base;
+        }
+        for i in 2u64.. {
+            let candidate = dir.join(format!("{}-{i}.json", r.name));
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        unreachable!("some numbered stem is always free")
+    }
+
     /// Scan this store's environment tree for resource files, keyed by
     /// PHYSICAL name (the file's `name` field, falling back to its stem).
+    ///
+    /// A file with invalid JSON is a HARD error (deliberately): sync
+    /// operations (push/pull/prune/ownership checks) build their world view
+    /// from this listing, and silently skipping a broken file would let them
+    /// act on a partial view — e.g. pruning a resource that still exists
+    /// locally. Fail loud and name the file instead.
     pub fn list(&self) -> Result<Vec<(ResourceRef, PathBuf)>> {
         let mut out = Vec::new();
         for kind in ResourceKind::all() {
@@ -221,12 +248,21 @@ impl<'w> Store<'w> {
     }
 
     /// Read a resource file with sidecars inlined. Locates the file by
-    /// physical name first; if nothing matches, falls back to the
-    /// stem-guessed path so the error shape (a plain `Io` not-found) is
-    /// unchanged for callers.
+    /// physical name; when nothing matches, the error keeps the plain `Io`
+    /// not-found shape callers expect (pointing at the stem-guessed path).
+    /// It never falls through to reading a file whose physical name differs
+    /// from `r.name` (a renamed resource occupying the stem).
     pub fn read(&self, r: &ResourceRef) -> Result<Value> {
-        let path = self.locate(r)?.unwrap_or_else(|| self.path_for(r));
-        self.read_path(&path)
+        match self.locate(r)? {
+            Some(path) => self.read_path(&path),
+            None => Err(StoreError::Io {
+                path: self.path_for(r),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("no resource with physical name '{}'", r.name),
+                ),
+            }),
+        }
     }
 
     /// Read any resource file (must belong to this project) with sidecars inlined.
@@ -245,10 +281,18 @@ impl<'w> Store<'w> {
 
     /// Write a resource: normalize for disk, extract sidecars, write only if
     /// the semantic content changed. Returns true if the file was (re)written.
-    /// Updates the located file when one exists (by physical name); creates
-    /// `<physical name>.json` otherwise.
+    ///
+    /// Updates the located file when one exists (by physical name). When
+    /// none exists (create), the target stem is DISAMBIGUATED, never stolen:
+    /// if `<name>.json` is already occupied by a renamed resource, the new
+    /// file lands at `<name>-2.json` (then `-3`, …). This keeps sync
+    /// operations (pull/adopt capture cloud reality mid-run) robust instead
+    /// of failing, while `locate` keeps lookups correct regardless of stem.
     pub fn write(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
-        let path = self.locate(r)?.unwrap_or_else(|| self.path_for(r));
+        let path = match self.locate(r)? {
+            Some(existing) => existing,
+            None => self.create_path_for(r),
+        };
         let mut normalized = normalize_for_disk(r.kind, value);
 
         // Preserve any x-rigg-* annotations the user added locally: they are
@@ -277,9 +321,14 @@ impl<'w> Store<'w> {
         Ok(true)
     }
 
-    /// Delete a resource file (and its default sidecars).
+    /// Delete a resource file (and its default sidecars). Only ever removes
+    /// the file `locate` resolves for this physical name — deleting a name
+    /// that matches nothing is a no-op (never falls through to a stem-guessed
+    /// path that could belong to a renamed resource).
     pub fn delete(&self, r: &ResourceRef) -> Result<()> {
-        let path = self.locate(r)?.unwrap_or_else(|| self.path_for(r));
+        let Some(path) = self.locate(r)? else {
+            return Ok(());
+        };
         // Sidecars are named after the file's stem (its logical id), which
         // may differ from the physical name — derive it from `path`, not `r`.
         let stem = path
@@ -844,6 +893,137 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
                 .unwrap();
         assert_eq!(on_disk["model"], json!("m2"));
+    }
+
+    #[test]
+    fn write_never_overwrites_a_renamed_resources_stem() {
+        // `regulus.json` holds physical name "Regulus-Prod" (a renamed
+        // resource). Creating a NEW resource whose physical name is
+        // "regulus" must NOT clobber it: the create path disambiguates to a
+        // free stem instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({"name": "Regulus-Prod", "model": "m"}).to_string(),
+        )
+        .unwrap();
+
+        let r = ResourceRef::new(ResourceKind::Agent, "regulus");
+        assert!(
+            store
+                .write(&r, &json!({"name": "regulus", "model": "new"}))
+                .unwrap()
+        );
+
+        // the renamed resource's file is untouched
+        let original: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            original["name"],
+            json!("Regulus-Prod"),
+            "original file untouched"
+        );
+
+        // the new resource landed at a different, disambiguated stem
+        let new_path = store.locate(&r).unwrap().expect("new resource locatable");
+        assert_ne!(new_path, dir.join("regulus.json"));
+        assert_eq!(new_path, dir.join("regulus-2.json"));
+
+        // both resolve correctly by physical name
+        assert_eq!(
+            store
+                .locate(&ResourceRef::new(ResourceKind::Agent, "Regulus-Prod"))
+                .unwrap(),
+            Some(dir.join("regulus.json"))
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn delete_by_physical_name_removes_located_file_and_stem_sidecars() {
+        // File stem "regulus" ≠ physical name "Regulus-Prod", with an
+        // instructions sidecar named after the STEM. Deleting by physical
+        // name must remove the located file AND its stem-named sidecar,
+        // leaving a neighboring resource untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({
+                "name": "Regulus-Prod", "model": "m",
+                "instructions": {"$file": "regulus.instructions.md"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("regulus.instructions.md"), "Be helpful.").unwrap();
+        // neighbor with its own sidecar
+        std::fs::write(
+            dir.join("other.json"),
+            json!({
+                "name": "other", "model": "m",
+                "instructions": {"$file": "other.instructions.md"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("other.instructions.md"), "Neighbor.").unwrap();
+
+        store
+            .delete(&ResourceRef::new(ResourceKind::Agent, "Regulus-Prod"))
+            .unwrap();
+        assert!(!dir.join("regulus.json").exists(), "located file removed");
+        assert!(
+            !dir.join("regulus.instructions.md").exists(),
+            "stem-named sidecar removed"
+        );
+        assert!(dir.join("other.json").exists(), "neighbor untouched");
+        assert!(
+            dir.join("other.instructions.md").exists(),
+            "neighbor sidecar untouched"
+        );
+
+        // deleting a physical name that matches nothing is a no-op
+        store
+            .delete(&ResourceRef::new(ResourceKind::Agent, "ghost"))
+            .unwrap();
+        assert!(dir.join("other.json").exists());
+    }
+
+    #[test]
+    fn list_error_on_corrupt_json_names_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Index, "a"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("broken.json"), "{ this is not json").unwrap();
+        let err = store.list().unwrap_err();
+        assert!(matches!(err, StoreError::Parse { .. }));
+        assert!(
+            err.to_string().contains("broken.json"),
+            "error names the broken file: {err}"
+        );
     }
 
     #[test]

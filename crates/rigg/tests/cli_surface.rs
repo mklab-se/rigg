@@ -206,6 +206,37 @@ fn new_project_and_resource_land_in_right_paths() {
 }
 
 #[test]
+fn new_resource_existence_is_by_physical_name_and_never_clobbers_a_stem() {
+    let ws = workspace();
+    // `foo.json` holds a RENAMED resource: physical name "bar", stem "foo".
+    let dir = ws.path().join("projects/demo/envs/dev/search/indexes");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("foo.json"), r#"{"name": "bar", "fields": []}"#).unwrap();
+
+    // physical name "bar" exists (under stem foo) → "already exists"
+    rigg()
+        .current_dir(ws.path())
+        .args(["new", "index", "bar", "-p", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+
+    // physical name "foo" is free (the stem is taken, the NAME is not) →
+    // succeeds without clobbering foo.json
+    rigg()
+        .current_dir(ws.path())
+        .args(["new", "index", "foo", "-p", "demo"])
+        .assert()
+        .success();
+    let original: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("foo.json")).unwrap()).unwrap();
+    assert_eq!(original["name"], "bar", "renamed resource untouched");
+    let disambiguated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("foo-2.json")).unwrap()).unwrap();
+    assert_eq!(disambiguated["name"], "foo", "new resource at a free stem");
+}
+
+#[test]
 fn new_datasource_type_validation() {
     let ws = workspace();
     rigg()

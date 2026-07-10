@@ -107,11 +107,14 @@ fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
         .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     for (kind, name, value) in &parts {
         let r = ResourceRef::new(*kind, name.clone());
-        if store.path_for(&r).exists() {
+        // Existence is by PHYSICAL name (locate), not file stem — a renamed
+        // resource may occupy the stem while the name itself is free.
+        if store.locate(&r)?.is_some() {
             bail!("{r} already exists in project '{}'", project.name);
         }
         store.write(&r, value)?;
-        println!("  created {}", store.path_for(&r).display());
+        let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
+        println!("  created {}", path.display());
     }
     println!();
     println!(
@@ -132,7 +135,9 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     let project = resolve_project(&ws, args)?;
     let store = Store::new(project, &env.name);
     let r = ResourceRef::new(kind, args.name.clone());
-    if store.path_for(&r).exists() {
+    // Existence is by PHYSICAL name (locate), not file stem — a renamed
+    // resource may occupy the stem while the name itself is free.
+    if store.locate(&r)?.is_some() {
         bail!("{r} already exists in project '{}'", project.name);
     }
     if kind == ResourceKind::DataSource {
@@ -163,7 +168,8 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     }
 
     store.write(&r, &value)?;
-    println!("Created {}", store.path_for(&r).display());
+    let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
+    println!("Created {}", path.display());
     Ok(())
 }
 
