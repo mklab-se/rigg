@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-07-10
+
+### Added
+
+- **`rigg adopt`** — a first-class verb for bringing existing Azure resources
+  under management, replacing the all-or-nothing `pull --adopt`. Selectors
+  pick exactly what to adopt (`all`, a kind like `indexes`, or
+  `<kind>/<name>`); `--with-deps` optionally follows a resource's upstream
+  dependency graph — across the Foundry→Search boundary for portal-built
+  agents (KB MCP `server_url`, `project_connection_id`); `--dry-run`
+  previews. Naming an already-managed resource with `--with-deps` adopts its
+  missing dependencies (e.g. after portal changes).
+- **Interactive adopt wizard** — run `rigg adopt` with missing arguments on a
+  terminal: pick the project (created on the spot if none exists), multi-select
+  unmanaged resources queried live from both services, choose individual
+  dependencies (pre-checked), confirm, and get the equivalent scriptable
+  command as a hint.
+- **`rigg concepts`** — the workspace/project mental model rendered in the
+  terminal, single-sourced from the new `CONCEPTS.md`. Cross-referenced from
+  `--help`; empty workspaces now print next-step guidance instead of nothing.
+- **Informed pull conflicts** — a conflicting resource shows a field summary
+  and offers `[o]verwrite / [k]eep / [d]iff / [a]bort`, rendering the full
+  labeled diff table in place.
+- Dual-direction hints after drifted diffs (`rigg pull …` / `rigg push …`),
+  and adopt-path signposting from `rigg new project`.
+
+### Changed
+
+- **BREAKING:** `rigg pull --adopt` is removed — use `rigg adopt`.
+  The MCP `rigg_pull` tool's `adopt: true` now routes to `rigg adopt <project>
+  all --yes`.
+- **Diff output is direction-neutral**: a labeled two-column table
+  (`local` vs `Azure (<env>)`) with no temporal wording, deterministic row
+  order, hard truncation for long values, and long field paths on their own
+  line. Markdown format is a table (PR-friendly). The AI diff summary
+  attributes each side and covers both pull and push consequences instead of
+  assuming a push.
+- **Sync baselines are self-healing**: they now store the compare-normalized
+  document, so checksum rules can evolve between rigg versions without
+  causing false conflicts. Old checksum-only baselines are read as before and
+  upgrade on the next sync.
+- Platform-managed resources (Microsoft's built-in `SystemManaged`
+  guardrails) and sub-resources auto-created by managed-ingestion knowledge
+  sources are excluded from adoption and unmanaged reporting — rigg only
+  tracks configuration you can actually change. Explicitly naming one
+  explains why it is skipped.
+- The wizard's dependency step lists already-managed dependencies for full
+  visibility; deployment runtime state (`currentCapacity`,
+  `deploymentState`) and the portal's `metadata.modified_at` are now
+  volatile and no longer produce phantom drift.
+
+### Fixed
+
+- Authentication errors render their cause once (previously duplicated) and
+  Azure CLI hiccups produce actionable guidance instead of raw parse errors;
+  deep HTTP diagnostics (TLS, connect) are preserved in error chains.
+- A latent panic when truncating long multi-byte strings (e.g. Swedish text)
+  in diff previews.
+- `rigg init`'s next-steps hint referenced the removed `pull --adopt`.
+- Value previews pluralize correctly ("1 key").
+
 ## [1.0.2] - 2026-07-07
 
 ### Changed
