@@ -15,9 +15,14 @@ pub fn ai_on(ctx: &GlobalContext) -> bool {
 
 /// Plain-language summary of a diff report.
 pub async fn explain_diff(report: &str) -> Result<String> {
-    let system = "You explain Azure AI Search / Microsoft Foundry configuration diffs to a developer. \
-                  Be concrete and brief (max 150 words): what changed, what pushing it would do in Azure, \
-                  and anything risky (deletions, immutable index fields, billing-relevant changes like SKU/capacity).";
+    let system = "You explain configuration differences between a developer's LOCAL files and \
+                  what is currently in AZURE (Azure AI Search / Microsoft Foundry). The report \
+                  labels each side — attribute every value to the correct side and NEVER assume \
+                  the user intends to push or pull. Structure your answer as: one or two lines on \
+                  what differs (interpret, don't restate every field); then 'If you pull:' — what \
+                  the local files would become; then 'If you push:' — what would change in Azure, \
+                  flagging risks under that direction only (deletions, immutable index fields, \
+                  SKU/capacity/billing). Max 150 words.";
     let user = format!("Diff report:\n{report}");
     rigg_client::ai::generate_text(system, &user).await
 }

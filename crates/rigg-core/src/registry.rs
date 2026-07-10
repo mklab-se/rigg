@@ -235,6 +235,7 @@ static KINDS: &[KindMeta] = &[
             "created_at",
             "updated_at",
             "version",
+            "metadata.modified_at",
         ],
         read_only_fields: &[],
         secret_fields: &[],
@@ -692,6 +693,15 @@ mod tests {
         let vf = meta(ResourceKind::Deployment).volatile_fields;
         assert!(vf.contains(&"properties.currentCapacity"));
         assert!(vf.contains(&"properties.deploymentState"));
+    }
+
+    #[test]
+    fn agent_portal_timestamp_is_volatile() {
+        assert!(
+            meta(ResourceKind::Agent)
+                .volatile_fields
+                .contains(&"metadata.modified_at")
+        );
     }
 
     #[test]
