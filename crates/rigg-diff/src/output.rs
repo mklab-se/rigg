@@ -39,7 +39,7 @@ pub fn format_text(result: &DiffResult, resource_name: &str, labels: &SideLabels
         result.changes.len()
     ));
     output.push_str(&format!(
-        "{:<fw$} {:<vw$} {}\n",
+        "  {:<fw$} {:<vw$} {}\n",
         "field",
         labels.new_side,
         labels.old_side,
@@ -60,33 +60,58 @@ fn format_change_row(change: &Change) -> String {
         return format!("  {}\n", desc);
     }
 
-    let (marker, new_str, old_str) = match change.kind {
+    let (new_str, old_str) = match change.kind {
         ChangeKind::Added => (
-            '+',
-            format_value_preview(change.new_value.as_ref()),
+            table_value(change.new_value.as_ref()),
             "(absent)".to_string(),
         ),
         ChangeKind::Removed => (
-            '-',
             "(absent)".to_string(),
-            format_value_preview(change.old_value.as_ref()),
+            table_value(change.old_value.as_ref()),
         ),
         ChangeKind::Modified => (
-            '~',
-            format_value_preview(change.new_value.as_ref()),
-            format_value_preview(change.old_value.as_ref()),
+            table_value(change.new_value.as_ref()),
+            table_value(change.old_value.as_ref()),
         ),
     };
-    let field = format!("{} {}", marker, change.path);
 
-    format!(
-        "{:<fw$} {:<vw$} {}\n",
-        field,
-        new_str,
-        old_str,
-        fw = FIELD_COL_WIDTH,
-        vw = VALUE_COL_WIDTH
-    )
+    if change.path.len() > FIELD_COL_WIDTH {
+        // The path alone is wider than the field column: give it its own
+        // line so it never shoves the value columns out of alignment, then
+        // print the values on the next line, indented to the same column
+        // where a normal row's value would start (2-space row indent + the
+        // field column width + the separator space between field and value).
+        let indent = " ".repeat(FIELD_COL_WIDTH + 3);
+        format!(
+            "  {}\n{indent}{:<vw$} {}\n",
+            change.path,
+            new_str,
+            old_str,
+            vw = VALUE_COL_WIDTH
+        )
+    } else {
+        format!(
+            "  {:<fw$} {:<vw$} {}\n",
+            change.path,
+            new_str,
+            old_str,
+            fw = FIELD_COL_WIDTH,
+            vw = VALUE_COL_WIDTH
+        )
+    }
+}
+
+/// Table cells stay scannable: long previews are cut hard. The full value is
+/// always available in the file itself or via `--output json`.
+const TABLE_VALUE_MAX: usize = 80;
+
+fn table_value(value: Option<&Value>) -> String {
+    let preview = format_value_preview(value);
+    if preview.chars().count() <= TABLE_VALUE_MAX {
+        return preview;
+    }
+    let cut: String = preview.chars().take(TABLE_VALUE_MAX - 3).collect();
+    format!("{cut}...")
 }
 
 /// Create a human-readable preview of a JSON value.
@@ -100,8 +125,9 @@ pub fn format_value_preview(value: Option<&Value>) -> String {
         Some(Value::Bool(b)) => b.to_string(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::String(s)) => {
-            if s.len() > 500 {
-                format!("\"{}...\" ({} chars)", &s[..497], s.len())
+            if s.chars().count() > 500 {
+                let cut: String = s.chars().take(497).collect();
+                format!("\"{cut}...\" ({} chars)", s.chars().count())
             } else {
                 format!("\"{}\"", s)
             }
@@ -236,7 +262,6 @@ mod tests {
 
         assert!(output.contains("1 field"));
         assert!(output.contains("value"));
-        assert!(output.contains("~")); // modified indicator
         assert!(!output.contains(" was "));
         assert!(!output.contains(" now "));
     }
@@ -400,6 +425,144 @@ mod tests {
             "pluralization: {out}"
         );
     }
+
+    #[test]
+    fn table_has_no_change_kind_markers() {
+        let result = DiffResult {
+            is_equal: false,
+            changes: vec![
+                Change {
+                    path: "added_field".to_string(),
+                    kind: ChangeKind::Added,
+                    old_value: None,
+                    new_value: Some(json!("x")),
+                    description: None,
+                },
+                Change {
+                    path: "removed_field".to_string(),
+                    kind: ChangeKind::Removed,
+                    old_value: Some(json!("y")),
+                    new_value: None,
+                    description: None,
+                },
+                Change {
+                    path: "modified_field".to_string(),
+                    kind: ChangeKind::Modified,
+                    old_value: Some(json!("a")),
+                    new_value: Some(json!("b")),
+                    description: None,
+                },
+            ],
+        };
+        let out = format_text(&result, "r", &labels());
+        for line in out.lines() {
+            assert!(!line.starts_with("  - "), "removed marker in: {line}");
+            assert!(!line.starts_with("  + "), "added marker in: {line}");
+            assert!(!line.starts_with("  ~ "), "modified marker in: {line}");
+        }
+        assert!(out.contains("(absent)"), "{out}");
+    }
+
+    #[test]
+    fn long_field_paths_get_their_own_line() {
+        let long_path = "metadata.microsoft.voice-live.configuration";
+        assert!(long_path.len() > FIELD_COL_WIDTH, "fixture must be long");
+
+        let result = DiffResult {
+            is_equal: false,
+            changes: vec![Change {
+                path: long_path.to_string(),
+                kind: ChangeKind::Modified,
+                old_value: Some(json!("OLDVAL")),
+                new_value: Some(json!("NEWVAL")),
+                description: None,
+            }],
+        };
+        let out = format_text(&result, "r", &labels());
+        let lines: Vec<&str> = out.lines().collect();
+        let path_idx = lines
+            .iter()
+            .position(|l| l.contains(long_path))
+            .expect("path line present");
+        let path_line = lines[path_idx];
+        assert!(
+            !path_line.contains("NEWVAL") && !path_line.contains("OLDVAL"),
+            "path line must not carry values: {path_line}"
+        );
+        let value_line = lines[path_idx + 1];
+        assert!(
+            value_line.contains("NEWVAL") && value_line.contains("OLDVAL"),
+            "next line must carry both values: {value_line}"
+        );
+
+        // The new-side value must land in the same column as a normal (short-path) row.
+        let normal_row = format_change_row(&Change {
+            path: "short".to_string(),
+            kind: ChangeKind::Modified,
+            old_value: Some(json!("o")),
+            new_value: Some(json!("NEWVAL")),
+            description: None,
+        });
+        let expected_col = normal_row.find("NEWVAL").expect("value in normal row");
+        let actual_col = value_line.find("NEWVAL").expect("value in wrapped row");
+        assert_eq!(
+            actual_col, expected_col,
+            "wrapped value column should match normal row's value column\nnormal: {normal_row:?}\nwrapped: {value_line:?}"
+        );
+    }
+
+    #[test]
+    fn long_values_truncated_in_table() {
+        // 200 chars / 400 bytes: stays under format_value_preview's 500-byte cap
+        // (so its own truncation path isn't exercised), but its `"..."`-wrapped
+        // preview is well over TABLE_VALUE_MAX chars, so table_value must cut it.
+        let long_value = "å".repeat(200);
+        let result = DiffResult {
+            is_equal: false,
+            changes: vec![Change {
+                path: "field".to_string(),
+                kind: ChangeKind::Modified,
+                old_value: Some(json!(long_value)),
+                new_value: Some(json!("short")),
+                description: None,
+            }],
+        };
+        let out = format_text(&result, "r", &labels());
+        assert!(out.contains("..."), "{out}");
+        assert!(
+            !out.contains(&long_value),
+            "full 300-char value must not appear verbatim: {out}"
+        );
+    }
+
+    #[test]
+    fn markdown_cells_truncated_and_unmarked() {
+        // 200 chars / 400 bytes: stays under format_value_preview's 500-byte cap
+        // (so its own truncation path isn't exercised), but its `"..."`-wrapped
+        // preview is well over TABLE_VALUE_MAX chars, so table_value must cut it.
+        let long_value = "å".repeat(200);
+        let result = DiffResult {
+            is_equal: false,
+            changes: vec![Change {
+                path: "field".to_string(),
+                kind: ChangeKind::Modified,
+                old_value: Some(json!(long_value)),
+                new_value: Some(json!("short")),
+                description: None,
+            }],
+        };
+        let md = format_markdown(&[("r".to_string(), result)], &labels());
+        assert!(md.contains("..."), "{md}");
+        assert!(
+            !md.contains(&long_value),
+            "full 300-char value must not appear verbatim: {md}"
+        );
+        for line in md.lines().filter(|l| l.starts_with('|')) {
+            assert!(!line.contains("| - "), "removed marker in: {line}");
+            assert!(!line.contains("| + "), "added marker in: {line}");
+            assert!(!line.contains("| ~ "), "modified marker in: {line}");
+        }
+    }
 }
 
 /// Format a full diff report as Markdown (for PR comments).
@@ -443,16 +606,16 @@ fn format_change_markdown_row(change: &Change) -> String {
 
     let (new_str, old_str) = match change.kind {
         ChangeKind::Added => (
-            format_value_preview(change.new_value.as_ref()),
+            table_value(change.new_value.as_ref()),
             "(absent)".to_string(),
         ),
         ChangeKind::Removed => (
             "(absent)".to_string(),
-            format_value_preview(change.old_value.as_ref()),
+            table_value(change.old_value.as_ref()),
         ),
         ChangeKind::Modified => (
-            format_value_preview(change.new_value.as_ref()),
-            format_value_preview(change.old_value.as_ref()),
+            table_value(change.new_value.as_ref()),
+            table_value(change.old_value.as_ref()),
         ),
     };
 
@@ -526,5 +689,15 @@ mod markdown_tests {
             "{out}"
         );
         assert!(!out.contains(" was "), "{out}");
+    }
+
+    #[test]
+    fn long_multibyte_string_preview_does_not_panic() {
+        // Regression: byte-slicing at 497 panicked when it split a multi-byte
+        // char (e.g. Swedish text in long descriptions).
+        let long = "å".repeat(600);
+        let out = format_value_preview(Some(&Value::String(long)));
+        assert!(out.ends_with("(600 chars)"), "{out}");
+        assert!(out.contains("..."));
     }
 }
