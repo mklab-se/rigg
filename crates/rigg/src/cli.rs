@@ -529,7 +529,7 @@ impl Cli {
             Commands::Describe(args) => commands::describe::run(&ctx, args),
             Commands::Concepts => commands::concepts::run(&ctx),
             Commands::Validate(args) => commands::validate::run(&ctx, args),
-            Commands::Env { command } => commands::env::run(&ctx, command),
+            Commands::Env { command } => commands::env::run(&ctx, command).await,
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,
             Commands::Ai { command } => commands::ai::run(command).await,
             Commands::Mcp(args) => commands::mcp_cmd::run(&ctx, args).await,

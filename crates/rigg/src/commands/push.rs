@@ -167,7 +167,10 @@ async fn push_project(
     // below, and the --prune deletion path), and before the routine apply
     // confirmation so a rejected/missing typed confirmation short-circuits
     // everything that follows.
-    confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")?;
+    if !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
+        println!("Aborted.");
+        return Ok(false);
+    }
 
     if !conflicts.is_empty() && !ctx.interactive() {
         return Ok(true); // caller reports exit 5

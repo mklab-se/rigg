@@ -45,7 +45,7 @@ Whether you use both services together for a full RAG stack, or either one indep
 - **Version control** — track who changed what, when, and why via Git history across both your retrieval and agent layers
 - **Code review** — review agent instructions, knowledge base retrieval rules, index schema changes, and skillset updates in pull requests before they go live
 - **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
-- **Environment promotion** — push the same project to dev, staging, and prod; environment-specific references (like knowledge-base MCP endpoints) are injected at push time
+- **Environment promotion** — `rigg promote` copies a project's tree from dev to staging to prod, keeping each environment's pinned fields (secrets, per-env values); environment-specific references (like knowledge-base MCP endpoints) are injected at push time; protected environments (e.g. prod) require explicit confirmation before anything is pushed or deleted
 - **CI/CD** — validate configuration in pull requests, deploy on merge, detect drift on a schedule — with OIDC federated login and no stored secrets
 
 **For your AI coding tools:**
@@ -134,19 +134,26 @@ apis/
 projects/
   my-rag/
     project.yaml                 # metadata only — the directory IS the membership
-    search/
-      data-sources/docs-ds.json
-      indexes/docs-index.json
-      skillsets/docs-skills.json
-      indexers/docs-indexer.json
-      knowledge-sources/docs-ks.json
-      knowledge-bases/docs-kb.json
-    foundry/
-      deployments/docs-model.json
-      agents/docs-agent.json
-      agents/docs-agent.instructions.md   # $file sidecar for long text
+    envs/
+      dev/
+        search/
+          data-sources/docs-ds.json
+          indexes/docs-index.json
+          skillsets/docs-skills.json
+          indexers/docs-indexer.json
+          knowledge-sources/docs-ks.json
+          knowledge-bases/docs-kb.json
+        foundry/
+          deployments/docs-model.json
+          agents/docs-agent.json
+          agents/docs-agent.instructions.md   # $file sidecar for long text
+      prod/
+        search/...
+        foundry/...
 .rigg/                           # per-environment sync state (gitignored)
 ```
+
+Every project keeps a **separate resource tree per environment**, under `envs/<env>/` — dev and prod are never one shared file with overlay patches, so their divergence is visible and diffable. See [Deployment Environments](#deployment-environments) below and the [Environments chapter](CONCEPTS.md#environments) of CONCEPTS.md for the full model, including how a file's *path* (not its `name` field) is a resource's identity across environments.
 
 Every resource is a normalized, deterministic JSON file that belongs to exactly one project — rigg enforces this. Long text fields like agent instructions live in Markdown sidecars (`{"$file": "docs-agent.instructions.md"}`) so they diff and review like prose. Credentials are never written to disk; write-only fields (like data source connection strings) are preserved locally and never echoed back by Azure.
 
@@ -272,15 +279,13 @@ The [`samples/`](samples/) directory is a complete working workspace with three 
 
 ### Deployment Environments
 
-Manage the same resource definitions across multiple Azure targets:
+Each environment is a named Azure target with its own resource tree (`envs/<env>/` — see [Workspace Layout](#workspace-layout)), so dev and prod never share a JSON file. Add one interactively (ARM discovery, same pick-lists as `rigg init`) or non-interactively with flags:
 
 ```bash
+rigg env add test                          # interactive wizard
 rigg env add test --search-service my-search-test
 rigg env list
 rigg env set-default prod
-
-rigg push my-rag --env prod              # push to a specific environment
-rigg diff my-rag -e test --compare-env prod
 ```
 
 The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands. When omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
@@ -292,8 +297,25 @@ environments:
     search: { service: my-search-dev }
     foundry: { account: my-foundry, project: my-project-dev }
   prod:
+    policy: { protected: true }
     search: { service: my-search-prod }
     foundry: { account: my-foundry, project: my-project-prod }
+```
+
+`rigg promote` copies one environment's project tree into another, locally — preserving the target's pinned fields (`name`, secrets/write-only fields, `x-rigg-pin`-annotated paths) instead of overwriting them:
+
+```bash
+rigg promote my-rag --from dev --to prod --dry-run   # preview
+rigg promote my-rag --from dev --to prod             # write prod's tree
+rigg push my-rag --env prod                          # then sync it to Azure
+rigg diff my-rag -e test --compare-env prod          # or just compare, env vs env
+```
+
+Marking an environment `policy: { protected: true }` (as `prod` is above) requires an explicit, typed confirmation before rigg mutates it — `--yes` alone is never enough, since it only skips the routine "apply N changes?" prompt:
+
+```bash
+rigg push my-rag --env prod --yes                       # blocked: prod is protected
+rigg push my-rag --env prod --yes --confirm-env prod    # proceeds
 ```
 
 ### Authentication

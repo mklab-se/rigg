@@ -63,9 +63,10 @@ rigg.yaml                     # workspace: environments + service connections
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
   project.yaml                # metadata only — the directory IS the membership
-  search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
-          knowledge-sources,knowledge-bases}/<name>.json
-  foundry/{agents,deployments,connections,guardrails}/<name>.json
+  envs/<env>/
+    search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
+            knowledge-sources,knowledge-bases}/<name>.json
+    foundry/{agents,deployments,connections,guardrails}/<name>.json
 .rigg/<env>/<project>/...     # per-environment sync state (gitignored)
 ```
 
@@ -75,6 +76,82 @@ can actually change. Your resources reference them by name instead. The same
 applies to sub-resources that Azure creates automatically (for example the
 index and indexer behind a managed-ingestion knowledge source) — manage the
 knowledge source; Azure manages what it generates.
+
+## Environments
+
+An **environment** is a named Azure target — which Azure AI Search service,
+which Microsoft Foundry account/project — plus an optional **policy**.
+Environments are declared under `environments:` in `rigg.yaml`:
+
+```yaml
+environments:
+  dev:
+    default: true
+    search: { service: my-search-dev }
+    foundry: { account: my-foundry, project: my-project-dev }
+  prod:
+    policy: { protected: true }
+    search: { service: my-search-prod }
+    foundry: { account: my-foundry, project: my-project-prod }
+```
+
+Every project keeps a **separate resource tree per environment**, rooted at
+`envs/<env>/` (see the layout above). This is deliberate: dev and prod
+genuinely diverge — different field mappings while you're testing, different
+agent instructions before a rollout — and a full tree, rather than a shared
+file with overlay patches, makes that divergence something you can see and
+diff instead of logic hidden behind a merge step.
+
+### Logical identity vs. physical name
+
+A resource is identified by **where its file lives**: the kind directory and
+file stem (e.g. `envs/dev/search/indexes/docs-index.json` → logical id
+`indexes/docs-index`) — that file path is its identity across environments.
+The `name` field inside the file is a different thing: the resource's
+**physical** name, what Azure actually calls it. The two usually match, but
+don't have to — `envs/dev/search/indexes/docs-index.json` can have
+`"name": "docs-index-dev"` while its `prod` counterpart, at the same logical
+path, has `"name": "docs-index"`. rigg correlates the two files by path, not
+by name, so renaming a resource in one environment never breaks its link to
+the same resource in another.
+
+### Promoting between environments
+
+`rigg promote` copies one environment's project tree into another, entirely
+locally — it never talks to Azure:
+
+```bash
+rigg promote my-rag --from dev --to prod --dry-run   # preview only
+rigg promote my-rag --from dev --to prod             # write prod's tree
+rigg push my-rag --env prod                          # then sync it to Azure
+```
+
+Promotion preserves the target environment's **pinned fields** instead of
+overwriting them: the resource's `name` (always — physical names are never
+promoted), each kind's registry-default env-pinned fields (secrets,
+write-only fields, and genuinely per-environment values like an agent's
+`tools[].server_url`), and anything named in the file's own `x-rigg-pin`
+annotation. Resources new in the source are created verbatim (logical id
+preserved, physical name copied as-is); resources that only exist in the
+target are left untouched. A→B and B→A are the same operation — you choose
+the sync direction with `--from`/`--to`, not a fixed "deploy" direction.
+
+### Protected environments
+
+Marking an environment `policy: { protected: true }` requires an explicit,
+per-invocation confirmation before rigg mutates it: `push` (create/update or
+`--prune`) and `delete --remote`.
+
+```bash
+rigg push my-rag --env prod --yes                        # blocked: prod is protected
+rigg push my-rag --env prod --yes --confirm-env prod     # proceeds
+```
+
+Interactively, rigg instead prompts you to type the environment's name.
+`--yes` alone never satisfies a protected environment's gate — it only skips
+the routine "apply N changes?" prompt, and scripts reach for it reflexively;
+if it also cleared this gate, a protected environment would be no safer than
+an ordinary one.
 
 ## See also
 

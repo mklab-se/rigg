@@ -373,6 +373,21 @@ fn env_commands_roundtrip() {
 }
 
 #[test]
+fn env_add_without_flags_non_interactive_is_usage_error() {
+    // Regression guard: `rigg env add <name>` with no service flags on a
+    // non-interactive session (assert_cmd's stdout is piped, never a TTY)
+    // must fail with a usage error that points at the interactive wizard,
+    // not silently create an empty environment.
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "add", "test"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("wizard"));
+}
+
+#[test]
 fn copy_within_project() {
     let ws = workspace();
     rigg()
@@ -681,6 +696,29 @@ fn init_next_steps_reference_live_commands() {
 }
 
 #[test]
+fn init_output_explains_the_environment() {
+    // Regression guard: init's success output must explain the environment
+    // it just created (name, that -e/RIGG_ENV select others) and point at
+    // `rigg env add` for adding more.
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args([
+            "init",
+            ".",
+            "--search-service",
+            "unit-test-svc",
+            "--env-name",
+            "dev",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dev"))
+        .stdout(predicate::str::contains("RIGG_ENV"))
+        .stdout(predicate::str::contains("rigg env add"));
+}
+
+#[test]
 fn new_project_signposts_adopt_path() {
     let ws = workspace();
     rigg()
@@ -701,6 +739,18 @@ fn concepts_includes_naming_guidance() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Name a project after"));
+}
+
+#[test]
+fn concepts_includes_environments_chapter() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("concepts")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Environments"))
+        .stdout(predicate::str::contains("physical"));
 }
 
 /// A workspace with two environments (dev + prod) and one project, no

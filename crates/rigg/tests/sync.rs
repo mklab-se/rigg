@@ -1091,3 +1091,52 @@ async fn protected_env_delete_blocks_non_interactive_without_confirm_env() {
         "protected env must not be deleted without confirmation"
     );
 }
+
+#[tokio::test]
+async fn protected_env_delete_succeeds_with_confirm_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"name": "idx", "fields": []})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": []}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "delete",
+            "demo",
+            "--remote",
+            "-e",
+            "prod",
+            "--yes",
+            "--confirm-env",
+            "prod",
+        ])
+        .assert()
+        .success();
+
+    let deletes = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "DELETE")
+        .count();
+    assert_eq!(deletes, 1);
+}

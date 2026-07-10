@@ -62,7 +62,10 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     // Protected-env gate: separate from, and comes before, the typed
     // project-name confirmation below (which guards against deleting the
     // wrong project, not against mutating a protected environment).
-    confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "delete")?;
+    if !confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "delete")? {
+        println!("Aborted.");
+        return Ok(());
+    }
 
     if ctx.interactive() {
         println!();
