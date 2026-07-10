@@ -76,10 +76,11 @@ rigg.yaml                     # workspace: environments, connections (YAML)
 apis/<name>.json              # shared OpenAPI specs (WebApiSkill contract)
 projects/<name>/
   project.yaml                # metadata only; directory contents = membership
-  search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
-          knowledge-sources,knowledge-bases}/<name>.json
-  foundry/{agents,deployments,connections,guardrails}/<name>.json
-  foundry/agents/<name>.instructions.md   # $file sidecar
+  envs/<env>/
+    search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
+            knowledge-sources,knowledge-bases}/<name>.json
+    foundry/{agents,deployments,connections,guardrails}/<name>.json
+    foundry/agents/<name>.instructions.md   # $file sidecar
 .rigg/<env>/<project>/state.json          # baselines, gitignored
 ```
 

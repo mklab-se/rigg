@@ -14,7 +14,7 @@ them and deletes everything afterwards. Keep SKUs minimal (capacity 1).
 1. Build: `cargo build` — use `target/debug/rigg`.
 2. Copy `samples/` to a temp dir. In the copy:
    - `rigg.yaml`: point the `demo` env at `mklabsrch` and `mklabaifndr/proj-default`.
-   - `projects/agentic-stack/search/data-sources/docs-ds.json`: set the real
+   - `projects/agentic-stack/envs/demo/search/data-sources/docs-ds.json`: set the real
      storage ResourceId (`az storage account list`) and container `rigg-e2e-docs`.
    - Rename the deployment to `rigg-e2e-model` (avoid colliding with real
      deployments) and point the agent's `model` at it. Pick a currently
