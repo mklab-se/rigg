@@ -49,6 +49,10 @@ pub enum ChangeKind {
 pub fn diff(old: &Value, new: &Value, identity_key: &str) -> DiffResult {
     let mut changes = Vec::new();
     diff_values(old, new, "", identity_key, &mut changes);
+    // Deterministic output: object-key iteration goes through HashSets, so
+    // change order would otherwise vary between runs — confusing in tables
+    // and noisy for scripts consuming JSON/markdown reports.
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
 
     DiffResult {
         is_equal: changes.is_empty(),
@@ -334,5 +338,19 @@ mod tests {
 
         assert_eq!(added.len(), 1);
         assert!(added[0].path.contains("[c]"));
+    }
+
+    #[test]
+    fn change_order_is_deterministic_and_sorted_by_path() {
+        // Object keys iterate via HashSet internally; the public result must
+        // still be stable across runs.
+        let old = serde_json::json!({"name": "a", "zeta": 1, "alpha": 1, "mid": 1});
+        let new = serde_json::json!({"name": "a", "zeta": 2, "alpha": 2, "mid": 2});
+        let paths: Vec<String> = diff(&old, &new, "name")
+            .changes
+            .into_iter()
+            .map(|c| c.path)
+            .collect();
+        assert_eq!(paths, vec!["alpha", "mid", "zeta"]);
     }
 }
