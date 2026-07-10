@@ -185,6 +185,51 @@ pub fn resolve_env(ws: &Workspace, ctx: &GlobalContext) -> Result<ResolvedEnv> {
     Ok(ws.resolve_env(ctx.env.as_deref())?)
 }
 
+/// Gate a cloud-mutating operation (`push` apply/`--prune`, `delete
+/// --remote`) against an environment's `policy.protected` flag.
+///
+/// No-op when the environment is unprotected. Otherwise:
+/// - `--confirm-env <name>` matching the environment name exactly → `Ok`.
+/// - Interactive session → prompts the user to type the environment name;
+///   a mismatch aborts with an error.
+/// - Non-interactive session → fails with `CommandError::Usage` (exit 2)
+///   naming the required `--confirm-env` flag.
+///
+/// `ctx.yes` (`--yes`) is deliberately **not** consulted: `--yes` exists to
+/// skip the routine "apply N changes?" prompt, and scripts/agents reach for
+/// it reflexively. If it also satisfied this gate, a protected environment
+/// would be no safer than an unprotected one the moment someone habitually
+/// pipes `-y` into their commands. Protection must be opted into explicitly,
+/// per invocation, via a typed name (interactive) or `--confirm-env`
+/// (non-interactive) — never implied by a blanket "yes to everything" flag.
+pub fn confirm_protected_env(
+    ctx: &GlobalContext,
+    env: &ResolvedEnv,
+    confirm_env: Option<&str>,
+    operation: &str,
+) -> Result<()> {
+    if !env.protected() {
+        return Ok(());
+    }
+    if confirm_env == Some(env.name.as_str()) {
+        return Ok(());
+    }
+    if ctx.non_interactive {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "environment '{}' is protected: pass --confirm-env {} to proceed",
+            env.name, env.name
+        ))));
+    }
+    let answer = confirm::prompt_line(&format!(
+        "Environment '{}' is protected. Type its name to confirm {}: ",
+        env.name, operation
+    ))?;
+    if answer.trim() != env.name {
+        return Err(anyhow!("aborted"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

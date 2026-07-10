@@ -21,7 +21,8 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use crate::cli::PushArgs;
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
-    CommandError, GlobalContext, confirm, load_workspace, resolve_env, select_projects,
+    CommandError, GlobalContext, confirm, confirm_protected_env, load_workspace, resolve_env,
+    select_projects,
 };
 
 pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
@@ -161,6 +162,13 @@ async fn push_project(
         println!("  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
     }
+
+    // Protected-env gate: fires before any mutating call (creates/updates
+    // below, and the --prune deletion path), and before the routine apply
+    // confirmation so a rejected/missing typed confirmation short-circuits
+    // everything that follows.
+    confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")?;
+
     if !conflicts.is_empty() && !ctx.interactive() {
         return Ok(true); // caller reports exit 5
     }

@@ -287,6 +287,10 @@ pub struct PushArgs {
     /// Delete remote resources whose local files were removed
     #[arg(long)]
     pub prune: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
 }
 
 #[derive(Args)]
@@ -330,6 +334,10 @@ pub struct DeleteArgs {
     /// Delete the project's resources from Azure (required)
     #[arg(long)]
     pub remote: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
 }
 
 #[derive(Args)]

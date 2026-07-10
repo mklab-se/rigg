@@ -35,13 +35,38 @@ fn workspace(endpoint: &str) -> tempfile::TempDir {
 }
 
 fn write_resource(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
-    let d = ws.join("projects/demo/envs/dev/search").join(dir);
+    write_resource_env(ws, "dev", dir, name, body);
+}
+
+fn write_resource_env(ws: &std::path::Path, env: &str, dir: &str, name: &str, body: &Value) {
+    let d = ws
+        .join("projects/demo/envs")
+        .join(env)
+        .join("search")
+        .join(dir);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(
         d.join(format!("{name}.json")),
         serde_json::to_string_pretty(body).unwrap(),
     )
     .unwrap();
+}
+
+/// Workspace with a `dev` (default, unprotected) and `prod` (protected) env,
+/// both pointed at the same mock server.
+fn workspace_with_protected_prod(endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "environments:\n  dev:\n    default: true\n    search: {{ service: mock, endpoint: \"{endpoint}\" }}\n  prod:\n    policy: {{ protected: true }}\n    search: {{ service: mock, endpoint: \"{endpoint}\" }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
 }
 
 /// Mock empty list responses for every search kind except overridden ones.
@@ -896,4 +921,173 @@ async fn auto_created_subresources_are_not_adoptable() {
         .assert()
         .success()
         .stdout(predicate::str::contains("regulatory-index").not());
+}
+
+#[tokio::test]
+async fn protected_env_push_blocks_non_interactive_without_confirm_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "-e", "prod", "--yes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--confirm-env prod"));
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(
+        puts, 0,
+        "protected env must not be mutated without confirmation"
+    );
+}
+
+#[tokio::test]
+async fn protected_env_push_succeeds_with_confirm_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/indexes/idx"))
+        .respond_with(|req: &Request| {
+            let mut body: Value = serde_json::from_slice(&req.body).unwrap();
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("@odata.etag".into(), json!("\"0xNEW\""));
+            }
+            ResponseTemplate::new(201).set_body_json(body)
+        })
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "prod",
+            "--yes",
+            "--confirm-env",
+            "prod",
+        ])
+        .assert()
+        .success();
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 1);
+
+    // canonicalized to the prod tree, not dev
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/prod/search/indexes/idx.json")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn protected_env_push_dry_run_is_ungated() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "-e", "prod", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("idx"));
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 0, "dry run must never mutate, gated or not");
+}
+
+#[tokio::test]
+async fn protected_env_delete_blocks_non_interactive_without_confirm_env() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"name": "idx", "fields": []})),
+        )
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": []}),
+    );
+
+    rigg(ws.path())
+        .args(["delete", "demo", "--remote", "-e", "prod", "--yes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--confirm-env prod"));
+
+    let deletes = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "DELETE")
+        .count();
+    assert_eq!(
+        deletes, 0,
+        "protected env must not be deleted without confirmation"
+    );
 }

@@ -35,6 +35,7 @@ fn list(ctx: &GlobalContext) -> Result<()> {
                 serde_json::json!({
                     "name": name,
                     "default": env.default,
+                    "protected": env.policy.protected,
                     "search": env.search.as_slice().iter().map(|s| &s.service).collect::<Vec<_>>(),
                     "foundry": env.foundry.as_slice().iter().map(|f| format!("{}/{}", f.account, f.project)).collect::<Vec<_>>(),
                 })
@@ -60,6 +61,7 @@ fn show(ctx: &GlobalContext, name: Option<&str>) -> Result<()> {
 }
 
 fn print_env(env: &Environment, indent: &str) {
+    println!("{indent}protected: {}", env.policy.protected);
     for s in env.search.as_slice() {
         let label = s.name.as_deref().unwrap_or("search");
         println!("{indent}{label}: {} (Azure AI Search)", s.service);

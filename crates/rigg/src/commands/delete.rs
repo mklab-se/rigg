@@ -11,7 +11,9 @@ use rigg_core::store::{ProjectState, Store};
 
 use crate::cli::DeleteArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
-use crate::commands::{CommandError, GlobalContext, confirm, load_workspace, resolve_env};
+use crate::commands::{
+    CommandError, GlobalContext, confirm, confirm_protected_env, load_workspace, resolve_env,
+};
 
 pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     if !args.remote {
@@ -56,6 +58,11 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     for r in &order {
         println!("  {} {}", "delete".red(), r);
     }
+
+    // Protected-env gate: separate from, and comes before, the typed
+    // project-name confirmation below (which guards against deleting the
+    // wrong project, not against mutating a protected environment).
+    confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "delete")?;
 
     if ctx.interactive() {
         println!();
