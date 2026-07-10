@@ -158,7 +158,7 @@ async fn pull_project(
         .iter()
         .map(|(r, _)| r.clone())
         .filter(|r| {
-            state.baseline(r).is_some()
+            state.has_baseline(r)
                 && remote.supported_kinds().contains(&r.kind)
                 && !remote_keys.contains(&r.key())
         })

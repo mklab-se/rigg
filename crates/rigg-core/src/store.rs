@@ -299,12 +299,27 @@ pub enum SyncClass {
     Untracked,
 }
 
+/// A sync baseline. Newer rigg versions store the compare-normalized
+/// document so the checksum can be recomputed under CURRENT normalization
+/// rules — surviving rule evolution across rigg upgrades. Legacy entries
+/// hold only the frozen checksum and behave as before until the resource
+/// next syncs (every successful pull/push/adopt rewrites its baseline).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Baseline {
+    /// Legacy: frozen checksum (string MUST be tried first — `Value`
+    /// deserializes any JSON, including strings).
+    Checksum(String),
+    /// Compare-normalized canonical document.
+    Doc(Value),
+}
+
 /// Per-project, per-environment sync baselines.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectState {
-    /// `kind-dir/name` → checksum of the push-normalized JSON at last sync.
+    /// `kind-dir/name` → baseline captured at last sync.
     #[serde(default)]
-    pub baselines: BTreeMap<String, String>,
+    pub baselines: BTreeMap<String, Baseline>,
 }
 
 impl ProjectState {
@@ -340,13 +355,25 @@ impl ProjectState {
         format!("{:x}", md5_like(&canonical))
     }
 
-    pub fn baseline(&self, r: &ResourceRef) -> Option<&str> {
-        self.baselines.get(&r.key()).map(String::as_str)
+    /// Whether a baseline is recorded for this resource.
+    pub fn has_baseline(&self, r: &ResourceRef) -> bool {
+        self.baselines.contains_key(&r.key())
+    }
+
+    /// Checksum of the recorded baseline, recomputed under CURRENT
+    /// normalization rules for `Doc` entries — this is what lets a resource
+    /// self-heal when a rigg upgrade changes which fields are volatile.
+    /// Legacy `Checksum` entries are frozen and returned as-is.
+    pub fn baseline_checksum(&self, r: &ResourceRef) -> Option<String> {
+        match self.baselines.get(&r.key())? {
+            Baseline::Checksum(s) => Some(s.clone()),
+            Baseline::Doc(v) => Some(Self::checksum(r.kind, v)),
+        }
     }
 
     pub fn set_baseline(&mut self, r: &ResourceRef, kind_value: &Value) {
-        self.baselines
-            .insert(r.key(), Self::checksum(r.kind, kind_value));
+        let doc = canonical_form(&normalize_for_compare(r.kind, kind_value));
+        self.baselines.insert(r.key(), Baseline::Doc(doc));
     }
 
     pub fn clear_baseline(&mut self, r: &ResourceRef) {
@@ -360,7 +387,7 @@ impl ProjectState {
         local: Option<&Value>,
         remote: Option<&Value>,
     ) -> SyncClass {
-        let baseline = self.baseline(r);
+        let baseline = self.baseline_checksum(r);
         match (local, remote) {
             (None, None) => SyncClass::InSync, // nothing anywhere (only baseline leftover)
             (Some(_), None) => SyncClass::LocalOnly,
@@ -588,7 +615,69 @@ mod tests {
         // save/load round trip
         state.save(&ws, "dev", "p").unwrap();
         let loaded = ProjectState::load(&ws, "dev", "p");
-        assert_eq!(loaded.baseline(&r), state.baseline(&r));
+        assert_eq!(loaded.baseline_checksum(&r), state.baseline_checksum(&r));
+    }
+
+    #[test]
+    fn legacy_checksum_baseline_still_loads_and_classifies() {
+        // A state.json written by an older rigg: baseline is a bare string.
+        let json = r#"{"baselines": {"agents/a": "deadbeef"}}"#;
+        let state: ProjectState = serde_json::from_str(json).unwrap();
+        let r = ResourceRef::new(ResourceKind::Agent, "a".to_string());
+        assert!(state.has_baseline(&r));
+        // Stale hash + differing local/remote → Conflict (today's behavior).
+        let local = json!({"name": "a", "model": "x"});
+        let remote = json!({"name": "a", "model": "y"});
+        assert_eq!(
+            state.classify(&r, Some(&local), Some(&remote)),
+            SyncClass::Conflict
+        );
+    }
+
+    #[test]
+    fn doc_baseline_self_heals_across_rule_changes() {
+        // Simulate a baseline stored BEFORE metadata.modified_at became
+        // volatile: the stored doc still carries the field. Under current
+        // rules the recomputed checksum strips it, so an untouched local
+        // (without the field) plus a remote-only change classifies as
+        // RemoteAhead — NOT Conflict.
+        let r = ResourceRef::new(ResourceKind::Agent, "a".to_string());
+        let old_doc = json!({
+            "name": "a", "model": "x",
+            "metadata": {"modified_at": "111", "logo": "l.svg"}
+        });
+        let mut state = ProjectState::default();
+        state.baselines.insert(r.key(), Baseline::Doc(old_doc));
+        let local = json!({
+            "name": "a", "model": "x", "metadata": {"logo": "l.svg"}
+        });
+        let remote = json!({
+            "name": "a", "model": "CHANGED", "metadata": {"logo": "l.svg"}
+        });
+        assert_eq!(
+            state.classify(&r, Some(&local), Some(&remote)),
+            SyncClass::RemoteAhead
+        );
+    }
+
+    #[test]
+    fn baseline_serde_mixed_roundtrip() {
+        let r = ResourceRef::new(ResourceKind::Agent, "new".to_string());
+        let mut state = ProjectState::default();
+        state.baselines.insert(
+            "agents/legacy".to_string(),
+            Baseline::Checksum("abc".to_string()),
+        );
+        state.set_baseline(&r, &json!({"name": "new", "model": "m"}));
+        let text = serde_json::to_string(&state).unwrap();
+        let back: ProjectState = serde_json::from_str(&text).unwrap();
+        assert!(
+            matches!(back.baselines.get("agents/legacy"), Some(Baseline::Checksum(s)) if s == "abc")
+        );
+        assert!(matches!(
+            back.baselines.get("agents/new"),
+            Some(Baseline::Doc(_))
+        ));
     }
 
     #[test]
