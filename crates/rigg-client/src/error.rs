@@ -7,11 +7,18 @@ use crate::auth::AuthError;
 /// Azure Search client errors
 #[derive(Debug, Error)]
 pub enum ClientError {
+    // NOTE: `{0}` embeds the cause's Display in this variant's own message,
+    // so we deliberately do NOT also mark it `#[from]` (which would make
+    // thiserror implement `source()` to return the same value). Doing both
+    // renders the cause twice in an anyhow chain (`{:#}` walks both the
+    // Display text and the `source()` chain). Conversion via `?` is instead
+    // provided by the manual `impl From<...>` below, which is functionally
+    // identical to `#[from]` except it does not wire up `source()`.
     #[error("Authentication error: {0}")]
-    Auth(#[from] AuthError),
+    Auth(AuthError),
 
     #[error("HTTP request failed: {0}")]
-    Request(#[from] reqwest::Error),
+    Request(reqwest::Error),
 
     #[error("API error ({status}): {message}")]
     Api { status: u16, message: String },
@@ -39,10 +46,32 @@ pub enum ClientError {
     ServiceUnavailable(String),
 
     #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(serde_json::Error),
 
     #[error("Local agent error: {0}")]
     LocalAgent(String),
+}
+
+// Manual `From` impls replacing `#[from]` for the variants above — see the
+// comment on `ClientError::Auth` for why. These preserve `?`-based
+// conversion exactly as `#[from]` would, without also implementing
+// `source()` (which would duplicate the cause when rendering anyhow chains).
+impl From<AuthError> for ClientError {
+    fn from(err: AuthError) -> Self {
+        ClientError::Auth(err)
+    }
+}
+
+impl From<reqwest::Error> for ClientError {
+    fn from(err: reqwest::Error) -> Self {
+        ClientError::Request(err)
+    }
+}
+
+impl From<serde_json::Error> for ClientError {
+    fn from(err: serde_json::Error) -> Self {
+        ClientError::Json(err)
+    }
 }
 
 impl ClientError {
@@ -432,5 +461,22 @@ mod tests {
         // the suggestion arm logic: if not cert, not connect, not timeout → generic
         let suggestion = "The HTTP request failed. Check network connectivity and the endpoint URL in rigg.toml.";
         assert!(suggestion.contains("HTTP request failed"));
+    }
+
+    #[test]
+    fn auth_error_chain_renders_cause_exactly_once() {
+        let client_err = ClientError::from(AuthError::TokenError("boom".to_string()));
+        let chained = anyhow::Error::from(client_err).context("failed to list remote data-sources");
+        let rendered = format!("{chained:#}");
+        assert_eq!(
+            rendered.matches("boom").count(),
+            1,
+            "cause must appear exactly once: {rendered}"
+        );
+        assert!(rendered.contains("Authentication error"), "{rendered}");
+        assert!(
+            rendered.contains("failed to list remote data-sources"),
+            "{rendered}"
+        );
     }
 }
