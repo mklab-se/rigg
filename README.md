@@ -202,9 +202,9 @@ rigg diff my-rag
 ```
 docs-index — differs (2 field(s))
 
-field                                    local                Azure (dev)
-+ fields[rating]                         {...} (2 keys)       (absent)
-~ fields[chunk].type                     "Edm.Int32"          "Edm.String"
+  field                                    local                Azure (dev)
+  fields[rating]                           {...} (2 keys)       (absent)
+  fields[chunk].type                       "Edm.Int32"          "Edm.String"
 
 hint: rigg pull my-rag — update local files to match Azure
       rigg push my-rag — make Azure match your local files
