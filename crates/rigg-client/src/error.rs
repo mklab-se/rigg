@@ -17,8 +17,14 @@ pub enum ClientError {
     #[error("Authentication error: {0}")]
     Auth(AuthError),
 
-    #[error("HTTP request failed: {0}")]
-    Request(reqwest::Error),
+    // Unlike Auth/Json, reqwest errors carry deeper causes in their own
+    // source chain (TLS `UnknownIssuer`, connect-refused detail, ...), so
+    // this variant keeps a `#[source]` (without `#[from]`) and does NOT
+    // embed `{0}` in its message. anyhow's `{:#}` then renders
+    // `HTTP request failed: <reqwest display>: <deeper causes>` — prefix
+    // plus the full chain, each segment exactly once.
+    #[error("HTTP request failed")]
+    Request(#[source] reqwest::Error),
 
     #[error("API error ({status}): {message}")]
     Api { status: u16, message: String },
@@ -53,9 +59,11 @@ pub enum ClientError {
 }
 
 // Manual `From` impls replacing `#[from]` for the variants above — see the
-// comment on `ClientError::Auth` for why. These preserve `?`-based
-// conversion exactly as `#[from]` would, without also implementing
-// `source()` (which would duplicate the cause when rendering anyhow chains).
+// comments on `ClientError::Auth` and `ClientError::Request` for why. These
+// preserve `?`-based conversion exactly as `#[from]` would, while letting
+// each variant choose independently whether the cause lives in its Display
+// (`Auth`, `Json`) or in `source()` (`Request`) — never both, which is what
+// duplicated the cause when rendering anyhow chains.
 impl From<AuthError> for ClientError {
     fn from(err: AuthError) -> Self {
         ClientError::Auth(err)
@@ -477,6 +485,36 @@ mod tests {
         assert!(
             rendered.contains("failed to list remote data-sources"),
             "{rendered}"
+        );
+    }
+
+    #[test]
+    fn request_error_chain_keeps_deep_causes_and_renders_each_once() {
+        // A cheaply-constructible reqwest error with a real deeper cause:
+        // building a request from an unparseable URL yields a "builder error"
+        // whose source() is the underlying url::ParseError.
+        let reqwest_err = reqwest::Client::new()
+            .get("not-a-valid-url")
+            .build()
+            .unwrap_err();
+        let reqwest_display = reqwest_err.to_string();
+        let client_err = ClientError::from(reqwest_err);
+        let chained = anyhow::Error::from(client_err).context("failed to list remote indexes");
+        let rendered = format!("{chained:#}");
+        assert_eq!(
+            rendered.matches("HTTP request failed").count(),
+            1,
+            "prefix must appear exactly once: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches(reqwest_display.as_str()).count(),
+            1,
+            "reqwest display must appear exactly once: {rendered}"
+        );
+        // The deeper cause (url::ParseError) must still surface via source().
+        assert!(
+            rendered.contains("relative URL without a base"),
+            "deep cause must not be dropped: {rendered}"
         );
     }
 }
