@@ -299,6 +299,50 @@ async fn conflict_fails_non_interactive_with_exit_5() {
 }
 
 #[tokio::test]
+async fn pull_conflict_fails_non_interactive_with_rigg_diff_pointer() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "name": "idx",
+                "fields": [{"name": "remote-change", "type": "Edm.String", "key": true}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "local-change", "type": "Edm.String", "key": true}]}),
+    );
+    // baseline differs from both local and remote → conflict
+    std::fs::create_dir_all(ws.path().join(".rigg/dev/demo")).unwrap();
+    std::fs::write(
+        ws.path().join(".rigg/dev/demo/state.json"),
+        json!({"baselines": {"indexes/idx": "0000000000000000"}}).to_string(),
+    )
+    .unwrap();
+
+    rigg(ws.path())
+        .args(["pull", "demo"])
+        .assert()
+        .code(5)
+        .stdout(predicate::str::contains("conflict"))
+        .stdout(predicate::str::contains("rigg diff"));
+    // local file left untouched
+    let v: Value = serde_json::from_str(
+        &std::fs::read_to_string(ws.path().join("projects/demo/search/indexes/idx.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["fields"][0]["name"], "local-change");
+}
+
+#[tokio::test]
 async fn diff_reports_drift_with_exit_code_and_markdown() {
     let server = MockServer::start().await;
     mock_empty_lists(&server).await;
