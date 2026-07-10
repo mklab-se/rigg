@@ -19,6 +19,7 @@ pub mod init;
 pub mod interactive;
 pub mod mcp_cmd;
 pub mod new;
+pub mod promote;
 pub mod pull;
 pub mod push;
 pub mod remote;

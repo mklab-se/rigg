@@ -254,6 +254,22 @@ mod tests {
     }
 
     #[test]
+    fn push_normalization_strips_x_rigg_pin_annotation() {
+        // x-rigg-pin (rigg promote's per-resource pin list) is just another
+        // x-rigg-* key: normalize_for_push's generic strip covers it without
+        // needing a dedicated rule.
+        let doc = json!({
+            "name": "a",
+            "properties": {"target": "https://prod.example"},
+            "x-rigg-pin": ["properties.target"]
+        });
+        let disk = normalize_for_disk(ResourceKind::Connection, &doc);
+        assert_eq!(disk["x-rigg-pin"], json!(["properties.target"]));
+        let push = normalize_for_push(ResourceKind::Connection, &doc);
+        assert!(push.get("x-rigg-pin").is_none());
+    }
+
+    #[test]
     fn semantic_eq_ignores_volatile_and_order() {
         let a = json!({"name": "i", "@odata.etag": "1", "fields": [{"name": "f1"}]});
         let b = json!({"@odata.etag": "2", "fields": [{"name": "f1"}], "name": "i"});

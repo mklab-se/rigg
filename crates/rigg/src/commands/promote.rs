@@ -1,0 +1,437 @@
+//! `rigg promote` — copy one environment's project tree into another,
+//! preserving pinned (environment-specific) fields. Purely local: it reads
+//! and writes project files only, and never talks to Azure. The subsequent
+//! `rigg diff`/`rigg push` (against the target env) are what actually sync
+//! with the cloud.
+//!
+//! Correlation across environments is by LOGICAL id — the resource's file
+//! stem within its kind directory — not by physical (Azure) name, since the
+//! two may diverge once a resource is renamed in one environment (see
+//! `rigg-core::store` module docs).
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use anyhow::{Result, anyhow};
+use colored::Colorize;
+use serde_json::{Value, json};
+
+use rigg_core::registry::{self, X_RIGG_PIN};
+use rigg_core::resources::{ResourceKind, ResourceRef};
+use rigg_core::store::Store;
+use rigg_diff::output::SideLabels;
+use rigg_diff::semantic::DiffResult;
+
+use crate::cli::PromoteArgs;
+use crate::commands::{CommandError, GlobalContext, interactive, load_workspace};
+
+/// One logical resource's promotion plan: what it looks like in the source
+/// env, what (if anything) it looks like in the target env today, and what
+/// it would become after pinned fields are re-applied.
+struct Item {
+    kind: ResourceKind,
+    stem: String,
+    target: Option<Value>,
+    merged: Value,
+    /// Pinned paths used to build `merged` (empty when nothing was kept,
+    /// i.e. a brand-new file where there is nothing to pin from yet).
+    pinned: Vec<String>,
+    diff: DiffResult,
+}
+
+impl Item {
+    fn label(&self) -> String {
+        format!("{}/{}", self.kind.directory_name(), self.stem)
+    }
+}
+
+struct Plan {
+    changed: Vec<Item>,
+    new: Vec<Item>,
+    unchanged: Vec<Item>,
+    kept_only_in_to: Vec<(ResourceKind, String)>,
+}
+
+pub fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
+    let ws = load_workspace()?;
+    if !ws.config.environments.contains_key(&args.from) {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "unknown environment '{}' (see `rigg env list`)",
+            args.from
+        ))));
+    }
+    if !ws.config.environments.contains_key(&args.to) {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "unknown environment '{}' (see `rigg env list`)",
+            args.to
+        ))));
+    }
+    if args.from == args.to {
+        return Err(anyhow!(CommandError::Usage(
+            "--from and --to must name different environments".to_string()
+        )));
+    }
+
+    let project = ws.project(&args.project)?;
+    let store_from = Store::new(project, &args.from);
+    let store_to = Store::new(project, &args.to);
+
+    let plan = build_plan(&store_from, &store_to)?;
+
+    if !ctx.json() {
+        print_preview(&args, &plan);
+    }
+
+    let nothing_to_do = plan.changed.is_empty() && plan.new.is_empty();
+
+    if args.dry_run {
+        if !ctx.json() {
+            println!();
+            println!("(dry run — nothing written)");
+        } else {
+            print_json(&plan, true);
+        }
+        return Ok(());
+    }
+
+    if nothing_to_do {
+        if ctx.json() {
+            print_json(&plan, false);
+        } else {
+            println!();
+            println!(
+                "nothing to promote — '{}' already matches '{}'",
+                args.to, args.from
+            );
+        }
+        return Ok(());
+    }
+
+    if ctx.interactive() && !ctx.json() {
+        if !interactive::confirm_default_yes("Proceed?", ctx.no_color)? {
+            println!("aborted");
+            return Ok(());
+        }
+    } else if !ctx.yes {
+        return Err(anyhow!(CommandError::Usage(
+            "non-interactive promote requires --yes".to_string()
+        )));
+    }
+
+    for item in &plan.changed {
+        let name = item
+            .merged
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(&item.stem)
+            .to_string();
+        store_to.write(&ResourceRef::new(item.kind, name), &item.merged)?;
+    }
+    for item in &plan.new {
+        store_to.write_at(&item.stem, item.kind, &item.merged)?;
+    }
+
+    if ctx.json() {
+        print_json(&plan, false);
+    } else {
+        println!();
+        println!("hint: rigg diff {} -e {}", args.project, args.to);
+        println!("      rigg push {} -e {}", args.project, args.to);
+        print_new_file_hints(&args, &plan);
+    }
+    Ok(())
+}
+
+/// Build the promotion plan: correlate FROM/TO by (kind, stem), merge each
+/// FROM resource into its TO counterpart (pinning fields per
+/// `pinned_paths`), and classify the result.
+fn build_plan(store_from: &Store, store_to: &Store) -> Result<Plan> {
+    let from_map = list_by_stem(store_from)?;
+    let to_map = list_by_stem(store_to)?;
+
+    let mut changed = Vec::new();
+    let mut new = Vec::new();
+    let mut unchanged = Vec::new();
+
+    for ((kind, stem), from_path) in &from_map {
+        let source = store_from.read_path(from_path)?;
+        let target = match to_map.get(&(*kind, stem.clone())) {
+            Some(to_path) => Some(store_to.read_path(to_path)?),
+            None => None,
+        };
+        let pinned = pinned_paths(*kind, target.as_ref());
+        let merged = merge_promote(&source, target.as_ref(), &pinned);
+        let diff =
+            rigg_diff::semantic::diff(target.as_ref().unwrap_or(&Value::Null), &merged, "name");
+        let item = Item {
+            kind: *kind,
+            stem: stem.clone(),
+            target: target.clone(),
+            merged,
+            pinned,
+            diff,
+        };
+        match &item.target {
+            None => new.push(item),
+            Some(_) if item.diff.is_equal => unchanged.push(item),
+            Some(_) => changed.push(item),
+        }
+    }
+
+    let mut kept_only_in_to: Vec<(ResourceKind, String)> = to_map
+        .keys()
+        .filter(|k| !from_map.contains_key(*k))
+        .cloned()
+        .collect();
+    kept_only_in_to.sort();
+
+    Ok(Plan {
+        changed,
+        new,
+        unchanged,
+        kept_only_in_to,
+    })
+}
+
+fn list_by_stem(store: &Store) -> Result<BTreeMap<(ResourceKind, String), PathBuf>> {
+    let mut out = BTreeMap::new();
+    for (r, path) in store.list()? {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        out.insert((r.kind, stem), path);
+    }
+    Ok(out)
+}
+
+/// The full set of paths kept pinned to the target's current value for this
+/// kind/resource: `"name"` (always — the target keeps its physical name) ∪
+/// the kind's registry defaults ∪ any extra paths the target's own
+/// `x-rigg-pin` annotation names ∪ the annotation key itself (so it survives
+/// the promote and keeps applying on the next one). When there is no target
+/// yet, this is still the set that WOULD apply — used to hint which fields
+/// are worth reviewing on the new copy.
+fn pinned_paths(kind: ResourceKind, target: Option<&Value>) -> Vec<String> {
+    let mut pinned: Vec<String> = vec!["name".to_string()];
+    pinned.extend(registry::env_pinned(kind).into_iter().map(String::from));
+    if let Some(target) = target {
+        if let Some(extra) = target.get(X_RIGG_PIN).and_then(Value::as_array) {
+            for p in extra {
+                if let Some(s) = p.as_str() {
+                    pinned.push(s.to_string());
+                }
+            }
+        }
+        pinned.push(X_RIGG_PIN.to_string());
+    }
+    pinned.sort();
+    pinned.dedup();
+    pinned
+}
+
+/// The source's document becomes the target's, except at `pinned` paths,
+/// which keep the target's current value (when a target exists at all — a
+/// brand-new resource has nothing to pin from, and is created verbatim).
+fn merge_promote(source: &Value, target: Option<&Value>, pinned: &[String]) -> Value {
+    let mut merged = source.clone();
+    if let Some(target) = target {
+        for path in pinned {
+            registry::set_path(&mut merged, target, path);
+        }
+    }
+    merged
+}
+
+fn print_preview(args: &PromoteArgs, plan: &Plan) {
+    println!(
+        "{} project '{}': {} {} {}",
+        "Promote".bold(),
+        args.project,
+        args.from,
+        "→".dimmed(),
+        args.to
+    );
+    println!(
+        "  {} changed, {} new, {} unchanged, {} kept (only in '{}')",
+        plan.changed.len(),
+        plan.new.len(),
+        plan.unchanged.len(),
+        plan.kept_only_in_to.len(),
+        args.to
+    );
+
+    if !plan.changed.is_empty() {
+        println!();
+        let labels = SideLabels {
+            new_side: format!("{} (incoming)", args.from),
+            old_side: args.to.clone(),
+        };
+        for item in &plan.changed {
+            print!(
+                "{}",
+                rigg_diff::output::format_text(&item.diff, &item.label(), &labels)
+            );
+        }
+    }
+
+    if !plan.new.is_empty() {
+        println!();
+        println!("new (will be created in '{}'):", args.to);
+        for item in &plan.new {
+            println!("  {}", item.label());
+        }
+    }
+
+    if !plan.kept_only_in_to.is_empty() {
+        println!();
+        println!("kept (only in '{}' — never touched by promote):", args.to);
+        for (kind, stem) in &plan.kept_only_in_to {
+            println!("  {}/{}", kind.directory_name(), stem);
+        }
+    }
+}
+
+fn print_new_file_hints(args: &PromoteArgs, plan: &Plan) {
+    let with_pins: Vec<&Item> = plan
+        .new
+        .iter()
+        .filter(|i| !registry::env_pinned(i.kind).is_empty())
+        .collect();
+    if with_pins.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "New files were created verbatim from '{}'. Fields worth reviewing (env-pinned by default):",
+        args.from
+    );
+    for item in with_pins {
+        println!(
+            "  {}: {}",
+            item.label(),
+            registry::env_pinned(item.kind).join(", ")
+        );
+    }
+}
+
+fn print_json(plan: &Plan, dry_run: bool) {
+    let mut pinned_kept: serde_json::Map<String, Value> = serde_json::Map::new();
+    for item in &plan.changed {
+        pinned_kept.insert(item.label(), json!(item.pinned));
+    }
+    let value = json!({
+        "dry_run": dry_run,
+        "promoted": plan.changed.iter().map(Item::label).collect::<Vec<_>>(),
+        "created": plan.new.iter().map(Item::label).collect::<Vec<_>>(),
+        "kept_only_in_to": plan
+            .kept_only_in_to
+            .iter()
+            .map(|(k, s)| format!("{}/{}", k.directory_name(), s))
+            .collect::<Vec<_>>(),
+        "pinned_kept": pinned_kept,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).unwrap_or_default()
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn merge_promote_keeps_name_from_target() {
+        let source = json!({"name": "a-name", "model": "m"});
+        let target = json!({"name": "b-name", "model": "old"});
+        let merged = merge_promote(&source, Some(&target), &["name".to_string()]);
+        assert_eq!(merged["name"], json!("b-name"));
+        assert_eq!(
+            merged["model"],
+            json!("m"),
+            "non-pinned field comes from source"
+        );
+    }
+
+    #[test]
+    fn merge_promote_keeps_registry_pinned_path() {
+        // Real Agent shape: tools[].server_url differs per env (points at a
+        // different Search service) and must stay pinned to the target's.
+        let source = json!({
+            "name": "agent",
+            "model": "gpt-5-mini",
+            "tools": [{"type": "mcp", "server_url": "https://dev.search.windows.net/x"}]
+        });
+        let target = json!({
+            "name": "agent",
+            "model": "gpt-5-mini",
+            "tools": [{"type": "mcp", "server_url": "https://prod.search.windows.net/x"}]
+        });
+        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
+        assert!(pinned.iter().any(|p| p == "tools[].server_url"));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        assert_eq!(
+            merged["tools"][0]["server_url"],
+            json!("https://prod.search.windows.net/x"),
+            "target's server_url kept, not source's"
+        );
+    }
+
+    #[test]
+    fn merge_promote_keeps_x_rigg_pin_listed_extra_path() {
+        let source = json!({"name": "conn", "properties": {"description": "new description"}});
+        let target = json!({
+            "name": "conn",
+            "properties": {"description": "prod description"},
+            "x-rigg-pin": ["properties.description"]
+        });
+        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        assert_eq!(
+            merged["properties"]["description"],
+            json!("prod description"),
+            "x-rigg-pin-listed path kept from target"
+        );
+    }
+
+    #[test]
+    fn merge_promote_target_none_is_source_verbatim() {
+        let source = json!({"name": "a", "model": "m", "tools": []});
+        let merged = merge_promote(&source, None, &["name".to_string(), "model".to_string()]);
+        assert_eq!(merged, source);
+    }
+
+    #[test]
+    fn merge_promote_x_rigg_pin_annotation_itself_survives() {
+        let source = json!({"name": "conn", "properties": {"target": "https://dev"}});
+        let target = json!({
+            "name": "conn",
+            "properties": {"target": "https://prod"},
+            "x-rigg-pin": ["properties.description"]
+        });
+        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        assert_eq!(
+            merged["x-rigg-pin"],
+            json!(["properties.description"]),
+            "the annotation itself travels with the target, unmerged from source"
+        );
+        assert_eq!(
+            merged["properties"]["target"],
+            json!("https://prod"),
+            "properties.target is env_pinned_extra for Connection — kept from target too"
+        );
+    }
+
+    #[test]
+    fn pinned_paths_has_no_target_annotation_key_when_target_is_none() {
+        // A brand-new file: nothing to keep pinned yet, so pinned_paths is
+        // just the structural defaults (used only for the review hint).
+        let pinned = pinned_paths(ResourceKind::Agent, None);
+        assert!(!pinned.iter().any(|p| p == X_RIGG_PIN));
+        assert!(pinned.iter().any(|p| p == "tools[].server_url"));
+    }
+}

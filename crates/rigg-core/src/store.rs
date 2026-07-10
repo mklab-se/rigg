@@ -67,6 +67,14 @@ pub enum StoreError {
         first: String,
         second: String,
     },
+    #[error(
+        "cannot create '{path}': stem is already used by a different resource (existing physical name '{existing_name}', new '{new_name}')"
+    )]
+    StemOccupiedByDifferentResource {
+        path: PathBuf,
+        existing_name: String,
+        new_name: String,
+    },
 }
 
 type Result<T> = std::result::Result<T, StoreError>;
@@ -321,6 +329,68 @@ impl<'w> Store<'w> {
             })?;
         }
         sidecar::extract_sidecars(r.kind, &path, &mut normalized)?;
+        std::fs::write(&path, format_json(&normalized)).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(true)
+    }
+
+    /// Write a resource at an explicit STEM rather than its physical name —
+    /// used by `rigg promote` when creating a resource in the target
+    /// environment that has no counterpart there yet: the new file must land
+    /// at the SOURCE environment's stem (its logical/correlation id) so the
+    /// two trees keep correlating by path, even when the resource's physical
+    /// `name` differs from that stem (a renamed resource in the source env).
+    ///
+    /// Unlike [`Store::write`] (which locates-or-creates by physical name),
+    /// this never disambiguates: if `<stem>.json` already exists and holds a
+    /// DIFFERENT physical name than `value`, that's a genuine collision (some
+    /// other resource already occupies this stem) and it errors rather than
+    /// overwriting or guessing a new path. When the existing file's physical
+    /// name matches, it behaves like `write` (update in place, same
+    /// x-rigg-*/write-only carry-over and semantic-no-op short circuit).
+    pub fn write_at(&self, stem: &str, kind: ResourceKind, value: &Value) -> Result<bool> {
+        validate_resource_name(stem).map_err(|e| StoreError::BadName {
+            path: self.kind_dir(kind).join(format!("{stem}.json")),
+            message: e.to_string(),
+        })?;
+        let path = self.kind_dir(kind).join(format!("{stem}.json"));
+        let mut normalized = normalize_for_disk(kind, value);
+        let new_name = normalized
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(stem)
+            .to_string();
+
+        if path.is_file() {
+            let existing = self.read_path(&path)?;
+            let existing_name = existing
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(stem)
+                .to_string();
+            if existing_name != new_name {
+                return Err(StoreError::StemOccupiedByDifferentResource {
+                    path,
+                    existing_name,
+                    new_name,
+                });
+            }
+            carry_over_x_rigg(&existing, &mut normalized);
+            carry_over_write_only(kind, &existing, &mut normalized);
+            if crate::normalize::semantic_eq(kind, &existing, &normalized) {
+                return Ok(false);
+            }
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        sidecar::extract_sidecars(kind, &path, &mut normalized)?;
         std::fs::write(&path, format_json(&normalized)).map_err(|source| StoreError::Io {
             path: path.clone(),
             source,
@@ -1207,6 +1277,132 @@ mod tests {
             ProjectState::checksum(ResourceKind::Index, &a),
             ProjectState::checksum(ResourceKind::Index, &b)
         );
+    }
+
+    #[test]
+    fn write_at_creates_file_at_given_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let created = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m"}),
+            )
+            .unwrap();
+        assert!(created);
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert!(
+            dir.join("regulus.json").is_file(),
+            "landed at the stem, not the physical name"
+        );
+        assert!(!dir.join("Regulus-Prod.json").exists());
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["name"], json!("Regulus-Prod"));
+    }
+
+    #[test]
+    fn write_at_updates_in_place_when_physical_name_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m1"}),
+            )
+            .unwrap();
+        let rewritten = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m2"}),
+            )
+            .unwrap();
+        assert!(rewritten);
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["model"], json!("m2"));
+    }
+
+    #[test]
+    fn write_at_refuses_to_overwrite_a_different_resources_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m1"}),
+            )
+            .unwrap();
+        let err = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "some-other-name", "model": "m2"}),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::StemOccupiedByDifferentResource { .. }
+        ));
+        // original untouched
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["name"], json!("Regulus-Prod"));
+    }
+
+    #[test]
+    fn write_at_returns_false_when_semantically_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "idx",
+                ResourceKind::Index,
+                &json!({"name": "idx", "fields": []}),
+            )
+            .unwrap();
+        let rewritten = store
+            .write_at(
+                "idx",
+                ResourceKind::Index,
+                &json!({"@odata.etag": "0x1", "name": "idx", "fields": []}),
+            )
+            .unwrap();
+        assert!(!rewritten);
+    }
+
+    #[test]
+    fn write_at_rejects_path_escaping_stems() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let err = store.write_at("../../evil", ResourceKind::Index, &json!({"name": "evil"}));
+        assert!(matches!(err, Err(StoreError::BadName { .. })), "{err:?}");
     }
 
     #[test]

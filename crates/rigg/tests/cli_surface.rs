@@ -702,3 +702,272 @@ fn concepts_includes_naming_guidance() {
         .success()
         .stdout(predicate::str::contains("Name a project after"));
 }
+
+/// A workspace with two environments (dev + prod) and one project, no
+/// resources yet — tests populate `envs/<env>/...` files directly for full
+/// control over the dev/prod divergence being exercised.
+fn two_env_workspace() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  \
+         dev:\n    default: true\n    search: { service: dev-svc }\n    foundry: { account: dev-acct, project: dev-proj }\n  \
+         prod:\n    search: { service: prod-svc }\n    foundry: { account: prod-acct, project: prod-proj }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+fn write_json(path: &std::path::Path, value: &serde_json::Value) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+}
+
+fn read_json(path: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn promote_keeps_pinned_fields_applies_other_changes_and_creates_missing_files() {
+    let ws = two_env_workspace();
+    let dev_agents = ws.path().join("projects/demo/envs/dev/foundry/agents");
+    let prod_agents = ws.path().join("projects/demo/envs/prod/foundry/agents");
+
+    // Same logical resource (stem "helper"), diverged physical name in prod
+    // (renamed there) plus a pinned tool field — both must survive promote.
+    write_json(
+        &dev_agents.join("helper.json"),
+        &serde_json::json!({
+            "name": "helper",
+            "model": "gpt-5-mini",
+            "instructions": "Be helpful.",
+            "tools": [{
+                "type": "mcp",
+                "server_url": "https://dev.example.search.windows.net/mcp",
+                "project_connection_id": "conn-dev"
+            }]
+        }),
+    );
+    write_json(
+        &prod_agents.join("helper.json"),
+        &serde_json::json!({
+            "name": "helper-PROD",
+            "model": "gpt-4o-old",
+            "instructions": "Be helpful.",
+            "tools": [{
+                "type": "mcp",
+                "server_url": "https://prod.example.search.windows.net/mcp",
+                "project_connection_id": "conn-prod"
+            }]
+        }),
+    );
+
+    // dev-only index: has no prod counterpart, must be created verbatim.
+    let dev_indexes = ws.path().join("projects/demo/envs/dev/search/indexes");
+    write_json(
+        &dev_indexes.join("docs.json"),
+        &serde_json::json!({"name": "docs", "fields": []}),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 changed"))
+        .stdout(predicate::str::contains("1 new"))
+        .stdout(predicate::str::contains("rigg diff demo -e prod"))
+        .stdout(predicate::str::contains("rigg push demo -e prod"));
+
+    let prod_helper = read_json(&prod_agents.join("helper.json"));
+    assert_eq!(
+        prod_helper["name"], "helper-PROD",
+        "physical name stays pinned to the target's"
+    );
+    assert_eq!(
+        prod_helper["model"], "gpt-5-mini",
+        "non-pinned field promoted from dev"
+    );
+    assert_eq!(
+        prod_helper["tools"][0]["server_url"], "https://prod.example.search.windows.net/mcp",
+        "registry-pinned tool field kept from target"
+    );
+    assert_eq!(
+        prod_helper["tools"][0]["project_connection_id"], "conn-prod",
+        "registry-pinned connection id kept from target"
+    );
+
+    let prod_index_path = ws
+        .path()
+        .join("projects/demo/envs/prod/search/indexes/docs.json");
+    assert!(
+        prod_index_path.is_file(),
+        "missing resource created in prod"
+    );
+    assert_eq!(read_json(&prod_index_path)["name"], "docs");
+}
+
+#[test]
+fn promote_x_rigg_pin_annotation_keeps_extra_path_and_itself() {
+    let ws = two_env_workspace();
+    let dev_conns = ws.path().join("projects/demo/envs/dev/foundry/connections");
+    let prod_conns = ws
+        .path()
+        .join("projects/demo/envs/prod/foundry/connections");
+
+    write_json(
+        &dev_conns.join("c.json"),
+        &serde_json::json!({
+            "name": "c",
+            "properties": {
+                "category": "RemoteTool",
+                "target": "https://dev-endpoint",
+                "description": "dev description"
+            }
+        }),
+    );
+    write_json(
+        &prod_conns.join("c.json"),
+        &serde_json::json!({
+            "name": "c",
+            "properties": {
+                "category": "RemoteTool-OLD",
+                "target": "https://prod-endpoint",
+                "description": "prod description — do not overwrite"
+            },
+            "x-rigg-pin": ["properties.description"]
+        }),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success();
+
+    let merged = read_json(&prod_conns.join("c.json"));
+    assert_eq!(
+        merged["properties"]["category"], "RemoteTool",
+        "non-pinned field promoted"
+    );
+    assert_eq!(
+        merged["properties"]["target"], "https://prod-endpoint",
+        "properties.target is env-pinned by default for Connection"
+    );
+    assert_eq!(
+        merged["properties"]["description"], "prod description — do not overwrite",
+        "x-rigg-pin-listed path kept"
+    );
+    assert_eq!(
+        merged["x-rigg-pin"],
+        serde_json::json!(["properties.description"]),
+        "the annotation itself survives the promote"
+    );
+}
+
+#[test]
+fn promote_dry_run_writes_nothing() {
+    let ws = two_env_workspace();
+    let dev_indexes = ws.path().join("projects/demo/envs/dev/search/indexes");
+    write_json(
+        &dev_indexes.join("docs.json"),
+        &serde_json::json!({"name": "docs", "fields": []}),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run"));
+
+    assert!(
+        !ws.path()
+            .join("projects/demo/envs/prod/search/indexes/docs.json")
+            .exists(),
+        "dry-run must not write anything"
+    );
+}
+
+#[test]
+fn promote_non_interactive_without_yes_is_usage_error() {
+    let ws = two_env_workspace();
+    let dev_indexes = ws.path().join("projects/demo/envs/dev/search/indexes");
+    write_json(
+        &dev_indexes.join("docs.json"),
+        &serde_json::json!({"name": "docs", "fields": []}),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--yes"));
+
+    assert!(
+        !ws.path()
+            .join("projects/demo/envs/prod/search/indexes/docs.json")
+            .exists()
+    );
+}
+
+#[test]
+fn promote_rejects_same_env() {
+    let ws = two_env_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "dev", "-y"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn promote_rejects_unknown_env() {
+    let ws = two_env_workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "staging", "-y"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("staging"));
+}
+
+#[test]
+fn promote_nothing_to_do_when_envs_already_match() {
+    let ws = two_env_workspace();
+    for env in ["dev", "prod"] {
+        write_json(
+            &ws.path()
+                .join(format!("projects/demo/envs/{env}/search/indexes/docs.json")),
+            &serde_json::json!({"name": "docs", "fields": []}),
+        );
+    }
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to promote"));
+}
+
+#[test]
+fn promote_help_documents_local_only_and_pinned_fields() {
+    rigg()
+        .args(["promote", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pinned"))
+        .stdout(predicate::str::contains("never touches Azure"));
+}
