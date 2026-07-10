@@ -197,7 +197,14 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         // Explicit-only model: Rigg never manages Azure-created sub-resources.
         read_only_fields: &["createdResources", "ingestionPermissionOptions"],
-        secret_fields: &["searchIndexParameters.apiKey"],
+        // azureBlobParameters.connectionString is credential material for the
+        // managed-ingestion (azureBlob) KS shape: rejecting key values in
+        // validate AND keeping it env-pinned during promote (via env_pinned's
+        // secret ∪ write-only ∪ extras union).
+        secret_fields: &[
+            "searchIndexParameters.apiKey",
+            "azureBlobParameters.connectionString",
+        ],
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
@@ -610,25 +617,34 @@ pub fn collect_path(v: &Value, path: &str, f: &mut dyn FnMut(&Value)) {
     walk(v, &segments, f);
 }
 
-/// Set `dst`'s value(s) at `path` to the corresponding value(s) taken from
+/// Restore `dst`'s value(s) at `path` from the corresponding value(s) in
 /// `src` at the SAME path — the SET counterpart to [`collect_path`], used to
 /// apply `rigg promote`'s pinned fields (keep the target's value at pinned
-/// paths). Mirrors `collect_path`'s traversal (`a.b`, `arr[].field`, `arr[]`).
+/// paths: `dst` is the merged/source-cloned doc, `src` is the target env's
+/// current doc). Mirrors `collect_path`'s traversal (`a.b`, `arr[].field`,
+/// `arr[]`).
 ///
 /// For `[]` segments, `dst` and `src` arrays are paired by POSITION (index),
 /// not by an identity key — pinned paths (e.g. an agent's tool list) may have
-/// no stable name to match on. When the arrays differ in length, only the
-/// shared index prefix is paired; anything beyond it in `dst` is left as-is
-/// (there's nothing on the `src` side to pin from). Missing intermediate
-/// objects in `dst` are created (mirroring how the value is nested in `src`);
-/// when `src` doesn't have a value at some point along the path, that
-/// position in `dst` is left untouched.
-pub fn set_path(dst: &mut Value, src: &Value, path: &str) {
+/// no stable name to match on. When the arrays differ in length:
+///
+/// - `src` (the target) longer: the extra elements are appended to `dst`
+///   WHOLESALE — they are target-only customizations (e.g. an extra tool
+///   only prod has) and must survive promote; dropping them would be silent
+///   data loss.
+/// - `dst` (the merged/source side) longer: its extra elements are left
+///   as-is — they come from the source (that IS the promotion) and there is
+///   nothing on the target side to pin from.
+///
+/// Missing intermediate objects in `dst` are created (mirroring how the
+/// value is nested in `src`); when `src` doesn't have a value at some point
+/// along the path, that position in `dst` is left untouched.
+pub fn restore_path(dst: &mut Value, src: &Value, path: &str) {
     let segments: Vec<&str> = path.split('.').collect();
-    set_path_walk(dst, src, &segments);
+    restore_path_walk(dst, src, &segments);
 }
 
-fn set_path_walk(dst: &mut Value, src: &Value, segments: &[&str]) {
+fn restore_path_walk(dst: &mut Value, src: &Value, segments: &[&str]) {
     let Some((head, rest)) = segments.split_first() else {
         *dst = src.clone();
         return;
@@ -662,20 +678,27 @@ fn set_path_walk(dst: &mut Value, src: &Value, segments: &[&str]) {
             let entry = dst_map
                 .entry((*head).to_string())
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            set_path_walk(entry, src_val, rest);
+            restore_path_walk(entry, src_val, rest);
         }
     }
 }
 
-/// Pair `dst`/`src` arrays by index (min-prefix) and recurse `rest` into each
-/// matched pair.
+/// Pair `dst`/`src` arrays by index and recurse `rest` into each matched
+/// pair; `src`-only elements (the target env's extra array members) are then
+/// appended to `dst` wholesale so promote never drops them. Idempotent
+/// across multiple pinned paths through the same array: after the first
+/// restore appends the extras, later paths find equal lengths and simply
+/// re-pair.
 fn pair_arrays(dst: &mut Value, src: &Value, rest: &[&str]) {
     let (Value::Array(d), Value::Array(s)) = (dst, src) else {
         return;
     };
     let n = d.len().min(s.len());
     for i in 0..n {
-        set_path_walk(&mut d[i], &s[i], rest);
+        restore_path_walk(&mut d[i], &s[i], rest);
+    }
+    if s.len() > d.len() {
+        d.extend(s[n..].iter().cloned());
     }
 }
 
@@ -963,24 +986,41 @@ mod tests {
     }
 
     #[test]
-    fn set_path_plain_field() {
+    fn knowledge_source_blob_connection_is_secret_and_env_pinned() {
+        // The azureBlob KS shape carries a per-env storage connection string:
+        // it must be validate-rejected as credential material AND kept pinned
+        // to the target env during promote.
+        assert!(
+            meta(ResourceKind::KnowledgeSource)
+                .secret_fields
+                .contains(&"azureBlobParameters.connectionString")
+        );
+        assert!(
+            env_pinned(ResourceKind::KnowledgeSource)
+                .contains(&"azureBlobParameters.connectionString"),
+            "env_pinned includes it via the secret_fields union"
+        );
+    }
+
+    #[test]
+    fn restore_path_plain_field() {
         let mut dst = json!({"name": "b-name", "model": "m1"});
         let src = json!({"name": "a-name", "model": "m2"});
-        set_path(&mut dst, &src, "name");
+        restore_path(&mut dst, &src, "name");
         assert_eq!(dst["name"], json!("a-name"));
         assert_eq!(dst["model"], json!("m1"), "unrelated field untouched");
     }
 
     #[test]
-    fn set_path_creates_missing_intermediate_objects() {
+    fn restore_path_creates_missing_intermediate_objects() {
         let mut dst = json!({"name": "x"});
         let src = json!({"name": "x", "credentials": {"connectionString": "secret"}});
-        set_path(&mut dst, &src, "credentials.connectionString");
+        restore_path(&mut dst, &src, "credentials.connectionString");
         assert_eq!(dst["credentials"]["connectionString"], json!("secret"));
     }
 
     #[test]
-    fn set_path_array_paired_by_index_not_identity() {
+    fn restore_path_array_paired_by_index_not_identity() {
         let mut dst = json!({
             "tools": [
                 {"type": "mcp", "server_url": "https://dst-a"},
@@ -993,7 +1033,7 @@ mod tests {
                 {"type": "mcp", "server_url": "https://src-b"}
             ]
         });
-        set_path(&mut dst, &src, "tools[].server_url");
+        restore_path(&mut dst, &src, "tools[].server_url");
         assert_eq!(dst["tools"][0]["server_url"], json!("https://src-a"));
         assert_eq!(dst["tools"][1]["server_url"], json!("https://src-b"));
         assert_eq!(
@@ -1004,14 +1044,14 @@ mod tests {
     }
 
     #[test]
-    fn set_path_array_min_prefix_when_lengths_differ() {
+    fn restore_path_array_min_prefix_when_lengths_differ() {
         // dst has 3 tools, src only 2: only the first two get src's value;
         // the third is left as dst had it (nothing to pin from).
         let mut dst = json!({
             "tools": [{"server_url": "d1"}, {"server_url": "d2"}, {"server_url": "d3"}]
         });
         let src = json!({"tools": [{"server_url": "s1"}, {"server_url": "s2"}]});
-        set_path(&mut dst, &src, "tools[].server_url");
+        restore_path(&mut dst, &src, "tools[].server_url");
         assert_eq!(dst["tools"][0]["server_url"], json!("s1"));
         assert_eq!(dst["tools"][1]["server_url"], json!("s2"));
         assert_eq!(
@@ -1022,18 +1062,46 @@ mod tests {
     }
 
     #[test]
-    fn set_path_missing_in_src_leaves_dst_untouched() {
+    fn restore_path_appends_src_only_array_elements_wholesale() {
+        // CRITICAL regression (promote data-loss): merged doc = SOURCE clone,
+        // so its array has the source's length. When the TARGET (`src` of the
+        // restore) has MORE elements, the extras must be appended wholesale —
+        // otherwise promote silently deletes the target's extra tools.
+        let mut dst = json!({
+            "tools": [{"type": "mcp", "server_url": "https://src-a"}]
+        });
+        let src = json!({
+            "tools": [
+                {"type": "mcp", "server_url": "https://tgt-a"},
+                {"type": "file_search", "vector_store_ids": ["vs1"]},
+                {"type": "mcp", "server_url": "https://tgt-c"}
+            ]
+        });
+        restore_path(&mut dst, &src, "tools[].server_url");
+        let tools = dst["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 3, "target-only elements survive: {tools:?}");
+        assert_eq!(tools[0]["server_url"], json!("https://tgt-a"), "paired");
+        assert_eq!(
+            tools[1],
+            json!({"type": "file_search", "vector_store_ids": ["vs1"]}),
+            "extra element appended wholesale, not just the leaf field"
+        );
+        assert_eq!(tools[2]["server_url"], json!("https://tgt-c"));
+    }
+
+    #[test]
+    fn restore_path_missing_in_src_leaves_dst_untouched() {
         let mut dst = json!({"name": "b", "model": "kept"});
         let src = json!({"name": "a"});
-        set_path(&mut dst, &src, "model");
+        restore_path(&mut dst, &src, "model");
         assert_eq!(dst["model"], json!("kept"));
     }
 
     #[test]
-    fn set_path_missing_array_in_src_leaves_dst_untouched() {
+    fn restore_path_missing_array_in_src_leaves_dst_untouched() {
         let mut dst = json!({"tools": [{"server_url": "kept"}]});
         let src = json!({"name": "a"});
-        set_path(&mut dst, &src, "tools[].server_url");
+        restore_path(&mut dst, &src, "tools[].server_url");
         assert_eq!(dst["tools"][0]["server_url"], json!("kept"));
     }
 }

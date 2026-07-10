@@ -971,3 +971,153 @@ fn promote_help_documents_local_only_and_pinned_fields() {
         .stdout(predicate::str::contains("pinned"))
         .stdout(predicate::str::contains("never touches Azure"));
 }
+
+#[test]
+fn promote_preserves_target_only_tools_end_to_end() {
+    // CRITICAL data-loss regression: prod's agent carries tools dev doesn't
+    // have (an extra file_search tool). Promote must keep them — the pinned
+    // merge appends target-only array elements wholesale.
+    let ws = two_env_workspace();
+    let dev_agents = ws.path().join("projects/demo/envs/dev/foundry/agents");
+    let prod_agents = ws.path().join("projects/demo/envs/prod/foundry/agents");
+    write_json(
+        &dev_agents.join("helper.json"),
+        &serde_json::json!({
+            "name": "helper",
+            "model": "gpt-5-mini",
+            "tools": [{"type": "mcp", "server_url": "https://dev.search.windows.net/mcp"}]
+        }),
+    );
+    write_json(
+        &prod_agents.join("helper.json"),
+        &serde_json::json!({
+            "name": "helper",
+            "model": "gpt-4o-old",
+            "tools": [
+                {"type": "mcp", "server_url": "https://prod.search.windows.net/mcp"},
+                {"type": "file_search", "vector_store_ids": ["vs-prod-only"]}
+            ]
+        }),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success();
+
+    let prod = read_json(&prod_agents.join("helper.json"));
+    let tools = prod["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 2, "prod-only tool survives: {tools:?}");
+    assert_eq!(
+        tools[0]["server_url"], "https://prod.search.windows.net/mcp",
+        "paired tool keeps prod's pinned server_url"
+    );
+    assert_eq!(
+        tools[1],
+        serde_json::json!({"type": "file_search", "vector_store_ids": ["vs-prod-only"]}),
+        "prod-only tool kept wholesale"
+    );
+    assert_eq!(prod["model"], "gpt-5-mini", "non-pinned field promoted");
+}
+
+#[test]
+fn promote_leaves_only_in_to_resources_byte_identical() {
+    let ws = two_env_workspace();
+    // dev has one index; prod has that index PLUS a prod-only synonym map.
+    for env in ["dev", "prod"] {
+        write_json(
+            &ws.path()
+                .join(format!("projects/demo/envs/{env}/search/indexes/docs.json")),
+            &serde_json::json!({"name": "docs", "fields": [{"name": env}]}),
+        );
+    }
+    let prod_only = ws
+        .path()
+        .join("projects/demo/envs/prod/search/synonym-maps/brands.json");
+    write_json(
+        &prod_only,
+        &serde_json::json!({"name": "brands", "format": "solr", "synonyms": "a,b"}),
+    );
+    let before = std::fs::read(&prod_only).unwrap();
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kept (only in 'prod'"))
+        .stdout(predicate::str::contains("synonym-maps/brands"));
+
+    let after = std::fs::read(&prod_only).unwrap();
+    assert_eq!(before, after, "only-in-TO file must be byte-identical");
+    // and the promoted index did change
+    assert_eq!(
+        read_json(
+            &ws.path()
+                .join("projects/demo/envs/prod/search/indexes/docs.json")
+        )["fields"][0]["name"],
+        "dev"
+    );
+}
+
+#[test]
+fn promote_json_output_has_documented_keys() {
+    let ws = two_env_workspace();
+    // one changed (index), one created (agent), one kept-only-in-to (alias)
+    for (env, field) in [("dev", "new"), ("prod", "old")] {
+        write_json(
+            &ws.path()
+                .join(format!("projects/demo/envs/{env}/search/indexes/docs.json")),
+            &serde_json::json!({"name": "docs", "fields": [{"name": field}]}),
+        );
+    }
+    write_json(
+        &ws.path()
+            .join("projects/demo/envs/dev/foundry/agents/helper.json"),
+        &serde_json::json!({"name": "helper", "model": "m"}),
+    );
+    write_json(
+        &ws.path()
+            .join("projects/demo/envs/prod/search/aliases/docs-alias.json"),
+        &serde_json::json!({"name": "docs-alias", "indexes": ["docs"]}),
+    );
+
+    let output = rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote", "demo", "--from", "dev", "--to", "prod", "-y", "--output", "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|e| panic!("stdout must be pure JSON: {e}"));
+
+    assert_eq!(v["promoted"], serde_json::json!(["indexes/docs"]));
+    assert_eq!(v["created"], serde_json::json!(["agents/helper"]));
+    assert_eq!(
+        v["kept_only_in_to"],
+        serde_json::json!(["aliases/docs-alias"])
+    );
+    let pinned = v["pinned_kept"]["indexes/docs"].as_array().unwrap();
+    assert!(
+        pinned.iter().any(|p| p == "name"),
+        "pinned_kept lists the pin paths used: {pinned:?}"
+    );
+    assert_eq!(v["dry_run"], serde_json::json!(false));
+
+    // the files actually changed
+    assert_eq!(
+        read_json(
+            &ws.path()
+                .join("projects/demo/envs/prod/search/indexes/docs.json")
+        )["fields"][0]["name"],
+        "new"
+    );
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/prod/foundry/agents/helper.json")
+            .is_file()
+    );
+}

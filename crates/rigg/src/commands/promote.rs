@@ -234,11 +234,19 @@ fn pinned_paths(kind: ResourceKind, target: Option<&Value>) -> Vec<String> {
 /// The source's document becomes the target's, except at `pinned` paths,
 /// which keep the target's current value (when a target exists at all — a
 /// brand-new resource has nothing to pin from, and is created verbatim).
+/// Target-only array elements along pinned array paths survive wholesale
+/// (see `registry::restore_path`).
 fn merge_promote(source: &Value, target: Option<&Value>, pinned: &[String]) -> Value {
     let mut merged = source.clone();
+    // The x-rigg-pin annotation belongs to the TARGET env's file only — a
+    // source-side copy must not leak across; the target's own annotation (if
+    // any) is restored below via the pinned X_RIGG_PIN path.
+    if let Some(map) = merged.as_object_mut() {
+        map.remove(X_RIGG_PIN);
+    }
     if let Some(target) = target {
         for path in pinned {
-            registry::set_path(&mut merged, target, path);
+            registry::restore_path(&mut merged, target, path);
         }
     }
     merged
@@ -381,6 +389,72 @@ mod tests {
     }
 
     #[test]
+    fn merge_promote_preserves_target_only_tools() {
+        // CRITICAL regression: prod (target) has customizations dev doesn't —
+        // an extra file_search tool and a second MCP tool. Promote must not
+        // silently delete them: they survive the merge wholesale.
+        let source = json!({
+            "name": "agent",
+            "model": "gpt-5-mini",
+            "tools": [{"type": "mcp", "server_url": "https://dev.search.windows.net/x"}]
+        });
+        let target = json!({
+            "name": "agent",
+            "model": "gpt-4o-old",
+            "tools": [
+                {"type": "mcp", "server_url": "https://prod.search.windows.net/x"},
+                {"type": "file_search", "vector_store_ids": ["vs-prod"]},
+                {"type": "mcp", "server_url": "https://prod.search.windows.net/y",
+                 "project_connection_id": "conn-prod-2"}
+            ]
+        });
+        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        let tools = merged["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 3, "target-only tools survive: {tools:?}");
+        assert_eq!(
+            tools[0]["server_url"],
+            json!("https://prod.search.windows.net/x"),
+            "paired tool keeps target's pinned field"
+        );
+        assert_eq!(
+            tools[1],
+            json!({"type": "file_search", "vector_store_ids": ["vs-prod"]}),
+            "target-only tool survives wholesale"
+        );
+        assert_eq!(
+            tools[2]["project_connection_id"],
+            json!("conn-prod-2"),
+            "second target-only tool survives with all fields"
+        );
+        assert_eq!(merged["model"], json!("gpt-5-mini"), "non-pinned promoted");
+    }
+
+    #[test]
+    fn merge_promote_source_only_tools_stay() {
+        // Reverse direction: source has MORE tools than the target. The
+        // extras come from the source (that's the promotion) and keep the
+        // source's own values — nothing on the target side to pin from.
+        let source = json!({
+            "name": "agent",
+            "tools": [
+                {"type": "mcp", "server_url": "https://dev/x"},
+                {"type": "code_interpreter"}
+            ]
+        });
+        let target = json!({
+            "name": "agent",
+            "tools": [{"type": "mcp", "server_url": "https://prod/x"}]
+        });
+        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        let tools = merged["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2, "source's extra tool is promoted: {tools:?}");
+        assert_eq!(tools[0]["server_url"], json!("https://prod/x"), "paired");
+        assert_eq!(tools[1], json!({"type": "code_interpreter"}));
+    }
+
+    #[test]
     fn merge_promote_keeps_x_rigg_pin_listed_extra_path() {
         let source = json!({"name": "conn", "properties": {"description": "new description"}});
         let target = json!({
@@ -424,6 +498,28 @@ mod tests {
             json!("https://prod"),
             "properties.target is env_pinned_extra for Connection — kept from target too"
         );
+    }
+
+    #[test]
+    fn merge_promote_strips_source_side_x_rigg_pin() {
+        // The annotation lives in the TARGET env's file. A source-side copy
+        // (e.g. promoted A→B earlier, now promoting B→A's sibling) must not
+        // leak into the merged output when the target has none of its own.
+        let source = json!({
+            "name": "conn",
+            "properties": {"target": "https://dev"},
+            "x-rigg-pin": ["properties.description"]
+        });
+        let target = json!({"name": "conn", "properties": {"target": "https://prod"}});
+        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
+        let merged = merge_promote(&source, Some(&target), &pinned);
+        assert!(
+            merged.get(X_RIGG_PIN).is_none(),
+            "source's annotation must not leak: {merged:?}"
+        );
+        // and target None (new file) also drops it — the fresh copy starts clean
+        let created = merge_promote(&source, None, &pinned);
+        assert!(created.get(X_RIGG_PIN).is_none());
     }
 
     #[test]
