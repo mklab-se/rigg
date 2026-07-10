@@ -172,7 +172,7 @@ fn with_common<'a>(mut args: Vec<&'a str>, env: &'a Option<String>, json: bool) 
 #[tool_router]
 impl RiggMcpServer {
     #[tool(
-        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources."
+        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources. Scoped to ONE environment (the default unless `env` is set)."
     )]
     async fn rigg_status(&self, Parameters(params): Parameters<ProjectParams>) -> String {
         let mut args = vec!["status"];
@@ -183,7 +183,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Full workspace description: projects, all resources with definitions and file paths, the dependency graph, and 'APIs to implement' (OpenAPI specs in apis/ that skillsets reference). The fastest way to understand the workspace."
+        description = "Full workspace description: projects, all resources with definitions and file paths, the dependency graph, and 'APIs to implement' (OpenAPI specs in apis/ that skillsets reference). Scoped to ONE environment (the default unless `env` is set). The fastest way to understand the workspace."
     )]
     async fn rigg_describe(&self, Parameters(params): Parameters<ProjectParams>) -> String {
         let mut args = vec!["describe"];
