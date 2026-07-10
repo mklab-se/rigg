@@ -3,47 +3,90 @@
 use crate::semantic::{Change, ChangeKind, DiffResult};
 use serde_json::Value;
 
-/// Format diff result as human-readable text
-pub fn format_text(result: &DiffResult, resource_name: &str) -> String {
+/// Fixed column width for the field-path column in the text table renderer.
+const FIELD_COL_WIDTH: usize = 40;
+/// Fixed column width for the "new side" value column in the text table renderer.
+const VALUE_COL_WIDTH: usize = 20;
+
+/// Human-readable labels for the two sides of a diff.
+///
+/// The diff engine itself is direction-neutral internally (`old`/`new`), but
+/// callers know what those sides actually *are* — local project files, a
+/// specific Azure environment, or another environment in `--compare-env`
+/// mode. Renderers use these labels instead of temporal language ("was"/
+/// "now") so the output never implies a push- or pull-shaped direction that
+/// isn't actually happening.
+#[derive(Debug, Clone)]
+pub struct SideLabels {
+    /// Label for the diff engine's "new" side (typically local project files,
+    /// or the first-named environment in `--compare-env` mode).
+    pub new_side: String,
+    /// Label for the diff engine's "old" side (typically the resolved Azure
+    /// environment, or the second-named environment in `--compare-env` mode).
+    pub old_side: String,
+}
+
+/// Format diff result as human-readable text (a labeled two-column table).
+pub fn format_text(result: &DiffResult, resource_name: &str, labels: &SideLabels) -> String {
     if result.is_equal {
         return format!("{}: no changes\n", resource_name);
     }
 
     let mut output = String::new();
     output.push_str(&format!(
-        "{}: {} change(s)\n",
+        "{} — differs ({} field(s))\n\n",
         resource_name,
         result.changes.len()
     ));
+    output.push_str(&format!(
+        "{:<fw$} {:<vw$} {}\n",
+        "field",
+        labels.new_side,
+        labels.old_side,
+        fw = FIELD_COL_WIDTH,
+        vw = VALUE_COL_WIDTH
+    ));
 
     for change in &result.changes {
-        output.push_str(&format_change_text(change));
+        output.push_str(&format_change_row(change));
     }
 
     output
 }
 
-fn format_change_text(change: &Change) -> String {
-    // If a higher layer set a description, use it directly
+fn format_change_row(change: &Change) -> String {
+    // If a higher layer set a description, print it as a full-width row.
     if let Some(desc) = &change.description {
         return format!("  {}\n", desc);
     }
 
-    match change.kind {
-        ChangeKind::Added => {
-            let value_str = format_value_preview(change.new_value.as_ref());
-            format!("  + {}: {}\n", change.path, value_str)
-        }
-        ChangeKind::Removed => {
-            let value_str = format_value_preview(change.old_value.as_ref());
-            format!("  - {}: {}\n", change.path, value_str)
-        }
-        ChangeKind::Modified => {
-            let old_str = format_value_preview(change.old_value.as_ref());
-            let new_str = format_value_preview(change.new_value.as_ref());
-            format!("  ~ {}: was {}, now {}\n", change.path, old_str, new_str)
-        }
-    }
+    let (marker, new_str, old_str) = match change.kind {
+        ChangeKind::Added => (
+            '+',
+            format_value_preview(change.new_value.as_ref()),
+            "(absent)".to_string(),
+        ),
+        ChangeKind::Removed => (
+            '-',
+            "(absent)".to_string(),
+            format_value_preview(change.old_value.as_ref()),
+        ),
+        ChangeKind::Modified => (
+            '~',
+            format_value_preview(change.new_value.as_ref()),
+            format_value_preview(change.old_value.as_ref()),
+        ),
+    };
+    let field = format!("{} {}", marker, change.path);
+
+    format!(
+        "{:<fw$} {:<vw$} {}\n",
+        field,
+        new_str,
+        old_str,
+        fw = FIELD_COL_WIDTH,
+        vw = VALUE_COL_WIDTH
+    )
 }
 
 /// Create a human-readable preview of a JSON value.
@@ -75,7 +118,13 @@ pub fn format_value_preview(value: Option<&Value>) -> String {
                 format!("[{} items]", arr.len())
             }
         }
-        Some(Value::Object(obj)) => format!("{{...}} ({} keys)", obj.len()),
+        Some(Value::Object(obj)) => {
+            if obj.len() == 1 {
+                "{...} (1 key)".to_string()
+            } else {
+                format!("{{...}} ({} keys)", obj.len())
+            }
+        }
     }
 }
 
@@ -93,9 +142,13 @@ pub fn format_json(result: &DiffResult) -> String {
 }
 
 /// Format a full diff report for multiple resources
-pub fn format_report(diffs: &[(String, DiffResult)], format: OutputFormat) -> String {
+pub fn format_report(
+    diffs: &[(String, DiffResult)],
+    format: OutputFormat,
+    labels: &SideLabels,
+) -> String {
     match format {
-        OutputFormat::Text => format_report_text(diffs),
+        OutputFormat::Text => format_report_text(diffs, labels),
         OutputFormat::Json => format_report_json(diffs),
     }
 }
@@ -107,7 +160,7 @@ pub enum OutputFormat {
     Json,
 }
 
-fn format_report_text(diffs: &[(String, DiffResult)]) -> String {
+fn format_report_text(diffs: &[(String, DiffResult)], labels: &SideLabels) -> String {
     let mut output = String::new();
 
     let (changed, unchanged): (Vec<_>, Vec<_>) = diffs.iter().partition(|(_, r)| !r.is_equal);
@@ -123,7 +176,7 @@ fn format_report_text(diffs: &[(String, DiffResult)]) -> String {
     ));
 
     for (name, result) in &changed {
-        output.push_str(&format_text(result, name));
+        output.push_str(&format_text(result, name, labels));
         output.push('\n');
     }
 
@@ -155,6 +208,13 @@ mod tests {
     use crate::semantic::diff;
     use serde_json::json;
 
+    fn labels() -> SideLabels {
+        SideLabels {
+            new_side: "local".to_string(),
+            old_side: "Azure (dev)".to_string(),
+        }
+    }
+
     #[test]
     fn test_format_text_no_changes() {
         let result = DiffResult {
@@ -162,7 +222,7 @@ mod tests {
             changes: vec![],
         };
 
-        let output = format_text(&result, "test-index");
+        let output = format_text(&result, "test-index", &labels());
         assert!(output.contains("no changes"));
     }
 
@@ -172,13 +232,13 @@ mod tests {
         let new = json!({"name": "test", "value": 2});
 
         let result = diff(&old, &new, "name");
-        let output = format_text(&result, "test-index");
+        let output = format_text(&result, "test-index", &labels());
 
-        assert!(output.contains("1 change"));
+        assert!(output.contains("1 field"));
         assert!(output.contains("value"));
         assert!(output.contains("~")); // modified indicator
-        assert!(output.contains("was"));
-        assert!(output.contains("now"));
+        assert!(!output.contains(" was "));
+        assert!(!output.contains(" now "));
     }
 
     #[test]
@@ -197,7 +257,7 @@ mod tests {
             }],
         };
 
-        let output = format_text(&result, "test-index");
+        let output = format_text(&result, "test-index", &labels());
         assert!(output.contains("The description differs"));
         assert!(!output.contains("~")); // Should not use generic format
     }
@@ -267,7 +327,19 @@ mod tests {
     }
 
     #[test]
-    fn test_modified_uses_english_phrasing() {
+    fn test_format_value_preview_object_singular_key() {
+        let preview = format_value_preview(Some(&json!({"a": 1})));
+        assert_eq!(preview, "{...} (1 key)");
+    }
+
+    #[test]
+    fn test_format_value_preview_object_plural_keys() {
+        let preview = format_value_preview(Some(&json!({"a": 1, "b": 2})));
+        assert_eq!(preview, "{...} (2 keys)");
+    }
+
+    #[test]
+    fn test_modified_row_has_no_temporal_words() {
         let change = Change {
             path: "description".to_string(),
             kind: ChangeKind::Modified,
@@ -275,17 +347,66 @@ mod tests {
             new_value: Some(json!("new text")),
             description: None,
         };
-        let output = format_change_text(&change);
-        assert!(output.contains("was"));
-        assert!(output.contains("now"));
+        let output = format_change_row(&change);
+        assert!(!output.contains(" was "));
+        assert!(!output.contains(" now "));
         assert!(!output.contains("->"));
+        assert!(output.contains("old text"));
+        assert!(output.contains("new text"));
+    }
+
+    #[test]
+    fn table_renders_both_sides_with_labels_no_temporal_words() {
+        let result = diff(
+            &json!({"name": "a", "model": "gpt-5.6-luna"}), // old = Azure
+            &json!({"name": "a", "model": "gpt-5.2-chat"}), // new = local
+            "name",
+        );
+        let labels = SideLabels {
+            new_side: "local".to_string(),
+            old_side: "Azure (dev)".to_string(),
+        };
+        let out = format_text(&result, "regulus/agents/Regulus", &labels);
+        assert!(out.contains("local"), "{out}");
+        assert!(out.contains("Azure (dev)"), "{out}");
+        assert!(
+            out.contains("gpt-5.2-chat") && out.contains("gpt-5.6-luna"),
+            "{out}"
+        );
+        // local column before Azure column on the model row
+        let row = out.lines().find(|l| l.contains("model")).unwrap();
+        let li = row.find("gpt-5.2-chat").unwrap();
+        let ri = row.find("gpt-5.6-luna").unwrap();
+        assert!(li < ri, "local value first: {row}");
+        assert!(!out.contains(" was "), "{out}");
+        assert!(!out.contains(" now "), "{out}");
+    }
+
+    #[test]
+    fn table_renders_absent_for_one_sided_values() {
+        let result = diff(
+            &json!({"name": "a", "reasoning": {"effort": "high"}}), // old/Azure has it
+            &json!({"name": "a"}),                                  // new/local lacks it
+            "name",
+        );
+        let labels = SideLabels {
+            new_side: "local".into(),
+            old_side: "Azure (dev)".into(),
+        };
+        let out = format_text(&result, "r", &labels);
+        assert!(out.contains("(absent)"), "{out}");
+        assert!(
+            out.contains("1 key)") && !out.contains("1 keys"),
+            "pluralization: {out}"
+        );
     }
 }
 
 /// Format a full diff report as Markdown (for PR comments).
 ///
-/// Layout: `### <resource>` per changed resource with a fenced +/~/- hunk list.
-pub fn format_markdown(diffs: &[(String, DiffResult)]) -> String {
+/// Layout: `### {resource}` per changed resource with a Markdown table whose
+/// columns are `field | {new_side} | {old_side}`.
+pub fn format_markdown(diffs: &[(String, DiffResult)], labels: &SideLabels) -> String {
     let changed: Vec<_> = diffs.iter().filter(|(_, d)| !d.is_equal).collect();
     if changed.is_empty() {
         return "✅ No differences.\n".to_string();
@@ -301,30 +422,51 @@ pub fn format_markdown(diffs: &[(String, DiffResult)]) -> String {
             name,
             result.changes.len()
         ));
-        out.push_str("```diff\n");
+        out.push_str(&format!(
+            "| field | {} | {} |\n",
+            escape_md(&labels.new_side),
+            escape_md(&labels.old_side)
+        ));
+        out.push_str("| --- | --- | --- |\n");
         for change in &result.changes {
-            match change.kind {
-                ChangeKind::Added => out.push_str(&format!(
-                    "+ {}: {}\n",
-                    change.path,
-                    format_value_preview(change.new_value.as_ref())
-                )),
-                ChangeKind::Removed => out.push_str(&format!(
-                    "- {}: {}\n",
-                    change.path,
-                    format_value_preview(change.old_value.as_ref())
-                )),
-                ChangeKind::Modified => out.push_str(&format!(
-                    "! {}: {} -> {}\n",
-                    change.path,
-                    format_value_preview(change.old_value.as_ref()),
-                    format_value_preview(change.new_value.as_ref())
-                )),
-            }
+            out.push_str(&format_change_markdown_row(change));
         }
-        out.push_str("```\n\n");
+        out.push('\n');
     }
     out
+}
+
+fn format_change_markdown_row(change: &Change) -> String {
+    if let Some(desc) = &change.description {
+        return format!("| {} | | |\n", escape_md(desc));
+    }
+
+    let (new_str, old_str) = match change.kind {
+        ChangeKind::Added => (
+            format_value_preview(change.new_value.as_ref()),
+            "(absent)".to_string(),
+        ),
+        ChangeKind::Removed => (
+            "(absent)".to_string(),
+            format_value_preview(change.old_value.as_ref()),
+        ),
+        ChangeKind::Modified => (
+            format_value_preview(change.new_value.as_ref()),
+            format_value_preview(change.old_value.as_ref()),
+        ),
+    };
+
+    format!(
+        "| {} | {} | {} |\n",
+        escape_md(&change.path),
+        escape_md(&new_str),
+        escape_md(&old_str)
+    )
+}
+
+/// Escape pipe characters so a value can't break a Markdown table row.
+fn escape_md(s: &str) -> String {
+    s.replace('|', "\\|")
 }
 
 #[cfg(test)]
@@ -332,23 +474,57 @@ mod markdown_tests {
     use super::*;
     use serde_json::json;
 
+    fn labels() -> SideLabels {
+        SideLabels {
+            new_side: "local".to_string(),
+            old_side: "Azure (dev)".to_string(),
+        }
+    }
+
     #[test]
-    fn markdown_report_renders_hunks() {
+    fn markdown_report_renders_table() {
         let d = crate::semantic::diff(
             &json!({"name": "i", "a": 1}),
             &json!({"name": "i", "a": 2, "b": true}),
             "name",
         );
-        let md = format_markdown(&[("indexes/i".to_string(), d)]);
+        let md = format_markdown(&[("indexes/i".to_string(), d)], &labels());
         assert!(md.contains("### `indexes/i`"));
-        assert!(md.contains("```diff"));
-        assert!(md.contains("+ b: true"));
-        assert!(md.contains("! a: 1 -> 2"));
+        assert!(md.contains("| field | local | Azure (dev) |"));
+        assert!(md.contains("| b | true | (absent) |"));
+        assert!(md.contains("| a | 2 | 1 |"));
+        assert!(!md.contains(" was "));
     }
 
     #[test]
     fn markdown_report_clean() {
         let d = crate::semantic::diff(&json!({"a": 1}), &json!({"a": 1}), "name");
-        assert_eq!(format_markdown(&[("x".into(), d)]), "✅ No differences.\n");
+        assert_eq!(
+            format_markdown(&[("x".into(), d)], &labels()),
+            "✅ No differences.\n"
+        );
+    }
+
+    #[test]
+    fn markdown_is_a_table_with_side_columns() {
+        let result = crate::semantic::diff(
+            &json!({"name": "a", "model": "x"}),
+            &json!({"name": "a", "model": "y"}),
+            "name",
+        );
+        let labels = SideLabels {
+            new_side: "local".into(),
+            old_side: "Azure (dev)".into(),
+        };
+        let out = format_markdown(&[("p/agents/a".to_string(), result)], &labels);
+        assert!(
+            out.contains("| field |") || out.contains("| Field |"),
+            "{out}"
+        );
+        assert!(
+            out.contains("| local |") || out.contains("local |"),
+            "{out}"
+        );
+        assert!(!out.contains(" was "), "{out}");
     }
 }

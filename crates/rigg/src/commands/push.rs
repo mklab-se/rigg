@@ -189,7 +189,14 @@ async fn push_project(
             &normalize_for_push(r.kind, &local),
             "name",
         );
-        print!("{}", rigg_diff::output::format_text(&diff, &r.to_string()));
+        let conflict_labels = rigg_diff::output::SideLabels {
+            new_side: "local".to_string(),
+            old_side: format!("Azure ({})", env.name),
+        };
+        print!(
+            "{}",
+            rigg_diff::output::format_text(&diff, &r.to_string(), &conflict_labels)
+        );
         let ai = crate::commands::ai_assist::ai_on(ctx);
         if ai {
             println!(
@@ -231,14 +238,30 @@ async fn push_project(
                             "name",
                         );
                         println!("  proposal vs LOCAL:");
+                        let vs_local_labels = rigg_diff::output::SideLabels {
+                            new_side: "AI proposal".to_string(),
+                            old_side: "local".to_string(),
+                        };
                         print!(
                             "{}",
-                            rigg_diff::output::format_text(&vs_local, &r.to_string())
+                            rigg_diff::output::format_text(
+                                &vs_local,
+                                &r.to_string(),
+                                &vs_local_labels
+                            )
                         );
                         println!("  proposal vs REMOTE:");
+                        let vs_remote_labels = rigg_diff::output::SideLabels {
+                            new_side: "AI proposal".to_string(),
+                            old_side: format!("Azure ({})", env.name),
+                        };
                         print!(
                             "{}",
-                            rigg_diff::output::format_text(&vs_remote, &r.to_string())
+                            rigg_diff::output::format_text(
+                                &vs_remote,
+                                &r.to_string(),
+                                &vs_remote_labels
+                            )
                         );
                         if confirm::prompt_yes_no(
                             "  accept the proposal (writes the local file and pushes it)?",

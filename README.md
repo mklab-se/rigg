@@ -200,11 +200,17 @@ rigg diff my-rag
 ```
 
 ```
-~ Index 'docs-index' (modified)
-    fields[3].type: Edm.String → Edm.Int32
-    fields[7]: added 'rating'
-    scoringProfiles[0].functions: 2 → 3 items
+docs-index — differs (2 field(s))
+
+field                                    local                Azure (dev)
++ fields[rating]                         {...} (2 keys)       (absent)
+~ fields[chunk].type                     "Edm.Int32"          "Edm.String"
+
+hint: rigg pull my-rag — update local files to match Azure
+      rigg push my-rag — make Azure match your local files
 ```
+
+Each row is labeled by side (`local` / `Azure (<env>)`), never by "was"/"now" — the diff itself doesn't assume which direction you're headed. The hint spells out both.
 
 ```bash
 rigg diff --all --exit-code                    # CI: exit 5 when drift is found
