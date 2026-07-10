@@ -13,12 +13,14 @@ pub mod delete;
 pub mod describe;
 pub mod dev;
 pub mod diff;
+pub mod discovery;
 pub mod doctor;
 pub mod env;
 pub mod init;
 pub mod interactive;
 pub mod mcp_cmd;
 pub mod new;
+pub mod promote;
 pub mod pull;
 pub mod push;
 pub mod remote;
@@ -182,6 +184,55 @@ pub fn select_projects<'w>(
 /// Resolve the environment for this invocation.
 pub fn resolve_env(ws: &Workspace, ctx: &GlobalContext) -> Result<ResolvedEnv> {
     Ok(ws.resolve_env(ctx.env.as_deref())?)
+}
+
+/// Gate a cloud-mutating operation (`push` apply/`--prune`, `delete
+/// --remote`) against an environment's `policy.protected` flag.
+///
+/// Returns `Ok(true)` when the operation may proceed, `Ok(false)` when the
+/// user declined (interactive typed-name mismatch) — callers should print
+/// "Aborted." and return `Ok(())`, matching every other decline in the CLI
+/// (e.g. answering `n` to "Apply N change(s)?"). Only a genuine usage
+/// problem (missing `--confirm-env` non-interactively) is an `Err`, since
+/// that is a caller mistake rather than a considered "no".
+///
+/// No-op (`Ok(true)`) when the environment is unprotected. Otherwise:
+/// - `--confirm-env <name>` matching the environment name exactly → `Ok(true)`.
+/// - Interactive session → prompts the user to type the environment name;
+///   a mismatch → `Ok(false)`.
+/// - Non-interactive session → `Err(CommandError::Usage)` (exit 2) naming
+///   the required `--confirm-env` flag.
+///
+/// `ctx.yes` (`--yes`) is deliberately **not** consulted: `--yes` exists to
+/// skip the routine "apply N changes?" prompt, and scripts/agents reach for
+/// it reflexively. If it also satisfied this gate, a protected environment
+/// would be no safer than an unprotected one the moment someone habitually
+/// pipes `-y` into their commands. Protection must be opted into explicitly,
+/// per invocation, via a typed name (interactive) or `--confirm-env`
+/// (non-interactive) — never implied by a blanket "yes to everything" flag.
+pub fn confirm_protected_env(
+    ctx: &GlobalContext,
+    env: &ResolvedEnv,
+    confirm_env: Option<&str>,
+    operation: &str,
+) -> Result<bool> {
+    if !env.protected() {
+        return Ok(true);
+    }
+    if confirm_env == Some(env.name.as_str()) {
+        return Ok(true);
+    }
+    if ctx.non_interactive {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "environment '{}' is protected: pass --confirm-env {} to proceed",
+            env.name, env.name
+        ))));
+    }
+    let answer = confirm::prompt_line(&format!(
+        "Environment '{}' is protected. Type its name to confirm {}: ",
+        env.name, operation
+    ))?;
+    Ok(answer.trim() == env.name)
 }
 
 #[cfg(test)]

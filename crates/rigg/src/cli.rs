@@ -97,6 +97,23 @@ pub enum Commands {
     /// Delete a project's resources from Azure
     Delete(DeleteArgs),
 
+    /// Copy one environment's project tree into another, locally
+    ///
+    /// A→B and B→A are the same operation — the A/B sync + hot-swap
+    /// workflow. Correlates resources by their file stem (logical id), not
+    /// their physical (Azure) name. Pinned fields keep the target env's
+    /// existing values instead of being overwritten: the resource's `name`
+    /// (always), the kind's registry-default env-pinned fields (secrets,
+    /// write-only fields, and a few genuinely per-environment fields like an
+    /// Agent's `tools[].server_url`), and any extra paths named in the
+    /// target file's own `x-rigg-pin` annotation. New-in-target resources
+    /// are created verbatim from the source (stem preserved); resources that
+    /// only exist in the target are left untouched. Always previews before
+    /// writing; `--dry-run` stops there. Local only — never touches Azure;
+    /// run `rigg diff`/`rigg push` against the target env afterward to sync
+    /// it.
+    Promote(PromoteArgs),
+
     /// Show sync status per project (incl. unmanaged remote resources)
     Status(StatusArgs),
 
@@ -270,6 +287,10 @@ pub struct PushArgs {
     /// Delete remote resources whose local files were removed
     #[arg(long)]
     pub prune: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
 }
 
 #[derive(Args)]
@@ -313,6 +334,28 @@ pub struct DeleteArgs {
     /// Delete the project's resources from Azure (required)
     #[arg(long)]
     pub remote: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
+}
+
+#[derive(Args)]
+pub struct PromoteArgs {
+    /// Project to promote
+    pub project: String,
+
+    /// Source environment
+    #[arg(long)]
+    pub from: String,
+
+    /// Target environment
+    #[arg(long)]
+    pub to: String,
+
+    /// Preview only; write nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args)]
@@ -481,11 +524,12 @@ impl Cli {
             Commands::Push(args) => commands::push::run(&ctx, args).await,
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
+            Commands::Promote(args) => commands::promote::run(&ctx, args),
             Commands::Status(args) => commands::status::run(&ctx, args).await,
             Commands::Describe(args) => commands::describe::run(&ctx, args),
             Commands::Concepts => commands::concepts::run(&ctx),
             Commands::Validate(args) => commands::validate::run(&ctx, args),
-            Commands::Env { command } => commands::env::run(&ctx, command),
+            Commands::Env { command } => commands::env::run(&ctx, command).await,
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,
             Commands::Ai { command } => commands::ai::run(command).await,
             Commands::Mcp(args) => commands::mcp_cmd::run(&ctx, args).await,

@@ -76,8 +76,8 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
 
     let ws = load_workspace()?;
-    assert_exclusive_ownership(&ws)?;
     let env = resolve_env(&ws, ctx)?;
+    assert_exclusive_ownership(&ws, &env.name)?;
     let plain = ctx.no_color;
 
     // ---- Wizard step 1: project ----
@@ -122,7 +122,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // Every resource key already owned by ANY project → its owner's name.
     let mut owned_by_any: BTreeMap<String, String> = BTreeMap::new();
     for p in &ws.projects {
-        for (r, _) in Store::new(p).list()? {
+        for (r, _) in Store::new(p, &env.name).list()? {
             owned_by_any.insert(r.key(), p.name.clone());
         }
         let st = ProjectState::load(&ws, &env.name, &p.name);
@@ -384,7 +384,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         return Ok(());
     }
 
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let mut state = ProjectState::load(&ws, &env.name, &project.name);
     for (r, doc) in &to_adopt {
         store.write(r, doc)?;

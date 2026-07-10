@@ -8,12 +8,13 @@ use rigg_core::store::Store;
 use rigg_core::workspace::Workspace;
 
 use crate::cli::CopyArgs;
-use crate::commands::{GlobalContext, load_workspace};
+use crate::commands::{GlobalContext, load_workspace, resolve_env};
 
-pub fn run(_ctx: &GlobalContext, args: CopyArgs) -> Result<()> {
+pub fn run(ctx: &GlobalContext, args: CopyArgs) -> Result<()> {
     let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
 
-    let (src_project, src_kind, src_name) = parse_source(&ws, &args.source)?;
+    let (src_project, src_kind, src_name) = parse_source(&ws, &env.name, &args.source)?;
     let (dst_project_name, dst_name) = match args.target.split_once(':') {
         Some((p, n)) => (Some(p.to_string()), n.to_string()),
         None => (None, args.target.clone()),
@@ -26,10 +27,10 @@ pub fn run(_ctx: &GlobalContext, args: CopyArgs) -> Result<()> {
     let src_ref = ResourceRef::new(src_kind, src_name.clone());
     let dst_ref = ResourceRef::new(src_kind, dst_name.clone());
 
-    let src_store = Store::new(ws.project(&src_project)?);
-    let dst_store = Store::new(dst_project);
+    let src_store = Store::new(ws.project(&src_project)?, &env.name);
+    let dst_store = Store::new(dst_project, &env.name);
 
-    if dst_store.path_for(&dst_ref).exists() {
+    if dst_store.locate(&dst_ref)?.is_some() {
         bail!(
             "target {} already exists in project '{}'",
             dst_ref,
@@ -59,7 +60,7 @@ pub fn run(_ctx: &GlobalContext, args: CopyArgs) -> Result<()> {
     Ok(())
 }
 
-fn parse_source(ws: &Workspace, source: &str) -> Result<(String, ResourceKind, String)> {
+fn parse_source(ws: &Workspace, env: &str, source: &str) -> Result<(String, ResourceKind, String)> {
     let (project_hint, rest) = match source.split_once(':') {
         Some((p, r)) => (Some(p.to_string()), r.to_string()),
         None => (None, source.to_string()),
@@ -76,7 +77,7 @@ fn parse_source(ws: &Workspace, source: &str) -> Result<(String, ResourceKind, S
     // Find the owning project.
     let reference = ResourceRef::new(kind, name);
     for project in &ws.projects {
-        if Store::new(project).path_for(&reference).exists() {
+        if Store::new(project, env).locate(&reference)?.is_some() {
             return Ok((project.name.clone(), kind, reference.name));
         }
     }

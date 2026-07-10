@@ -32,4 +32,6 @@ jobs:
         run: rigg validate --strict
 
       - name: Push all projects to {{RIGG_ENV}}
-        run: rigg push --all --env {{RIGG_ENV}} --yes
+        # --confirm-env is a no-op for unprotected environments and the required
+        # CI consent for protected ones (--yes never bypasses protection).
+        run: rigg push --all --env {{RIGG_ENV}} --yes --confirm-env {{RIGG_ENV}}

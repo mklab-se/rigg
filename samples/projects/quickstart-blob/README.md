@@ -6,11 +6,11 @@ retrieval. Every piece is an explicit file you can edit and push independently.
 ## Files
 
 ```
-search/data-sources/quickstart-docs.json    # WHERE the data lives (blob container, identity auth)
-search/indexes/quickstart-index.json        # HOW it is searchable (fields, semantic config)
-search/indexers/quickstart-indexer.json     # HOW data flows from source to index
-search/knowledge-sources/quickstart-ks.json # exposes the index for agentic retrieval
-search/knowledge-bases/quickstart-kb.json   # what agents query (routes across knowledge sources)
+envs/demo/search/data-sources/quickstart-docs.json    # WHERE the data lives (blob container, identity auth)
+envs/demo/search/indexes/quickstart-index.json        # HOW it is searchable (fields, semantic config)
+envs/demo/search/indexers/quickstart-indexer.json     # HOW data flows from source to index
+envs/demo/search/knowledge-sources/quickstart-ks.json # exposes the index for agentic retrieval
+envs/demo/search/knowledge-bases/quickstart-kb.json   # what agents query (routes across knowledge sources)
 ```
 
 ## Step by step

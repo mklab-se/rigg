@@ -197,7 +197,14 @@ static KINDS: &[KindMeta] = &[
         volatile_fields: COMMON_VOLATILE,
         // Explicit-only model: Rigg never manages Azure-created sub-resources.
         read_only_fields: &["createdResources", "ingestionPermissionOptions"],
-        secret_fields: &["searchIndexParameters.apiKey"],
+        // azureBlobParameters.connectionString is credential material for the
+        // managed-ingestion (azureBlob) KS shape: rejecting key values in
+        // validate AND keeping it env-pinned during promote (via env_pinned's
+        // secret ∪ write-only ∪ extras union).
+        secret_fields: &[
+            "searchIndexParameters.apiKey",
+            "azureBlobParameters.connectionString",
+        ],
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[RefField {
@@ -390,6 +397,43 @@ pub fn preview_only_datasource_types() -> &'static [&'static str] {
 pub const X_RIGG_REF: &str = "x-rigg-ref";
 /// The key linking a WebApiSkill to an OpenAPI spec in `apis/`.
 pub const X_RIGG_API: &str = "x-rigg-api";
+/// Per-resource annotation (array of dot-paths) in a TARGET env's file naming
+/// additional fields `rigg promote` should keep pinned to that env's current
+/// value, beyond the kind's registry defaults. Lives alongside other
+/// `x-rigg-*` keys: kept on disk, stripped before any PUT/POST.
+pub const X_RIGG_PIN: &str = "x-rigg-pin";
+
+/// Per-kind fields that are genuinely environment-specific but not already
+/// covered by `secret_fields`/`write_only_fields` (e.g. an Agent's MCP tool
+/// pointing at a per-environment Search endpoint and Foundry connection, or a
+/// Connection's target endpoint). Consulted only by [`env_pinned`].
+fn env_pinned_extra(kind: ResourceKind) -> &'static [&'static str] {
+    match kind {
+        ResourceKind::Agent => &["tools[].server_url", "tools[].project_connection_id"],
+        ResourceKind::Connection => &["properties.target"],
+        _ => &[],
+    }
+}
+
+/// Fields `rigg promote` keeps pinned to the TARGET environment's existing
+/// value by default: the kind's `secret_fields` ∪ `write_only_fields` ∪
+/// [`env_pinned_extra`] (de-duplicated; order-stable). `"name"` is pinned by
+/// the promote code itself, not the registry — it isn't a per-kind concern.
+pub fn env_pinned(kind: ResourceKind) -> Vec<&'static str> {
+    let m = meta(kind);
+    let mut out: Vec<&'static str> = Vec::new();
+    for field in m
+        .secret_fields
+        .iter()
+        .chain(m.write_only_fields)
+        .chain(env_pinned_extra(kind))
+    {
+        if !out.contains(field) {
+            out.push(field);
+        }
+    }
+    out
+}
 
 /// Extract all references from `body` per the kind's `reference_fields`,
 /// plus any `x-rigg-ref` values (`"<dir-name>/<name>"`) found at any depth.
@@ -571,6 +615,91 @@ pub fn collect_path(v: &Value, path: &str, f: &mut dyn FnMut(&Value)) {
     }
     let segments: Vec<&str> = path.split('.').collect();
     walk(v, &segments, f);
+}
+
+/// Restore `dst`'s value(s) at `path` from the corresponding value(s) in
+/// `src` at the SAME path — the SET counterpart to [`collect_path`], used to
+/// apply `rigg promote`'s pinned fields (keep the target's value at pinned
+/// paths: `dst` is the merged/source-cloned doc, `src` is the target env's
+/// current doc). Mirrors `collect_path`'s traversal (`a.b`, `arr[].field`,
+/// `arr[]`).
+///
+/// For `[]` segments, `dst` and `src` arrays are paired by POSITION (index),
+/// not by an identity key — pinned paths (e.g. an agent's tool list) may have
+/// no stable name to match on. When the arrays differ in length:
+///
+/// - `src` (the target) longer: the extra elements are appended to `dst`
+///   WHOLESALE — they are target-only customizations (e.g. an extra tool
+///   only prod has) and must survive promote; dropping them would be silent
+///   data loss.
+/// - `dst` (the merged/source side) longer: its extra elements are left
+///   as-is — they come from the source (that IS the promotion) and there is
+///   nothing on the target side to pin from.
+///
+/// Missing intermediate objects in `dst` are created (mirroring how the
+/// value is nested in `src`); when `src` doesn't have a value at some point
+/// along the path, that position in `dst` is left untouched.
+pub fn restore_path(dst: &mut Value, src: &Value, path: &str) {
+    let segments: Vec<&str> = path.split('.').collect();
+    restore_path_walk(dst, src, &segments);
+}
+
+fn restore_path_walk(dst: &mut Value, src: &Value, segments: &[&str]) {
+    let Some((head, rest)) = segments.split_first() else {
+        *dst = src.clone();
+        return;
+    };
+    if let Some(key) = head.strip_suffix("[]") {
+        if key.is_empty() {
+            pair_arrays(dst, src, rest);
+        } else {
+            let Value::Object(src_map) = src else { return };
+            let Some(src_val) = src_map.get(key) else {
+                return;
+            };
+            let Value::Object(dst_map) = dst else { return };
+            let entry = dst_map
+                .entry(key.to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            pair_arrays(entry, src_val, rest);
+        }
+    } else {
+        let Value::Object(src_map) = src else { return };
+        let Some(src_val) = src_map.get(*head) else {
+            return;
+        };
+        let Value::Object(dst_map) = dst else { return };
+        if rest.is_empty() {
+            // Leaf: assign directly rather than inserting a placeholder and
+            // recursing — an inserted `Null` wouldn't be an `Object` yet if
+            // some OTHER path later needed to nest under this same key.
+            dst_map.insert((*head).to_string(), src_val.clone());
+        } else {
+            let entry = dst_map
+                .entry((*head).to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            restore_path_walk(entry, src_val, rest);
+        }
+    }
+}
+
+/// Pair `dst`/`src` arrays by index and recurse `rest` into each matched
+/// pair; `src`-only elements (the target env's extra array members) are then
+/// appended to `dst` wholesale so promote never drops them. Idempotent
+/// across multiple pinned paths through the same array: after the first
+/// restore appends the extras, later paths find equal lengths and simply
+/// re-pair.
+fn pair_arrays(dst: &mut Value, src: &Value, rest: &[&str]) {
+    let (Value::Array(d), Value::Array(s)) = (dst, src) else {
+        return;
+    };
+    let n = d.len().min(s.len());
+    for i in 0..n {
+        restore_path_walk(&mut d[i], &s[i], rest);
+    }
+    if s.len() > d.len() {
+        d.extend(s[n..].iter().cloned());
+    }
 }
 
 #[cfg(test)]
@@ -817,5 +946,162 @@ mod tests {
         });
         let refs = extract_references(ResourceKind::KnowledgeSource, &ks);
         assert_eq!(refs, vec![(ResourceKind::Index, "docs".to_string())]);
+    }
+
+    #[test]
+    fn env_pinned_agent_covers_tool_server_fields() {
+        let pinned = env_pinned(ResourceKind::Agent);
+        assert!(pinned.contains(&"tools[].server_url"));
+        assert!(pinned.contains(&"tools[].project_connection_id"));
+    }
+
+    #[test]
+    fn env_pinned_connection_covers_target_endpoint() {
+        let pinned = env_pinned(ResourceKind::Connection);
+        assert!(pinned.contains(&"properties.target"));
+        // Credential fields already covered by secret_fields — no duplicate.
+        assert_eq!(
+            pinned.iter().filter(|f| **f == "properties.target").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn env_pinned_datasource_is_covered_by_secret_and_write_only_alone() {
+        // credentials.connectionString appears in both secret_fields and
+        // write_only_fields — env_pinned must de-duplicate it, not double it.
+        let pinned = env_pinned(ResourceKind::DataSource);
+        assert_eq!(
+            pinned
+                .iter()
+                .filter(|f| **f == "credentials.connectionString")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn env_pinned_empty_for_kinds_with_no_defaults() {
+        assert!(env_pinned(ResourceKind::Guardrail).is_empty());
+    }
+
+    #[test]
+    fn knowledge_source_blob_connection_is_secret_and_env_pinned() {
+        // The azureBlob KS shape carries a per-env storage connection string:
+        // it must be validate-rejected as credential material AND kept pinned
+        // to the target env during promote.
+        assert!(
+            meta(ResourceKind::KnowledgeSource)
+                .secret_fields
+                .contains(&"azureBlobParameters.connectionString")
+        );
+        assert!(
+            env_pinned(ResourceKind::KnowledgeSource)
+                .contains(&"azureBlobParameters.connectionString"),
+            "env_pinned includes it via the secret_fields union"
+        );
+    }
+
+    #[test]
+    fn restore_path_plain_field() {
+        let mut dst = json!({"name": "b-name", "model": "m1"});
+        let src = json!({"name": "a-name", "model": "m2"});
+        restore_path(&mut dst, &src, "name");
+        assert_eq!(dst["name"], json!("a-name"));
+        assert_eq!(dst["model"], json!("m1"), "unrelated field untouched");
+    }
+
+    #[test]
+    fn restore_path_creates_missing_intermediate_objects() {
+        let mut dst = json!({"name": "x"});
+        let src = json!({"name": "x", "credentials": {"connectionString": "secret"}});
+        restore_path(&mut dst, &src, "credentials.connectionString");
+        assert_eq!(dst["credentials"]["connectionString"], json!("secret"));
+    }
+
+    #[test]
+    fn restore_path_array_paired_by_index_not_identity() {
+        let mut dst = json!({
+            "tools": [
+                {"type": "mcp", "server_url": "https://dst-a"},
+                {"type": "mcp", "server_url": "https://dst-b"}
+            ]
+        });
+        let src = json!({
+            "tools": [
+                {"type": "mcp", "server_url": "https://src-a"},
+                {"type": "mcp", "server_url": "https://src-b"}
+            ]
+        });
+        restore_path(&mut dst, &src, "tools[].server_url");
+        assert_eq!(dst["tools"][0]["server_url"], json!("https://src-a"));
+        assert_eq!(dst["tools"][1]["server_url"], json!("https://src-b"));
+        assert_eq!(
+            dst["tools"][0]["type"],
+            json!("mcp"),
+            "unrelated sibling kept"
+        );
+    }
+
+    #[test]
+    fn restore_path_array_min_prefix_when_lengths_differ() {
+        // dst has 3 tools, src only 2: only the first two get src's value;
+        // the third is left as dst had it (nothing to pin from).
+        let mut dst = json!({
+            "tools": [{"server_url": "d1"}, {"server_url": "d2"}, {"server_url": "d3"}]
+        });
+        let src = json!({"tools": [{"server_url": "s1"}, {"server_url": "s2"}]});
+        restore_path(&mut dst, &src, "tools[].server_url");
+        assert_eq!(dst["tools"][0]["server_url"], json!("s1"));
+        assert_eq!(dst["tools"][1]["server_url"], json!("s2"));
+        assert_eq!(
+            dst["tools"][2]["server_url"],
+            json!("d3"),
+            "no src counterpart — left untouched"
+        );
+    }
+
+    #[test]
+    fn restore_path_appends_src_only_array_elements_wholesale() {
+        // CRITICAL regression (promote data-loss): merged doc = SOURCE clone,
+        // so its array has the source's length. When the TARGET (`src` of the
+        // restore) has MORE elements, the extras must be appended wholesale —
+        // otherwise promote silently deletes the target's extra tools.
+        let mut dst = json!({
+            "tools": [{"type": "mcp", "server_url": "https://src-a"}]
+        });
+        let src = json!({
+            "tools": [
+                {"type": "mcp", "server_url": "https://tgt-a"},
+                {"type": "file_search", "vector_store_ids": ["vs1"]},
+                {"type": "mcp", "server_url": "https://tgt-c"}
+            ]
+        });
+        restore_path(&mut dst, &src, "tools[].server_url");
+        let tools = dst["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 3, "target-only elements survive: {tools:?}");
+        assert_eq!(tools[0]["server_url"], json!("https://tgt-a"), "paired");
+        assert_eq!(
+            tools[1],
+            json!({"type": "file_search", "vector_store_ids": ["vs1"]}),
+            "extra element appended wholesale, not just the leaf field"
+        );
+        assert_eq!(tools[2]["server_url"], json!("https://tgt-c"));
+    }
+
+    #[test]
+    fn restore_path_missing_in_src_leaves_dst_untouched() {
+        let mut dst = json!({"name": "b", "model": "kept"});
+        let src = json!({"name": "a"});
+        restore_path(&mut dst, &src, "model");
+        assert_eq!(dst["model"], json!("kept"));
+    }
+
+    #[test]
+    fn restore_path_missing_array_in_src_leaves_dst_untouched() {
+        let mut dst = json!({"tools": [{"server_url": "kept"}]});
+        let src = json!({"name": "a"});
+        restore_path(&mut dst, &src, "tools[].server_url");
+        assert_eq!(dst["tools"][0]["server_url"], json!("kept"));
     }
 }

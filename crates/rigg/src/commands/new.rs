@@ -9,7 +9,7 @@ use rigg_core::store::Store;
 use rigg_core::workspace::{PROJECT_FILE, PROJECTS_DIR, Workspace};
 
 use crate::cli::NewArgs;
-use crate::commands::{CommandError, GlobalContext, load_workspace};
+use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
 
 pub async fn run(ctx: &GlobalContext, args: NewArgs) -> Result<()> {
     match args.kind.as_str() {
@@ -92,10 +92,11 @@ fn resolve_project<'w>(
     }
 }
 
-fn new_pipeline(_ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
+fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
     let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
     let project = resolve_project(&ws, args)?;
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let ds_type = args.ds_type.as_deref().unwrap_or("azureblob");
     if let Some(warning) = scaffold::check_datasource_type(ds_type)
         .map_err(|e| anyhow!(CommandError::Validation(e)))?
@@ -106,11 +107,14 @@ fn new_pipeline(_ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
         .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     for (kind, name, value) in &parts {
         let r = ResourceRef::new(*kind, name.clone());
-        if store.path_for(&r).exists() {
+        // Existence is by PHYSICAL name (locate), not file stem — a renamed
+        // resource may occupy the stem while the name itself is free.
+        if store.locate(&r)?.is_some() {
             bail!("{r} already exists in project '{}'", project.name);
         }
         store.write(&r, value)?;
-        println!("  created {}", store.path_for(&r).display());
+        let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
+        println!("  created {}", path.display());
     }
     println!();
     println!(
@@ -127,10 +131,13 @@ fn new_pipeline(_ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
 
 async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -> Result<()> {
     let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
     let project = resolve_project(&ws, args)?;
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let r = ResourceRef::new(kind, args.name.clone());
-    if store.path_for(&r).exists() {
+    // Existence is by PHYSICAL name (locate), not file stem — a renamed
+    // resource may occupy the stem while the name itself is free.
+    if store.locate(&r)?.is_some() {
         bail!("{r} already exists in project '{}'", project.name);
     }
     if kind == ResourceKind::DataSource {
@@ -161,7 +168,8 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     }
 
     store.write(&r, &value)?;
-    println!("Created {}", store.path_for(&r).display());
+    let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
+    println!("Created {}", path.display());
     Ok(())
 }
 

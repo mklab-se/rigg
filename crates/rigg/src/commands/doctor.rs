@@ -16,7 +16,7 @@ const COGNITIVE_ARM_API: &str = rigg_core::registry::ARM_COGNITIVE_API_VERSION;
 pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
-    let edges = identity_edges(&ws);
+    let edges = identity_edges(&ws, &env.name);
     if edges.is_empty() {
         println!(
             "{} no service-to-service identity requirements found in this workspace",

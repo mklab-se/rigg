@@ -82,6 +82,10 @@ pub struct PushParams {
     /// Without force (default) returns the push plan (dry run). With force=true, executes.
     #[schemars(default)]
     pub force: Option<bool>,
+    /// Required consent for protected environments: must equal the environment's name.
+    /// Ignored unless force=true.
+    #[schemars(default)]
+    pub confirm_env: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -94,6 +98,10 @@ pub struct DeleteParams {
     /// Without force (default) returns a preview. With force=true, executes the deletion.
     #[schemars(default)]
     pub force: Option<bool>,
+    /// Required consent for protected environments: must equal the environment's name.
+    /// Ignored unless force=true.
+    #[schemars(default)]
+    pub confirm_env: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +172,7 @@ fn with_common<'a>(mut args: Vec<&'a str>, env: &'a Option<String>, json: bool) 
 #[tool_router]
 impl RiggMcpServer {
     #[tool(
-        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources."
+        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources. Scoped to ONE environment (the default unless `env` is set)."
     )]
     async fn rigg_status(&self, Parameters(params): Parameters<ProjectParams>) -> String {
         let mut args = vec!["status"];
@@ -175,7 +183,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Full workspace description: projects, all resources with definitions and file paths, the dependency graph, and 'APIs to implement' (OpenAPI specs in apis/ that skillsets reference). The fastest way to understand the workspace."
+        description = "Full workspace description: projects, all resources with definitions and file paths, the dependency graph, and 'APIs to implement' (OpenAPI specs in apis/ that skillsets reference). Scoped to ONE environment (the default unless `env` is set). The fastest way to understand the workspace."
     )]
     async fn rigg_describe(&self, Parameters(params): Parameters<ProjectParams>) -> String {
         let mut args = vec!["describe"];
@@ -255,7 +263,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Always rigg_validate first."
+        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Always rigg_validate first."
     )]
     async fn rigg_push(&self, Parameters(params): Parameters<PushParams>) -> String {
         let mut args = vec!["push"];
@@ -267,6 +275,9 @@ impl RiggMcpServer {
         }
         if params.force.unwrap_or(false) {
             args.push("--yes");
+            if let Some(confirm_env) = &params.confirm_env {
+                args.extend(["--confirm-env", confirm_env]);
+            }
         } else {
             args.push("--dry-run");
         }
@@ -274,7 +285,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Delete ALL of a project's resources from Azure (local files are kept — pushing re-creates everything). Without force: preview. With force=true: executes. For deleting a single resource: delete its local file, then rigg_push with prune=true."
+        description = "Delete ALL of a project's resources from Azure (local files are kept — pushing re-creates everything). Without force: preview. With force=true: executes. Protected environments additionally require confirm_env to match the environment name (matches `rigg delete --confirm-env`). For deleting a single resource: delete its local file, then rigg_push with prune=true."
     )]
     async fn rigg_delete(&self, Parameters(params): Parameters<DeleteParams>) -> String {
         if !params.force.unwrap_or(false) {
@@ -293,6 +304,9 @@ impl RiggMcpServer {
         if let Some(env) = &params.env {
             args.extend(["--env", env]);
         }
+        if let Some(confirm_env) = &params.confirm_env {
+            args.extend(["--confirm-env", confirm_env]);
+        }
         args.push("--quiet");
         rigg_cli(&args)
     }
@@ -309,7 +323,7 @@ impl ServerHandler for RiggMcpServer {
                  and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
                  understand the workspace, rigg_validate before changes, rigg_diff to inspect \
                  drift, rigg_push (preview first, then force=true). Resource definitions are \
-                 JSON files under projects/<name>/{search,foundry}/<kind>/; secrets are never \
+                 JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
                  stored in files — identity-based access only."
                     .to_string(),
             ),

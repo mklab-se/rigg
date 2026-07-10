@@ -20,21 +20,44 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
 
     let mut problems: Vec<String> = Vec::new();
 
-    // Workspace-wide: exclusive ownership.
-    if let Err(e) = assert_exclusive_ownership(&ws) {
-        problems.push(e.to_string());
-    }
-
-    // All resources across the workspace (for reference resolution).
-    let mut workspace_refs: Vec<ResourceRef> = Vec::new();
+    // Validate every environment any project participates in. A project
+    // with no env dirs yet reports nothing (empty project).
+    let mut all_envs: Vec<String> = Vec::new();
     for project in &ws.projects {
-        if let Ok(list) = Store::new(project).list() {
-            workspace_refs.extend(list.into_iter().map(|(r, _)| r));
+        for e in Store::envs_of(project) {
+            if !all_envs.contains(&e) {
+                all_envs.push(e);
+            }
         }
     }
+    all_envs.sort();
 
-    for project in &projects {
-        validate_project(&ws, project, &workspace_refs, args.strict, &mut problems);
+    for env in &all_envs {
+        // Per-env: exclusive ownership.
+        if let Err(e) = assert_exclusive_ownership(&ws, env) {
+            problems.push(format!("[env {env}] {e}"));
+        }
+
+        // All resources in this env across the workspace (for reference
+        // resolution — references resolve within the SAME env).
+        let mut workspace_refs: Vec<ResourceRef> = Vec::new();
+        for project in &ws.projects {
+            if let Ok(list) = Store::new(project, env).list() {
+                workspace_refs.extend(list.into_iter().map(|(r, _)| r));
+            }
+        }
+
+        for project in &projects {
+            if !Store::envs_of(project).contains(env) {
+                continue; // this project doesn't participate in this env
+            }
+            let proj_problems = validate_project(&ws, project, env, &workspace_refs, args.strict);
+            problems.extend(
+                proj_problems
+                    .into_iter()
+                    .map(|p| format!("[env {env}] {p}")),
+            );
+        }
     }
 
     if ctx.json() {
@@ -73,19 +96,22 @@ fn select_projects_lenient<'w>(
     }
 }
 
+/// Validate one project's tree in one environment. Returns problems found
+/// (without the `[env <name>]` prefix — the caller adds that uniformly).
 fn validate_project(
     ws: &Workspace,
     project: &Project,
+    env: &str,
     workspace_refs: &[ResourceRef],
     strict: bool,
-    problems: &mut Vec<String>,
-) {
-    let store = Store::new(project);
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let store = Store::new(project, env);
     let list = match store.list() {
         Ok(list) => list,
         Err(e) => {
             problems.push(format!("[{}] {e}", project.name));
-            return;
+            return problems;
         }
     };
 
@@ -103,20 +129,18 @@ fn validate_project(
             }
         };
 
-        // name matches filename
-        match value.get("name").and_then(Value::as_str) {
-            Some(name) if name == r.name => {}
-            Some(name) => problems.push(format!(
-                "[{display}] \"name\" is '{name}' but the filename says '{}' — they must match",
-                r.name
-            )),
-            None => problems.push(format!("[{display}] missing \"name\" field")),
+        // "name" identifies the physical resource; it no longer needs to
+        // match the file stem (the stem is the logical/cross-env id — they
+        // may legitimately diverge when a resource is renamed in one env).
+        // A file with no "name" field at all still needs one to push.
+        if value.get("name").and_then(Value::as_str).is_none() {
+            problems.push(format!("[{display}] missing \"name\" field"));
         }
 
         // no secrets (registry secret_fields carrying key material)
-        check_secrets(r.kind, &value, &display, problems);
+        check_secrets(r.kind, &value, &display, &mut problems);
 
-        // registry references resolve within the workspace
+        // registry references resolve within the workspace, same environment
         for (kind, name) in registry::extract_references(r.kind, &value) {
             if name.starts_with('<') {
                 problems.push(format!(
@@ -142,7 +166,7 @@ fn validate_project(
         }
 
         // x-rigg-api links resolve to specs in apis/
-        check_api_links(ws, &value, &display, problems);
+        check_api_links(ws, &value, &display, &mut problems);
 
         // datasource type validity
         if r.kind == ResourceKind::DataSource {
@@ -158,6 +182,7 @@ fn validate_project(
             }
         }
     }
+    problems
 }
 
 /// Warn when a data source cannot detect deletions: removed source documents

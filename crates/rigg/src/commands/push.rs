@@ -21,13 +21,14 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use crate::cli::PushArgs;
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
-    CommandError, GlobalContext, confirm, load_workspace, resolve_env, select_projects,
+    CommandError, GlobalContext, confirm, confirm_protected_env, load_workspace, resolve_env,
+    select_projects,
 };
 
 pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
     let ws = load_workspace()?;
-    assert_exclusive_ownership(&ws)?;
     let env = resolve_env(&ws, ctx)?;
+    assert_exclusive_ownership(&ws, &env.name)?;
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
 
     let mut any_conflict = false;
@@ -56,7 +57,7 @@ async fn push_project(
     project: &Project,
     args: &PushArgs,
 ) -> Result<bool> {
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let remote = Remote::for_project(env, project);
     ensure_any_connection(&remote, project)?;
     let mut state = ProjectState::load(ws, &env.name, &project.name);
@@ -161,6 +162,16 @@ async fn push_project(
         println!("  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
     }
+
+    // Protected-env gate: fires before any mutating call (creates/updates
+    // below, and the --prune deletion path), and before the routine apply
+    // confirmation so a rejected/missing typed confirmation short-circuits
+    // everything that follows.
+    if !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
+        println!("Aborted.");
+        return Ok(false);
+    }
+
     if !conflicts.is_empty() && !ctx.interactive() {
         return Ok(true); // caller reports exit 5
     }

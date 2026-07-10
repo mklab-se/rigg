@@ -30,7 +30,7 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
     // All owned keys across the workspace, for unmanaged detection.
     let mut owned_by_any: BTreeSet<String> = BTreeSet::new();
     for project in &ws.projects {
-        for (r, _) in Store::new(project).list()? {
+        for (r, _) in Store::new(project, &env.name).list()? {
             owned_by_any.insert(r.key());
         }
         let state = ProjectState::load(&ws, &env.name, &project.name);
@@ -39,7 +39,7 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
 
     let mut report = Vec::new();
     for project in &projects {
-        let store = Store::new(project);
+        let store = Store::new(project, &env.name);
         let remote = Remote::for_project(&env, project);
         let state = ProjectState::load(&ws, &env.name, &project.name);
 

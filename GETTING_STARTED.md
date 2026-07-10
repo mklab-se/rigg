@@ -38,7 +38,7 @@ mkdir my-rag && cd my-rag
 rigg init .
 ```
 
-rigg discovers your Azure AI Search services and Foundry projects via ARM and writes `rigg.yaml` — environments and service connections. Resources live in projects:
+rigg discovers your Azure AI Search services and Foundry projects via ARM and writes `rigg.yaml` — environments and service connections. Resources live in projects, one resource tree per environment (`projects/<name>/envs/<env>/...` — see [CONCEPTS.md](CONCEPTS.md#environments)):
 
 ```bash
 rigg new project docs-rag
@@ -62,9 +62,9 @@ rigg new indexer docs-indexer -p docs-rag
 
 Either way, you now edit the generated files:
 
-1. **`search/data-sources/docs-ds.json`** — point it at your storage account. Scaffolds are identity-first: fill in the `ResourceId=` connection string and container name. Never put keys in files — `rigg validate` will reject them.
-2. **`search/indexes/docs-index.json`** — shape the fields to your documents.
-3. **`search/indexers/docs-indexer.json`** — the pipeline scaffold wires `dataSourceName` and `targetIndexName` for you (fill them in yourself if you scaffolded piece by piece); adjust field mappings and the schedule. Remove the skillset reference (and its file) if you don't need enrichment.
+1. **`envs/dev/search/data-sources/docs-ds.json`** — point it at your storage account. Scaffolds are identity-first: fill in the `ResourceId=` connection string and container name. Never put keys in files — `rigg validate` will reject them.
+2. **`envs/dev/search/indexes/docs-index.json`** — shape the fields to your documents.
+3. **`envs/dev/search/indexers/docs-indexer.json`** — the pipeline scaffold wires `dataSourceName` and `targetIndexName` for you (fill them in yourself if you scaffolded piece by piece); adjust field mappings and the schedule. Remove the skillset reference (and its file) if you don't need enrichment.
 
 Validate as you go:
 
@@ -106,7 +106,7 @@ Knowledge sources are explicit — they point at the index you just built:
 rigg new knowledge-source docs-ks -p docs-rag
 ```
 
-Edit `search/knowledge-sources/docs-ks.json` and set the index name (the `pipeline` scaffold has already done this):
+Edit `envs/dev/search/knowledge-sources/docs-ks.json` and set the index name (the `pipeline` scaffold has already done this):
 
 ```json
 {
@@ -122,7 +122,7 @@ Then the knowledge base — what agents actually query:
 rigg new knowledge-base docs-kb -p docs-rag
 ```
 
-Edit `search/knowledge-bases/docs-kb.json` to reference `docs-ks` and add retrieval instructions (e.g. "Find relevant passages; prefer exact text over summaries").
+Edit `envs/dev/search/knowledge-bases/docs-kb.json` to reference `docs-ks` and add retrieval instructions (e.g. "Find relevant passages; prefer exact text over summaries").
 
 Push again — only what changed is sent:
 
@@ -139,9 +139,9 @@ rigg new deployment docs-model -p docs-rag
 rigg new agent docs-agent -p docs-rag
 ```
 
-The agent's instructions live in a Markdown sidecar — edit `foundry/agents/docs-agent.instructions.md`, not the JSON (the JSON references it via `{"$file": "docs-agent.instructions.md"}`).
+The agent's instructions live in a Markdown sidecar — edit `envs/dev/foundry/agents/docs-agent.instructions.md`, not the JSON (the JSON references it via `{"$file": "docs-agent.instructions.md"}`).
 
-Ground the agent on your knowledge base by giving its MCP tool an `x-rigg-ref` annotation in `foundry/agents/docs-agent.json`:
+Ground the agent on your knowledge base by giving its MCP tool an `x-rigg-ref` annotation in `envs/dev/foundry/agents/docs-agent.json`:
 
 ```json
 {
@@ -169,7 +169,7 @@ Your Agentic RAG system is live, and its complete definition is a directory of r
 ## Next Steps
 
 - **Version control** — `git init && git add -A && git commit -m "docs-rag v1"` (`.rigg/` is already gitignored)
-- **Environments** — `rigg env add prod`, then `rigg push docs-rag --env prod` to promote
+- **Environments** — `rigg env add prod` (interactive wizard, or `--search-service`/`--foundry-account`/`--foundry-project` flags), then `rigg promote docs-rag --from dev --to prod` to copy the tree, and `rigg push docs-rag --env prod` to sync it to Azure; mark `prod` `policy: { protected: true }` in `rigg.yaml` to require `--confirm-env prod` before any push/delete against it
 - **CI/CD** — `rigg ci init github` scaffolds validate-on-PR, deploy-on-merge (OIDC), and nightly drift detection
 - **Connect your AI tool** — `rigg mcp install claude-code` lets Claude Code see and manage the stack ([MCP.md](MCP.md))
 - **AI assistance** — `rigg ai enable` turns on diff summaries, conflict merging, and `--describe` drafting

@@ -87,11 +87,12 @@ impl IdentityEdge {
     }
 }
 
-/// Extract every identity edge the workspace's resources require.
-pub fn identity_edges(ws: &Workspace) -> Vec<IdentityEdge> {
+/// Extract every identity edge the workspace's resources require, for one
+/// environment's tree.
+pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
     let mut edges: Vec<IdentityEdge> = Vec::new();
     for project in &ws.projects {
-        let store = Store::new(project);
+        let store = Store::new(project, env);
         let Ok(files) = store.list() else { continue };
         for (r, _) in files {
             let Ok(value) = store.read(&r) else { continue };
@@ -271,7 +272,7 @@ mod tests {
         std::fs::write(pdir.join(PROJECT_FILE), "{}\n").unwrap();
         let ws = Workspace::load(tmp.path()).unwrap();
         {
-            let store = Store::new(ws.project("demo").unwrap());
+            let store = Store::new(ws.project("demo").unwrap(), "dev");
             for (kind, name, value) in resources {
                 store.write(&ResourceRef::new(*kind, *name), value).unwrap();
             }
@@ -292,7 +293,7 @@ mod tests {
                 "container": {"name": "c"}
             }),
         )]);
-        let edges = identity_edges(&ws);
+        let edges = identity_edges(&ws, "dev");
         assert_eq!(edges.len(), 1);
         let e = &edges[0];
         assert_eq!(e.principal, Principal::SearchService);
@@ -320,7 +321,7 @@ mod tests {
                 json!({"name": "sds", "type": "azuresql", "credentials": {"connectionString": "ResourceId=/subscriptions/s/resourceGroups/r/providers/Microsoft.Sql/servers/sv;Database=d"}, "container": {"name": "t"}}),
             ),
         ]);
-        let edges = identity_edges(&ws);
+        let edges = identity_edges(&ws, "dev");
         assert_eq!(edges.len(), 2);
         assert!(edges.iter().all(|e| e.kind == EdgeKind::Informational));
     }
@@ -344,7 +345,7 @@ mod tests {
                 json!({"name": "idx", "fields": [], "vectorSearch": {"vectorizers": [{"name": "v"}]}}),
             ),
         ]);
-        let edges = identity_edges(&ws);
+        let edges = identity_edges(&ws, "dev");
         let roles: Vec<&str> = edges.iter().map(|e| e.role_name.as_str()).collect();
         assert!(roles.contains(&"Cognitive Services User"), "{roles:?}");
         assert!(roles.contains(&"Search Index Data Reader"), "{roles:?}");
@@ -381,6 +382,10 @@ mod tests {
             (ResourceKind::DataSource, "ds", ds),
             (ResourceKind::DataSource, "ds2", ds2),
         ]);
-        assert_eq!(identity_edges(&ws).len(), 1, "same scope+role dedups");
+        assert_eq!(
+            identity_edges(&ws, "dev").len(),
+            1,
+            "same scope+role dedups"
+        );
     }
 }

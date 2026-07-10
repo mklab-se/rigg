@@ -70,6 +70,14 @@ pub fn confirm_default_yes(prompt: &str, plain: bool) -> Result<bool> {
         .map_err(map_err)
 }
 
+pub fn confirm_default_no(prompt: &str, plain: bool) -> Result<bool> {
+    Confirm::new(prompt)
+        .with_default(false)
+        .with_render_config(config(plain))
+        .prompt()
+        .map_err(map_err)
+}
+
 pub fn text(prompt: &str, plain: bool) -> Result<String> {
     Text::new(prompt)
         .with_render_config(config(plain))

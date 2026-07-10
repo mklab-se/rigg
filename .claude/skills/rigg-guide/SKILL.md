@@ -28,11 +28,29 @@ rigg.yaml                     # environments + service connections (YAML)
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
   project.yaml                # metadata only — the directory IS the membership
-  search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
-          knowledge-sources,knowledge-bases}/<name>.json
-  foundry/{agents,deployments,connections,guardrails}/<name>.json
-  foundry/agents/<name>.instructions.md   # $file sidecar for long text
+  envs/<env>/
+    search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
+            knowledge-sources,knowledge-bases}/<name>.json
+    foundry/{agents,deployments,connections,guardrails}/<name>.json
+    foundry/agents/<name>.instructions.md   # $file sidecar for long text
 ```
+
+## Environments
+
+Each project keeps a **separate resource tree per environment** under
+`envs/<env>/` — dev and prod genuinely diverge (field mappings, agent
+instructions), so each gets its own full file tree rather than overlay
+patches. A resource's *logical* identity is its file path (kind dir + stem,
+e.g. `indexes/docs-index`); the `name` field inside the file is its
+*physical* Azure name and may differ per environment. Target an environment
+with `-e/--env <name>` (or `RIGG_ENV`, or the `default: true` env). Copy one
+environment's tree into another — locally, without touching Azure — with
+`rigg promote <project> --from <env> --to <env>` (pinned fields like `name`
+and secrets are preserved on the target, not overwritten). Environments can
+be marked `policy: { protected: true }` in `rigg.yaml`; mutating pushes and
+remote deletes against a protected environment then require an explicit
+`--confirm-env <name>` (or an interactive type-to-confirm) — `--yes` alone
+never satisfies this gate.
 
 ## Key workflows
 

@@ -5,9 +5,17 @@
 //! ```text
 //! projects/<name>/
 //!   project.yaml
-//!   search/<kind-dir>/<resource-name>.json
-//!   foundry/<kind-dir>/<resource-name>.json
+//!   envs/<env>/
+//!     search/<kind-dir>/<resource-stem>.json
+//!     foundry/<kind-dir>/<resource-stem>.json
 //! ```
+//!
+//! Each environment gets its own complete resource tree. The **file stem**
+//! (kind dir + filename) is the resource's *logical* identity — the
+//! correlation across environments. The **`name` field inside the file** is
+//! the *physical* Azure name for that environment; by default stem == name,
+//! but they may diverge when a resource is renamed in one environment (see
+//! [`Store::list`] / [`Store::locate`]).
 //!
 //! Files are written via [`crate::normalize::normalize_for_disk`] and long
 //! text fields are extracted to Markdown sidecars ([`crate::sidecar`]).
@@ -25,7 +33,7 @@ use crate::normalize::{format_json, normalize_for_compare, normalize_for_disk};
 use crate::resources::traits::{ResourceKind, ResourceRef, validate_resource_name};
 use crate::service::ServiceDomain;
 use crate::sidecar::{self, SidecarError};
-use crate::workspace::{Project, Workspace};
+use crate::workspace::{ENVS_DIR, Project, Workspace};
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -44,6 +52,14 @@ pub enum StoreError {
     #[error("invalid resource name in {path}: {message}")]
     BadName { path: PathBuf, message: String },
     #[error(
+        "duplicate physical name '{name}': both {first} and {second} define a resource named '{name}' — physical (Azure) names must be unique within a kind"
+    )]
+    DuplicatePhysicalName {
+        name: String,
+        first: PathBuf,
+        second: PathBuf,
+    },
+    #[error(
         "resource {reference} is defined in both project '{first}' and project '{second}' — a resource must belong to exactly one project"
     )]
     DuplicateOwnership {
@@ -51,22 +67,62 @@ pub enum StoreError {
         first: String,
         second: String,
     },
+    #[error(
+        "cannot create '{path}': stem is already used by a different resource (existing physical name '{existing_name}', new '{new_name}')"
+    )]
+    StemOccupiedByDifferentResource {
+        path: PathBuf,
+        existing_name: String,
+        new_name: String,
+    },
 }
 
 type Result<T> = std::result::Result<T, StoreError>;
 
-/// File store for one project.
+/// File store for one project, rooted at one environment's tree.
 pub struct Store<'w> {
     project: &'w Project,
+    env: String,
 }
 
 impl<'w> Store<'w> {
-    pub fn new(project: &'w Project) -> Self {
-        Store { project }
+    pub fn new(project: &'w Project, env: &str) -> Self {
+        Store {
+            project,
+            env: env.to_string(),
+        }
     }
 
     pub fn project(&self) -> &Project {
         self.project
+    }
+
+    pub fn env(&self) -> &str {
+        &self.env
+    }
+
+    /// List the environments a project participates in: the sorted names of
+    /// `<project>/envs/*` subdirectories. A project with no env dirs yet
+    /// participates in none (scaffold/adopt/pull materializes them lazily).
+    pub fn envs_of(project: &Project) -> Vec<String> {
+        let dir = project.dir.join(ENVS_DIR);
+        let mut envs: Vec<String> = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        envs.sort();
+        envs
+    }
+
+    /// Root of this store's environment tree: `<project>/envs/<env>/`.
+    fn root(&self) -> PathBuf {
+        self.project.dir.join(ENVS_DIR).join(&self.env)
     }
 
     fn domain_dir(domain: ServiceDomain) -> &'static str {
@@ -76,24 +132,91 @@ impl<'w> Store<'w> {
         }
     }
 
-    /// Absolute path for a resource file.
-    pub fn path_for(&self, r: &ResourceRef) -> PathBuf {
-        self.project
-            .dir
-            .join(Self::domain_dir(r.kind.domain()))
-            .join(r.kind.directory_name())
-            .join(format!("{}.json", r.name))
+    fn kind_dir(&self, kind: ResourceKind) -> PathBuf {
+        self.root()
+            .join(Self::domain_dir(kind.domain()))
+            .join(kind.directory_name())
     }
 
-    /// Scan the project directory for resource files.
+    /// Absolute path for a NEW resource file (used on create — the physical
+    /// name becomes the filename). Existing resources may live at a
+    /// different path when their file stem diverged from the physical name;
+    /// use [`Store::locate`] to find those.
+    pub fn path_for(&self, r: &ResourceRef) -> PathBuf {
+        self.kind_dir(r.kind).join(format!("{}.json", r.name))
+    }
+
+    /// Find the file in this store whose physical name (`name` field, or the
+    /// file stem when absent) equals `r.name`. Scans the kind directory —
+    /// small dirs, correctness over micro-optimization.
+    pub fn locate(&self, r: &ResourceRef) -> Result<Option<PathBuf>> {
+        let dir = self.kind_dir(r.kind);
+        if !dir.is_dir() {
+            return Ok(None);
+        }
+        // Fast path: stem == physical name (the common case).
+        let fast = dir.join(format!("{}.json", r.name));
+        if fast.is_file() && physical_name(&fast, &r.name)? == r.name {
+            return Ok(Some(fast));
+        }
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|source| StoreError::Io {
+                path: dir.clone(),
+                source,
+            })?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path == fast {
+                continue; // already checked above
+            }
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if physical_name(&path, &stem)? == r.name {
+                return Ok(Some(path));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Path for a resource being CREATED: `<physical name>.json`, or — when
+    /// that stem is already occupied by a DIFFERENT resource (a renamed one
+    /// whose stem no longer matches its `name` field) — the first free
+    /// numbered stem (`<name>-2.json`, `<name>-3.json`, …). The create path
+    /// never points at an existing file, so creating can never overwrite a
+    /// renamed resource.
+    fn create_path_for(&self, r: &ResourceRef) -> PathBuf {
+        let dir = self.kind_dir(r.kind);
+        let base = dir.join(format!("{}.json", r.name));
+        if !base.exists() {
+            return base;
+        }
+        for i in 2u64.. {
+            let candidate = dir.join(format!("{}-{i}.json", r.name));
+            if !candidate.exists() {
+                return candidate;
+            }
+        }
+        unreachable!("some numbered stem is always free")
+    }
+
+    /// Scan this store's environment tree for resource files, keyed by
+    /// PHYSICAL name (the file's `name` field, falling back to its stem).
+    ///
+    /// A file with invalid JSON is a HARD error (deliberately): sync
+    /// operations (push/pull/prune/ownership checks) build their world view
+    /// from this listing, and silently skipping a broken file would let them
+    /// act on a partial view — e.g. pruning a resource that still exists
+    /// locally. Fail loud and name the file instead.
     pub fn list(&self) -> Result<Vec<(ResourceRef, PathBuf)>> {
         let mut out = Vec::new();
         for kind in ResourceKind::all() {
-            let dir = self
-                .project
-                .dir
-                .join(Self::domain_dir(kind.domain()))
-                .join(kind.directory_name());
+            let dir = self.kind_dir(*kind);
             if !dir.is_dir() {
                 continue;
             }
@@ -107,25 +230,47 @@ impl<'w> Store<'w> {
                 .filter(|p| p.extension().is_some_and(|e| e == "json"))
                 .collect();
             entries.sort();
+            let mut seen: BTreeMap<String, PathBuf> = BTreeMap::new();
             for path in entries {
-                let name = path
+                let stem = path
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                let name = physical_name(&path, &stem)?;
                 validate_resource_name(&name).map_err(|e| StoreError::BadName {
                     path: path.clone(),
                     message: e.to_string(),
                 })?;
+                if let Some(first) = seen.get(&name) {
+                    return Err(StoreError::DuplicatePhysicalName {
+                        name,
+                        first: first.clone(),
+                        second: path,
+                    });
+                }
+                seen.insert(name.clone(), path.clone());
                 out.push((ResourceRef::new(*kind, name), path));
             }
         }
         Ok(out)
     }
 
-    /// Read a resource file with sidecars inlined.
+    /// Read a resource file with sidecars inlined. Locates the file by
+    /// physical name; when nothing matches, the error keeps the plain `Io`
+    /// not-found shape callers expect (pointing at the stem-guessed path).
+    /// It never falls through to reading a file whose physical name differs
+    /// from `r.name` (a renamed resource occupying the stem).
     pub fn read(&self, r: &ResourceRef) -> Result<Value> {
-        let path = self.path_for(r);
-        self.read_path(&path)
+        match self.locate(r)? {
+            Some(path) => self.read_path(&path),
+            None => Err(StoreError::Io {
+                path: self.path_for(r),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("no resource with physical name '{}'", r.name),
+                ),
+            }),
+        }
     }
 
     /// Read any resource file (must belong to this project) with sidecars inlined.
@@ -144,8 +289,25 @@ impl<'w> Store<'w> {
 
     /// Write a resource: normalize for disk, extract sidecars, write only if
     /// the semantic content changed. Returns true if the file was (re)written.
+    ///
+    /// Updates the located file when one exists (by physical name). When
+    /// none exists (create), the target stem is DISAMBIGUATED, never stolen:
+    /// if `<name>.json` is already occupied by a renamed resource, the new
+    /// file lands at `<name>-2.json` (then `-3`, …). This keeps sync
+    /// operations (pull/adopt capture cloud reality mid-run) robust instead
+    /// of failing, while `locate` keeps lookups correct regardless of stem.
     pub fn write(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
-        let path = self.path_for(r);
+        // Defense in depth: a physical name containing '/', '\' or '..' would
+        // otherwise build a path escaping the kind directory — and land where
+        // `list()`'s non-recursive scan never sees it.
+        validate_resource_name(&r.name).map_err(|e| StoreError::BadName {
+            path: self.create_path_for(r),
+            message: e.to_string(),
+        })?;
+        let path = match self.locate(r)? {
+            Some(existing) => existing,
+            None => self.create_path_for(r),
+        };
         let mut normalized = normalize_for_disk(r.kind, value);
 
         // Preserve any x-rigg-* annotations the user added locally: they are
@@ -174,19 +336,92 @@ impl<'w> Store<'w> {
         Ok(true)
     }
 
-    /// Delete a resource file (and its default sidecars).
+    /// Write a resource at an explicit STEM rather than its physical name —
+    /// used by `rigg promote` when creating a resource in the target
+    /// environment that has no counterpart there yet: the new file must land
+    /// at the SOURCE environment's stem (its logical/correlation id) so the
+    /// two trees keep correlating by path, even when the resource's physical
+    /// `name` differs from that stem (a renamed resource in the source env).
+    ///
+    /// Unlike [`Store::write`] (which locates-or-creates by physical name),
+    /// this never disambiguates: if `<stem>.json` already exists and holds a
+    /// DIFFERENT physical name than `value`, that's a genuine collision (some
+    /// other resource already occupies this stem) and it errors rather than
+    /// overwriting or guessing a new path. When the existing file's physical
+    /// name matches, it behaves like `write` (update in place, same
+    /// x-rigg-*/write-only carry-over and semantic-no-op short circuit).
+    pub fn write_at(&self, stem: &str, kind: ResourceKind, value: &Value) -> Result<bool> {
+        validate_resource_name(stem).map_err(|e| StoreError::BadName {
+            path: self.kind_dir(kind).join(format!("{stem}.json")),
+            message: e.to_string(),
+        })?;
+        let path = self.kind_dir(kind).join(format!("{stem}.json"));
+        let mut normalized = normalize_for_disk(kind, value);
+        let new_name = normalized
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(stem)
+            .to_string();
+
+        if path.is_file() {
+            let existing = self.read_path(&path)?;
+            let existing_name = existing
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(stem)
+                .to_string();
+            if existing_name != new_name {
+                return Err(StoreError::StemOccupiedByDifferentResource {
+                    path,
+                    existing_name,
+                    new_name,
+                });
+            }
+            carry_over_x_rigg(&existing, &mut normalized);
+            carry_over_write_only(kind, &existing, &mut normalized);
+            if crate::normalize::semantic_eq(kind, &existing, &normalized) {
+                return Ok(false);
+            }
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        sidecar::extract_sidecars(kind, &path, &mut normalized)?;
+        std::fs::write(&path, format_json(&normalized)).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(true)
+    }
+
+    /// Delete a resource file (and its default sidecars). Only ever removes
+    /// the file `locate` resolves for this physical name — deleting a name
+    /// that matches nothing is a no-op (never falls through to a stem-guessed
+    /// path that could belong to a renamed resource).
     pub fn delete(&self, r: &ResourceRef) -> Result<()> {
-        let path = self.path_for(r);
+        let Some(path) = self.locate(r)? else {
+            return Ok(());
+        };
+        // Sidecars are named after the file's stem (its logical id), which
+        // may differ from the physical name — derive it from `path`, not `r`.
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| r.name.clone());
         if path.is_file() {
             std::fs::remove_file(&path).map_err(|source| StoreError::Io {
                 path: path.clone(),
                 source,
             })?;
         }
-        // Remove default sidecars (e.g. `<name>.instructions.md`).
+        // Remove default sidecars (e.g. `<stem>.instructions.md`).
         if let Some(dir) = path.parent() {
             for field in crate::registry::meta(r.kind).sidecar_fields {
-                let sidecar = dir.join(format!("{}.{}.md", r.name, field));
+                let sidecar = dir.join(format!("{stem}.{field}.md"));
                 if sidecar.is_file() {
                     let _ = std::fs::remove_file(sidecar);
                 }
@@ -194,6 +429,25 @@ impl<'w> Store<'w> {
         }
         Ok(())
     }
+}
+
+/// Raw (non-sidecar-inlining) read of a resource file's physical name: the
+/// top-level `name` field if it's a string, else `fallback_stem`. Used by
+/// `list`/`locate`, which only need the identity, not the full document.
+fn physical_name(path: &Path, fallback_stem: &str) -> Result<String> {
+    let text = std::fs::read_to_string(path).map_err(|source| StoreError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let value: Value = serde_json::from_str(&text).map_err(|source| StoreError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(value
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| fallback_stem.to_string()))
 }
 
 /// Preserve write-only fields (server never echoes them) from the existing
@@ -260,11 +514,13 @@ fn carry_over_x_rigg(from: &Value, to: &mut Value) {
     }
 }
 
-/// Enforce exclusive ownership: a (kind, name) may appear in only one project.
-pub fn assert_exclusive_ownership(ws: &Workspace) -> Result<()> {
+/// Enforce exclusive ownership: a (kind, name) may appear in only one
+/// project — within one environment (a physical resource named the same in
+/// two envs is normal; it's the same logical resource pushed twice).
+pub fn assert_exclusive_ownership(ws: &Workspace, env: &str) -> Result<()> {
     let mut seen: BTreeMap<ResourceRef, &str> = BTreeMap::new();
     for project in &ws.projects {
-        let store = Store::new(project);
+        let store = Store::new(project, env);
         for (r, _) in store.list()? {
             if let Some(first) = seen.get(&r) {
                 return Err(StoreError::DuplicateOwnership {
@@ -499,7 +755,7 @@ mod tests {
     fn write_list_read_round_trip_with_sidecars() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);
-        let store = Store::new(ws.project("p").unwrap());
+        let store = Store::new(ws.project("p").unwrap(), "dev");
 
         let agent_ref = ResourceRef::new(ResourceKind::Agent, "helper");
         let agent = json!({"name": "helper", "model": "gpt-5-mini", "instructions": "Be nice."});
@@ -520,13 +776,21 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].0, agent_ref);
+
+        // env-rooted path
+        assert!(
+            store
+                .path_for(&agent_ref)
+                .to_string_lossy()
+                .contains("envs/dev/")
+        );
     }
 
     #[test]
     fn write_returns_false_when_semantically_unchanged() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);
-        let store = Store::new(ws.project("p").unwrap());
+        let store = Store::new(ws.project("p").unwrap(), "dev");
         let r = ResourceRef::new(ResourceKind::Index, "idx");
         assert!(
             store
@@ -545,7 +809,7 @@ mod tests {
     fn write_preserves_local_x_rigg_annotations() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);
-        let store = Store::new(ws.project("p").unwrap());
+        let store = Store::new(ws.project("p").unwrap(), "dev");
         let r = ResourceRef::new(ResourceKind::Skillset, "sk");
         let local = json!({
             "name": "sk",
@@ -568,7 +832,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["alpha", "beta"]);
         for p in ["alpha", "beta"] {
-            let store = Store::new(ws.project(p).unwrap());
+            let store = Store::new(ws.project(p).unwrap(), "dev");
             store
                 .write(
                     &ResourceRef::new(ResourceKind::Index, "shared"),
@@ -576,9 +840,285 @@ mod tests {
                 )
                 .unwrap();
         }
-        let err = assert_exclusive_ownership(&ws).unwrap_err();
+        let err = assert_exclusive_ownership(&ws, "dev").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("alpha") && msg.contains("beta") && msg.contains("indexes/shared"));
+    }
+
+    #[test]
+    fn ownership_is_scoped_per_environment() {
+        // Same physical name in two projects but DIFFERENT envs: not a
+        // violation (ownership is checked per env tree).
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["alpha", "beta"]);
+        Store::new(ws.project("alpha").unwrap(), "dev")
+            .write(
+                &ResourceRef::new(ResourceKind::Index, "shared"),
+                &json!({"name": "shared"}),
+            )
+            .unwrap();
+        Store::new(ws.project("beta").unwrap(), "prod")
+            .write(
+                &ResourceRef::new(ResourceKind::Index, "shared"),
+                &json!({"name": "shared"}),
+            )
+            .unwrap();
+        assert!(assert_exclusive_ownership(&ws, "dev").is_ok());
+        assert!(assert_exclusive_ownership(&ws, "prod").is_ok());
+    }
+
+    #[test]
+    fn envs_of_lists_env_dirs_sorted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let project = ws.project("p").unwrap();
+        assert_eq!(Store::envs_of(project), Vec::<String>::new());
+        Store::new(project, "prod")
+            .write(
+                &ResourceRef::new(ResourceKind::Index, "idx"),
+                &json!({"name": "idx"}),
+            )
+            .unwrap();
+        Store::new(project, "dev")
+            .write(
+                &ResourceRef::new(ResourceKind::Index, "idx"),
+                &json!({"name": "idx"}),
+            )
+            .unwrap();
+        assert_eq!(Store::envs_of(project), vec!["dev", "prod"]);
+    }
+
+    #[test]
+    fn list_keys_by_physical_name_when_stem_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({"name": "Regulus-Prod", "model": "m"}).to_string(),
+        )
+        .unwrap();
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0.name, "Regulus-Prod");
+        assert_eq!(listed[0].1, dir.join("regulus.json"));
+    }
+
+    #[test]
+    fn locate_finds_file_by_physical_name_when_stem_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({"name": "Regulus-Prod", "model": "m"}).to_string(),
+        )
+        .unwrap();
+        let found = store
+            .locate(&ResourceRef::new(ResourceKind::Agent, "Regulus-Prod"))
+            .unwrap();
+        assert_eq!(found, Some(dir.join("regulus.json")));
+        assert_eq!(
+            store
+                .locate(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+                .unwrap(),
+            None,
+            "the stem alone is not a physical name once name diverges"
+        );
+    }
+
+    #[test]
+    fn write_updates_the_located_file_not_a_stem_guess() {
+        // Physical rename case: file `regulus.json` holds name "Regulus-Prod".
+        // Writing a ResourceRef keyed on the physical name must update THAT
+        // file in place, not create a new `Regulus-Prod.json`.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({"name": "Regulus-Prod", "model": "m1"}).to_string(),
+        )
+        .unwrap();
+        let r = ResourceRef::new(ResourceKind::Agent, "Regulus-Prod");
+        store
+            .write(&r, &json!({"name": "Regulus-Prod", "model": "m2"}))
+            .unwrap();
+        assert!(
+            !dir.join("Regulus-Prod.json").exists(),
+            "must not create a second file keyed on the physical name"
+        );
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["model"], json!("m2"));
+    }
+
+    #[test]
+    fn write_never_overwrites_a_renamed_resources_stem() {
+        // `regulus.json` holds physical name "Regulus-Prod" (a renamed
+        // resource). Creating a NEW resource whose physical name is
+        // "regulus" must NOT clobber it: the create path disambiguates to a
+        // free stem instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({"name": "Regulus-Prod", "model": "m"}).to_string(),
+        )
+        .unwrap();
+
+        let r = ResourceRef::new(ResourceKind::Agent, "regulus");
+        assert!(
+            store
+                .write(&r, &json!({"name": "regulus", "model": "new"}))
+                .unwrap()
+        );
+
+        // the renamed resource's file is untouched
+        let original: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            original["name"],
+            json!("Regulus-Prod"),
+            "original file untouched"
+        );
+
+        // the new resource landed at a different, disambiguated stem
+        let new_path = store.locate(&r).unwrap().expect("new resource locatable");
+        assert_ne!(new_path, dir.join("regulus.json"));
+        assert_eq!(new_path, dir.join("regulus-2.json"));
+
+        // both resolve correctly by physical name
+        assert_eq!(
+            store
+                .locate(&ResourceRef::new(ResourceKind::Agent, "Regulus-Prod"))
+                .unwrap(),
+            Some(dir.join("regulus.json"))
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn delete_by_physical_name_removes_located_file_and_stem_sidecars() {
+        // File stem "regulus" ≠ physical name "Regulus-Prod", with an
+        // instructions sidecar named after the STEM. Deleting by physical
+        // name must remove the located file AND its stem-named sidecar,
+        // leaving a neighboring resource untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("regulus.json"),
+            json!({
+                "name": "Regulus-Prod", "model": "m",
+                "instructions": {"$file": "regulus.instructions.md"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("regulus.instructions.md"), "Be helpful.").unwrap();
+        // neighbor with its own sidecar
+        std::fs::write(
+            dir.join("other.json"),
+            json!({
+                "name": "other", "model": "m",
+                "instructions": {"$file": "other.instructions.md"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("other.instructions.md"), "Neighbor.").unwrap();
+
+        store
+            .delete(&ResourceRef::new(ResourceKind::Agent, "Regulus-Prod"))
+            .unwrap();
+        assert!(!dir.join("regulus.json").exists(), "located file removed");
+        assert!(
+            !dir.join("regulus.instructions.md").exists(),
+            "stem-named sidecar removed"
+        );
+        assert!(dir.join("other.json").exists(), "neighbor untouched");
+        assert!(
+            dir.join("other.instructions.md").exists(),
+            "neighbor sidecar untouched"
+        );
+
+        // deleting a physical name that matches nothing is a no-op
+        store
+            .delete(&ResourceRef::new(ResourceKind::Agent, "ghost"))
+            .unwrap();
+        assert!(dir.join("other.json").exists());
+    }
+
+    #[test]
+    fn list_error_on_corrupt_json_names_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Index, "a"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("broken.json"), "{ this is not json").unwrap();
+        let err = store.list().unwrap_err();
+        assert!(matches!(err, StoreError::Parse { .. }));
+        assert!(
+            err.to_string().contains("broken.json"),
+            "error names the broken file: {err}"
+        );
+    }
+
+    #[test]
+    fn duplicate_physical_name_in_one_kind_dir_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Index, "a"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.json"), json!({"name": "dup"}).to_string()).unwrap();
+        std::fs::write(dir.join("b.json"), json!({"name": "dup"}).to_string()).unwrap();
+        let err = store.list().unwrap_err();
+        assert!(matches!(err, StoreError::DuplicatePhysicalName { .. }));
+        assert!(err.to_string().contains("dup"));
     }
 
     #[test]
@@ -684,7 +1224,7 @@ mod tests {
     fn write_only_fields_survive_server_echo_and_compare() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);
-        let store = Store::new(ws.project("p").unwrap());
+        let store = Store::new(ws.project("p").unwrap(), "dev");
         let r = ResourceRef::new(ResourceKind::DataSource, "ds");
         let local = json!({
             "name": "ds", "type": "azureblob",
@@ -737,5 +1277,141 @@ mod tests {
             ProjectState::checksum(ResourceKind::Index, &a),
             ProjectState::checksum(ResourceKind::Index, &b)
         );
+    }
+
+    #[test]
+    fn write_at_creates_file_at_given_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let created = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m"}),
+            )
+            .unwrap();
+        assert!(created);
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert!(
+            dir.join("regulus.json").is_file(),
+            "landed at the stem, not the physical name"
+        );
+        assert!(!dir.join("Regulus-Prod.json").exists());
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["name"], json!("Regulus-Prod"));
+    }
+
+    #[test]
+    fn write_at_updates_in_place_when_physical_name_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m1"}),
+            )
+            .unwrap();
+        let rewritten = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m2"}),
+            )
+            .unwrap();
+        assert!(rewritten);
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["model"], json!("m2"));
+    }
+
+    #[test]
+    fn write_at_refuses_to_overwrite_a_different_resources_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "Regulus-Prod", "model": "m1"}),
+            )
+            .unwrap();
+        let err = store
+            .write_at(
+                "regulus",
+                ResourceKind::Agent,
+                &json!({"name": "some-other-name", "model": "m2"}),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            StoreError::StemOccupiedByDifferentResource { .. }
+        ));
+        // original untouched
+        let dir = store
+            .path_for(&ResourceRef::new(ResourceKind::Agent, "regulus"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("regulus.json")).unwrap())
+                .unwrap();
+        assert_eq!(on_disk["name"], json!("Regulus-Prod"));
+    }
+
+    #[test]
+    fn write_at_returns_false_when_semantically_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        store
+            .write_at(
+                "idx",
+                ResourceKind::Index,
+                &json!({"name": "idx", "fields": []}),
+            )
+            .unwrap();
+        let rewritten = store
+            .write_at(
+                "idx",
+                ResourceKind::Index,
+                &json!({"@odata.etag": "0x1", "name": "idx", "fields": []}),
+            )
+            .unwrap();
+        assert!(!rewritten);
+    }
+
+    #[test]
+    fn write_at_rejects_path_escaping_stems() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let err = store.write_at("../../evil", ResourceKind::Index, &json!({"name": "evil"}));
+        assert!(matches!(err, Err(StoreError::BadName { .. })), "{err:?}");
+    }
+
+    #[test]
+    fn write_rejects_path_escaping_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let r = ResourceRef::new(ResourceKind::Index, "../../evil");
+        let err = store.write(&r, &json!({"name": "../../evil"}));
+        assert!(matches!(err, Err(StoreError::BadName { .. })), "{err:?}");
     }
 }

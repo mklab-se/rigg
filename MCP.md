@@ -52,6 +52,8 @@ The server exposes 8 project-scoped tools. Every tool that talks to Azure accept
 
 Mutating tools (`rigg_pull`, `rigg_push`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 
+`rigg_push` and `rigg_delete` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation is refused unless `confirm_env` matches the environment's name exactly — an AI agent can't push or delete against a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly.
+
 ### rigg_status
 
 Sync status per project: which resources are in sync, local-ahead, remote-ahead, or conflicted, plus unmanaged remote resources.
@@ -115,6 +117,7 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `env` | string? | Environment name |
 | `prune` | bool? | Also delete remote resources whose local files were removed |
 | `force` | bool? | Without force: returns the push plan (dry run). With `force: true`: executes |
+| `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 
 Run `rigg_validate` first — the tool description tells the AI to, and well-behaved agents will.
 
@@ -127,6 +130,7 @@ Delete ALL of a project's resources from Azure. Local files are kept, so pushing
 | `project` | string | Project whose remote resources should be deleted (required) |
 | `env` | string? | Environment name |
 | `force` | bool? | Without force: returns a preview of what would be removed. With `force: true`: executes |
+| `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 
 ## Example Workflows
 
