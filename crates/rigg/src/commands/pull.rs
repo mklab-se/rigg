@@ -10,9 +10,11 @@ use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
+use serde_json::Value;
 
+use rigg_core::normalize::normalize_for_push;
 use rigg_core::registry;
-use rigg_core::resources::ResourceRef;
+use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 
@@ -124,29 +126,81 @@ async fn pull_project(
                 println!("  {} {} (local ahead — push pending)", "≠".yellow(), r);
             }
             SyncClass::Untracked | SyncClass::Conflict => {
-                if ctx.yes
-                    || (ctx.interactive() && {
-                        println!(
-                            "  {} {} differs locally and remotely",
-                            "conflict".red().bold(),
-                            r
-                        );
-                        confirm::prompt_yes_no("  overwrite local file with the remote version?")?
-                    })
-                {
+                let summary = local
+                    .as_ref()
+                    .map(|l| conflict_summary(r.kind, l, doc))
+                    .unwrap_or_else(|| "differs locally and remotely".to_string());
+                if ctx.yes {
                     store.write(r, doc)?;
                     state.set_baseline(r, doc);
                     println!("  {} overwrote {}", "~".cyan(), r);
                     written += 1;
-                } else if !ctx.interactive() {
+                } else if ctx.interactive() {
+                    println!("  {} {} — {}", "conflict".red().bold(), r, summary);
+                    let mut show_diff_option = true;
+                    loop {
+                        let opts: &[char] = if show_diff_option {
+                            &['o', 'k', 'd', 'a']
+                        } else {
+                            &['o', 'k', 'a']
+                        };
+                        let label = if show_diff_option {
+                            "  [o]verwrite local with remote / [k]eep local / [d]iff / [a]bort pull ?"
+                        } else {
+                            "  [o]verwrite local with remote / [k]eep local / [a]bort pull ?"
+                        };
+                        match confirm::prompt_choice(label, opts)? {
+                            'o' => {
+                                store.write(r, doc)?;
+                                state.set_baseline(r, doc);
+                                println!("  {} overwrote {}", "~".cyan(), r);
+                                written += 1;
+                                break;
+                            }
+                            'k' => {
+                                println!("  kept local {r}");
+                                break;
+                            }
+                            'd' => {
+                                if let Some(l) = &local {
+                                    let result = rigg_diff::semantic::diff(
+                                        &normalize_for_push(r.kind, doc),
+                                        &normalize_for_push(r.kind, l),
+                                        "name",
+                                    );
+                                    let labels = rigg_diff::output::SideLabels {
+                                        new_side: "local".to_string(),
+                                        old_side: format!("Azure ({})", env.name),
+                                    };
+                                    println!();
+                                    print!(
+                                        "{}",
+                                        rigg_diff::output::format_text(
+                                            &result,
+                                            &r.to_string(),
+                                            &labels
+                                        )
+                                    );
+                                    println!();
+                                }
+                                show_diff_option = false;
+                            }
+                            'a' => {
+                                state.save(ws, &env.name, &project.name)?;
+                                return Err(anyhow!("aborted"));
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                } else {
                     println!(
-                        "  {} {} (local and remote differ; pass --yes to overwrite)",
+                        "  {} {} — {} (run `rigg diff {}` to inspect; pass --yes to overwrite)",
                         "conflict".red().bold(),
-                        r
+                        r,
+                        summary,
+                        project.name
                     );
                     any_conflict = true;
-                } else {
-                    println!("  kept local {r}");
                 }
             }
             SyncClass::LocalOnly => unreachable!("remote doc was provided"),
@@ -158,7 +212,7 @@ async fn pull_project(
         .iter()
         .map(|(r, _)| r.clone())
         .filter(|r| {
-            state.baseline(r).is_some()
+            state.has_baseline(r)
                 && remote.supported_kinds().contains(&r.kind)
                 && !remote_keys.contains(&r.key())
         })
@@ -197,4 +251,42 @@ async fn pull_project(
         println!("  {} up to date", "✓".green());
     }
     Ok(any_conflict)
+}
+
+/// One-line conflict summary: change count + first few differing fields.
+/// Orientation matches `rigg diff`: old=remote, new=local.
+fn conflict_summary(kind: ResourceKind, local: &Value, remote: &Value) -> String {
+    let result = rigg_diff::semantic::diff(
+        &normalize_for_push(kind, remote),
+        &normalize_for_push(kind, local),
+        "name",
+    );
+    let n = result.changes.len();
+    // The diff engine walks a HashSet internally, so change order is not
+    // stable across runs — sort for deterministic, readable output.
+    let mut paths: Vec<&str> = result.changes.iter().map(|c| c.path.as_str()).collect();
+    paths.sort_unstable();
+    let mut fields: Vec<&str> = paths.into_iter().take(3).collect();
+    if n > 3 {
+        fields.push("…");
+    }
+    format!("{n} field(s) differ ({})", fields.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_summary_counts_and_names_fields() {
+        let local = serde_json::json!({"name": "a", "model": "x", "p": 1, "q": 2, "r": 3});
+        let remote = serde_json::json!({"name": "a", "model": "y", "p": 9, "q": 8, "r": 7});
+        let s = conflict_summary(ResourceKind::Agent, &local, &remote);
+        assert!(s.starts_with("4 field(s) differ ("), "{s}");
+        assert!(s.contains("model"), "{s}");
+        assert!(
+            s.ends_with(", …)") || s.matches(',').count() >= 2,
+            "at most 3 named: {s}"
+        );
+    }
 }
