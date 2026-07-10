@@ -337,7 +337,7 @@ async fn diff_reports_drift_with_exit_code_and_markdown() {
         .assert()
         .code(5)
         .stdout(predicate::str::contains("indexes/idx"))
-        .stdout(predicate::str::contains("```diff"));
+        .stdout(predicate::str::contains("| field | local |"));
 }
 
 #[tokio::test]

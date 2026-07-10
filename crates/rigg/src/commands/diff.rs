@@ -8,6 +8,7 @@ use rigg_core::normalize::normalize_for_push;
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::Store;
 use rigg_core::workspace::{Project, Workspace};
+use rigg_diff::output::SideLabels;
 use rigg_diff::semantic::DiffResult;
 
 use crate::cli::{DiffArgs, DiffFormat};
@@ -24,14 +25,15 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
         diffs.extend(diff_project(ctx, &ws, project, &args, only.as_ref()).await?);
     }
 
+    let labels = side_labels(&ws, ctx, &args)?;
     let output = match args.format {
         DiffFormat::Text => {
-            rigg_diff::output::format_report(&diffs, rigg_diff::output::OutputFormat::Text)
+            rigg_diff::output::format_report(&diffs, rigg_diff::output::OutputFormat::Text, &labels)
         }
         DiffFormat::Json => {
-            rigg_diff::output::format_report(&diffs, rigg_diff::output::OutputFormat::Json)
+            rigg_diff::output::format_report(&diffs, rigg_diff::output::OutputFormat::Json, &labels)
         }
-        DiffFormat::Markdown => rigg_diff::output::format_markdown(&diffs),
+        DiffFormat::Markdown => rigg_diff::output::format_markdown(&diffs, &labels),
     };
     print!("{output}");
 
@@ -54,6 +56,26 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Build the labels for the two sides of the diff: local-vs-Azure by
+/// default, or the two named environments in `--compare-env` mode. Mirrors
+/// the env resolution in `diff_project` — new=local/env_a, old=Azure/env_b
+/// (see the diff-orientation comment there).
+fn side_labels(ws: &Workspace, ctx: &GlobalContext, args: &DiffArgs) -> Result<SideLabels> {
+    let env_b = ws.resolve_env(args.compare_env.as_deref().or(ctx.env.as_deref()))?;
+    if args.compare_env.is_some() {
+        let env_a = ws.resolve_env(ctx.env.as_deref())?;
+        Ok(SideLabels {
+            new_side: env_a.name.clone(),
+            old_side: env_b.name.clone(),
+        })
+    } else {
+        Ok(SideLabels {
+            new_side: "local".to_string(),
+            old_side: format!("Azure ({})", env_b.name),
+        })
+    }
 }
 
 fn parse_only(s: &str) -> Result<ResourceRef> {
