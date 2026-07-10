@@ -289,6 +289,13 @@ impl<'w> Store<'w> {
     /// operations (pull/adopt capture cloud reality mid-run) robust instead
     /// of failing, while `locate` keeps lookups correct regardless of stem.
     pub fn write(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
+        // Defense in depth: a physical name containing '/', '\' or '..' would
+        // otherwise build a path escaping the kind directory — and land where
+        // `list()`'s non-recursive scan never sees it.
+        validate_resource_name(&r.name).map_err(|e| StoreError::BadName {
+            path: self.create_path_for(r),
+            message: e.to_string(),
+        })?;
         let path = match self.locate(r)? {
             Some(existing) => existing,
             None => self.create_path_for(r),
@@ -1200,5 +1207,15 @@ mod tests {
             ProjectState::checksum(ResourceKind::Index, &a),
             ProjectState::checksum(ResourceKind::Index, &b)
         );
+    }
+
+    #[test]
+    fn write_rejects_path_escaping_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let r = ResourceRef::new(ResourceKind::Index, "../../evil");
+        let err = store.write(&r, &json!({"name": "../../evil"}));
+        assert!(matches!(err, Err(StoreError::BadName { .. })), "{err:?}");
     }
 }
