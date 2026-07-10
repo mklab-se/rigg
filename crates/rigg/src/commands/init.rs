@@ -119,7 +119,11 @@ async fn discover_interactive() -> Result<Discovered> {
     let arm = match ArmClient::new() {
         Ok(arm) => arm,
         Err(e) => {
-            println!("  ARM discovery unavailable ({e}); falling back to manual entry.");
+            // Render via anyhow's alternate Display so the full source chain
+            // (e.g. reqwest detail under ClientError::Request) is shown, not
+            // just the top-level message.
+            let e = anyhow::Error::from(e);
+            println!("  ARM discovery unavailable ({e:#}); falling back to manual entry.");
             return manual_entry();
         }
     };

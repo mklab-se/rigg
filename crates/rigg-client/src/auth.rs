@@ -20,6 +20,32 @@ pub enum AuthError {
     AuthFailed(String),
 }
 
+/// Build an actionable error for a failure to parse `az account show` output.
+///
+/// A bare serde error (e.g. `expected value at line 1 column 1`) gives the
+/// user no idea what to do; this is almost always a transient Azure CLI
+/// hiccup (extension update noise, empty stdout, etc.), so point them at the
+/// obvious next steps.
+fn account_parse_error(e: serde_json::Error) -> AuthError {
+    AuthError::TokenError(format!(
+        "could not parse `az account show` output ({e}); this is usually a \
+         transient Azure CLI issue — try again, and if it persists run `az login`"
+    ))
+}
+
+/// Turn `az`'s stderr into a `TokenError` detail, substituting an actionable
+/// fallback message when stderr is empty or whitespace-only (which otherwise
+/// surfaces to the user as a blank cause).
+fn token_error_detail(stderr: &str, status: std::process::ExitStatus) -> String {
+    if stderr.trim().is_empty() {
+        format!(
+            "az returned no error detail (exit {status}); usually transient — try again, or run `az login`"
+        )
+    } else {
+        stderr.trim().to_string()
+    }
+}
+
 /// Authentication provider trait
 pub trait AuthProvider: Send + Sync {
     /// Get an access token for Azure Search
@@ -88,8 +114,8 @@ impl AzCliAuth {
         }
 
         // Parse account info
-        let account_json: serde_json::Value = serde_json::from_slice(&account_output.stdout)
-            .map_err(|e| AuthError::TokenError(e.to_string()))?;
+        let account_json: serde_json::Value =
+            serde_json::from_slice(&account_output.stdout).map_err(account_parse_error)?;
 
         Ok(AuthStatus {
             logged_in: true,
@@ -130,7 +156,10 @@ impl AzCliAuth {
             if stderr.contains("not logged in") || stderr.contains("AADSTS") {
                 return Err(AuthError::NotLoggedIn);
             }
-            return Err(AuthError::TokenError(stderr.to_string()));
+            return Err(AuthError::TokenError(token_error_detail(
+                &stderr,
+                output.status,
+            )));
         }
 
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -185,7 +214,10 @@ impl AuthProvider for AzCliAuth {
                     self.resource_scope, detail, self.resource_scope
                 )));
             }
-            return Err(AuthError::TokenError(stderr.to_string()));
+            return Err(AuthError::TokenError(token_error_detail(
+                &stderr,
+                output.status,
+            )));
         }
 
         let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -559,5 +591,39 @@ mod tests {
     fn test_for_cosmos_uses_cosmos_scope() {
         let auth = AzCliAuth::for_cosmos();
         assert_eq!(auth.resource_scope, "https://cosmos.azure.com");
+    }
+
+    #[test]
+    fn account_parse_error_is_actionable_not_raw_serde() {
+        let serde_err = serde_json::from_slice::<serde_json::Value>(b"").unwrap_err();
+        let err = account_parse_error(serde_err);
+        match err {
+            AuthError::TokenError(msg) => {
+                assert!(msg.contains("az login"), "{msg}");
+                assert!(msg.contains("transient"), "{msg}");
+                assert!(msg.contains("az account show"), "{msg}");
+            }
+            other => panic!("expected TokenError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn token_error_detail_falls_back_when_stderr_empty() {
+        let status = std::process::Command::new("true")
+            .status()
+            .expect("failed to run `true`");
+        let detail = token_error_detail("   \n", status);
+        assert!(detail.contains("az login"), "{detail}");
+        assert!(detail.contains("transient"), "{detail}");
+        assert!(!detail.trim().is_empty());
+    }
+
+    #[test]
+    fn token_error_detail_preserves_nonempty_stderr() {
+        let status = std::process::Command::new("false")
+            .status()
+            .expect("failed to run `false`");
+        let detail = token_error_detail("  ERROR: something specific broke  ", status);
+        assert_eq!(detail, "ERROR: something specific broke");
     }
 }
