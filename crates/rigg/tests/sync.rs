@@ -35,7 +35,7 @@ fn workspace(endpoint: &str) -> tempfile::TempDir {
 }
 
 fn write_resource(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
-    let d = ws.join("projects/demo/search").join(dir);
+    let d = ws.join("projects/demo/envs/dev/search").join(dir);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(
         d.join(format!("{name}.json")),
@@ -88,7 +88,9 @@ async fn pull_writes_normalized_files_and_skips_volatile_noise() {
         .assert()
         .success();
 
-    let file = ws.path().join("projects/demo/search/indexes/docs.json");
+    let file = ws
+        .path()
+        .join("projects/demo/envs/dev/search/indexes/docs.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert!(v.get("@odata.etag").is_none(), "volatile stripped");
     assert_eq!(v["name"], "docs");
@@ -184,7 +186,11 @@ async fn push_orders_dependencies_and_canonicalizes() {
 
     // canonicalization: server-added default written back to disk, etag not
     let idx_file: Value = serde_json::from_str(
-        &std::fs::read_to_string(ws.path().join("projects/demo/search/indexes/idx.json")).unwrap(),
+        &std::fs::read_to_string(
+            ws.path()
+                .join("projects/demo/envs/dev/search/indexes/idx.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(idx_file["serverDefault"], json!(true));
@@ -336,7 +342,11 @@ async fn pull_conflict_fails_non_interactive_with_rigg_diff_pointer() {
         .stdout(predicate::str::contains("rigg diff"));
     // local file left untouched
     let v: Value = serde_json::from_str(
-        &std::fs::read_to_string(ws.path().join("projects/demo/search/indexes/idx.json")).unwrap(),
+        &std::fs::read_to_string(
+            ws.path()
+                .join("projects/demo/envs/dev/search/indexes/idx.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(v["fields"][0]["name"], "local-change");
@@ -462,12 +472,12 @@ async fn adopt_named_selector_adopts_only_that_resource() {
 
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists()
     );
     assert!(
         !ws.path()
-            .join("projects/demo/search/indexes/cars.json")
+            .join("projects/demo/envs/dev/search/indexes/cars.json")
             .exists(),
         "only the named resource is adopted"
     );
@@ -497,7 +507,7 @@ async fn adopt_kind_selector_needs_confirmation_and_yes_adopts_all_of_kind() {
         .stderr(predicate::str::contains("--yes").or(predicate::str::contains("--dry-run")));
     assert!(
         !ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists()
     );
 
@@ -508,12 +518,12 @@ async fn adopt_kind_selector_needs_confirmation_and_yes_adopts_all_of_kind() {
         .success();
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists()
     );
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/cars.json")
+            .join("projects/demo/envs/dev/search/indexes/cars.json")
             .exists()
     );
 }
@@ -541,12 +551,12 @@ async fn adopt_all_selector_adopts_everything_unmanaged() {
 
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/a.json")
+            .join("projects/demo/envs/dev/search/indexes/a.json")
             .exists()
     );
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/b.json")
+            .join("projects/demo/envs/dev/search/indexes/b.json")
             .exists()
     );
 }
@@ -570,7 +580,7 @@ async fn adopt_dry_run_writes_nothing() {
         .success();
     assert!(
         !ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists()
     );
 }
@@ -592,7 +602,7 @@ async fn adopt_never_steals_another_projects_resource() {
     let ws = workspace(&server.uri());
 
     // Second project "other" already owns "hotels".
-    let other_indexes = ws.path().join("projects/other/search/indexes");
+    let other_indexes = ws.path().join("projects/other/envs/dev/search/indexes");
     std::fs::create_dir_all(&other_indexes).unwrap();
     std::fs::write(ws.path().join("projects/other/project.yaml"), "{}\n").unwrap();
     std::fs::write(
@@ -613,7 +623,7 @@ async fn adopt_never_steals_another_projects_resource() {
         .stderr(predicate::str::contains("owned by project 'other'"));
     assert!(
         !ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists()
     );
 
@@ -624,12 +634,12 @@ async fn adopt_never_steals_another_projects_resource() {
         .success();
     assert!(
         ws.path()
-            .join("projects/demo/search/indexes/cars.json")
+            .join("projects/demo/envs/dev/search/indexes/cars.json")
             .exists()
     );
     assert!(
         !ws.path()
-            .join("projects/demo/search/indexes/hotels.json")
+            .join("projects/demo/envs/dev/search/indexes/hotels.json")
             .exists(),
         "hotels is owned by 'other' and must not be adopted into 'demo'"
     );
@@ -722,7 +732,7 @@ async fn adopt_with_deps_pulls_upstream_chain_only() {
         .assert()
         .success();
 
-    let base = ws.path().join("projects/demo/search");
+    let base = ws.path().join("projects/demo/envs/dev/search");
     assert!(
         base.join("indexers/docs-indexer.json").exists(),
         "the named resource"
@@ -791,7 +801,7 @@ async fn adopt_with_deps_on_owned_resource_adopts_missing_deps() {
         .args(["adopt", "demo", "indexers/docs-indexer"])
         .assert()
         .success();
-    let base = ws.path().join("projects/demo/search");
+    let base = ws.path().join("projects/demo/envs/dev/search");
     assert!(base.join("indexers/docs-indexer.json").exists());
     assert!(
         !base.join("indexes/docs-index.json").exists(),
@@ -863,7 +873,7 @@ async fn auto_created_subresources_are_not_adoptable() {
         .args(["adopt", "demo", "indexes", "--yes"])
         .assert()
         .success();
-    let base = ws.path().join("projects/demo/search");
+    let base = ws.path().join("projects/demo/envs/dev/search");
     assert!(base.join("indexes/normal-index.json").exists());
     assert!(
         !base.join("indexes/regulatory-index.json").exists(),

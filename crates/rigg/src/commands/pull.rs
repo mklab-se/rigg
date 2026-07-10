@@ -36,14 +36,14 @@ pub async fn run(ctx: &GlobalContext, args: PullArgs) -> Result<()> {
 
 async fn pull_once(ctx: &GlobalContext, args: &PullArgs) -> Result<()> {
     let ws = load_workspace()?;
-    assert_exclusive_ownership(&ws)?;
     let env = resolve_env(&ws, ctx)?;
+    assert_exclusive_ownership(&ws, &env.name)?;
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
 
     // Resources owned by ANY project (for unmanaged detection).
     let mut owned_by_any: BTreeSet<String> = BTreeSet::new();
     for project in &ws.projects {
-        for (r, _) in Store::new(project).list()? {
+        for (r, _) in Store::new(project, &env.name).list()? {
             owned_by_any.insert(r.key());
         }
         let state = ProjectState::load(&ws, &env.name, &project.name);
@@ -69,7 +69,7 @@ async fn pull_project(
     project: &Project,
     owned_by_any: &BTreeSet<String>,
 ) -> Result<bool> {
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let remote = Remote::for_project(env, project);
     ensure_any_connection(&remote, project)?;
     let mut state = ProjectState::load(ws, &env.name, &project.name);

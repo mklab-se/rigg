@@ -122,11 +122,10 @@ async fn diff_project(
     args: &DiffArgs,
     only: Option<&ResourceRef>,
 ) -> Result<Vec<(String, DiffResult)>> {
-    let store = Store::new(project);
-
     // Baseline side: local files (or env A remote with --compare-env).
     // Comparison side: the resolved environment's remote.
     let env_b = ws.resolve_env(args.compare_env.as_deref().or(ctx.env.as_deref()))?;
+    let store = Store::new(project, &env_b.name);
     let remote_b = Remote::for_project(&env_b, project);
 
     let mut pairs: Vec<(ResourceRef, Option<Value>, Option<Value>)> = Vec::new();

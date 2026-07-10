@@ -26,8 +26,8 @@ use crate::commands::{
 
 pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
     let ws = load_workspace()?;
-    assert_exclusive_ownership(&ws)?;
     let env = resolve_env(&ws, ctx)?;
+    assert_exclusive_ownership(&ws, &env.name)?;
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
 
     let mut any_conflict = false;
@@ -56,7 +56,7 @@ async fn push_project(
     project: &Project,
     args: &PushArgs,
 ) -> Result<bool> {
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let remote = Remote::for_project(env, project);
     ensure_any_connection(&remote, project)?;
     let mut state = ProjectState::load(ws, &env.name, &project.name);

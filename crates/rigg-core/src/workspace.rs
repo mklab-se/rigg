@@ -17,6 +17,9 @@ pub const PROJECT_FILE: &str = "project.yaml";
 pub const PROJECTS_DIR: &str = "projects";
 pub const APIS_DIR: &str = "apis";
 pub const STATE_DIR: &str = ".rigg";
+/// Subdirectory of a project holding one tree per environment:
+/// `projects/<project>/envs/<env>/{search,foundry}/...`.
+pub const ENVS_DIR: &str = "envs";
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
@@ -103,6 +106,24 @@ pub struct Environment {
     pub search: ConnectionList<SearchConnection>,
     #[serde(default, skip_serializing_if = "ConnectionList::is_empty")]
     pub foundry: ConnectionList<FoundryConnection>,
+    #[serde(default, skip_serializing_if = "Policy::is_default")]
+    pub policy: Policy,
+}
+
+/// Per-environment policy gates. `protected: true` requires an explicit,
+/// typed confirmation for every cloud-mutating operation against this
+/// environment (`push` apply/`--prune`, `delete --remote`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Policy {
+    #[serde(default)]
+    pub protected: bool,
+}
+
+impl Policy {
+    fn is_default(&self) -> bool {
+        self == &Policy::default()
+    }
 }
 
 /// Accepts either a single mapping or a list of mappings in YAML.
@@ -389,6 +410,11 @@ impl ResolvedEnv {
     pub fn has_foundry(&self) -> bool {
         !self.env.foundry.is_empty()
     }
+
+    /// Whether this environment's policy gates cloud-mutating operations.
+    pub fn protected(&self) -> bool {
+        self.env.policy.protected
+    }
 }
 
 fn pick_connection<'a, T>(
@@ -554,6 +580,18 @@ environments:
             ws.project("gamma"),
             Err(WorkspaceError::UnknownProject(..))
         ));
+    }
+
+    #[test]
+    fn policy_protected_parses_and_defaults_unprotected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = make_ws(
+            tmp.path(),
+            "environments:\n  dev:\n    default: true\n    search: { service: s }\n  prod:\n    policy: { protected: true }\n    search: { service: p }\n",
+            &[],
+        );
+        assert!(!ws.resolve_env(Some("dev")).unwrap().protected());
+        assert!(ws.resolve_env(Some("prod")).unwrap().protected());
     }
 
     #[test]

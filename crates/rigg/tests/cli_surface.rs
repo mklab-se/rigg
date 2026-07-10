@@ -76,10 +76,10 @@ fn validate_duplicate_ownership_exits_3() {
     // same index in two projects
     for p in ["demo", "other"] {
         let dir = ws.path().join("projects").join(p);
-        std::fs::create_dir_all(dir.join("search/indexes")).unwrap();
+        std::fs::create_dir_all(dir.join("envs/dev/search/indexes")).unwrap();
         std::fs::write(dir.join("project.yaml"), "{}\n").unwrap();
         std::fs::write(
-            dir.join("search/indexes/shared.json"),
+            dir.join("envs/dev/search/indexes/shared.json"),
             r#"{"name": "shared", "fields": []}"#,
         )
         .unwrap();
@@ -146,7 +146,7 @@ fn adopt_without_project_non_interactive_is_usage_error() {
 #[test]
 fn validate_rejects_secrets_exit_3() {
     let ws = workspace();
-    let dir = ws.path().join("projects/demo/search/data-sources");
+    let dir = ws.path().join("projects/demo/envs/dev/search/data-sources");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("bad.json"),
@@ -167,7 +167,7 @@ fn validate_rejects_secrets_exit_3() {
 #[test]
 fn validate_placeholder_reference_fails() {
     let ws = workspace();
-    let dir = ws.path().join("projects/demo/search/indexers");
+    let dir = ws.path().join("projects/demo/envs/dev/search/indexers");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("i.json"),
@@ -196,7 +196,9 @@ fn new_project_and_resource_land_in_right_paths() {
         .args(["new", "index", "docs", "-p", "alpha"])
         .assert()
         .success();
-    let index_path = ws.path().join("projects/alpha/search/indexes/docs.json");
+    let index_path = ws
+        .path()
+        .join("projects/alpha/envs/dev/search/indexes/docs.json");
     assert!(index_path.is_file());
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(index_path).unwrap()).unwrap();
@@ -248,7 +250,7 @@ fn new_pipeline_scaffolds_explicit_chain() {
         .args(["new", "pipeline", "rag", "-p", "demo"])
         .assert()
         .success();
-    let base = ws.path().join("projects/demo/search");
+    let base = ws.path().join("projects/demo/envs/dev/search");
     for f in [
         "data-sources/rag-ds.json",
         "indexes/rag-index.json",
@@ -297,7 +299,7 @@ fn describe_lists_dependencies_and_apis() {
     // link the skillset to the api
     let sk_path = ws
         .path()
-        .join("projects/demo/search/skillsets/rag-skills.json");
+        .join("projects/demo/envs/dev/search/skillsets/rag-skills.json");
     let mut sk: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sk_path).unwrap()).unwrap();
     sk["skills"][0]["x-rigg-api"] = serde_json::json!("enrich");
@@ -353,8 +355,11 @@ fn copy_within_project() {
         .assert()
         .success();
     let v: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(ws.path().join("projects/demo/search/indexes/dst-idx.json"))
-            .unwrap(),
+        &std::fs::read_to_string(
+            ws.path()
+                .join("projects/demo/envs/dev/search/indexes/dst-idx.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(v["name"], "dst-idx");
@@ -427,7 +432,7 @@ fn validate_checks_webapi_skill_contract() {
     schemas["EnrichmentResponse"]["properties"]["values"]["items"]["properties"]["data"] = serde_json::json!({"type": "object", "properties": {"translation": {"type": "string"}}, "additionalProperties": false});
     std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
 
-    let dir = ws.path().join("projects/demo/search/skillsets");
+    let dir = ws.path().join("projects/demo/envs/dev/search/skillsets");
     std::fs::create_dir_all(&dir).unwrap();
     // conforming skill passes
     std::fs::write(
@@ -495,7 +500,7 @@ fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missin
     let v: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(
             ws.path()
-                .join("projects/demo/search/data-sources/blob-ds.json"),
+                .join("projects/demo/envs/dev/search/data-sources/blob-ds.json"),
         )
         .unwrap(),
     )
@@ -509,7 +514,7 @@ fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missin
     );
 
     // strip the policy → validate warns (but does not fail)
-    let dir = ws.path().join("projects/demo/search/data-sources");
+    let dir = ws.path().join("projects/demo/envs/dev/search/data-sources");
     std::fs::write(
         dir.join("no-del.json"),
         r#"{"name": "no-del", "type": "azureblob", "credentials": {"connectionString": "ResourceId=/subscriptions/x;"}, "container": {"name": "c"}}"#,

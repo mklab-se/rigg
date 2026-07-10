@@ -11,10 +11,11 @@ use rigg_core::store::Store;
 use rigg_core::workspace::Workspace;
 
 use crate::cli::DescribeArgs;
-use crate::commands::{GlobalContext, load_workspace};
+use crate::commands::{GlobalContext, load_workspace, resolve_env};
 
 pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
     let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
     let projects: Vec<_> = match args.project.as_deref() {
         Some(name) => vec![ws.project(name)?],
         None => ws.projects.iter().collect(),
@@ -27,7 +28,7 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
 
     let mut out_projects = Vec::new();
     for project in &projects {
-        let store = Store::new(project);
+        let store = Store::new(project, &env.name);
         let mut resources = Vec::new();
         let mut edges = Vec::new();
         let mut apis: Vec<(String, String)> = Vec::new(); // (api, consumer)
@@ -48,6 +49,7 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
             .iter()
             .map(|(project, resources, edges, apis)| json!({
                 "project": project.name,
+                "env": env.name,
                 "description": project.manifest.description,
                 "resources": resources.iter().map(|(r, path, value)| json!({
                     "resource": r.key(),
@@ -71,7 +73,7 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
     }
 
     for (project, resources, edges, apis) in &out_projects {
-        println!("{}", project.name.bold());
+        println!("{} (env: {})", project.name.bold(), env.name);
         if let Some(desc) = &project.manifest.description {
             if !desc.is_empty() {
                 println!("  {}", desc.dimmed());

@@ -309,7 +309,7 @@ impl ServerHandler for RiggMcpServer {
                  and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
                  understand the workspace, rigg_validate before changes, rigg_diff to inspect \
                  drift, rigg_push (preview first, then force=true). Resource definitions are \
-                 JSON files under projects/<name>/{search,foundry}/<kind>/; secrets are never \
+                 JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
                  stored in files — identity-based access only."
                     .to_string(),
             ),

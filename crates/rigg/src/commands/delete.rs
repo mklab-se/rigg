@@ -24,7 +24,7 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
     let project = ws.project(&args.project)?;
-    let store = Store::new(project);
+    let store = Store::new(project, &env.name);
     let remote = Remote::for_project(&env, project);
     ensure_any_connection(&remote, project)?;
     let mut state = ProjectState::load(&ws, &env.name, &project.name);
