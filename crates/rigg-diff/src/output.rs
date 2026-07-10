@@ -125,8 +125,9 @@ pub fn format_value_preview(value: Option<&Value>) -> String {
         Some(Value::Bool(b)) => b.to_string(),
         Some(Value::Number(n)) => n.to_string(),
         Some(Value::String(s)) => {
-            if s.len() > 500 {
-                format!("\"{}...\" ({} chars)", &s[..497], s.len())
+            if s.chars().count() > 500 {
+                let cut: String = s.chars().take(497).collect();
+                format!("\"{cut}...\" ({} chars)", s.chars().count())
             } else {
                 format!("\"{}\"", s)
             }
@@ -688,5 +689,15 @@ mod markdown_tests {
             "{out}"
         );
         assert!(!out.contains(" was "), "{out}");
+    }
+
+    #[test]
+    fn long_multibyte_string_preview_does_not_panic() {
+        // Regression: byte-slicing at 497 panicked when it split a multi-byte
+        // char (e.g. Swedish text in long descriptions).
+        let long = "å".repeat(600);
+        let out = format_value_preview(Some(&Value::String(long)));
+        assert!(out.ends_with("(600 chars)"), "{out}");
+        assert!(out.contains("..."));
     }
 }
