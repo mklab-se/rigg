@@ -50,6 +50,12 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
             Err(e) => eprintln!("note: AI summary unavailable ({e})"),
         }
     }
+    if has_drift && args.format == DiffFormat::Text && args.compare_env.is_none() {
+        let p = drifted_project_hint(&diffs);
+        println!();
+        println!("hint: rigg pull {p} — update local files to match Azure");
+        println!("      rigg push {p} — make Azure match your local files");
+    }
     if args.exit_code && has_drift {
         return Err(anyhow!(CommandError::DriftOrConflict(
             "differences found".to_string()
@@ -75,6 +81,23 @@ fn side_labels(ws: &Workspace, ctx: &GlobalContext, args: &DiffArgs) -> Result<S
             new_side: "local".to_string(),
             old_side: format!("Azure ({})", env_b.name),
         })
+    }
+}
+
+/// Derive the `<project>` placeholder for the post-diff hint: the single
+/// drifted project's name if every drifted key names the same one, else the
+/// literal `<project>` placeholder. Keys look like `"{project}/{kind}/{name}"`.
+fn drifted_project_hint(diffs: &[(String, DiffResult)]) -> String {
+    let mut projects: Vec<&str> = diffs
+        .iter()
+        .filter(|(_, d)| !d.is_equal)
+        .filter_map(|(key, _)| key.split_once('/').map(|(project, _)| project))
+        .collect();
+    projects.sort_unstable();
+    projects.dedup();
+    match projects.as_slice() {
+        [only] => only.to_string(),
+        _ => "<project>".to_string(),
     }
 }
 

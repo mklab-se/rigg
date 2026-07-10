@@ -323,7 +323,8 @@ async fn diff_reports_drift_with_exit_code_and_markdown() {
     rigg(ws.path())
         .args(["diff", "demo", "--exit-code"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("hint:").not());
 
     // local edit → drift, exit 5, markdown mentions the resource
     write_resource(
@@ -337,7 +338,22 @@ async fn diff_reports_drift_with_exit_code_and_markdown() {
         .assert()
         .code(5)
         .stdout(predicate::str::contains("indexes/idx"))
-        .stdout(predicate::str::contains("| field | local |"));
+        .stdout(predicate::str::contains("| field | local |"))
+        .stdout(predicate::str::contains("hint:").not());
+
+    // same drift, default text format → dual-direction hint naming the project
+    rigg(ws.path())
+        .args(["diff", "demo", "--exit-code"])
+        .assert()
+        .code(5)
+        .stdout(predicate::str::contains("hint: rigg pull demo"))
+        .stdout(predicate::str::contains(
+            "update local files to match Azure",
+        ))
+        .stdout(predicate::str::contains("rigg push demo"))
+        .stdout(predicate::str::contains(
+            "make Azure match your local files",
+        ));
 }
 
 #[tokio::test]
