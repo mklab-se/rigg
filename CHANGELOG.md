@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-07-14
+
+### Fixed
+
+- **`auth doctor` can now resolve plain Cognitive Services accounts.** The
+  AI-services-account edge resolution reused Foundry discovery, which
+  filters to accounts of kind `AIServices` — an enrichment account of kind
+  `CognitiveServices` (the common case for skillsets) could not be resolved,
+  so `--fix` reported a problem it should have fixed. Resolution now matches
+  any Microsoft.CognitiveServices account by name.
+- **`auth doctor --fix` no longer tells you to "rerun with --fix".** When a
+  fix run still has problems, the closing message now says what it could not
+  fix automatically and why, instead of suggesting the flag you just used.
+
+### Added
+
+- **Push closes the auth loop instead of hinting.** After fixing a
+  connection interactively (storage discovery or the AI-services identity
+  rewrite), push offers to run `auth doctor --fix` inline so the required
+  roles exist before anything is pushed. Freshly granted roles take a
+  moment to propagate, so RBAC-shaped rejections are then retried twice at
+  20s intervals — and if a push still fails on a missing role, the error
+  says to run `rigg auth doctor --fix` rather than leaving a bare API error.
+
 ## [1.4.2] - 2026-07-14
 
 ### Fixed

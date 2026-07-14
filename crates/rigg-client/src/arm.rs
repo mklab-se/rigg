@@ -573,6 +573,40 @@ impl ArmClient {
             .collect())
     }
 
+    /// Find the ARM resource id of ANY Microsoft.CognitiveServices account
+    /// by name — regardless of kind (AIServices, CognitiveServices, OpenAI,
+    /// ...). Unlike [`Self::list_ai_services_accounts`] (which serves
+    /// Foundry discovery and filters to kind AIServices), this covers e.g.
+    /// the plain CognitiveServices accounts skillsets use for enrichment.
+    pub async fn find_cognitive_account_id(&self, name: &str) -> Result<String, ClientError> {
+        for sub in self.list_subscriptions().await? {
+            let url = format!(
+                "{}/subscriptions/{}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01",
+                ARM_BASE_URL, sub.subscription_id
+            );
+            let response = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .send()
+                .await?;
+            let status = response.status();
+            if !status.is_success() {
+                continue; // no access to this subscription — keep looking
+            }
+            let result: ArmListResponse<AiServicesAccount> = response.json().await?;
+            for acct in result.value {
+                if acct.name.eq_ignore_ascii_case(name) && !acct.id.is_empty() {
+                    return Ok(acct.id);
+                }
+            }
+        }
+        Err(ClientError::NotFound {
+            kind: "Cognitive Services account".to_string(),
+            name: name.to_string(),
+        })
+    }
+
     /// List Microsoft Foundry projects under a specific AI Services account.
     ///
     /// Projects are sub-resources at:

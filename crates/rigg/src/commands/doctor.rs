@@ -98,18 +98,20 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
             }
         });
         // Targets naming an AI services account (skillset enrichment) are
-        // resolved by account name through ARM.
+        // resolved by account name through ARM — any Cognitive Services
+        // kind, not just Foundry's AIServices accounts.
         if scope.is_none() {
             if let Some(account) = edge
                 .target
                 .strip_prefix("AI services account '")
                 .and_then(|s| s.strip_suffix('\''))
             {
-                if let Ok(sc) = resolve_account_scope(&arm, account).await {
-                    scope = Some(format!(
-                        "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
-                        sc.subscription_id, sc.resource_group, sc.account
-                    ));
+                match arm.find_cognitive_account_id(account).await {
+                    Ok(id) => scope = Some(id),
+                    Err(e) => println!(
+                        "  {} could not resolve AI services account '{account}' via ARM: {e}",
+                        "?".yellow()
+                    ),
                 }
             }
         }
@@ -230,6 +232,12 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
         println!();
         println!("{} identity wiring looks good", "✓".green().bold());
         Ok(())
+    } else if fix {
+        println!();
+        bail!(
+            "{} identity problem(s) rigg could not fix automatically (see the lines above for what each one needs — unresolvable targets must be corrected in the files; role assignments need Owner/User Access Administrator rights)",
+            failures.len()
+        )
     } else {
         println!();
         bail!(

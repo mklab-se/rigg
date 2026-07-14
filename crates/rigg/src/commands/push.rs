@@ -258,6 +258,7 @@ async fn push_project(
     // for a replace, AFTER the old pipeline was already destroyed. Detect it
     // here, before anything mutates. Updates that omit credentials are legal
     // (the service keeps the existing secret), so only creations are gated.
+    let mut fixed_credentials = false;
     let mut cred_missing: Vec<ResourceRef> = Vec::new();
     for item in &to_push {
         if item.r.kind == ResourceKind::DataSource
@@ -347,6 +348,7 @@ async fn push_project(
                         "✓".green(),
                         r
                     );
+                    fixed_credentials = true;
                     if let Some(account) = conn.strip_prefix("ResourceId=") {
                         credentials::print_rbac_hint(account.trim_end_matches(';'));
                     }
@@ -389,6 +391,7 @@ async fn push_project(
                         }
                     }
                     println!("  {} {} switched to AIServicesByIdentity", "✓".green(), r);
+                    fixed_credentials = true;
                     if let Some(account) = credentials::ai_services_account_name(&subdomain) {
                         credentials::print_ai_services_rbac_hint(account);
                     }
@@ -406,6 +409,24 @@ async fn push_project(
                  or run `rigg push` interactively to rewrite it automatically",
                 names.join(", ")
             ))));
+        }
+    }
+
+    // The connections just fixed need data-plane roles the identities may
+    // not have yet — offer to verify/grant them right here instead of
+    // hinting and letting the push run into a predictable 400.
+    if fixed_credentials && ctx.interactive() {
+        println!();
+        if interactive::confirm_default_yes(
+            "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
+            ctx.no_color,
+        )? {
+            if let Err(e) = crate::commands::doctor::run(ctx, true).await {
+                println!(
+                    "  {} auth doctor could not fix everything ({e:#}) — continuing; the push may fail until the roles exist",
+                    "!".yellow()
+                );
+            }
         }
     }
 
@@ -581,7 +602,7 @@ async fn push_project(
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
         let body = normalize_for_push(r.kind, &with_refs);
 
-        match remote.put(r, &body).await {
+        match put_with_rbac_help(&remote, r, &body, fixed_credentials).await {
             Ok(server_doc) => {
                 store.write(r, &server_doc)?;
                 state.set_baseline(r, &server_doc);
@@ -600,7 +621,18 @@ async fn push_project(
     // previously interrupted run.
     for bundle in &replaces {
         let prior = pending_relinks.remove(&bundle.ks.name).unwrap_or_default();
-        execute_replace(env, ws, project, &store, &mut state, &remote, bundle, prior).await?;
+        execute_replace(
+            env,
+            ws,
+            project,
+            &store,
+            &mut state,
+            &remote,
+            bundle,
+            prior,
+            fixed_credentials,
+        )
+        .await?;
     }
     if !pending_relinks.is_empty() {
         finish_pending_relinks(
@@ -637,6 +669,50 @@ fn parse_key(key: &str) -> Option<ResourceRef> {
     let (dir, name) = key.split_once('/')?;
     let kind = ResourceKind::from_directory_name(dir)?;
     Some(ResourceRef::new(kind, name.to_string()))
+}
+
+/// Errors that smell like missing data-plane RBAC for a managed identity.
+fn is_rbac_error(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}").to_lowercase();
+    msg.contains("managed identity")
+        || msg.contains("cognitive services user")
+        || msg.contains("storage blob data reader")
+        || (msg.contains("identity") && msg.contains("permission"))
+}
+
+/// PUT with two kinds of RBAC help: when `patience` is set (a role may have
+/// been granted moments ago by the inline doctor fix), RBAC-shaped rejections
+/// are retried twice at 20s intervals — Azure role assignments take a moment
+/// to propagate. Either way, an RBAC-shaped failure points at the doctor
+/// instead of leaving a bare API error.
+async fn put_with_rbac_help(
+    remote: &Remote,
+    r: &ResourceRef,
+    body: &Value,
+    patience: bool,
+) -> Result<Value> {
+    let mut attempt = 0u8;
+    loop {
+        match remote.put(r, body).await {
+            Ok(v) => return Ok(v),
+            Err(e) if patience && attempt < 2 && is_rbac_error(&e) => {
+                attempt += 1;
+                println!(
+                    "  {} {} rejected for a missing role — waiting 20s for RBAC propagation (retry {attempt}/2)",
+                    "…".yellow(),
+                    r
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            }
+            Err(e) if is_rbac_error(&e) => {
+                return Err(e.context(
+                    "this looks like a missing role assignment — run `rigg auth doctor --fix` \
+                     (and allow a minute for a fresh grant to propagate)",
+                ));
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +853,7 @@ async fn execute_replace(
     remote: &Remote,
     bundle: &ReplaceBundle,
     prior: Vec<Value>,
+    rbac_patience: bool,
 ) -> Result<()> {
     let ks = &bundle.ks;
     println!("  {} {}", "replace".magenta().bold(), ks);
@@ -898,8 +975,7 @@ async fn execute_replace(
         let mut with_refs = body.clone();
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
         let push_body = normalize_for_push(r.kind, &with_refs);
-        let server_doc = remote
-            .put(r, &push_body)
+        let server_doc = put_with_rbac_help(remote, r, &push_body, rbac_patience)
             .await
             .with_context(|| step(&format!("while re-creating {r}")))?;
         store.write(r, &server_doc)?;
@@ -912,8 +988,7 @@ async fn execute_replace(
     let mut with_refs = bundle.new_body.clone();
     resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
     let push_body = normalize_for_push(ks.kind, &with_refs);
-    let server_doc = remote
-        .put(ks, &push_body)
+    let server_doc = put_with_rbac_help(remote, ks, &push_body, rbac_patience)
         .await
         .with_context(|| step("while re-creating the knowledge source"))?;
     store.write(ks, &server_doc)?;
