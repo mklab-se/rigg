@@ -1273,3 +1273,32 @@ fn validate_warns_on_datasource_without_credentials() {
         .stderr(predicate::str::contains("no credentials.connectionString"))
         .stderr(predicate::str::contains("ResourceId="));
 }
+
+#[test]
+fn dynamic_completion_emits_registration_script() {
+    // COMPLETE=<shell> with no args makes the binary print the registration
+    // script and exit 0 (clap_complete dynamic engine).
+    let out = rigg().env("COMPLETE", "zsh").output().unwrap();
+    assert!(out.status.success());
+    let script = String::from_utf8_lossy(&out.stdout);
+    assert!(script.contains("rigg"), "script: {script}");
+    assert!(!script.trim().is_empty());
+}
+
+#[test]
+fn az_surface_parses() {
+    rigg()
+        .args(["az", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("indexer"))
+        .stdout(predicate::str::contains("knowledge-base"));
+    // kb alias resolves
+    rigg()
+        .args(["az", "kb", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ask"));
+    // reset without name fails parse
+    rigg().args(["az", "indexer", "reset"]).assert().code(2);
+}

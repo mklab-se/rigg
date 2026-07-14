@@ -9,10 +9,21 @@ mod commands;
 mod mcp;
 mod update;
 
+mod completion_dynamic;
+
 use cli::Cli;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    // Dynamic shell completion: when COMPLETE=<shell> is set, emit either
+    // the registration script or completion candidates and exit. Must run
+    // before argument parsing.
+    clap_complete::CompleteEnv::with_factory(|| {
+        use clap::CommandFactory;
+        Cli::command()
+    })
+    .complete();
+
     // Parse CLI arguments
     let cli = Cli::parse();
 

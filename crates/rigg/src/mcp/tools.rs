@@ -37,6 +37,64 @@ pub struct ValidateParams {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct IndexerStatusParams {
+    /// Indexer name
+    pub indexer: String,
+    /// Environment name (uses the default environment if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct IndexerRunParams {
+    /// Indexer name
+    pub indexer: String,
+    /// Environment name (uses the default environment if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
+    /// Without force (default): returns the indexer's current status as a
+    /// preview. With force=true: triggers a run (fire-and-forget; poll with
+    /// rigg_indexer_status).
+    #[schemars(default)]
+    pub force: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct QueryParams {
+    /// Index name
+    pub index: String,
+    /// Search text (* matches all documents)
+    pub search: String,
+    /// Number of results (default 5)
+    #[schemars(default)]
+    pub top: Option<u32>,
+    /// OData filter expression
+    #[schemars(default)]
+    pub filter: Option<String>,
+    /// Comma-separated fields to return
+    #[schemars(default)]
+    pub select: Option<String>,
+    /// Environment name (uses the default environment if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct AskParams {
+    /// Knowledge base name (exactly one of knowledge_base/agent)
+    #[schemars(default)]
+    pub knowledge_base: Option<String>,
+    /// Agent name (exactly one of knowledge_base/agent)
+    #[schemars(default)]
+    pub agent: Option<String>,
+    /// The prompt / question
+    pub prompt: String,
+    /// Environment name (uses the default environment if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct DiffParams {
     /// Project name (omit when the workspace has exactly one project)
     #[schemars(default)]
@@ -290,6 +348,62 @@ impl RiggMcpServer {
             args.push("--dry-run");
         }
         rigg_cli(&with_common(args, &params.env, false))
+    }
+
+    #[tool(
+        description = "Execution status of a live indexer: state, last run result, per-document errors and warnings. Use after rigg_push or rigg_indexer_run to verify ingestion. Read-only."
+    )]
+    async fn rigg_indexer_status(
+        &self,
+        Parameters(params): Parameters<IndexerStatusParams>,
+    ) -> String {
+        let args = vec!["az", "indexer", "status", &params.indexer];
+        rigg_cli(&with_common(args, &params.env, true))
+    }
+
+    #[tool(
+        description = "Trigger a live indexer run. Without force: returns the current status as a preview. With force=true: triggers the run (fire-and-forget) — poll rigg_indexer_status until the run completes. Part of the post-push verification flow: rigg_push → rigg_indexer_run → rigg_indexer_status → rigg_query → rigg_ask."
+    )]
+    async fn rigg_indexer_run(&self, Parameters(params): Parameters<IndexerRunParams>) -> String {
+        if !params.force.unwrap_or(false) {
+            let args = vec!["az", "indexer", "status", &params.indexer];
+            let preview = rigg_cli(&with_common(args, &params.env, true));
+            return format!(
+                "PREVIEW (no run triggered) — current status:\n{preview}\nRun again with force=true to trigger a run."
+            );
+        }
+        let args = vec!["az", "indexer", "run", &params.indexer, "--yes"];
+        rigg_cli(&with_common(args, &params.env, false))
+    }
+
+    #[tool(
+        description = "Run a search query against a live index (smoke-test retrieval without the portal). Read-only."
+    )]
+    async fn rigg_query(&self, Parameters(params): Parameters<QueryParams>) -> String {
+        let top = params.top.map(|t| t.to_string());
+        let mut args = vec!["az", "index", "query", &params.index, &params.search];
+        if let Some(top) = &top {
+            args.extend(["--top", top]);
+        }
+        if let Some(filter) = &params.filter {
+            args.extend(["--filter", filter]);
+        }
+        if let Some(select) = &params.select {
+            args.extend(["--select", select]);
+        }
+        rigg_cli(&with_common(args, &params.env, true))
+    }
+
+    #[tool(
+        description = "Prompt a live knowledge base (agentic retrieval: grounding content + references) or a Foundry agent (single-shot reply). Pass EXACTLY ONE of knowledge_base or agent. Read-only — the end-to-end 'does my RAG stack work' probe."
+    )]
+    async fn rigg_ask(&self, Parameters(params): Parameters<AskParams>) -> String {
+        let args = match (&params.knowledge_base, &params.agent) {
+            (Some(kb), None) => vec!["az", "knowledge-base", "ask", kb, &params.prompt],
+            (None, Some(agent)) => vec!["az", "agent", "ask", agent, &params.prompt],
+            _ => return "Error: pass exactly one of knowledge_base or agent".to_string(),
+        };
+        rigg_cli(&with_common(args, &params.env, true))
     }
 
     #[tool(

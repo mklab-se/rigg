@@ -1,6 +1,9 @@
 //! CLI definition for rigg — project-scoped command surface (0.18+).
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap_complete::engine::ArgValueCandidates;
+
+use crate::completion_dynamic as complete;
 
 use crate::commands;
 use crate::commands::ExitCode;
@@ -22,7 +25,8 @@ pub struct Cli {
     pub command: Commands,
 
     /// Environment to target (default: the environment marked `default: true`)
-    #[arg(long, short = 'e', global = true, env = "RIGG_ENV")]
+    #[arg(long, short = 'e', global = true, env = "RIGG_ENV",
+          add = ArgValueCandidates::new(complete::envs))]
     pub env: Option<String>,
 
     /// Output format for machine consumption
@@ -178,6 +182,15 @@ pub enum Commands {
     },
 
     /// Generate shell completions
+    ///
+    /// Static script: `rigg completion zsh > ~/.zfunc/_rigg` (subcommands
+    /// and flags). Dynamic completion (also completes project, environment
+    /// and resource NAMES from your workspace files) is a one-liner in your
+    /// shell rc instead:
+    ///
+    ///   zsh:  source <(COMPLETE=zsh rigg)
+    ///   bash: source <(COMPLETE=bash rigg)
+    ///   fish: COMPLETE=fish rigg | source
     Completion {
         /// Shell to generate completions for
         #[arg(value_enum)]
@@ -226,6 +239,7 @@ pub struct NewArgs {
     /// What to scaffold: project | pipeline | api | a resource kind
     /// (data-source, index, skillset, indexer, synonym-map, alias,
     /// knowledge-source, knowledge-base, agent, deployment, connection, guardrail)
+    #[arg(add = ArgValueCandidates::new(complete::new_kinds))]
     pub kind: String,
 
     /// Name of the new project/resource/spec. Tip: name a project after the
@@ -257,6 +271,7 @@ pub struct CopyArgs {
 #[derive(Args)]
 pub struct PullArgs {
     /// Project to pull (omit with --all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 
     /// Pull all projects
@@ -275,10 +290,11 @@ pub struct PullArgs {
 #[derive(Args)]
 pub struct AdoptArgs {
     /// Project to adopt the resources into (omit on a TTY for an interactive wizard)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 
     /// What to adopt: `all`, a kind (`indexes`), or `<kind>/<name>` (`agents/regulus`). Repeatable.
-    #[arg(value_name = "SELECTOR")]
+    #[arg(value_name = "SELECTOR", add = ArgValueCandidates::new(complete::selectors))]
     pub selectors: Vec<String>,
 
     /// Preview what would be adopted; write nothing
@@ -293,6 +309,7 @@ pub struct AdoptArgs {
 #[derive(Args)]
 pub struct PushArgs {
     /// Project to push (omit with --all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 
     /// Push all projects
@@ -322,6 +339,7 @@ pub struct PushArgs {
 #[derive(Args)]
 pub struct DiffArgs {
     /// Project to diff (omit with --all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 
     /// Diff all projects
@@ -341,7 +359,7 @@ pub struct DiffArgs {
     pub compare_env: Option<String>,
 
     /// Restrict to one resource: <kind-dir>/<name> (e.g. indexes/my-index)
-    #[arg(long, value_name = "KIND/NAME")]
+    #[arg(long, value_name = "KIND/NAME", add = ArgValueCandidates::new(complete::selectors))]
     pub only: Option<String>,
 }
 
@@ -355,6 +373,7 @@ pub enum DiffFormat {
 #[derive(Args)]
 pub struct DeleteArgs {
     /// Project whose resources should be deleted
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: String,
 
     /// Delete the project's resources from Azure (required)
@@ -369,6 +388,7 @@ pub struct DeleteArgs {
 #[derive(Args)]
 pub struct PromoteArgs {
     /// Project to promote
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: String,
 
     /// Source environment
@@ -404,6 +424,7 @@ pub enum MigrateCommands {
 #[derive(Args)]
 pub struct MigrateKsArgs {
     /// Knowledge source to migrate
+    #[arg(add = ArgValueCandidates::new(complete::knowledge_sources))]
     pub name: String,
 
     /// Project owning the knowledge source (defaults to the only project)
@@ -455,6 +476,7 @@ pub enum AzIndexerCommands {
     /// Execution state, last run result, per-document errors
     Status {
         /// Indexer name
+        #[arg(add = ArgValueCandidates::new(complete::indexers))]
         name: String,
     },
 }
@@ -462,6 +484,7 @@ pub enum AzIndexerCommands {
 #[derive(Args)]
 pub struct AzIndexerRunArgs {
     /// Indexer name
+    #[arg(add = ArgValueCandidates::new(complete::indexers))]
     pub name: String,
 
     /// Poll until the run completes; exit non-zero if it fails
@@ -481,6 +504,7 @@ pub struct AzIndexerRunArgs {
 #[derive(Args)]
 pub struct AzIndexerResetArgs {
     /// Indexer name
+    #[arg(add = ArgValueCandidates::new(complete::indexers))]
     pub name: String,
 
     /// Typed confirmation for protected environments (must equal the env name)
@@ -495,6 +519,7 @@ pub enum AzIndexCommands {
     /// Document count and storage size
     Stats {
         /// Index name
+        #[arg(add = ArgValueCandidates::new(complete::indexes))]
         name: String,
     },
 }
@@ -502,6 +527,7 @@ pub enum AzIndexCommands {
 #[derive(Args)]
 pub struct AzIndexQueryArgs {
     /// Index name
+    #[arg(add = ArgValueCandidates::new(complete::indexes))]
     pub name: String,
 
     /// Search text (* matches all documents)
@@ -525,6 +551,7 @@ pub enum AzKbCommands {
     /// Retrieve grounding content for a prompt (agentic retrieval)
     Ask {
         /// Knowledge base name
+        #[arg(add = ArgValueCandidates::new(complete::knowledge_bases))]
         name: String,
         /// The question / semantic intent
         prompt: String,
@@ -536,6 +563,7 @@ pub enum AzAgentCommands {
     /// Send a single prompt to the agent and print its reply
     Ask {
         /// Agent name
+        #[arg(add = ArgValueCandidates::new(complete::agents))]
         name: String,
         /// The prompt
         prompt: String,
@@ -545,18 +573,21 @@ pub enum AzAgentCommands {
 #[derive(Args)]
 pub struct StatusArgs {
     /// Project to check (default: all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 }
 
 #[derive(Args)]
 pub struct DescribeArgs {
     /// Project to describe (default: all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 }
 
 #[derive(Args)]
 pub struct ValidateArgs {
     /// Project to validate (default: all)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
 
     /// Enable stricter checks (cross-service reference resolution)

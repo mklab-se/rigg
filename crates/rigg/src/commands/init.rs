@@ -142,5 +142,8 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     println!("  rigg new project <name>           # create your first project");
     println!("  rigg new pipeline <name> -p <p>   # scaffold an explicit RAG pipeline");
     println!("  rigg adopt <project> <selector>   # or adopt existing Azure resources");
+    println!();
+    println!("Tip: enable tab completion (names included) with one line in your shell rc:");
+    println!("  zsh:  source <(COMPLETE=zsh rigg)     bash: source <(COMPLETE=bash rigg)");
     Ok(())
 }
