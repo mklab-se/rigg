@@ -76,6 +76,10 @@ pub struct KindMeta {
     pub sidecar_fields: &'static [&'static str],
     /// How this kind references other resources.
     pub reference_fields: &'static [RefField],
+    /// Fields the service will not change in place — a differing local value
+    /// means an in-place PUT cannot reconcile the documents and the resource
+    /// must be deleted and re-created (`rigg push` shows `replace`).
+    pub immutable_fields: &'static [&'static str],
 }
 
 const COMMON_VOLATILE: &[&str] = &["@odata.etag", "@odata.context", "e_tag", "etag"];
@@ -93,6 +97,7 @@ static KINDS: &[KindMeta] = &[
         write_only_fields: &["credentials.connectionString"],
         sidecar_fields: &[],
         reference_fields: &[],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Index,
@@ -109,6 +114,7 @@ static KINDS: &[KindMeta] = &[
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Skillset,
@@ -132,6 +138,7 @@ static KINDS: &[KindMeta] = &[
                 to: ResourceKind::Index,
             },
         ],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Indexer,
@@ -158,6 +165,7 @@ static KINDS: &[KindMeta] = &[
                 to: ResourceKind::Skillset,
             },
         ],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::SynonymMap,
@@ -171,6 +179,7 @@ static KINDS: &[KindMeta] = &[
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Alias,
@@ -187,6 +196,7 @@ static KINDS: &[KindMeta] = &[
             path: "indexes[]",
             to: ResourceKind::Index,
         }],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::KnowledgeSource,
@@ -211,6 +221,9 @@ static KINDS: &[KindMeta] = &[
             path: "searchIndexParameters.searchIndexName",
             to: ResourceKind::Index,
         }],
+        // A knowledge source's kind (azureBlob, searchIndex, ...) cannot be
+        // changed by PUT — push replaces (delete + recreate) instead.
+        immutable_fields: &["kind"],
     },
     KindMeta {
         kind: ResourceKind::KnowledgeBase,
@@ -227,6 +240,7 @@ static KINDS: &[KindMeta] = &[
             path: "knowledgeSources[].name",
             to: ResourceKind::KnowledgeSource,
         }],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Agent,
@@ -258,6 +272,7 @@ static KINDS: &[KindMeta] = &[
                 to: ResourceKind::Connection,
             },
         ],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Deployment,
@@ -285,6 +300,7 @@ static KINDS: &[KindMeta] = &[
             path: "properties.raiPolicyName",
             to: ResourceKind::Guardrail,
         }],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Connection,
@@ -312,6 +328,7 @@ static KINDS: &[KindMeta] = &[
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
+        immutable_fields: &[],
     },
     KindMeta {
         kind: ResourceKind::Guardrail,
@@ -325,6 +342,7 @@ static KINDS: &[KindMeta] = &[
         write_only_fields: &[],
         sidecar_fields: &[],
         reference_fields: &[],
+        immutable_fields: &[],
     },
 ];
 
@@ -566,6 +584,42 @@ fn collect_created_resources(
             collect_created_resources(item, ks_name, out);
         }
     }
+}
+
+/// Immutable fields whose local and remote values differ — a non-empty
+/// result means an in-place PUT cannot reconcile the two documents and the
+/// resource must be replaced (delete + recreate). Returns
+/// `(path, remote value, local value)` per differing field. A value missing
+/// on one side counts as a difference when the other side has one.
+pub fn immutable_diff(
+    kind: ResourceKind,
+    local: &Value,
+    remote: &Value,
+) -> Vec<(&'static str, String, String)> {
+    fn values_at(doc: &Value, path: &str) -> Vec<Value> {
+        let mut vals = Vec::new();
+        collect_path(doc, path, &mut |v| vals.push(v.clone()));
+        vals
+    }
+    fn show(vals: &[Value]) -> String {
+        vals.iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+    let mut out = Vec::new();
+    for path in meta(kind).immutable_fields {
+        let l = values_at(local, path);
+        let r = values_at(remote, path);
+        if l != r {
+            out.push((*path, show(&r), show(&l)));
+        }
+    }
+    out
 }
 
 fn collect_x_rigg_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
@@ -946,6 +1000,44 @@ mod tests {
         });
         let refs = extract_references(ResourceKind::KnowledgeSource, &ks);
         assert_eq!(refs, vec![(ResourceKind::Index, "docs".to_string())]);
+    }
+
+    #[test]
+    fn immutable_diff_detects_kind_change() {
+        let local = json!({"name": "ks", "kind": "searchIndex",
+            "searchIndexParameters": {"searchIndexName": "docs"}});
+        let remote = json!({"name": "ks", "kind": "azureBlob",
+            "azureBlobParameters": {"containerName": "c"}});
+        let diff = immutable_diff(ResourceKind::KnowledgeSource, &local, &remote);
+        assert_eq!(
+            diff,
+            vec![("kind", "azureBlob".to_string(), "searchIndex".to_string())]
+        );
+    }
+
+    #[test]
+    fn immutable_diff_empty_when_kind_unchanged() {
+        let local = json!({"name": "ks", "kind": "azureBlob", "description": "new"});
+        let remote = json!({"name": "ks", "kind": "azureBlob"});
+        assert!(immutable_diff(ResourceKind::KnowledgeSource, &local, &remote).is_empty());
+    }
+
+    #[test]
+    fn immutable_diff_empty_for_kinds_without_immutable_fields() {
+        let local = json!({"name": "i", "kind": "a"});
+        let remote = json!({"name": "i", "kind": "b"});
+        assert!(immutable_diff(ResourceKind::Index, &local, &remote).is_empty());
+    }
+
+    #[test]
+    fn immutable_diff_counts_missing_side_as_difference() {
+        let local = json!({"name": "ks", "kind": "searchIndex"});
+        let remote = json!({"name": "ks"});
+        let diff = immutable_diff(ResourceKind::KnowledgeSource, &local, &remote);
+        assert_eq!(
+            diff,
+            vec![("kind", String::new(), "searchIndex".to_string())]
+        );
     }
 
     #[test]
