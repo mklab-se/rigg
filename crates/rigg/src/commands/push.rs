@@ -188,8 +188,34 @@ async fn push_project(
         }
     }
 
+    // Scan EVERY local skillset for Web API skills whose key was lost to
+    // redaction — an in-sync one is not a healthy one here: the server
+    // echoes the key redacted, so both sides can "agree" on a placeholder
+    // that fails at enrichment time. Interactively this pulls an otherwise
+    // empty push into the resolution flow.
+    let mut webapi_missing: Vec<ResourceRef> = Vec::new();
+    for (r, body) in &items {
+        if r.kind == ResourceKind::Skillset
+            && !credentials::webapi_skills_missing_auth(body).is_empty()
+        {
+            webapi_missing.push(r.clone());
+        }
+    }
+
     // Report the plan.
-    if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() && replaces.is_empty() {
+    if to_push.is_empty()
+        && orphans.is_empty()
+        && conflicts.is_empty()
+        && replaces.is_empty()
+        && (webapi_missing.is_empty() || !ctx.interactive())
+    {
+        for r in &webapi_missing {
+            println!(
+                "  {} {} calls a custom Web API with a redacted key — enrichment will fail until it is authorized (run `rigg push` interactively)",
+                "!".yellow(),
+                r
+            );
+        }
         if !pending_relinks.is_empty() && !args.dry_run {
             finish_pending_relinks(
                 &remote,
@@ -329,17 +355,6 @@ async fn push_project(
     // Custom Web API skills whose function key was lost to Azure's
     // redaction: without auth the enrichment fails at indexing time for
     // every document — resolve now (Entra ID or push-time key), not then.
-    // Scan EVERY local skillset — an in-sync one is not a healthy one here:
-    // the server echoes the key redacted, so both sides can "agree" on a
-    // placeholder that fails at enrichment time.
-    let mut webapi_missing: Vec<ResourceRef> = Vec::new();
-    for (r, body) in &items {
-        if r.kind == ResourceKind::Skillset
-            && !credentials::webapi_skills_missing_auth(body).is_empty()
-        {
-            webapi_missing.push(r.clone());
-        }
-    }
     let in_plan: BTreeSet<String> = to_push
         .iter()
         .map(|p| p.r.key())

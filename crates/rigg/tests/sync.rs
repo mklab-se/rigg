@@ -2015,3 +2015,31 @@ async fn push_gates_webapi_skill_with_redacted_key_non_interactively() {
         .count();
     assert_eq!(mutations, 0, "must fail before any mutation");
 }
+
+#[tokio::test]
+async fn push_warns_about_in_sync_skillset_with_redacted_webapi_key() {
+    let server = MockServer::start().await;
+    let ss = json!({"name": "webss", "skills": [{
+        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+        "name": "enrich",
+        "uri": "https://fn.azurewebsites.net/api/enrich?code=<redacted>"
+    }]});
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ss.clone()))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "skillsets", "webss", &ss);
+
+    // Non-interactive + in sync: no mutation, but the broken enrichment is
+    // called out instead of a silent "everything in sync".
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("everything in sync"))
+        .stdout(predicate::str::contains("redacted key"));
+}
