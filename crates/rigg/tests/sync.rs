@@ -1931,3 +1931,50 @@ async fn push_refuses_creating_skillset_with_redacted_ai_services_key() {
         .count();
     assert_eq!(mutations, 0, "must fail before any mutation");
 }
+
+#[tokio::test]
+async fn push_retries_rbac_shaped_rejections_and_says_how_to_resume() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/skillsets/ss"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    // Persistently RBAC-rejected PUT (as Azure does before role propagation).
+    Mock::given(method("PUT"))
+        .and(path("/skillsets/ss"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {"message": "Unable to connect to AI Services using managed identity. Ensure the identity has been granted permission Cognitive Services User on the AI Service."}
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "ss",
+        &json!({"name": "ss", "skills": [], "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity",
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }}),
+    );
+
+    rigg(ws.path())
+        .env("RIGG_RBAC_RETRY_SECS", "0")
+        .env("RIGG_RBAC_MAX_RETRIES", "2")
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("re-run `rigg push`"));
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/skillsets/ss")
+        .count();
+    assert_eq!(puts, 3, "initial attempt + 2 propagation retries");
+}

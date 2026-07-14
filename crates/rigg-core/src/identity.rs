@@ -96,8 +96,26 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
         let Ok(files) = store.list() else { continue };
         for (r, _) in files {
             let Ok(value) = store.read(&r) else { continue };
+            collect_edges_for(r.kind, &r.name, &value, &mut edges);
+        }
+    }
+    dedup(edges)
+}
+
+/// The identity edges ONE document requires (used by push to diagnose an
+/// RBAC-shaped rejection of that document).
+pub fn edges_for(kind: ResourceKind, name: &str, value: &Value) -> Vec<IdentityEdge> {
+    let mut edges = Vec::new();
+    collect_edges_for(kind, name, value, &mut edges);
+    dedup(edges)
+}
+
+fn collect_edges_for(kind: ResourceKind, name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
+    {
+        {
+            let r = DocRef { kind, name };
             match r.kind {
-                ResourceKind::DataSource => datasource_edges(&r.name, &value, &mut edges),
+                ResourceKind::DataSource => datasource_edges(r.name, value, edges),
                 ResourceKind::KnowledgeBase
                     if value
                         .get("models")
@@ -115,7 +133,7 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
                         ),
                     ));
                 }
-                ResourceKind::Skillset => skillset_edges(&r.name, &value, &mut edges),
+                ResourceKind::Skillset => skillset_edges(r.name, value, edges),
                 ResourceKind::Index => {
                     let has_vectorizer = value
                         .get("vectorSearch")
@@ -133,7 +151,7 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
                     }
                 }
                 ResourceKind::Agent => {
-                    for (kind, name) in registry::extract_references(r.kind, &value) {
+                    for (kind, name) in registry::extract_references(r.kind, value) {
                         if kind == ResourceKind::KnowledgeBase {
                             edges.push(IdentityEdge::rbac(
                                 Principal::FoundryProject,
@@ -167,7 +185,12 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
             }
         }
     }
-    dedup(edges)
+}
+
+/// Borrowed (kind, name) pair for edge extraction.
+struct DocRef<'a> {
+    kind: ResourceKind,
+    name: &'a str,
 }
 
 /// Skillset edges: Azure OpenAI skills need model access on the Foundry

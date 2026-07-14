@@ -587,6 +587,8 @@ async fn push_project(
         }
     }
 
+    let search_service = env.search_for(project).ok().map(|c| c.service.clone());
+
     // Execute in order (conflicts resolved to local were appended — reorder).
     let order = graph::push_order(
         &to_push
@@ -602,7 +604,7 @@ async fn push_project(
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
         let body = normalize_for_push(r.kind, &with_refs);
 
-        match put_with_rbac_help(&remote, r, &body, fixed_credentials).await {
+        match put_with_rbac_help(&remote, r, &body, ctx, search_service.as_deref()).await {
             Ok(server_doc) => {
                 store.write(r, &server_doc)?;
                 state.set_baseline(r, &server_doc);
@@ -622,6 +624,7 @@ async fn push_project(
     for bundle in &replaces {
         let prior = pending_relinks.remove(&bundle.ks.name).unwrap_or_default();
         execute_replace(
+            ctx,
             env,
             ws,
             project,
@@ -630,7 +633,7 @@ async fn push_project(
             &remote,
             bundle,
             prior,
-            fixed_credentials,
+            search_service.as_deref(),
         )
         .await?;
     }
@@ -680,39 +683,212 @@ fn is_rbac_error(e: &anyhow::Error) -> bool {
         || (msg.contains("identity") && msg.contains("permission"))
 }
 
-/// PUT with two kinds of RBAC help: when `patience` is set (a role may have
-/// been granted moments ago by the inline doctor fix), RBAC-shaped rejections
-/// are retried twice at 20s intervals — Azure role assignments take a moment
-/// to propagate. Either way, an RBAC-shaped failure points at the doctor
-/// instead of leaving a bare API error.
+/// RBAC propagation tuning, env-overridable (tests set both low).
+fn rbac_retry_tuning() -> (u64, u32) {
+    let secs = std::env::var("RIGG_RBAC_RETRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    let attempts = std::env::var("RIGG_RBAC_MAX_RETRIES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    (secs, attempts)
+}
+
+struct MissingRole {
+    role_name: String,
+    role_id: String,
+    scope: String,
+    reason: String,
+}
+
+struct RbacDiagnosis {
+    /// The search service identity's principal id (first, for grants).
+    principal: String,
+    missing: Vec<MissingRole>,
+}
+
+const SEARCH_ARM_API: &str = "2023-11-01";
+
+/// Which search-service roles `body` requires but the identity lacks —
+/// resolved live through ARM. `Ok(None)` when the document has no
+/// RBAC-verifiable edges (nothing to diagnose).
+async fn diagnose_rbac(
+    r: &ResourceRef,
+    body: &Value,
+    search_service: &str,
+) -> Result<Option<RbacDiagnosis>> {
+    use rigg_core::identity::{EdgeKind, Principal, edges_for};
+    let edges: Vec<_> = edges_for(r.kind, &r.name, body)
+        .into_iter()
+        .filter(|e| e.kind == EdgeKind::Rbac && e.principal == Principal::SearchService)
+        .collect();
+    if edges.is_empty() {
+        return Ok(None);
+    }
+    let arm = rigg_client::arm::ArmClient::new()?;
+    let service_id = arm.find_search_service_id(search_service).await?;
+    let identity = arm
+        .get_resource_identity(&service_id, SEARCH_ARM_API)
+        .await?;
+    let principals: Vec<String> = identity
+        .map(|i| i.principal_ids().iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    if principals.is_empty() {
+        anyhow::bail!(
+            "search service '{search_service}' has no managed identity — run `rigg auth doctor --fix` to enable one"
+        );
+    }
+    let mut missing = Vec::new();
+    let mut any_resolved = false;
+    for edge in edges {
+        let scope = match &edge.scope {
+            Some(s) => Some(s.clone()),
+            None => match edge
+                .target
+                .strip_prefix("AI services account '")
+                .and_then(|t| t.strip_suffix('\''))
+            {
+                Some(account) => arm.find_cognitive_account_id(account).await.ok(),
+                None => None,
+            },
+        };
+        let Some(scope) = scope else { continue };
+        any_resolved = true;
+        let mut have = false;
+        for p in &principals {
+            if arm
+                .list_role_assignments(&scope, p)
+                .await?
+                .iter()
+                .any(|rd| rd.ends_with(&edge.role_id))
+            {
+                have = true;
+                break;
+            }
+        }
+        if !have {
+            missing.push(MissingRole {
+                role_name: edge.role_name,
+                role_id: edge.role_id,
+                scope,
+                reason: edge.reason,
+            });
+        }
+    }
+    if !any_resolved {
+        return Ok(None);
+    }
+    Ok(Some(RbacDiagnosis {
+        principal: principals[0].clone(),
+        missing,
+    }))
+}
+
+/// PUT that treats RBAC-shaped rejections as a solvable problem instead of
+/// a dead end: diagnose the required roles through ARM; grant missing ones
+/// (with consent, interactively); then wait out Azure's role-assignment
+/// propagation with periodic retries. Every path either succeeds or ends in
+/// an error that names the exact role, scope, and next command.
 async fn put_with_rbac_help(
     remote: &Remote,
     r: &ResourceRef,
     body: &Value,
-    patience: bool,
+    ctx: &GlobalContext,
+    search_service: Option<&str>,
 ) -> Result<Value> {
-    let mut attempt = 0u8;
-    loop {
-        match remote.put(r, body).await {
-            Ok(v) => return Ok(v),
-            Err(e) if patience && attempt < 2 && is_rbac_error(&e) => {
-                attempt += 1;
+    let first = match remote.put(r, body).await {
+        Ok(v) => return Ok(v),
+        Err(e) if is_rbac_error(&e) => e,
+        Err(e) => return Err(e),
+    };
+    println!(
+        "  {} {} rejected for a role/permission — diagnosing via ARM...",
+        "!".yellow(),
+        r
+    );
+    let diagnosis = match search_service {
+        Some(svc) => match diagnose_rbac(r, body, svc).await {
+            Ok(d) => d,
+            Err(e) => {
+                println!("  {} diagnosis unavailable ({e:#})", "!".yellow());
+                None
+            }
+        },
+        None => None,
+    };
+    match diagnosis {
+        Some(d) if !d.missing.is_empty() => {
+            for m in &d.missing {
                 println!(
-                    "  {} {} rejected for a missing role — waiting 20s for RBAC propagation (retry {attempt}/2)",
-                    "…".yellow(),
-                    r
+                    "  {} missing role: '{}' on {}",
+                    "✗".red(),
+                    m.role_name,
+                    m.scope
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                println!("      needed because {}", m.reason);
+            }
+            if !ctx.interactive() {
+                return Err(anyhow!(CommandError::Validation(format!(
+                    "{r} requires role(s) the search identity does not hold: {} — run `rigg auth doctor --fix`",
+                    d.missing
+                        .iter()
+                        .map(|m| format!("'{}' on {}", m.role_name, m.scope))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))));
+            }
+            if !interactive::confirm_default_yes(
+                "Grant the missing role(s) now (requires rights to assign roles)?",
+                ctx.no_color,
+            )? {
+                return Err(first.context(
+                    "missing role(s) left ungranted — run `rigg auth doctor --fix`, then push again",
+                ));
+            }
+            let arm = rigg_client::arm::ArmClient::new()?;
+            for m in &d.missing {
+                arm.create_role_assignment(&m.scope, &d.principal, &m.role_id)
+                    .await
+                    .with_context(|| {
+                        format!("failed to assign '{}' on {}", m.role_name, m.scope)
+                    })?;
+                println!("  {} granted '{}'", "✓".green(), m.role_name);
+            }
+        }
+        Some(_) => println!(
+            "  {} the role assignments exist — Azure is still propagating them",
+            "ℹ".cyan()
+        ),
+        None => println!(
+            "  {} could not verify role assignments — retrying in case a fresh grant is propagating",
+            "!".yellow()
+        ),
+    }
+    let (delay, attempts) = rbac_retry_tuning();
+    println!(
+        "  waiting for RBAC propagation — retrying every {delay}s for up to ~{} min (Ctrl-C is safe; re-running push resumes)",
+        (delay * attempts as u64).div_ceil(60)
+    );
+    let mut last = first;
+    for attempt in 1..=attempts {
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        match remote.put(r, body).await {
+            Ok(v) => {
+                println!("  {} access propagated (attempt {attempt})", "✓".green());
+                return Ok(v);
             }
             Err(e) if is_rbac_error(&e) => {
-                return Err(e.context(
-                    "this looks like a missing role assignment — run `rigg auth doctor --fix` \
-                     (and allow a minute for a fresh grant to propagate)",
-                ));
+                println!("  … not yet ({attempt}/{attempts})");
+                last = e;
             }
             Err(e) => return Err(e),
         }
     }
+    Err(last.context(format!(
+        "access had not propagated after {attempts} attempts — wait a few minutes and re-run `rigg push` (it resumes where it left off)"
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -845,6 +1021,7 @@ async fn relink_knowledge_bases(
 /// becomes a plain create, and leftover relinks are finished at the end).
 #[allow(clippy::too_many_arguments)]
 async fn execute_replace(
+    ctx: &GlobalContext,
     env: &ResolvedEnv,
     ws: &Workspace,
     project: &Project,
@@ -853,7 +1030,7 @@ async fn execute_replace(
     remote: &Remote,
     bundle: &ReplaceBundle,
     prior: Vec<Value>,
-    rbac_patience: bool,
+    search_service: Option<&str>,
 ) -> Result<()> {
     let ks = &bundle.ks;
     println!("  {} {}", "replace".magenta().bold(), ks);
@@ -975,7 +1152,7 @@ async fn execute_replace(
         let mut with_refs = body.clone();
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
         let push_body = normalize_for_push(r.kind, &with_refs);
-        let server_doc = put_with_rbac_help(remote, r, &push_body, rbac_patience)
+        let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, search_service)
             .await
             .with_context(|| step(&format!("while re-creating {r}")))?;
         store.write(r, &server_doc)?;
@@ -988,7 +1165,7 @@ async fn execute_replace(
     let mut with_refs = bundle.new_body.clone();
     resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
     let push_body = normalize_for_push(ks.kind, &with_refs);
-    let server_doc = put_with_rbac_help(remote, ks, &push_body, rbac_patience)
+    let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, search_service)
         .await
         .with_context(|| step("while re-creating the knowledge source"))?;
     store.write(ks, &server_doc)?;
