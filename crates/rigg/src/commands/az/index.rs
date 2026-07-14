@@ -27,7 +27,10 @@ async fn query(ctx: &GlobalContext, args: AzIndexQueryArgs) -> Result<()> {
     if let Some(select) = &args.select {
         body["select"] = json!(select);
     }
-    let result = remote.search_docs(&args.name, &body).await?;
+    let result = remote
+        .search_docs(&args.name, &body)
+        .await
+        .map_err(|e| super::hint_user_role(e, "Search Index Data Reader"))?;
     if ctx.json() {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());

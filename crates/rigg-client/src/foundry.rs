@@ -126,9 +126,11 @@ impl FoundryClient {
     /// (`POST {project}/openai/v1/responses`); returns the raw OpenAI-shaped
     /// response object.
     pub async fn agent_respond(&self, agent: &str, input: &str) -> Result<Value, ClientError> {
+        // NOTE: the /openai/v1/ route rejects an api-version query parameter
+        // (the version is in the path) — verified live.
         let url = format!(
-            "{}/api/projects/{}/openai/v1/responses?api-version={}",
-            self.base_url, self.project, self.api_version
+            "{}/api/projects/{}/openai/v1/responses",
+            self.base_url, self.project
         );
         let body = serde_json::json!({
             "agent_reference": { "name": agent, "type": "agent_reference" },

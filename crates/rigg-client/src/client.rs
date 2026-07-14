@@ -152,6 +152,10 @@ impl AzureSearchClient {
 
         if let Some(json) = body {
             request = request.json(json);
+        } else if method == Method::POST {
+            // Azure's front end rejects bodyless POSTs without an explicit
+            // Content-Length (HTTP 411) — indexer run/reset take no body.
+            request = request.header("Content-Length", "0");
         }
 
         debug!("Request: {} {}", method, url);

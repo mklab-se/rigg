@@ -24,6 +24,22 @@ pub async fn run(ctx: &GlobalContext, command: AzCommands) -> Result<()> {
     }
 }
 
+/// Data-plane reads (documents, retrieval, agent invocation) need roles the
+/// config-plane commands never exercise — decorate a 403 with the exact role
+/// the signed-in identity is missing instead of a bare "access denied".
+pub(crate) fn hint_user_role(e: anyhow::Error, role: &str) -> anyhow::Error {
+    let msg = format!("{e:#}").to_lowercase();
+    if msg.contains("403") || msg.contains("access denied") || msg.contains("forbidden") {
+        e.context(format!(
+            "your signed-in identity needs the '{role}' role for this operation — grant it \
+             (e.g. az role assignment create --assignee <your-upn> --role \"{role}\" \
+             --scope <resource-id>) and allow a few minutes to propagate"
+        ))
+    } else {
+        e
+    }
+}
+
 /// Resolve the environment and build a connected [`Remote`], printing the
 /// target banner. Operations are service-level, so any project's connection
 /// configuration for this environment will do — the first project with a

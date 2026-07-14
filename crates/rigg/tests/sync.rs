@@ -2268,6 +2268,7 @@ async fn az_agent_ask_renders_reply() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/projects/proj/openai/v1/responses"))
+        .and(wiremock::matchers::query_param_is_missing("api-version"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": "resp_1",
             "status": "completed",

@@ -14,7 +14,10 @@ pub async fn run(ctx: &GlobalContext, command: AzAgentCommands) -> Result<()> {
 
 async fn ask(ctx: &GlobalContext, name: &str, prompt: &str) -> Result<()> {
     let (_ws, _env, remote) = super::connect(ctx)?;
-    let result = remote.agent_ask(name, prompt).await?;
+    let result = remote
+        .agent_ask(name, prompt)
+        .await
+        .map_err(|e| super::hint_user_role(e, "Azure AI User"))?;
     if ctx.json() {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
