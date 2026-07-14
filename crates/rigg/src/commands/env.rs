@@ -149,8 +149,8 @@ async fn add(
                 .to_string()
         )));
     } else {
-        let (search, foundry) = discovery::discover_interactive().await?;
         let plain = ctx.no_color;
+        let (search, foundry) = discovery::discover_interactive(plain).await?;
         let protected = interactive::confirm_default_no(
             "Protect this environment (require typed confirmation for cloud changes)?",
             plain,

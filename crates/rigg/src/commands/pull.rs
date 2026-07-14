@@ -21,7 +21,7 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use crate::cli::PullArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
-    CommandError, GlobalContext, confirm, load_workspace, resolve_env, select_projects,
+    CommandError, GlobalContext, interactive, load_workspace, resolve_env, select_projects,
 };
 
 pub async fn run(ctx: &GlobalContext, args: PullArgs) -> Result<()> {
@@ -137,31 +137,36 @@ async fn pull_project(
                     written += 1;
                 } else if ctx.interactive() {
                     println!("  {} {} — {}", "conflict".red().bold(), r, summary);
+                    const OVERWRITE: &str = "overwrite local with remote";
+                    const KEEP: &str = "keep local";
+                    const DIFF: &str = "show diff";
+                    const ABORT: &str = "abort pull";
                     let mut show_diff_option = true;
                     loop {
-                        let opts: &[char] = if show_diff_option {
-                            &['o', 'k', 'd', 'a']
-                        } else {
-                            &['o', 'k', 'a']
+                        let mut opts = vec![OVERWRITE.to_string(), KEEP.to_string()];
+                        if show_diff_option {
+                            opts.push(DIFF.to_string());
+                        }
+                        opts.push(ABORT.to_string());
+                        // Esc/Ctrl-C counts as abort: save baselines gathered
+                        // so far, exactly like choosing "abort pull".
+                        let choice = match interactive::select("Resolve:", opts, ctx.no_color) {
+                            Ok(c) => c,
+                            Err(_) => ABORT.to_string(),
                         };
-                        let label = if show_diff_option {
-                            "  [o]verwrite local with remote / [k]eep local / [d]iff / [a]bort pull ?"
-                        } else {
-                            "  [o]verwrite local with remote / [k]eep local / [a]bort pull ?"
-                        };
-                        match confirm::prompt_choice(label, opts)? {
-                            'o' => {
+                        match choice.as_str() {
+                            OVERWRITE => {
                                 store.write(r, doc)?;
                                 state.set_baseline(r, doc);
                                 println!("  {} overwrote {}", "~".cyan(), r);
                                 written += 1;
                                 break;
                             }
-                            'k' => {
+                            KEEP => {
                                 println!("  kept local {r}");
                                 break;
                             }
-                            'd' => {
+                            DIFF => {
                                 if let Some(l) = &local {
                                     let result = rigg_diff::semantic::diff(
                                         &normalize_for_push(r.kind, doc),
@@ -185,11 +190,10 @@ async fn pull_project(
                                 }
                                 show_diff_option = false;
                             }
-                            'a' => {
+                            _ => {
                                 state.save(ws, &env.name, &project.name)?;
                                 return Err(anyhow!("aborted"));
                             }
-                            _ => unreachable!(),
                         }
                     }
                 } else {
@@ -220,7 +224,10 @@ async fn pull_project(
     for r in deleted {
         if ctx.interactive() {
             println!("  {} {} was deleted remotely", "!".red().bold(), r);
-            if confirm::prompt_yes_no("  delete the local file too? (no = keep for re-push)")? {
+            if interactive::confirm_default_no(
+                "Delete the local file too? (no = keep for re-push)",
+                ctx.no_color,
+            )? {
                 store.delete(&r)?;
                 state.clear_baseline(&r);
                 println!("  {} removed local {}", "✓".green(), r);

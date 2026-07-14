@@ -53,7 +53,7 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
             "in non-interactive mode pass --search-service and/or --foundry-account/--foundry-project".to_string()
         )));
     } else {
-        discovery::discover_interactive().await?
+        discovery::discover_interactive(ctx.no_color).await?
     };
 
     if search.is_none() && foundry.is_none() {

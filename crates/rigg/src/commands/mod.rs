@@ -7,7 +7,6 @@ pub mod auth;
 pub mod ci;
 pub mod completion;
 pub mod concepts;
-pub mod confirm;
 pub mod copy;
 pub mod delete;
 pub mod describe;
@@ -228,10 +227,13 @@ pub fn confirm_protected_env(
             env.name, env.name
         ))));
     }
-    let answer = confirm::prompt_line(&format!(
-        "Environment '{}' is protected. Type its name to confirm {}: ",
-        env.name, operation
-    ))?;
+    let answer = interactive::text(
+        &format!(
+            "Environment '{}' is protected. Type its name to confirm {}:",
+            env.name, operation
+        ),
+        ctx.no_color,
+    )?;
     Ok(answer.trim() == env.name)
 }
 

@@ -2,7 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.2] - 2026-07-14
+## [1.2.3] - 2026-07-14
+
+### Changed
+
+- **One interaction style everywhere.** All interactive prompts now use the
+  same arrow-key UI (inquire) that the adopt wizard introduced — no more
+  type-a-number pick lists or raw `[y/N]`/single-letter prompts:
+  - `rigg init` / `rigg env add` service discovery: arrow-key selection with
+    an explicit "(skip — none)" row; manual fallback uses styled text inputs.
+  - Pull conflicts: select between "overwrite local with remote" /
+    "keep local" / "show diff" / "abort pull" instead of `[o/k/d/a]`.
+  - Push conflicts: select between "push local" / "keep remote" /
+    "AI merge proposal" / "skip" instead of `[l/r/a/s]`.
+  - Apply/adopt/delete confirmations: styled yes/no confirms; typed-name
+    safety gates (project delete, protected environments) keep requiring the
+    full name, now via the same styled text prompt.
+  - Esc/Ctrl-C in a conflict prompt aborts safely (pull saves baselines
+    gathered so far; push skips the resource).
+  - The broad-selector adopt confirmation now defaults to yes, matching the
+    wizard's "Proceed?" (adopting only writes local files).
 
 ### Fixed
 

@@ -11,9 +11,7 @@ use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
 use crate::cli::AdoptArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
-use crate::commands::{
-    CommandError, GlobalContext, confirm, interactive, load_workspace, new, resolve_env,
-};
+use crate::commands::{CommandError, GlobalContext, interactive, load_workspace, new, resolve_env};
 
 /// What the user asked to adopt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,7 +365,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
             for (r, _) in &to_adopt {
                 println!("  {r}");
             }
-            if !confirm::prompt_yes_no("Adopt these?")? {
+            if !interactive::confirm_default_yes("Adopt these?", ctx.no_color)? {
                 println!("Aborted.");
                 return Ok(());
             }

@@ -12,7 +12,7 @@ use rigg_core::store::{ProjectState, Store};
 use crate::cli::DeleteArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
-    CommandError, GlobalContext, confirm, confirm_protected_env, load_workspace, resolve_env,
+    CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
 };
 
 pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
@@ -69,8 +69,7 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
 
     if ctx.interactive() {
         println!();
-        println!("Type the project name to confirm:");
-        let answer = confirm::prompt_line("> ")?;
+        let answer = interactive::text("Type the project name to confirm:", ctx.no_color)?;
         if answer.trim() != project.name {
             println!("aborted");
             return Ok(());

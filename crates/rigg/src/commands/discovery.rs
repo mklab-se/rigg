@@ -1,19 +1,19 @@
 //! Shared Azure service discovery for interactive wizards (`rigg init`,
 //! `rigg env add`).
 //!
-//! Both wizards need the same ARM discovery + numbered pick-list flow, so it
-//! lives here once rather than being duplicated per command.
-
-use std::io::{BufRead, Write};
+//! Both wizards need the same ARM discovery + pick-list flow, so it lives
+//! here once rather than being duplicated per command.
 
 use anyhow::{Result, anyhow};
 
 use rigg_client::arm::ArmClient;
 
+use crate::commands::interactive;
+
 pub(crate) type Discovered = (Option<String>, Option<(String, String)>);
 
 /// Discover services via ARM and let the user pick interactively.
-pub(crate) async fn discover_interactive() -> Result<Discovered> {
+pub(crate) async fn discover_interactive(plain: bool) -> Result<Discovered> {
     println!("Discovering Azure services (via Azure CLI credentials)...");
     let arm = match ArmClient::new() {
         Ok(arm) => arm,
@@ -23,14 +23,14 @@ pub(crate) async fn discover_interactive() -> Result<Discovered> {
             // just the top-level message.
             let e = anyhow::Error::from(e);
             println!("  ARM discovery unavailable ({e:#}); falling back to manual entry.");
-            return manual_entry();
+            return manual_entry(plain);
         }
     };
     let subs = match arm.list_subscriptions().await {
         Ok(subs) if !subs.is_empty() => subs,
         _ => {
             println!("  No subscriptions visible; falling back to manual entry.");
-            return manual_entry();
+            return manual_entry(plain);
         }
     };
 
@@ -65,12 +65,12 @@ pub(crate) async fn discover_interactive() -> Result<Discovered> {
         }
     }
 
-    let search = pick("Azure AI Search service", &search_services)?;
+    let search = pick("Azure AI Search service:", &search_services, plain)?;
     let foundry_labels: Vec<String> = foundry_projects
         .iter()
         .map(|(a, p)| format!("{a}/{p}"))
         .collect();
-    let foundry = pick("Microsoft Foundry project", &foundry_labels)?.and_then(|label| {
+    let foundry = pick("Microsoft Foundry project:", &foundry_labels, plain)?.and_then(|label| {
         foundry_projects
             .iter()
             .find(|(a, p)| format!("{a}/{p}") == label)
@@ -79,12 +79,18 @@ pub(crate) async fn discover_interactive() -> Result<Discovered> {
     Ok((search, foundry))
 }
 
-fn manual_entry() -> Result<Discovered> {
-    let search = ask("Azure AI Search service name (empty to skip): ")?;
-    let account = ask("Foundry account name (empty to skip): ")?;
+fn manual_entry(plain: bool) -> Result<Discovered> {
+    let search = optional(interactive::text(
+        "Azure AI Search service name (empty to skip):",
+        plain,
+    )?);
+    let account = optional(interactive::text(
+        "Foundry account name (empty to skip):",
+        plain,
+    )?);
     let foundry = match account {
         Some(account) => {
-            let project = ask("Foundry project name: ")?
+            let project = optional(interactive::text("Foundry project name:", plain)?)
                 .ok_or_else(|| anyhow!("a Foundry project name is required with an account"))?;
             Some((account, project))
         }
@@ -93,36 +99,21 @@ fn manual_entry() -> Result<Discovered> {
     Ok((search, foundry))
 }
 
-/// Numbered pick from a list; empty list or "0" skips.
-fn pick(label: &str, options: &[String]) -> Result<Option<String>> {
+const SKIP: &str = "(skip — none)";
+
+/// Arrow-key pick from a list, with an explicit skip row; empty list skips.
+fn pick(label: &str, options: &[String], plain: bool) -> Result<Option<String>> {
     if options.is_empty() {
-        println!("  No {label} found — skipping.");
+        println!("  No {} found — skipping.", label.trim_end_matches(':'));
         return Ok(None);
     }
-    println!();
-    println!("Select {label} (0 to skip):");
-    for (i, opt) in options.iter().enumerate() {
-        println!("  {}. {}", i + 1, opt);
-    }
-    loop {
-        let answer = ask("> ")?.unwrap_or_default();
-        if answer.is_empty() || answer == "0" {
-            return Ok(None);
-        }
-        if let Ok(n) = answer.parse::<usize>() {
-            if n >= 1 && n <= options.len() {
-                return Ok(Some(options[n - 1].clone()));
-            }
-        }
-        println!("  Enter a number between 0 and {}.", options.len());
-    }
+    let mut rows = options.to_vec();
+    rows.push(SKIP.to_string());
+    let choice = interactive::select(label, rows, plain)?;
+    Ok((choice != SKIP).then_some(choice))
 }
 
-fn ask(prompt: &str) -> Result<Option<String>> {
-    print!("{prompt}");
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().lock().read_line(&mut input)?;
-    let trimmed = input.trim().to_string();
-    Ok((!trimmed.is_empty()).then_some(trimmed))
+fn optional(answer: String) -> Option<String> {
+    let trimmed = answer.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }

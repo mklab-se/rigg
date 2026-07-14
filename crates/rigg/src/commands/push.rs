@@ -21,7 +21,7 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use crate::cli::PushArgs;
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
-    CommandError, GlobalContext, confirm, confirm_protected_env, load_workspace, resolve_env,
+    CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
     select_projects,
 };
 
@@ -179,7 +179,9 @@ async fn push_project(
     // Confirm.
     if ctx.interactive() {
         let total = order.len() + if args.prune { orphans.len() } else { 0 };
-        if total > 0 && !confirm::prompt_yes_no(&format!("Apply {total} change(s)?"))? {
+        if total > 0
+            && !interactive::confirm_default_no(&format!("Apply {total} change(s)?"), ctx.no_color)?
+        {
             println!("  aborted");
             return Ok(false);
         }
@@ -209,30 +211,32 @@ async fn push_project(
             rigg_diff::output::format_text(&diff, &r.to_string(), &conflict_labels)
         );
         let ai = crate::commands::ai_assist::ai_on(ctx);
+        const PUSH_LOCAL: &str = "push local";
+        const KEEP_REMOTE: &str = "keep remote (overwrites local file)";
+        const AI_MERGE: &str = "AI merge proposal";
+        const SKIP: &str = "skip";
+        let mut options = vec![PUSH_LOCAL.to_string(), KEEP_REMOTE.to_string()];
         if ai {
-            println!(
-                "  [l] push local  [r] keep remote (overwrites local file)  [a] AI merge proposal  [s] skip"
-            );
-        } else {
-            println!("  [l] push local  [r] keep remote (overwrites local file)  [s] skip");
+            options.push(AI_MERGE.to_string());
         }
-        let options: &[char] = if ai {
-            &['l', 'r', 'a', 's']
-        } else {
-            &['l', 'r', 's']
+        options.push(SKIP.to_string());
+        // Esc/Ctrl-C counts as skip for this resource.
+        let choice = match interactive::select("Resolve:", options, ctx.no_color) {
+            Ok(c) => c,
+            Err(_) => SKIP.to_string(),
         };
-        match confirm::prompt_choice("resolve", options)? {
-            'l' => to_push.push(PlanItem {
+        match choice.as_str() {
+            PUSH_LOCAL => to_push.push(PlanItem {
                 r: r.clone(),
                 body: local,
                 exists_remotely: true,
             }),
-            'r' => {
+            KEEP_REMOTE => {
                 store.write(r, &remote_doc)?;
                 state.set_baseline(r, &remote_doc);
                 println!("  kept remote version for {r}");
             }
-            'a' => {
+            AI_MERGE => {
                 println!("  asking ailloy for a merge proposal...");
                 match crate::commands::ai_assist::propose_merge(&r.to_string(), &local, &remote_doc)
                     .await
@@ -274,8 +278,9 @@ async fn push_project(
                                 &vs_remote_labels
                             )
                         );
-                        if confirm::prompt_yes_no(
-                            "  accept the proposal (writes the local file and pushes it)?",
+                        if interactive::confirm_default_no(
+                            "Accept the proposal (writes the local file and pushes it)?",
+                            ctx.no_color,
                         )? {
                             store.write(r, &proposal)?;
                             to_push.push(PlanItem {
