@@ -114,6 +114,12 @@ pub enum Commands {
     /// it.
     Promote(PromoteArgs),
 
+    /// Migrate a resource to an explicit, fully rigg-managed shape
+    Migrate {
+        #[command(subcommand)]
+        command: MigrateCommands,
+    },
+
     /// Show sync status per project (incl. unmanaged remote resources)
     Status(StatusArgs),
 
@@ -360,6 +366,43 @@ pub struct PromoteArgs {
     pub dry_run: bool,
 }
 
+#[derive(Subcommand)]
+pub enum MigrateCommands {
+    /// Convert an indexed knowledge source (azureBlob, azureSql, ...) to the
+    /// explicit searchIndex kind, materializing its Azure-generated pipeline
+    /// (data source, index, skillset, indexer) as project files
+    ///
+    /// Local-only: writes/rewrites project files; the next `rigg push`
+    /// applies the change. In-place migration keeps every name — push then
+    /// REPLACES the knowledge source (delete + recreate), which rebuilds the
+    /// index from source data (time, ingestion/embedding cost, and the
+    /// source is unavailable until repopulated). Side-by-side (--rename)
+    /// creates a parallel pipeline under new names; the old knowledge source
+    /// keeps serving until you cut over and delete it.
+    #[command(alias = "ks")]
+    KnowledgeSource(MigrateKsArgs),
+}
+
+#[derive(Args)]
+pub struct MigrateKsArgs {
+    /// Knowledge source to migrate
+    pub name: String,
+
+    /// Project owning the knowledge source (defaults to the only project)
+    #[arg(long, short = 'p')]
+    pub project: Option<String>,
+
+    /// In-place: keep all names; the next push replaces the knowledge source
+    /// and REBUILDS its index
+    #[arg(long, conflicts_with = "rename")]
+    pub in_place: bool,
+
+    /// Side-by-side: create a parallel pipeline under this new knowledge
+    /// source name (old one keeps serving until you cut over)
+    #[arg(long, value_name = "NEW-NAME")]
+    pub rename: Option<String>,
+}
+
 #[derive(Args)]
 pub struct StatusArgs {
     /// Project to check (default: all)
@@ -527,6 +570,7 @@ impl Cli {
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
             Commands::Promote(args) => commands::promote::run(&ctx, args),
+            Commands::Migrate { command } => commands::migrate::run(&ctx, command).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,
             Commands::Describe(args) => commands::describe::run(&ctx, args),
             Commands::Concepts => commands::concepts::run(&ctx),

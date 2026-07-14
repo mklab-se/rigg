@@ -1228,3 +1228,29 @@ fn promote_json_output_has_documented_keys() {
             .is_file()
     );
 }
+
+#[test]
+fn migrate_requires_subcommand_and_rejects_conflicting_modes() {
+    // no subcommand → clap usage error
+    rigg().arg("migrate").assert().code(2);
+    // --in-place conflicts with --rename
+    rigg()
+        .args([
+            "migrate",
+            "knowledge-source",
+            "x",
+            "--in-place",
+            "--rename",
+            "y",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+    // `ks` alias parses (fails later on missing workspace, not on parsing)
+    rigg()
+        .current_dir(std::env::temp_dir())
+        .args(["migrate", "ks", "x", "--in-place"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("workspace").or(predicate::str::contains("rigg init")));
+}

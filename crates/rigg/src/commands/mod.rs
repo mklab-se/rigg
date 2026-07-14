@@ -18,6 +18,7 @@ pub mod env;
 pub mod init;
 pub mod interactive;
 pub mod mcp_cmd;
+pub mod migrate;
 pub mod new;
 pub mod promote;
 pub mod pull;

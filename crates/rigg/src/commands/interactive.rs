@@ -78,6 +78,15 @@ pub fn confirm_default_no(prompt: &str, plain: bool) -> Result<bool> {
         .map_err(map_err)
 }
 
+/// Text prompt pre-filled with a default (Enter accepts it).
+pub fn text_with_default(prompt: &str, default: &str, plain: bool) -> Result<String> {
+    Text::new(prompt)
+        .with_default(default)
+        .with_render_config(config(plain))
+        .prompt()
+        .map_err(map_err)
+}
+
 pub fn text(prompt: &str, plain: bool) -> Result<String> {
     Text::new(prompt)
         .with_render_config(config(plain))

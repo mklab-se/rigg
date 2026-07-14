@@ -1173,3 +1173,306 @@ async fn protected_env_delete_succeeds_with_confirm_env() {
         .count();
     assert_eq!(deletes, 1);
 }
+
+// ---------------------------------------------------------------------------
+// rigg migrate knowledge-source
+// ---------------------------------------------------------------------------
+
+/// An azureBlob knowledge source with the live nested createdResources shape.
+fn blob_ks_doc(name: &str) -> Value {
+    json!({
+        "@odata.etag": "\"0xKS\"",
+        "name": name,
+        "kind": "azureBlob",
+        "description": "Test knowledge source.",
+        "azureBlobParameters": {
+            "connectionString": null,
+            "containerName": "docs",
+            "createdResources": {
+                "datasource": format!("{name}-datasource"),
+                "indexer": format!("{name}-indexer"),
+                "skillset": format!("{name}-skillset"),
+                "index": format!("{name}-index")
+            }
+        }
+    })
+}
+
+/// Mount GETs for a blob KS and its four generated sub-resources.
+async fn mount_blob_ks(server: &MockServer, name: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/knowledgeSources/{name}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(blob_ks_doc(name)))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/datasources/{name}-datasource")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xDS\"",
+            "name": format!("{name}-datasource"),
+            "type": "azureblob",
+            "credentials": {"connectionString": null},
+            "container": {"name": "docs"}
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/indexes/{name}-index")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xIDX\"",
+            "name": format!("{name}-index"),
+            "fields": [{"name": "id", "type": "Edm.String", "key": true}]
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/skillsets/{name}-skillset")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xSS\"",
+            "name": format!("{name}-skillset"),
+            "skills": []
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/indexers/{name}-indexer")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xIXR\"",
+            "name": format!("{name}-indexer"),
+            "status": "running",
+            "dataSourceName": format!("{name}-datasource"),
+            "targetIndexName": format!("{name}-index"),
+            "skillsetName": format!("{name}-skillset")
+        })))
+        .mount(server)
+        .await;
+}
+
+fn read_json(ws: &std::path::Path, rel: &str) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(ws.join(rel)).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn migrate_in_place_writes_explicit_pipeline() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+
+    let ws = workspace(&server.uri());
+    // The KS must be project-managed: its (pulled, normalized) file exists.
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "test-ks",
+        &json!({"name": "test-ks", "kind": "azureBlob",
+                "azureBlobParameters": {"containerName": "docs"}}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "test-ks",
+            "--in-place",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("REPLACE"));
+
+    let base = "projects/demo/envs/dev/search";
+    let ds = read_json(
+        ws.path(),
+        &format!("{base}/data-sources/test-ks-datasource.json"),
+    );
+    assert_eq!(ds["name"], "test-ks-datasource");
+    assert!(ds.get("@odata.etag").is_none(), "volatile stripped");
+    let idxr = read_json(ws.path(), &format!("{base}/indexers/test-ks-indexer.json"));
+    assert!(idxr.get("status").is_none(), "read-only stripped");
+    read_json(ws.path(), &format!("{base}/indexes/test-ks-index.json"));
+    read_json(
+        ws.path(),
+        &format!("{base}/skillsets/test-ks-skillset.json"),
+    );
+
+    let ks = read_json(ws.path(), &format!("{base}/knowledge-sources/test-ks.json"));
+    assert_eq!(ks["kind"], "searchIndex");
+    assert_eq!(
+        ks["searchIndexParameters"]["searchIndexName"],
+        "test-ks-index"
+    );
+    assert!(ks.get("azureBlobParameters").is_none());
+}
+
+#[tokio::test]
+async fn migrate_side_by_side_creates_new_files_and_keeps_old() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    // New names must not exist remotely.
+    for p in [
+        "/knowledgeSources/test-ks2",
+        "/datasources/test-ks2-datasource",
+        "/indexes/test-ks2-index",
+        "/skillsets/test-ks2-skillset",
+        "/indexers/test-ks2-indexer",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(p.to_string()))
+            .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+            .mount(&server)
+            .await;
+    }
+
+    let ws = workspace(&server.uri());
+    let old_ks = json!({"name": "test-ks", "kind": "azureBlob",
+                        "azureBlobParameters": {"containerName": "docs"}});
+    write_resource(ws.path(), "knowledge-sources", "test-ks", &old_ks);
+
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "test-ks",
+            "--rename",
+            "test-ks2",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Next steps"));
+
+    let base = "projects/demo/envs/dev/search";
+    let ks2 = read_json(
+        ws.path(),
+        &format!("{base}/knowledge-sources/test-ks2.json"),
+    );
+    assert_eq!(ks2["kind"], "searchIndex");
+    assert_eq!(
+        ks2["searchIndexParameters"]["searchIndexName"],
+        "test-ks2-index"
+    );
+    let idxr = read_json(ws.path(), &format!("{base}/indexers/test-ks2-indexer.json"));
+    assert_eq!(idxr["dataSourceName"], "test-ks2-datasource");
+    assert_eq!(idxr["targetIndexName"], "test-ks2-index");
+    assert_eq!(idxr["skillsetName"], "test-ks2-skillset");
+
+    // old KS file untouched
+    let old = read_json(ws.path(), &format!("{base}/knowledge-sources/test-ks.json"));
+    assert_eq!(old, old_ks);
+}
+
+#[tokio::test]
+async fn migrate_side_by_side_rejects_remote_name_collision() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    Mock::given(method("GET"))
+        .and(path("/knowledgeSources/test-ks2"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    // one derived name collides remotely
+    Mock::given(method("GET"))
+        .and(path("/datasources/test-ks2-datasource"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"name": "test-ks2-datasource", "type": "azureblob"})),
+        )
+        .mount(&server)
+        .await;
+    for p in [
+        "/indexes/test-ks2-index",
+        "/skillsets/test-ks2-skillset",
+        "/indexers/test-ks2-indexer",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(p.to_string()))
+            .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+            .mount(&server)
+            .await;
+    }
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "test-ks",
+        &json!({"name": "test-ks", "kind": "azureBlob"}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "test-ks",
+            "--rename",
+            "test-ks2",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists remotely"));
+}
+
+#[tokio::test]
+async fn migrate_rejects_unmanaged_and_remote_kinds() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    Mock::given(method("GET"))
+        .and(path("/knowledgeSources/web-ks"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"name": "web-ks", "kind": "web", "webParameters": {}})),
+        )
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    // unmanaged: no local file, no baseline
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "test-ks",
+            "--in-place",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("adopt"));
+
+    // remote kind: nothing to migrate
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "web-ks",
+        &json!({"name": "web-ks", "kind": "web"}),
+    );
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "web-ks",
+            "--in-place",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no Azure-generated pipeline"));
+}
+
+#[tokio::test]
+async fn migrate_requires_mode_non_interactively() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "test-ks",
+        &json!({"name": "test-ks", "kind": "azureBlob"}),
+    );
+    rigg(ws.path())
+        .args(["migrate", "knowledge-source", "test-ks"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--in-place or --rename"));
+}
