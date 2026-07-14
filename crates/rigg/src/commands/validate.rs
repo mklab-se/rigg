@@ -180,9 +180,27 @@ fn validate_project(
             } else {
                 problems.push(format!("[{display}] data source missing \"type\""));
             }
+            warn_missing_credentials(&value, &display);
         }
     }
     problems
+}
+
+/// Warn when a data source has no usable connection at all — typical after
+/// copying an Azure-generated definition (GET never returns credentials).
+/// Pushing it would create a data source that cannot reach its source.
+fn warn_missing_credentials(value: &Value, display: &str) {
+    let conn = value
+        .pointer("/credentials/connectionString")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if conn.trim().is_empty() {
+        eprintln!(
+            "{} [{display}] no credentials.connectionString — the indexer cannot reach the source; \
+             use identity-based access (ResourceId=/subscriptions/.../storageAccounts/<name>;)",
+            "warning:".yellow()
+        );
+    }
 }
 
 /// Warn when a data source cannot detect deletions: removed source documents

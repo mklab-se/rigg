@@ -21,8 +21,11 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
     let only = args.only.as_deref().map(parse_only).transpose()?;
 
     let mut diffs: Vec<(String, DiffResult)> = Vec::new();
+    let mut replace_notes: Vec<String> = Vec::new();
     for project in projects {
-        diffs.extend(diff_project(ctx, &ws, project, &args, only.as_ref()).await?);
+        diffs.extend(
+            diff_project(ctx, &ws, project, &args, only.as_ref(), &mut replace_notes).await?,
+        );
     }
 
     let labels = side_labels(&ws, ctx, &args)?;
@@ -36,6 +39,11 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
         DiffFormat::Markdown => rigg_diff::output::format_markdown(&diffs, &labels),
     };
     print!("{output}");
+    if args.format == DiffFormat::Text {
+        for note in &replace_notes {
+            println!("{note}");
+        }
+    }
 
     let has_drift = diffs.iter().any(|(_, d)| !d.is_equal);
     if has_drift && args.format == DiffFormat::Text && crate::commands::ai_assist::ai_on(ctx) {
@@ -121,6 +129,7 @@ async fn diff_project(
     project: &Project,
     args: &DiffArgs,
     only: Option<&ResourceRef>,
+    notes: &mut Vec<String>,
 ) -> Result<Vec<(String, DiffResult)>> {
     // Baseline side: local files (or env A remote with --compare-env).
     // Comparison side: the resolved environment's remote.
@@ -187,6 +196,22 @@ async fn diff_project(
         }
         if !remote_b.supported_kinds().contains(&r.kind) {
             continue;
+        }
+        // Immutable-field drift (local vs Azure only): pushing this is not an
+        // update — surface the replace consequence alongside the diff.
+        if args.compare_env.is_none() {
+            if let (Some(local), Some(remote)) = (&left, &right) {
+                for (path, remote_val, local_val) in
+                    rigg_core::registry::immutable_diff(r.kind, local, remote)
+                {
+                    notes.push(format!(
+                        "note: {}/{r} — '{path}' is immutable ({remote_val} → {local_val}): \
+                         push will REPLACE this resource (delete + recreate; a knowledge \
+                         source's index is rebuilt from source data)",
+                        project.name
+                    ));
+                }
+            }
         }
         let left_n = left
             .map(|v| normalize_for_push(r.kind, &v))

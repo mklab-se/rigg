@@ -1254,3 +1254,22 @@ fn migrate_requires_subcommand_and_rejects_conflicting_modes() {
         .failure()
         .stderr(predicate::str::contains("workspace").or(predicate::str::contains("rigg init")));
 }
+
+#[test]
+fn validate_warns_on_datasource_without_credentials() {
+    let ws = workspace();
+    let dir = ws.path().join("projects/demo/envs/dev/search/data-sources");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("copied.json"),
+        r#"{"name": "copied", "type": "azureblob", "credentials": {"connectionString": null}, "container": {"name": "docs"}}"#,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no credentials.connectionString"))
+        .stderr(predicate::str::contains("ResourceId="));
+}

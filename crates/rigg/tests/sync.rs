@@ -1805,3 +1805,20 @@ async fn push_resumes_interrupted_replace_relink() {
     assert!(kb_put.is_some(), "relink PUT sent");
     assert!(!state_dir.join("replace-test-ks.json").exists());
 }
+
+#[tokio::test]
+async fn diff_notes_immutable_kind_change_as_replace() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+
+    rigg(ws.path())
+        .args(["diff", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("'kind' is immutable"))
+        .stdout(predicate::str::contains("REPLACE"));
+}
