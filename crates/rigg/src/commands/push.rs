@@ -8,15 +8,17 @@
 //! - orphans (baseline exists, file deleted) require --prune or confirmation
 //! - conflicts (local and remote both changed) fail non-interactively (exit 5)
 
-use anyhow::{Result, anyhow};
-use colored::Colorize;
-use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
-use rigg_core::graph;
+use anyhow::{Context, Result, anyhow};
+use colored::Colorize;
+use serde_json::{Value, json};
+
 use rigg_core::normalize::normalize_for_push;
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
+use rigg_core::{graph, migrate, registry};
 
 use crate::cli::PushArgs;
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
@@ -48,6 +50,22 @@ struct PlanItem {
     r: ResourceRef,
     body: Value,
     exists_remotely: bool,
+}
+
+/// One replace operation: a resource whose immutable field(s) changed, so it
+/// must be deleted and re-created — for a knowledge source, together with the
+/// generated pipeline Azure cascades away on delete.
+struct ReplaceBundle {
+    ks: ResourceRef,
+    /// Desired local document (the new shape).
+    new_body: Value,
+    /// Current remote document (the old shape, incl. createdResources).
+    remote_ks: Value,
+    /// Local files re-created after the cascade delete, regardless of their
+    /// own sync class (an in-sync copy would otherwise be skipped and lost).
+    sub: Vec<(ResourceRef, Value)>,
+    /// (path, remote value, local value) for plan display.
+    diff: Vec<(&'static str, String, String)>,
 }
 
 async fn push_project(
@@ -82,12 +100,31 @@ async fn push_project(
         items.push((r.clone(), store.read(r)?));
     }
 
+    // Leftover relink obligations from an interrupted replace (see
+    // execute_replace): ks name → original knowledge-base docs.
+    let mut pending_relinks = load_pending_relinks(ws, &env.name, &project.name)?;
+
     // Classify each against remote + baseline.
     let mut to_push: Vec<PlanItem> = Vec::new();
+    let mut replaces: Vec<ReplaceBundle> = Vec::new();
     let mut conflicts: Vec<ResourceRef> = Vec::new();
     let mut skipped_remote_ahead: Vec<ResourceRef> = Vec::new();
     for (r, body) in &items {
         let remote_doc = remote.get(r).await?;
+        // Immutable-field change → in-place PUT cannot reconcile: replace.
+        if let Some(remote_body) = &remote_doc {
+            let diff = registry::immutable_diff(r.kind, body, remote_body);
+            if !diff.is_empty() {
+                replaces.push(ReplaceBundle {
+                    ks: r.clone(),
+                    new_body: body.clone(),
+                    remote_ks: remote_body.clone(),
+                    sub: Vec::new(),
+                    diff,
+                });
+                continue;
+            }
+        }
         match state.classify(r, Some(body), remote_doc.as_ref()) {
             SyncClass::InSync => {}
             SyncClass::LocalAhead | SyncClass::LocalOnly | SyncClass::Untracked => {
@@ -101,6 +138,23 @@ async fn push_project(
             SyncClass::Conflict => conflicts.push(r.clone()),
             SyncClass::RemoteOnly => unreachable!("local body was provided"),
         }
+    }
+
+    // Attach each replace bundle's sub-resources: local files named by the
+    // remote knowledge source's createdResources are cascade-deleted with it
+    // and must be re-created inside the bundle — pull them out of the normal
+    // plan whatever their own sync class.
+    for bundle in &mut replaces {
+        let created: BTreeSet<String> = migrate::created_resources(&bundle.remote_ks)
+            .iter()
+            .map(|(kind, name)| ResourceRef::new(*kind, name.clone()).key())
+            .collect();
+        for (r, body) in &items {
+            if created.contains(&r.key()) {
+                bundle.sub.push((r.clone(), body.clone()));
+            }
+        }
+        to_push.retain(|p| !created.contains(&p.r.key()));
     }
 
     // Orphans: baseline exists but local file is gone.
@@ -119,7 +173,19 @@ async fn push_project(
     }
 
     // Report the plan.
-    if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() {
+    if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() && replaces.is_empty() {
+        if !pending_relinks.is_empty() && !args.dry_run {
+            finish_pending_relinks(
+                &remote,
+                ws,
+                env,
+                project,
+                &store,
+                &mut state,
+                &mut pending_relinks,
+            )
+            .await?;
+        }
         println!("  {} everything in sync", "✓".green());
         return Ok(false);
     }
@@ -137,6 +203,28 @@ async fn push_project(
             "create"
         };
         println!("  {} {}", verb.cyan(), r);
+    }
+    for bundle in &replaces {
+        let (path, remote_val, local_val) = &bundle.diff[0];
+        println!(
+            "  {} {}   {}: {} → {}",
+            "replace".magenta().bold(),
+            bundle.ks,
+            path,
+            remote_val,
+            local_val
+        );
+        println!(
+            "      {} deletes the knowledge source AND its generated pipeline, then",
+            "⚠".yellow()
+        );
+        println!("        recreates it explicitly. The index is REBUILT from source data:");
+        println!("        this takes time, costs ingestion/embeddings, and the source is");
+        println!("        unavailable to knowledge bases until repopulated.");
+        if !bundle.sub.is_empty() {
+            let names: Vec<String> = bundle.sub.iter().map(|(r, _)| r.to_string()).collect();
+            println!("      recreates: {}", names.join(", "));
+        }
     }
     for r in &skipped_remote_ahead {
         println!(
@@ -182,9 +270,30 @@ async fn push_project(
         return Ok(true); // caller reports exit 5
     }
 
+    // Replace gate: --yes deliberately does NOT satisfy it (same philosophy
+    // as --confirm-env) — a replace destroys and rebuilds a live index, and
+    // scripts pipe -y reflexively. Interactive: explicit default-No confirm.
+    if !replaces.is_empty() && !args.allow_replace {
+        if ctx.interactive() {
+            let prompt = format!(
+                "Proceed with {} replace(s)? The index rebuild takes time and money.",
+                replaces.len()
+            );
+            if !interactive::confirm_default_no(&prompt, ctx.no_color)? {
+                println!("  aborted");
+                return Ok(false);
+            }
+        } else {
+            return Err(anyhow!(CommandError::Usage(
+                "push plan contains replace(s); pass --allow-replace (in addition to --yes) to proceed"
+                    .to_string()
+            )));
+        }
+    }
+
     // Confirm.
     if ctx.interactive() {
-        let total = order.len() + if args.prune { orphans.len() } else { 0 };
+        let total = order.len() + replaces.len() + if args.prune { orphans.len() } else { 0 };
         if total > 0
             && !interactive::confirm_default_no(&format!("Apply {total} change(s)?"), ctx.no_color)?
         {
@@ -334,6 +443,26 @@ async fn push_project(
         }
     }
 
+    // Execute replace bundles (delete + recreate with knowledge-base
+    // unlink/relink), then finish any leftover relink obligations from a
+    // previously interrupted run.
+    for bundle in &replaces {
+        let prior = pending_relinks.remove(&bundle.ks.name).unwrap_or_default();
+        execute_replace(env, ws, project, &store, &mut state, &remote, bundle, prior).await?;
+    }
+    if !pending_relinks.is_empty() {
+        finish_pending_relinks(
+            &remote,
+            ws,
+            env,
+            project,
+            &store,
+            &mut state,
+            &mut pending_relinks,
+        )
+        .await?;
+    }
+
     // Prune orphans in reverse dependency order (best effort ordering: use
     // registry declaration order reversed — orphan bodies are gone).
     if args.prune {
@@ -356,4 +485,306 @@ fn parse_key(key: &str) -> Option<ResourceRef> {
     let (dir, name) = key.split_once('/')?;
     let kind = ResourceKind::from_directory_name(dir)?;
     Some(ResourceRef::new(kind, name.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Replace orchestration (knowledge-source kind change)
+// ---------------------------------------------------------------------------
+
+/// Recovery file for one replace: written before the knowledge bases are
+/// unlinked, removed after they are restored. Its presence after a crash is
+/// what lets the next `rigg push` finish the relink — essential for
+/// knowledge bases outside this project, whose original docs exist nowhere
+/// else.
+fn recovery_path(ws: &Workspace, env: &str, project: &str, ks_name: &str) -> std::path::PathBuf {
+    ws.state_dir(env, project)
+        .join(format!("replace-{ks_name}.json"))
+}
+
+/// Load leftover relink obligations (`replace-*.json`) from interrupted runs:
+/// ks name → original knowledge-base docs.
+fn load_pending_relinks(
+    ws: &Workspace,
+    env: &str,
+    project: &str,
+) -> Result<BTreeMap<String, Vec<Value>>> {
+    let mut out = BTreeMap::new();
+    let dir = ws.state_dir(env, project);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(out);
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(ks) = name
+            .strip_prefix("replace-")
+            .and_then(|s| s.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let text = std::fs::read_to_string(entry.path())
+            .with_context(|| format!("reading recovery file {}", entry.path().display()))?;
+        let doc: Value = serde_json::from_str(&text)
+            .with_context(|| format!("parsing recovery file {}", entry.path().display()))?;
+        let kbs = doc
+            .get("knowledge_bases")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        println!(
+            "  {} found interrupted replace of knowledge-sources/{ks} — will restore {} knowledge base link(s)",
+            "↻".cyan(),
+            kbs.len()
+        );
+        out.insert(ks.to_string(), kbs);
+    }
+    Ok(out)
+}
+
+/// Restore knowledge-base links recorded by interrupted replaces, where the
+/// replaced knowledge source exists again. Removes each finished file.
+#[allow(clippy::too_many_arguments)]
+async fn finish_pending_relinks(
+    remote: &Remote,
+    ws: &Workspace,
+    env: &ResolvedEnv,
+    project: &Project,
+    store: &Store<'_>,
+    state: &mut ProjectState,
+    pending: &mut BTreeMap<String, Vec<Value>>,
+) -> Result<()> {
+    let names: Vec<String> = pending.keys().cloned().collect();
+    for ks_name in names {
+        let ks_ref = ResourceRef::new(ResourceKind::KnowledgeSource, ks_name.clone());
+        if remote.get(&ks_ref).await?.is_none() {
+            println!(
+                "  {} knowledge-sources/{ks_name} still missing remotely — push its file, then run push again to restore knowledge base links",
+                "!".yellow()
+            );
+            continue;
+        }
+        let kbs = pending.remove(&ks_name).unwrap_or_default();
+        relink_knowledge_bases(remote, store, state, &kbs).await?;
+        state.save(ws, &env.name, &project.name)?;
+        std::fs::remove_file(recovery_path(ws, &env.name, &project.name, &ks_name)).ok();
+        println!(
+            "  {} restored {} knowledge base link(s) for knowledge-sources/{ks_name}",
+            "✓".green(),
+            kbs.len()
+        );
+    }
+    Ok(())
+}
+
+/// PUT each original knowledge-base doc back (re-creating any that were
+/// deleted during unlink); canonicalize the ones this project owns.
+async fn relink_knowledge_bases(
+    remote: &Remote,
+    store: &Store<'_>,
+    state: &mut ProjectState,
+    kbs: &[Value],
+) -> Result<()> {
+    for original in kbs {
+        let Some(name) = original.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let kb_ref = ResourceRef::new(ResourceKind::KnowledgeBase, name.to_string());
+        let body = normalize_for_push(ResourceKind::KnowledgeBase, original);
+        let server_doc = remote
+            .put(&kb_ref, &body)
+            .await
+            .with_context(|| format!("failed to restore {kb_ref}"))?;
+        if store.locate(&kb_ref)?.is_some() {
+            store.write(&kb_ref, &server_doc)?;
+            state.set_baseline(&kb_ref, &server_doc);
+        }
+    }
+    Ok(())
+}
+
+/// Execute one replace bundle:
+/// 1. snapshot every remote knowledge base referencing the knowledge source
+///    (plus `prior` obligations from an interrupted run),
+/// 2. write the recovery file,
+/// 3. unlink (PUT without the reference; DELETE when the service rejects an
+///    empty knowledgeSources list),
+/// 4. delete the old knowledge source (Azure cascades the generated pipeline),
+/// 5. re-create the local sub-resources in dependency order,
+/// 6. create the new knowledge source,
+/// 7. restore the knowledge bases and remove the recovery file.
+///
+/// Any failure leaves the recovery file in place; re-running `rigg push`
+/// resumes (the kind change is re-detected, or the missing knowledge source
+/// becomes a plain create, and leftover relinks are finished at the end).
+#[allow(clippy::too_many_arguments)]
+async fn execute_replace(
+    env: &ResolvedEnv,
+    ws: &Workspace,
+    project: &Project,
+    store: &Store<'_>,
+    state: &mut ProjectState,
+    remote: &Remote,
+    bundle: &ReplaceBundle,
+    prior: Vec<Value>,
+) -> Result<()> {
+    let ks = &bundle.ks;
+    println!("  {} {}", "replace".magenta().bold(), ks);
+
+    // 1. Snapshot referencing knowledge bases — ALL of them, this project's
+    // or not: the delete fails while any reference exists. Foreign ones are
+    // restored byte-for-byte afterwards.
+    let mut referencing: Vec<Value> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for kb in remote.list(ResourceKind::KnowledgeBase).await? {
+        let mut refs = Vec::new();
+        registry::collect_path(&kb, "knowledgeSources[].name", &mut |v| {
+            if let Some(s) = v.as_str() {
+                refs.push(s.to_string());
+            }
+        });
+        if refs.iter().any(|r| r == &ks.name) {
+            if let Some(name) = kb.get("name").and_then(Value::as_str) {
+                seen.insert(name.to_string());
+                let kb_ref = ResourceRef::new(ResourceKind::KnowledgeBase, name.to_string());
+                if store.locate(&kb_ref)?.is_none() && !state.has_baseline(&kb_ref) {
+                    println!(
+                        "      {} temporarily unlinking foreign knowledge base '{name}' (not managed by this project) — restored afterwards",
+                        "!".yellow()
+                    );
+                }
+            }
+            referencing.push(kb);
+        }
+    }
+    // Merge obligations from an interrupted earlier run (those knowledge
+    // bases are already unlinked, so the listing above missed them).
+    for kb in prior {
+        let name = kb.get("name").and_then(Value::as_str).unwrap_or_default();
+        if !name.is_empty() && !seen.contains(name) {
+            referencing.push(kb);
+        }
+    }
+
+    // 2. Recovery file BEFORE any mutation.
+    let recovery = recovery_path(ws, &env.name, &project.name, &ks.name);
+    if let Some(parent) = recovery.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(
+        &recovery,
+        serde_json::to_string_pretty(&json!({
+            "ks": ks.name,
+            "knowledge_bases": referencing,
+        }))?,
+    )
+    .with_context(|| format!("writing recovery file {}", recovery.display()))?;
+
+    let step = |msg: &str| {
+        format!(
+            "replace of '{}' interrupted {msg}; re-run `rigg push` to resume (recovery file kept)",
+            ks.name
+        )
+    };
+
+    // 3. Unlink.
+    for kb in &referencing {
+        let Some(name) = kb.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let kb_ref = ResourceRef::new(ResourceKind::KnowledgeBase, name.to_string());
+        let mut unlinked = normalize_for_push(ResourceKind::KnowledgeBase, kb);
+        let mut now_empty = false;
+        if let Some(list) = unlinked
+            .get_mut("knowledgeSources")
+            .and_then(Value::as_array_mut)
+        {
+            list.retain(|entry| {
+                entry.get("name").and_then(Value::as_str) != Some(ks.name.as_str())
+            });
+            now_empty = list.is_empty();
+        }
+        let result = remote.put(&kb_ref, &unlinked).await;
+        match result {
+            Ok(_) => println!("      unlinked {kb_ref}"),
+            Err(e) if now_empty => {
+                // The service may reject an empty knowledgeSources list —
+                // fall back to deleting the knowledge base (restored later
+                // from the recovery snapshot).
+                tracing::debug!("unlink PUT rejected ({e:#}); deleting {kb_ref} instead");
+                remote
+                    .delete(&kb_ref)
+                    .await
+                    .with_context(|| step("while unlinking knowledge bases"))?;
+                println!("      deleted {kb_ref} (empty after unlink; restored afterwards)");
+            }
+            Err(e) => {
+                return Err(e.context(step("while unlinking knowledge bases")));
+            }
+        }
+    }
+
+    // 4. Delete the old knowledge source; Azure cascades the generated
+    // pipeline away, so those baselines are gone too.
+    remote
+        .delete(ks)
+        .await
+        .with_context(|| step("after unlinking knowledge bases"))?;
+    state.clear_baseline(ks);
+    for (kind, name) in migrate::created_resources(&bundle.remote_ks) {
+        state.clear_baseline(&ResourceRef::new(kind, name));
+    }
+    state.save(ws, &env.name, &project.name)?;
+    println!("      deleted old {ks} (generated pipeline cascaded)");
+
+    // 5. Re-create the explicit pipeline in dependency order.
+    let order = graph::push_order(&bundle.sub)?;
+    for r in &order {
+        let (_, body) = bundle
+            .sub
+            .iter()
+            .find(|(sr, _)| sr == r)
+            .expect("ordered item");
+        let mut with_refs = body.clone();
+        resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+        let push_body = normalize_for_push(r.kind, &with_refs);
+        let server_doc = remote
+            .put(r, &push_body)
+            .await
+            .with_context(|| step(&format!("while re-creating {r}")))?;
+        store.write(r, &server_doc)?;
+        state.set_baseline(r, &server_doc);
+        state.save(ws, &env.name, &project.name)?;
+        println!("      {} {}", "✓".green(), r);
+    }
+
+    // 6. Create the new knowledge source.
+    let mut with_refs = bundle.new_body.clone();
+    resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+    let push_body = normalize_for_push(ks.kind, &with_refs);
+    let server_doc = remote
+        .put(ks, &push_body)
+        .await
+        .with_context(|| step("while re-creating the knowledge source"))?;
+    store.write(ks, &server_doc)?;
+    state.set_baseline(ks, &server_doc);
+    state.save(ws, &env.name, &project.name)?;
+    println!("      {} {} (kind: searchIndex)", "✓".green(), ks);
+
+    // 7. Restore the knowledge bases exactly as snapshotted.
+    relink_knowledge_bases(remote, store, state, &referencing)
+        .await
+        .with_context(|| step("while restoring knowledge base links"))?;
+    state.save(ws, &env.name, &project.name)?;
+    std::fs::remove_file(&recovery).ok();
+    if !referencing.is_empty() {
+        println!(
+            "      {} restored {} knowledge base link(s)",
+            "✓".green(),
+            referencing.len()
+        );
+    }
+    println!(
+        "      {} index is repopulating — knowledge bases may return thin results until the indexer finishes",
+        "ℹ".cyan()
+    );
+    Ok(())
 }

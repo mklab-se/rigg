@@ -299,6 +299,13 @@ pub struct PushArgs {
     /// Typed confirmation for protected environments (must equal the env name)
     #[arg(long, value_name = "ENV")]
     pub confirm_env: Option<String>,
+
+    /// Allow replace operations (delete + recreate, e.g. a knowledge-source
+    /// kind change). Required non-interactively when the plan contains one:
+    /// --yes alone is not enough, because a replace rebuilds the index
+    /// (time, ingestion cost, downtime)
+    #[arg(long)]
+    pub allow_replace: bool,
 }
 
 #[derive(Args)]

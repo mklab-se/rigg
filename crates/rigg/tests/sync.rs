@@ -1476,3 +1476,332 @@ async fn migrate_requires_mode_non_interactively() {
         .code(2)
         .stderr(predicate::str::contains("--in-place or --rename"));
 }
+
+// ---------------------------------------------------------------------------
+// push replace (knowledge-source kind change)
+// ---------------------------------------------------------------------------
+
+/// Local project files for an in-place-migrated KS: searchIndex KS + the
+/// four explicit sub-resources under the generated names.
+fn write_migrated_files(ws: &std::path::Path, name: &str) {
+    write_resource(
+        ws,
+        "knowledge-sources",
+        name,
+        &json!({"name": name, "kind": "searchIndex",
+                "description": "Test knowledge source.",
+                "searchIndexParameters": {"searchIndexName": format!("{name}-index")}}),
+    );
+    write_resource(
+        ws,
+        "data-sources",
+        &format!("{name}-datasource"),
+        &json!({"name": format!("{name}-datasource"), "type": "azureblob",
+                "credentials": {"connectionString": "ResourceId=/subscriptions/x;"},
+                "container": {"name": "docs"}}),
+    );
+    write_resource(
+        ws,
+        "indexes",
+        &format!("{name}-index"),
+        &json!({"name": format!("{name}-index"),
+                "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+    write_resource(
+        ws,
+        "skillsets",
+        &format!("{name}-skillset"),
+        &json!({"name": format!("{name}-skillset"), "skills": []}),
+    );
+    write_resource(
+        ws,
+        "indexers",
+        &format!("{name}-indexer"),
+        &json!({"name": format!("{name}-indexer"),
+                "dataSourceName": format!("{name}-datasource"),
+                "targetIndexName": format!("{name}-index"),
+                "skillsetName": format!("{name}-skillset")}),
+    );
+}
+
+/// Echo PUT (201) for a path.
+async fn mount_put_echo(server: &MockServer, p: &str) {
+    Mock::given(method("PUT"))
+        .and(path(p.to_string()))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            ResponseTemplate::new(201).set_body_json(body)
+        })
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn push_detects_kind_change_as_replace_dry_run() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await; // remote is still azureBlob
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+
+    rigg(ws.path())
+        .args(["push", "demo", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("replace"))
+        .stdout(predicate::str::contains("kind: azureBlob → searchIndex"))
+        .stdout(predicate::str::contains("REBUILT"))
+        .stdout(predicate::str::contains("recreates:"));
+
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "dry run must not mutate");
+}
+
+#[tokio::test]
+async fn push_replace_requires_allow_replace_flag() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--allow-replace"));
+
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "gated push must not mutate");
+}
+
+#[tokio::test]
+async fn push_replace_full_choreography() {
+    let server = MockServer::start().await;
+    // Foreign KB referencing the KS (and another, so unlink stays non-empty).
+    Mock::given(method("GET"))
+        .and(path("/knowledgeBases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "@odata.etag": "\"0xKB\"",
+                "name": "kb1",
+                "knowledgeSources": [{"name": "test-ks"}, {"name": "other-ks"}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    mount_blob_ks(&server, "test-ks").await;
+    mock_empty_lists(&server).await;
+    mount_put_echo(&server, "/knowledgeBases/kb1").await;
+    Mock::given(method("DELETE"))
+        .and(path("/knowledgeSources/test-ks"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    for p in [
+        "/datasources/test-ks-datasource",
+        "/indexes/test-ks-index",
+        "/skillsets/test-ks-skillset",
+        "/indexers/test-ks-indexer",
+        "/knowledgeSources/test-ks",
+    ] {
+        mount_put_echo(&server, p).await;
+    }
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes", "--allow-replace"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("foreign knowledge base 'kb1'"))
+        .stdout(predicate::str::contains("repopulating"));
+
+    // Exact mutation order.
+    let requests = server.received_requests().await.unwrap();
+    let muts: Vec<String> = requests
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .map(|r| format!("{} {}", r.method, r.url.path()))
+        .collect();
+    assert_eq!(
+        muts,
+        vec![
+            "PUT /knowledgeBases/kb1",             // unlink
+            "DELETE /knowledgeSources/test-ks",    // cascade delete
+            "PUT /datasources/test-ks-datasource", // recreate in graph order
+            "PUT /indexes/test-ks-index",
+            "PUT /skillsets/test-ks-skillset",
+            "PUT /indexers/test-ks-indexer",
+            "PUT /knowledgeSources/test-ks", // new searchIndex KS
+            "PUT /knowledgeBases/kb1",       // relink
+        ],
+        "unexpected order: {muts:?}"
+    );
+
+    // Unlink removed only the replaced KS; relink restored the original.
+    let kb_puts: Vec<Value> = requests
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT" && r.url.path() == "/knowledgeBases/kb1")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(
+        kb_puts[0]["knowledgeSources"],
+        json!([{"name": "other-ks"}])
+    );
+    assert_eq!(
+        kb_puts[1]["knowledgeSources"],
+        json!([{"name": "test-ks"}, {"name": "other-ks"}])
+    );
+
+    // Recovery file removed on success.
+    assert!(
+        !ws.path()
+            .join(".rigg/dev/demo/replace-test-ks.json")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn push_replace_empty_kb_falls_back_to_delete() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/knowledgeBases"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{
+                "name": "kb1",
+                "knowledgeSources": [{"name": "test-ks"}]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    mount_blob_ks(&server, "test-ks").await;
+    mock_empty_lists(&server).await;
+    // PUT with an empty knowledgeSources list is rejected by the service.
+    Mock::given(method("PUT"))
+        .and(path("/knowledgeBases/kb1"))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            let empty = body["knowledgeSources"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true);
+            if empty {
+                ResponseTemplate::new(400).set_body_json(
+                    json!({"error": {"message": "knowledgeSources must not be empty"}}),
+                )
+            } else {
+                ResponseTemplate::new(201).set_body_json(body)
+            }
+        })
+        .mount(&server)
+        .await;
+    for p in ["/knowledgeBases/kb1", "/knowledgeSources/test-ks"] {
+        Mock::given(method("DELETE"))
+            .and(path(p.to_string()))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+    }
+    for p in [
+        "/datasources/test-ks-datasource",
+        "/indexes/test-ks-index",
+        "/skillsets/test-ks-skillset",
+        "/indexers/test-ks-indexer",
+        "/knowledgeSources/test-ks",
+    ] {
+        mount_put_echo(&server, p).await;
+    }
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes", "--allow-replace"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deleted knowledge-bases/kb1"));
+
+    let requests = server.received_requests().await.unwrap();
+    let muts: Vec<String> = requests
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .map(|r| format!("{} {}", r.method, r.url.path()))
+        .collect();
+    // rejected empty PUT → DELETE kb → ... → final PUT recreates kb
+    assert_eq!(muts[0], "PUT /knowledgeBases/kb1");
+    assert_eq!(muts[1], "DELETE /knowledgeBases/kb1");
+    assert_eq!(muts[2], "DELETE /knowledgeSources/test-ks");
+    assert_eq!(muts.last().unwrap(), "PUT /knowledgeBases/kb1");
+    // the final PUT restores the original reference list
+    let last_kb: Value = serde_json::from_slice(
+        &requests
+            .iter()
+            .rfind(|r| r.method.as_str() == "PUT" && r.url.path() == "/knowledgeBases/kb1")
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(last_kb["knowledgeSources"], json!([{"name": "test-ks"}]));
+}
+
+#[tokio::test]
+async fn push_resumes_interrupted_replace_relink() {
+    let server = MockServer::start().await;
+    // Remote KS already replaced (searchIndex) — only the relink is pending.
+    Mock::given(method("GET"))
+        .and(path("/knowledgeSources/test-ks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "test-ks", "kind": "searchIndex",
+            "searchIndexParameters": {"searchIndexName": "test-ks-index"}
+        })))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+    mount_put_echo(&server, "/knowledgeBases/kb1").await;
+
+    let ws = workspace(&server.uri());
+    let state_dir = ws.path().join(".rigg/dev/demo");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("replace-test-ks.json"),
+        serde_json::to_string_pretty(&json!({
+            "ks": "test-ks",
+            "knowledge_bases": [{
+                "name": "kb1",
+                "knowledgeSources": [{"name": "test-ks"}]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("interrupted replace"))
+        .stdout(predicate::str::contains("restored 1 knowledge base link"));
+
+    let requests = server.received_requests().await.unwrap();
+    let kb_put = requests
+        .iter()
+        .find(|r| r.method.as_str() == "PUT" && r.url.path() == "/knowledgeBases/kb1");
+    assert!(kb_put.is_some(), "relink PUT sent");
+    assert!(!state_dir.join("replace-test-ks.json").exists());
+}
