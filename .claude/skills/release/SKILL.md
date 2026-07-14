@@ -37,6 +37,11 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 - Run `cargo clippy --workspace --all-targets -- -D warnings` — abort if warnings
   (`--all-targets` matches CI: it also lints tests and benches)
 - Run `cargo test --workspace` — abort if any test fails
+- Run `grep -rn "include_str!" crates/*/src` and verify every path stays inside
+  its crate directory (no `../` escaping above the crate root) — `cargo publish`
+  packages only the crate directory, so an `include_str!` reaching into the repo
+  root builds fine locally but fails tarball verification during publish
+  (this broke the v1.2.1 publish via CONCEPTS.md)
 - Run `git status` — abort if there are uncommitted changes that are NOT documentation, version, or dependency files
 
 ### 4. Bump version numbers

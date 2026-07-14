@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::commands::GlobalContext;
 
 /// The canonical concept guide. Embedding `CONCEPTS.md` guarantees CLI/docs parity.
-const CONCEPTS_MD: &str = include_str!("../../../../CONCEPTS.md");
+const CONCEPTS_MD: &str = include_str!("../../CONCEPTS.md");
 
 pub fn run(ctx: &GlobalContext) -> Result<()> {
     if ctx.json() {

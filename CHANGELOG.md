@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2026-07-14
+
+### Fixed
+
+- `cargo publish` of the `rigg` crate failed tarball verification: `rigg
+  concepts` embedded the repo-root `CONCEPTS.md`, which is outside the crate
+  directory and therefore not packaged. The crate now carries its own copy
+  (`crates/rigg/CONCEPTS.md`), guarded by a test that fails if it drifts from
+  the repo-root document. This blocked the v1.2.1 crates.io publish after the
+  binaries had already built.
+
 ## [1.2.1] - 2026-07-14
 
 ### Changed

@@ -501,6 +501,24 @@ fn init_with_folder_keeps_workspace_in_cwd_and_stores_files_there() {
 }
 
 #[test]
+fn crate_concepts_doc_matches_repo_root_copy() {
+    // `rigg concepts` embeds crates/rigg/CONCEPTS.md because cargo publish
+    // cannot package files outside the crate; the repo-root CONCEPTS.md is
+    // the one people read and edit. Keep them identical (cp CONCEPTS.md
+    // crates/rigg/CONCEPTS.md after editing).
+    let root_copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../CONCEPTS.md");
+    if !root_copy.exists() {
+        return; // published tarball: only the crate copy exists
+    }
+    let crate_copy = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("CONCEPTS.md");
+    assert_eq!(
+        std::fs::read_to_string(&root_copy).unwrap(),
+        std::fs::read_to_string(&crate_copy).unwrap(),
+        "CONCEPTS.md drifted: run `cp CONCEPTS.md crates/rigg/CONCEPTS.md`"
+    );
+}
+
+#[test]
 fn validate_checks_webapi_skill_contract() {
     let ws = workspace();
     rigg()
