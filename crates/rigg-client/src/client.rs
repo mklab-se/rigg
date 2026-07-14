@@ -286,6 +286,107 @@ impl AzureSearchClient {
         Ok(())
     }
 
+    // ------------------------------------------------------------------
+    // Runtime operations (rigg az)
+    // ------------------------------------------------------------------
+
+    /// Trigger an indexer run now (202 Accepted, no body).
+    #[instrument(skip(self))]
+    pub async fn indexer_run(&self, name: &str) -> Result<(), ClientError> {
+        let url = format!(
+            "{}/indexers/{}/run?api-version={}",
+            self.base_url,
+            urlencoding::encode(name),
+            self.api_version_for(ResourceKind::Indexer)
+        );
+        self.request_with_retry(Method::POST, &url, None).await?;
+        Ok(())
+    }
+
+    /// Clear an indexer's change-tracking state (the next run reprocesses
+    /// every document).
+    #[instrument(skip(self))]
+    pub async fn indexer_reset(&self, name: &str) -> Result<(), ClientError> {
+        let url = format!(
+            "{}/indexers/{}/reset?api-version={}",
+            self.base_url,
+            urlencoding::encode(name),
+            self.api_version_for(ResourceKind::Indexer)
+        );
+        self.request_with_retry(Method::POST, &url, None).await?;
+        Ok(())
+    }
+
+    /// Execution state and history for an indexer.
+    #[instrument(skip(self))]
+    pub async fn indexer_status(&self, name: &str) -> Result<Value, ClientError> {
+        let url = format!(
+            "{}/indexers/{}/status?api-version={}",
+            self.base_url,
+            urlencoding::encode(name),
+            self.api_version_for(ResourceKind::Indexer)
+        );
+        self.request_with_retry(Method::GET, &url, None)
+            .await?
+            .ok_or_else(|| ClientError::NotFound {
+                kind: "indexer status".to_string(),
+                name: name.to_string(),
+            })
+    }
+
+    /// Document count and storage size for an index.
+    #[instrument(skip(self))]
+    pub async fn index_stats(&self, name: &str) -> Result<Value, ClientError> {
+        let url = format!(
+            "{}/indexes/{}/stats?api-version={}",
+            self.base_url,
+            urlencoding::encode(name),
+            self.api_version_for(ResourceKind::Index)
+        );
+        self.request_with_retry(Method::GET, &url, None)
+            .await?
+            .ok_or_else(|| ClientError::NotFound {
+                kind: "index stats".to_string(),
+                name: name.to_string(),
+            })
+    }
+
+    /// Run a search query against an index's documents.
+    #[instrument(skip(self, body))]
+    pub async fn search_docs(&self, index: &str, body: &Value) -> Result<Value, ClientError> {
+        let url = format!(
+            "{}/indexes/{}/docs/search?api-version={}",
+            self.base_url,
+            urlencoding::encode(index),
+            self.api_version_for(ResourceKind::Index)
+        );
+        self.request_with_retry(Method::POST, &url, Some(body))
+            .await?
+            .ok_or_else(|| ClientError::Api {
+                status: 0,
+                message: "search returned no body".to_string(),
+            })
+    }
+
+    /// Agentic retrieval against a knowledge base (the `retrieve` action).
+    /// A 206 Partial response (some knowledge sources errored) still carries
+    /// a usable body and is returned as success.
+    #[instrument(skip(self, body))]
+    pub async fn kb_retrieve(&self, kb: &str, body: &Value) -> Result<Value, ClientError> {
+        let url = format!(
+            "{}/knowledgebases('{}')/retrieve?api-version={}",
+            self.base_url,
+            urlencoding::encode(kb),
+            self.api_version_for(ResourceKind::KnowledgeBase)
+        );
+        self.request_with_retry(Method::POST, &url, Some(body))
+            .await?
+            .ok_or_else(|| ClientError::Api {
+                status: 0,
+                message: "retrieve returned no body".to_string(),
+            })
+    }
+
     /// Check if a resource exists
     pub async fn exists(&self, kind: ResourceKind, name: &str) -> Result<bool, ClientError> {
         match self.get(kind, name).await {

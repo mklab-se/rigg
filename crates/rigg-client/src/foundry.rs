@@ -122,6 +122,27 @@ impl FoundryClient {
         )
     }
 
+    /// Invoke an agent with a single prompt via the Foundry responses API
+    /// (`POST {project}/openai/v1/responses`); returns the raw OpenAI-shaped
+    /// response object.
+    pub async fn agent_respond(&self, agent: &str, input: &str) -> Result<Value, ClientError> {
+        let url = format!(
+            "{}/api/projects/{}/openai/v1/responses?api-version={}",
+            self.base_url, self.project, self.api_version
+        );
+        let body = serde_json::json!({
+            "agent_reference": { "name": agent, "type": "agent_reference" },
+            "input": input,
+            "stream": false
+        });
+        self.request_with_retry(Method::POST, &url, Some(&body))
+            .await?
+            .ok_or_else(|| ClientError::Api {
+                status: 0,
+                message: "agent response had no body".to_string(),
+            })
+    }
+
     /// Execute an HTTP request
     async fn request(
         &self,
