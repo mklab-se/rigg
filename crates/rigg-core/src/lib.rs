@@ -9,6 +9,7 @@
 pub mod config;
 pub mod graph;
 pub mod identity;
+pub mod migrate;
 pub mod normalize;
 pub mod openapi;
 pub mod registry;
