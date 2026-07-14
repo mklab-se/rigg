@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-07-15
+
+The auth-first release: everything a portal-built pipeline loses on the way
+into config-as-code (keys Azure never returns, roles nobody granted) is now
+detected before it breaks, resolved with your consent, and kept out of your
+files. Battle-tested end-to-end on a live knowledge-source migration.
+
+### Added
+
+- **Push diagnoses RBAC rejections instead of failing.** When Azure rejects
+  a write for a role/permission, push resolves which roles that exact
+  document requires (the same identity-edge model `auth doctor` uses),
+  checks the actual assignments through ARM, and then: missing → offers to
+  grant right there (interactively; non-interactively the error names the
+  exact role and scope); present → waits out Azure's propagation with
+  periodic retries (30s × 10 by default; `RIGG_RBAC_RETRY_SECS` /
+  `RIGG_RBAC_MAX_RETRIES` to tune). Measured live: ~3 minutes for a
+  Cognitive Services role to propagate.
+- **Custom Web API skill authorization, two ways.** Azure redacts a
+  WebApiSkill's `?code=` key on GET, so migrated skillsets fail at
+  enrichment time with no visible reason. Push and the migrate wizard now
+  detect the redacted marker — even on "in sync" skillsets, where both
+  sides agree on a broken placeholder — and offer:
+  - **Entra ID (recommended):** `authResourceId`, pre-resolved from the
+    function app's Easy Auth configuration via ARM when enabled; concrete
+    enablement guidance when not.
+  - **Push-time function key:** the skill is annotated
+    `x-rigg-auth: function-key` (stripped from PUTs like all `x-rigg-*`
+    keys); rigg fetches the key via ARM `listKeys` on every push and
+    injects it into the request body only — the file keeps the placeholder
+    forever, and key rotation heals itself.
+- **Keyless skillset billing targets the right kind of account.**
+  `AIServicesByIdentity` only works against Foundry (ARM kind `AIServices`)
+  resources; the identity rewrite now verifies the current account's kind
+  and, for legacy CognitiveServices accounts, discovers and offers your
+  actual Foundry resources.
+
+### Fixed
+
+- **Search HTTP timeout raised to 120s + timed-out PUTs resolved.** Indexer
+  creation validates connections and starts its first run before responding
+  — 30s produced false failures twice in live testing. A PUT that still
+  times out is now resolved by GETting the resource and accepting
+  semantically matching server state.
+- **`auth doctor --fix` messaging** no longer suggests the flag you just
+  used; remaining problems state what could not be fixed and why.
+
 ## [1.4.3] - 2026-07-14
 
 ### Fixed
