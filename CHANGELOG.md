@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-07-15
+
+Rigg grows an operations plane: `rigg az` acts on the LIVE cloud resources
+that the config commands version-control — and the CLI now tab-completes
+resource names straight from your workspace files.
+
+### Added
+
+- **`rigg az` — operate the live resources.** Noun-first subcommands,
+  addressed by physical name (no project ownership required), env-resolved
+  like everything else:
+  - `rigg az indexer run <name> [--watch] [--reset]` — trigger a run;
+    `--watch` polls until it completes, prints state transitions and
+    per-document errors, and exits non-zero on a failed run. `--reset`
+    (and `rigg az indexer reset`) clears change-tracking state behind a
+    confirmation that spells out the full-reprocess cost.
+  - `rigg az indexer status <name>` — execution state, last run, errors and
+    warnings with document keys.
+  - `rigg az index query <name> <text> [--top] [--filter] [--select]` —
+    smoke-test retrieval without the portal; `rigg az index stats <name>`
+    for document count and storage size.
+  - `rigg az kb ask <name> <prompt>` — agentic retrieval (grounding content
+    + numbered references with reranker scores; the stable API is
+    extractive). `kb` is an alias for `knowledge-base`.
+  - `rigg az agent ask <name> <prompt>` — single-shot prompt to a Foundry
+    agent via the responses API.
+  - `--output json` on all of them for scripting; protected environments
+    gate the mutating verbs.
+- **MCP runtime tools.** `rigg_indexer_status`, `rigg_query`, `rigg_ask`
+  (knowledge base or agent) read-only, plus `rigg_indexer_run` behind the
+  force pattern — an AI agent can now verify a deployment end-to-end after
+  `rigg_push` without a human in the portal.
+- **Dynamic tab completion.** One line in your shell rc
+  (`source <(COMPLETE=zsh rigg)`; bash/fish equivalents) and rigg completes
+  not just subcommands and flags but VALUES: project names, environment
+  names, `<kind>/<name>` selectors, `rigg new` kinds, and the resource
+  names in every `rigg az` and `rigg migrate` command — resolved offline
+  from your local workspace files, the quiet payoff of config-as-code.
+  The static `rigg completion <shell>` scripts remain for subcommand/flag
+  completion without registration.
+
 ## [1.5.0] - 2026-07-15
 
 The auth-first release: everything a portal-built pipeline loses on the way

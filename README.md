@@ -198,6 +198,12 @@ rigg migrate knowledge-source <name> --in-place       # convert a portal-created
                                 #   REPLACES it (index rebuild — gated by --allow-replace)
 rigg migrate ks <name> --rename <new>   # or build a side-by-side pipeline under new names
 
+rigg az indexer run <name> --watch      # trigger a live indexer and follow the run
+rigg az indexer status <name>           # execution state + per-document errors
+rigg az index query <name> "gdpr"       # smoke-test retrieval against the live index
+rigg az kb ask <name> "What does..."    # agentic retrieval: grounding + references
+rigg az agent ask <name> "Summarize..." # single-shot prompt to a Foundry agent
+
 rigg delete my-rag --remote     # delete the project's resources from Azure (files kept)
 rigg status                     # per-resource sync state across all projects
 ```

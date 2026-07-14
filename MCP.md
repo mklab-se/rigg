@@ -120,6 +120,51 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 | `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
 
+### rigg_indexer_status
+
+Execution status of a live indexer (read-only): state, last run result, per-document errors/warnings. Use after `rigg_push` or `rigg_indexer_run` to verify ingestion.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `indexer` | string | Indexer name |
+| `env` | string? | Environment name |
+
+### rigg_indexer_run
+
+Trigger a live indexer run. Without `force`: returns the current status (preview). With `force: true`: triggers the run (fire-and-forget) — poll `rigg_indexer_status` until it completes.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `indexer` | string | Indexer name |
+| `env` | string? | Environment name |
+| `force` | bool? | Preview without, trigger with `true` |
+
+### rigg_query
+
+Search a live index (read-only) — the smoke test for retrieval.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `index` | string | Index name |
+| `search` | string | Search text (`*` for all) |
+| `top` | int? | Result count (default 5) |
+| `filter` | string? | OData filter |
+| `select` | string? | Comma-separated fields |
+| `env` | string? | Environment name |
+
+### rigg_ask
+
+Prompt a live knowledge base (agentic retrieval: grounding + references) or Foundry agent (single-shot reply). Read-only. Pass exactly one of `knowledge_base`/`agent`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `knowledge_base` | string? | Knowledge base name |
+| `agent` | string? | Agent name |
+| `prompt` | string | The question |
+| `env` | string? | Environment name |
+
+Together these close the loop for AI agents: `rigg_push` → `rigg_indexer_run` → `rigg_indexer_status` → `rigg_query` → `rigg_ask` — a self-verified deployment with no human in the portal.
+
 Run `rigg_validate` first — the tool description tells the AI to, and well-behaved agents will.
 
 ### rigg_delete

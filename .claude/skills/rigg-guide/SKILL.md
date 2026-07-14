@@ -90,4 +90,12 @@ never satisfies this gate.
   automatically and resumes an interrupted replace on the next run.
 - Index fields cannot be removed in Azure — pushing a field removal fails with
   a clear API error; to recreate: delete the file, `push --prune`, restore, push.
+- `rigg az <noun> <verb>` operates the LIVE resources (vs the config
+  commands): `indexer run --watch|reset|status`, `index query|stats`,
+  `kb ask`, `agent ask`. Physical names, no project ownership needed;
+  `--output json` for scripting. The MCP tools rigg_indexer_run/
+  rigg_indexer_status/rigg_query/rigg_ask expose the same for post-push
+  self-verification.
+- Tab completion incl. resource names: `source <(COMPLETE=zsh rigg)` in the
+  shell rc (bash/fish equivalents); candidates come from local files.
 - Exit codes: 0 ok · 1 error · 2 usage · 3 validation · 4 auth · 5 drift/conflict.
