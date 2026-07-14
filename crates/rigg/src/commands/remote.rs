@@ -136,7 +136,31 @@ impl Remote {
 
     /// Create or update; returns the server's post-write document
     /// (GETs it back when the API returns 204/no body) for canonicalization.
+    ///
+    /// A timed-out PUT is ambiguous — the server may have completed it (an
+    /// indexer create validates connections and starts its first run before
+    /// responding). Resolve the ambiguity instead of failing: GET the
+    /// resource and accept the write when the server's document semantically
+    /// matches what was sent.
     pub async fn put(&self, r: &ResourceRef, body: &Value) -> Result<Value> {
+        match self.put_inner(r, body).await {
+            Ok(v) => Ok(v),
+            Err(e) if is_timeout(&e) => match self.get(r).await {
+                Ok(Some(server_doc))
+                    if rigg_core::normalize::semantic_eq(r.kind, body, &server_doc) =>
+                {
+                    Ok(server_doc)
+                }
+                _ => Err(e.context(format!(
+                    "the request timed out and {r} does not (yet) match what was sent — \
+                         re-run the command; it resumes safely"
+                ))),
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn put_inner(&self, r: &ResourceRef, body: &Value) -> Result<Value> {
         match registry::meta(r.kind).domain {
             Domain::Search => {
                 let client = self.search().await?;
@@ -193,6 +217,16 @@ impl Remote {
         }
         Ok(out)
     }
+}
+
+/// Whether an error chain bottoms out in an HTTP timeout.
+fn is_timeout(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)
+            || cause.to_string().contains("operation timed out")
+    })
 }
 
 /// Resolve environment-specific values into a push body: `x-rigg-ref`

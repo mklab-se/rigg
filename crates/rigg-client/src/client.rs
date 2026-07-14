@@ -38,13 +38,20 @@ pub struct AzureSearchClient {
     preview_api_version: String,
 }
 
+/// Indexer creation validates the data source and AI-services connections
+/// and starts the first run before responding — routinely slower than a
+/// typical management call. 30s produced live false-failure timeouts.
+const HTTP_TIMEOUT_SECS: u64 = 120;
+
 impl AzureSearchClient {
     /// Create client from a workspace search connection.
     pub fn from_connection(
         conn: &rigg_core::workspace::SearchConnection,
     ) -> Result<Self, ClientError> {
         let auth = get_auth_provider()?;
-        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let http = Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()?;
         Ok(Self {
             http,
             auth,
@@ -63,7 +70,9 @@ impl AzureSearchClient {
     /// Create client from a specific search service config (legacy).
     pub fn from_service_config(service: &SearchServiceConfig) -> Result<Self, ClientError> {
         let auth = get_auth_provider()?;
-        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let http = Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()?;
 
         Ok(Self {
             http,
@@ -82,7 +91,7 @@ impl AzureSearchClient {
         auth: Box<dyn AuthProvider>,
     ) -> Result<Self, ClientError> {
         let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()?;
 
         Ok(Self {
