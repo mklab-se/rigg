@@ -77,6 +77,11 @@ type Result<T> = std::result::Result<T, WorkspaceError>;
 pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Directory (relative to rigg.yaml) holding rigg's file trees —
+    /// `projects/`, `apis/`, `.rigg/`. Default: alongside rigg.yaml.
+    /// Set by `rigg init <folder>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
     #[serde(default)]
     pub environments: BTreeMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Defaults::is_empty")]
@@ -276,8 +281,12 @@ impl Workspace {
         let config: WorkspaceConfig =
             serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse { path, source })?;
 
+        let files_root = match &config.root {
+            Some(sub) => root.join(sub),
+            None => root.to_path_buf(),
+        };
         let mut projects = Vec::new();
-        let projects_dir = root.join(PROJECTS_DIR);
+        let projects_dir = files_root.join(PROJECTS_DIR);
         if projects_dir.is_dir() {
             let mut entries: Vec<_> = std::fs::read_dir(&projects_dir)
                 .map_err(|source| WorkspaceError::Io {
@@ -371,12 +380,21 @@ impl Workspace {
             .map(|(n, _)| n.as_str())
     }
 
+    /// Directory holding rigg's file trees (`projects/`, `apis/`, `.rigg/`) —
+    /// the workspace root unless `root:` in rigg.yaml relocates them.
+    pub fn files_root(&self) -> PathBuf {
+        match &self.config.root {
+            Some(sub) => self.root.join(sub),
+            None => self.root.clone(),
+        }
+    }
+
     pub fn apis_dir(&self) -> PathBuf {
-        self.root.join(APIS_DIR)
+        self.files_root().join(APIS_DIR)
     }
 
     pub fn state_dir(&self, env: &str, project: &str) -> PathBuf {
-        self.root.join(STATE_DIR).join(env).join(project)
+        self.files_root().join(STATE_DIR).join(env).join(project)
     }
 }
 
@@ -556,6 +574,30 @@ environments:
             ws.resolve_env(None),
             Err(WorkspaceError::NoDefaultEnvironment)
         ));
+    }
+
+    #[test]
+    fn root_setting_relocates_file_trees() {
+        let tmp = tempfile::tempdir().unwrap();
+        let yaml =
+            "root: rag\nenvironments:\n  dev:\n    default: true\n    search: { service: s }\n";
+        std::fs::write(tmp.path().join(WORKSPACE_FILE), yaml).unwrap();
+        let pdir = tmp.path().join("rag").join(PROJECTS_DIR).join("alpha");
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(pdir.join(PROJECT_FILE), "{}\n").unwrap();
+        let ws = Workspace::load(tmp.path()).unwrap();
+        assert_eq!(ws.root, tmp.path());
+        assert_eq!(ws.files_root(), tmp.path().join("rag"));
+        assert_eq!(ws.project("alpha").unwrap().dir, pdir);
+        assert_eq!(ws.apis_dir(), tmp.path().join("rag").join(APIS_DIR));
+        assert_eq!(
+            ws.state_dir("dev", "alpha"),
+            tmp.path()
+                .join("rag")
+                .join(STATE_DIR)
+                .join("dev")
+                .join("alpha")
+        );
     }
 
     #[test]

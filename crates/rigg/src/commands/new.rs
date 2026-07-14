@@ -46,7 +46,7 @@ fn new_project(name: &str) -> Result<()> {
 /// Create the project directory + manifest. Shared with the adopt wizard.
 pub fn create_project(ws: &Workspace, name: &str) -> Result<()> {
     rigg_core::resources::validate_resource_name(name)?;
-    let dir = ws.root.join(PROJECTS_DIR).join(name);
+    let dir = ws.files_root().join(PROJECTS_DIR).join(name);
     if dir.exists() {
         bail!("project '{name}' already exists");
     }

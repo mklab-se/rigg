@@ -21,15 +21,21 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
   - `major`: 0.10.1 -> 1.0.0
 - Show the user: "Releasing rigg v{OLD} -> v{NEW}"
 
-### 2. Update dependencies
+### 2. Update toolchain and dependencies
 
+- Run `rustup update stable` — CI runs the LATEST stable Rust, and newer clippy
+  versions ship new lints. Running the pre-flight checks on an older local
+  toolchain lets warnings through that then fail the release workflow
+  (this happened for v1.1.0 and v1.2.0). After updating, confirm with
+  `rustc --version`.
 - Run `cargo update` to update all dependencies to the latest compatible versions
 - This ensures the release ships with up-to-date dependencies
 
 ### 3. Pre-flight checks
 
 - Run `cargo fmt --all -- --check` — abort if formatting issues
-- Run `cargo clippy --workspace -- -D warnings` — abort if warnings
+- Run `cargo clippy --workspace --all-targets -- -D warnings` — abort if warnings
+  (`--all-targets` matches CI: it also lints tests and benches)
 - Run `cargo test --workspace` — abort if any test fails
 - Run `git status` — abort if there are uncommitted changes that are NOT documentation, version, or dependency files
 
@@ -51,12 +57,22 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 
 ### 7. Commit, push, and tag
 
-- Stage all changed files: `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and any updated docs
+- Stage all changed files: `Cargo.toml`, `CHANGELOG.md`, and any updated docs
+  (`Cargo.lock` is gitignored in this repo — do not force-add it)
 - Commit with message: `Release v{NEW_VERSION}`
 - Push to main: `git push`
 - Create and push tag: `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}`
 
-### 8. Confirm
+### 8. Verify the release workflow
 
-- Tell the user the release is tagged and pushed
-- Remind them that the GitHub Actions release workflow will now build binaries, publish to crates.io, and update the Homebrew tap
+- The push triggers the Release workflow on GitHub Actions. Do NOT declare
+  success yet — watch it: `gh run list --repo mklab-se/rigg --limit 3`, then
+  `gh run watch <id> --repo mklab-se/rigg` (or poll `gh run view <id>`)
+  until it completes
+- If it fails, inspect with `gh run view <id> --log-failed`, fix the cause,
+  and re-release as a patch
+
+### 9. Confirm
+
+- Tell the user the release is tagged, pushed, and the workflow is green —
+  binaries are built, crates.io is published, and the Homebrew tap is updated

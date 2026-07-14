@@ -85,6 +85,7 @@ See [INSTALL.md](INSTALL.md) for all installation methods, pre-built binaries, a
 ```bash
 # Initialize a workspace (discovers your services via Azure CLI)
 rigg init .
+# …or keep rigg's files in a subfolder of the workspace: rigg init rag
 
 # Create a project — the unit rigg syncs
 rigg new project my-rag

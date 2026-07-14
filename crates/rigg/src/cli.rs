@@ -177,7 +177,9 @@ pub enum Commands {
 
 #[derive(Args)]
 pub struct InitArgs {
-    /// Directory to initialize (default: current directory)
+    /// Folder to store rigg's files in (projects/, apis/, .rigg/), recorded
+    /// as `root:` in rigg.yaml. The workspace itself is always initialized
+    /// in the current directory (default: files alongside rigg.yaml)
     #[arg(default_value = ".")]
     pub path: String,
 

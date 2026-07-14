@@ -55,7 +55,7 @@ pub fn push_order(items: &[(ResourceRef, Value)]) -> Result<Vec<ResourceRef>, Gr
         for r in &ready {
             remaining.remove(*r);
         }
-        for (_, d) in remaining.iter_mut() {
+        for d in remaining.values_mut() {
             for r in &ready {
                 d.remove(*r);
             }

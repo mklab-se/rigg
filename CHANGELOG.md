@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-07-14
+
+### Changed
+
+- **`rigg init <folder>` initializes the workspace in the current directory**
+  and stores rigg's file trees (`projects/`, `apis/`, `.rigg/`) in the named
+  folder, recorded as `root: <folder>` in `rigg.yaml`. Previously the whole
+  workspace (including `rigg.yaml`) was created inside `<folder>`, so rigg
+  commands did not work from the directory where init was run. `rigg init`
+  / `rigg init .` behave as before.
+
+### Fixed
+
+- CI/release builds failed on the latest stable Rust toolchain due to a new
+  clippy lint in `rigg-core::graph` (`iter_mut()` over map values). This had
+  silently blocked the v1.1.0 and v1.2.0 release workflows — neither
+  published binaries, crates.io versions, or Homebrew updates; v1.2.1 is the
+  first release since v1.0.x to ship.
+
 ## [1.2.0] - 2026-07-14
 
 ### Added

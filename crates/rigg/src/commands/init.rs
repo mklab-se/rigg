@@ -12,8 +12,21 @@ use crate::commands::discovery;
 use crate::commands::{CommandError, GlobalContext};
 
 pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
-    let root = Path::new(&args.path);
-    std::fs::create_dir_all(root)?;
+    // The workspace root is always the current directory — that is where
+    // rigg.yaml lands and where rigg commands work from. The optional path
+    // argument names the folder that stores rigg's file trees
+    // (projects/, apis/, .rigg/), recorded as `root:` in rigg.yaml.
+    let root = Path::new(".");
+    let files_sub = args
+        .path
+        .trim_end_matches('/')
+        .trim_start_matches("./")
+        .to_string();
+    let files_sub = (!files_sub.is_empty() && files_sub != ".").then_some(files_sub);
+    let files_root = match &files_sub {
+        Some(sub) => root.join(sub),
+        None => root.to_path_buf(),
+    };
     let ws_file = root.join(WORKSPACE_FILE);
     if ws_file.exists() {
         bail!(
@@ -62,7 +75,16 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     // Write rigg.yaml
     let mut yaml = String::new();
     yaml.push_str("# Rigg workspace configuration.\n");
-    yaml.push_str("# Resource definitions live in projects/<name>/ — see `rigg new project`.\n");
+    if let Some(sub) = &files_sub {
+        yaml.push_str(&format!(
+            "# Resource definitions live in {sub}/projects/<name>/ — see `rigg new project`.\n"
+        ));
+        yaml.push_str(&format!("root: {sub}\n"));
+    } else {
+        yaml.push_str(
+            "# Resource definitions live in projects/<name>/ — see `rigg new project`.\n",
+        );
+    }
     yaml.push_str("environments:\n");
     yaml.push_str(&format!("  {}:\n", args.env_name));
     yaml.push_str("    default: true\n");
@@ -77,25 +99,33 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     std::fs::write(&ws_file, yaml)?;
 
     // Directory skeleton + .gitignore
-    std::fs::create_dir_all(root.join(PROJECTS_DIR))?;
-    std::fs::create_dir_all(root.join(APIS_DIR))?;
+    std::fs::create_dir_all(files_root.join(PROJECTS_DIR))?;
+    std::fs::create_dir_all(files_root.join(APIS_DIR))?;
+    let state_ignore = match &files_sub {
+        Some(sub) => format!("{sub}/{STATE_DIR}/"),
+        None => format!("{STATE_DIR}/"),
+    };
     let gitignore = root.join(".gitignore");
     let mut gi = if gitignore.exists() {
         std::fs::read_to_string(&gitignore)?
     } else {
         String::new()
     };
-    if !gi.lines().any(|l| l.trim() == format!("{STATE_DIR}/")) {
+    if !gi.lines().any(|l| l.trim() == state_ignore) {
         if !gi.is_empty() && !gi.ends_with('\n') {
             gi.push('\n');
         }
-        gi.push_str(&format!("{STATE_DIR}/\n"));
+        gi.push_str(&state_ignore);
+        gi.push('\n');
         std::fs::write(&gitignore, gi)?;
     }
 
     println!();
     println!("{} rigg workspace initialized", "✓".green().bold());
     println!("  config:   {}", ws_file.display());
+    if let Some(sub) = &files_sub {
+        println!("  files:    {sub}/ (projects, apis, state)");
+    }
     if let Some(s) = &search {
         println!("  search:   {s}");
     }

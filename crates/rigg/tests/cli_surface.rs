@@ -462,6 +462,45 @@ fn init_writes_workspace_files() {
 }
 
 #[test]
+fn init_with_folder_keeps_workspace_in_cwd_and_stores_files_there() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["init", "rag", "--search-service", "unit-test-svc"])
+        .assert()
+        .success();
+    // The current directory is the workspace: rigg.yaml lives here...
+    assert!(tmp.path().join("rigg.yaml").is_file());
+    let yaml = std::fs::read_to_string(tmp.path().join("rigg.yaml")).unwrap();
+    assert!(yaml.contains("root: rag"));
+    // ...but rigg's file trees live in the named folder.
+    assert!(tmp.path().join("rag/projects").is_dir());
+    assert!(tmp.path().join("rag/apis").is_dir());
+    assert!(!tmp.path().join("projects").exists());
+    let gi = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
+    assert!(gi.contains("rag/.rigg/"));
+    // Commands run from the workspace root and resolve files under the folder.
+    rigg()
+        .current_dir(tmp.path())
+        .args(["status"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["new", "project", "demo"])
+        .assert()
+        .success();
+    assert!(tmp.path().join("rag/projects/demo/project.yaml").is_file());
+    assert!(!tmp.path().join("projects").exists());
+    // Re-running init in the same workspace fails: already initialized.
+    rigg()
+        .current_dir(tmp.path())
+        .args(["init", "other", "--search-service", "x"])
+        .assert()
+        .code(1);
+}
+
+#[test]
 fn validate_checks_webapi_skill_contract() {
     let ws = workspace();
     rigg()
