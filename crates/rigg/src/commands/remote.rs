@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
+use colored::Colorize;
 use rigg_client::arm_resources::ArmResourceClient;
 use rigg_client::client::AzureSearchClient;
 use rigg_client::error::ClientError;
@@ -32,6 +33,23 @@ impl Remote {
             search: OnceCell::new(),
             foundry: OnceCell::new(),
             arm: OnceCell::new(),
+        }
+    }
+
+    /// Print the actual Azure targets (service names + resolved base URLs)
+    /// so the user can verify where cloud operations go before anything
+    /// happens — the URLs shown are exactly what the clients request against.
+    pub fn print_targets(&self) {
+        if let Some(s) = &self.search_conn {
+            println!("  Search:  {} → {}", s.service.bold(), s.url());
+        }
+        if let Some(f) = &self.foundry_conn {
+            println!(
+                "  Foundry: {}/{} → {}",
+                f.account.bold(),
+                f.project,
+                f.url()
+            );
         }
     }
 

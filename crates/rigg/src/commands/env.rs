@@ -64,13 +64,19 @@ fn print_env(env: &Environment, indent: &str) {
     println!("{indent}protected: {}", env.policy.protected);
     for s in env.search.as_slice() {
         let label = s.name.as_deref().unwrap_or("search");
-        println!("{indent}{label}: {} (Azure AI Search)", s.service);
+        println!(
+            "{indent}{label}: {} → {} (Azure AI Search)",
+            s.service,
+            s.url()
+        );
     }
     for f in env.foundry.as_slice() {
         let label = f.name.as_deref().unwrap_or("foundry");
         println!(
-            "{indent}{label}: {}/{} (Microsoft Foundry)",
-            f.account, f.project
+            "{indent}{label}: {}/{} → {} (Microsoft Foundry)",
+            f.account,
+            f.project,
+            f.url()
         );
     }
 }

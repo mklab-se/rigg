@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.4] - 2026-07-14
+
+### Added
+
+- **Cloud operations name their actual Azure targets** (#3). `push`, `pull`,
+  and `delete --remote` print a target banner under the header — service
+  names and the exact base URLs the clients request against:
+
+  ```
+  Push project 'my-rag' (env: prod, protected)
+    Search:  mklabsrch → https://mklabsrch.search.windows.net
+    Foundry: mklabaifndr/proj-default → https://mklabaifndr.services.ai.azure.com
+  ```
+
+  Protected environments are flagged inline in the push/delete headers.
+  `rigg env list` shows the same resolved URLs per connection. URL
+  resolution is single-sourced (`SearchConnection::url()` /
+  `FoundryConnection::url()`, also used by the HTTP clients), so the banner
+  can never disagree with where requests actually go.
+
 ## [1.2.3] - 2026-07-14
 
 ### Changed

@@ -223,6 +223,39 @@ async fn push_orders_dependencies_and_canonicalizes() {
 }
 
 #[tokio::test]
+async fn cloud_mutations_show_target_service_and_url() {
+    // Issue #3: push/pull/delete must name the actual Azure target (service
+    // and resolved base URL) so the user can verify where changes go.
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+
+    let banner = format!("Search:  mock → {}", server.uri());
+    rigg(ws.path())
+        .args(["push", "demo", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&banner));
+    rigg(ws.path())
+        .args(["pull", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&banner));
+}
+
+#[tokio::test]
 async fn push_dry_run_sends_nothing_and_prune_deletes() {
     let server = MockServer::start().await;
     mock_empty_lists(&server).await;

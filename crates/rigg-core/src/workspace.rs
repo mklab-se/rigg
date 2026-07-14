@@ -185,6 +185,17 @@ pub struct SearchConnection {
     pub preview_api_version: Option<String>,
 }
 
+impl SearchConnection {
+    /// Base URL requests go to: the `endpoint` override, or the public-cloud
+    /// default derived from the service name.
+    pub fn url(&self) -> String {
+        match &self.endpoint {
+            Some(e) => e.trim_end_matches('/').to_string(),
+            None => format!("https://{}.search.windows.net", self.service),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FoundryConnection {
@@ -205,6 +216,17 @@ pub struct FoundryConnection {
         skip_serializing_if = "Option::is_none"
     )]
     pub api_version: Option<String>,
+}
+
+impl FoundryConnection {
+    /// Base URL requests go to: the `endpoint` override, or the public-cloud
+    /// default derived from the account name.
+    pub fn url(&self) -> String {
+        match &self.endpoint {
+            Some(e) => e.trim_end_matches('/').to_string(),
+            None => format!("https://{}.services.ai.azure.com", self.account),
+        }
+    }
 }
 
 /// `project.yaml` — metadata only; the directory contents are the membership.

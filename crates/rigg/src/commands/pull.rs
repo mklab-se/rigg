@@ -80,6 +80,7 @@ async fn pull_project(
         project.name.bold(),
         env.name
     );
+    remote.print_targets();
 
     let snapshot = remote.snapshot().await?;
     let auto_created = registry::auto_created_by(&snapshot);

@@ -63,11 +63,17 @@ async fn push_project(
     let mut state = ProjectState::load(ws, &env.name, &project.name);
 
     println!(
-        "{} project '{}' (env: {})",
+        "{} project '{}' (env: {}{})",
         "Push".bold(),
         project.name.bold(),
-        env.name
+        env.name,
+        if env.protected() {
+            format!(", {}", "protected".yellow())
+        } else {
+            String::new()
+        }
     );
+    remote.print_targets();
 
     // Collect local resources.
     let local_files = store.list()?;

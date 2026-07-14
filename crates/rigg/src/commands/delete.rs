@@ -48,12 +48,18 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     }
 
     println!(
-        "{} the following resources of project '{}' from {} (env: {}):",
+        "{} the following resources of project '{}' from {} (env: {}{}):",
         "DELETING".red().bold(),
         project.name.bold(),
         "Azure".bold(),
-        env.name
+        env.name,
+        if env.protected() {
+            format!(", {}", "protected".yellow())
+        } else {
+            String::new()
+        }
     );
+    remote.print_targets();
     let order = graph::delete_order(&items)?;
     for r in &order {
         println!("  {} {}", "delete".red(), r);

@@ -48,11 +48,7 @@ impl AzureSearchClient {
         Ok(Self {
             http,
             auth,
-            base_url: conn
-                .endpoint
-                .clone()
-                .map(|e| e.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| format!("https://{}.search.windows.net", conn.service)),
+            base_url: conn.url(),
             api_version: conn
                 .api_version
                 .clone()
