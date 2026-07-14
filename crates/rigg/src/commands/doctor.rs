@@ -87,7 +87,7 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
                 COGNITIVE_ARM_API,
             ),
         };
-        let scope = edge.scope.clone().or_else(|| {
+        let mut scope = edge.scope.clone().or_else(|| {
             // Default scopes: model access → foundry account; KB retrieval → search service.
             if edge.target.contains("Foundry account") {
                 foundry_account_id.clone()
@@ -97,6 +97,22 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
                 None
             }
         });
+        // Targets naming an AI services account (skillset enrichment) are
+        // resolved by account name through ARM.
+        if scope.is_none() {
+            if let Some(account) = edge
+                .target
+                .strip_prefix("AI services account '")
+                .and_then(|s| s.strip_suffix('\''))
+            {
+                if let Ok(sc) = resolve_account_scope(&arm, account).await {
+                    scope = Some(format!(
+                        "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
+                        sc.subscription_id, sc.resource_group, sc.account
+                    ));
+                }
+            }
+        }
 
         if edge.kind == EdgeKind::Informational {
             println!("  {} {} — {}", "ⓘ".blue(), edge.role_name, edge.reason);

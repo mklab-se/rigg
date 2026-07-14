@@ -182,6 +182,24 @@ fn validate_project(
             }
             warn_missing_credentials(&value, &display);
         }
+
+        // skillset with a key-based AI services connection but no usable key
+        if r.kind == ResourceKind::Skillset {
+            if let Some(subdomain) =
+                crate::commands::credentials::skillset_missing_ai_services_key(&value)
+            {
+                let hint = match subdomain {
+                    Some(s) => format!("switch to AIServicesByIdentity (subdomainUrl: {s})"),
+                    None => "add an identity-based cognitiveServices connection \
+                             (AIServicesByIdentity + subdomainUrl)"
+                        .to_string(),
+                };
+                eprintln!(
+                    "{} [{display}] key-based cognitiveServices connection without a usable key — push will fail; {hint}",
+                    "warning:".yellow()
+                );
+            }
+        }
     }
     problems
 }

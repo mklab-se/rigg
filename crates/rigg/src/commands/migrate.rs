@@ -204,6 +204,7 @@ async fn in_place(
     println!("  {} {} (kind: searchIndex)", "wrote".cyan(), ks_ref);
 
     check_datasource_credentials(ctx, store, created).await?;
+    check_skillset_ai_services(ctx, store, created.get(&ResourceKind::Skillset)).await?;
 
     println!();
     println!(
@@ -317,6 +318,51 @@ async fn side_by_side(
     println!(
         "  4. delete {} and its files, then `rigg push --prune` to remove the old pipeline",
         old_ks_ref
+    );
+    Ok(())
+}
+
+/// The generated skillset's AI services key never leaves Azure either —
+/// offer the keyless identity-based connection (subdomain preserved).
+async fn check_skillset_ai_services(
+    ctx: &GlobalContext,
+    store: &Store<'_>,
+    ss_name: Option<&String>,
+) -> Result<()> {
+    let Some(ss_name) = ss_name else {
+        return Ok(());
+    };
+    let r = ResourceRef::new(ResourceKind::Skillset, ss_name.clone());
+    if store.locate(&r)?.is_none() {
+        return Ok(());
+    }
+    let mut doc = store.read(&r)?;
+    let Some(subdomain) = credentials::skillset_missing_ai_services_key(&doc) else {
+        return Ok(());
+    };
+    if let Some(subdomain) = subdomain {
+        if ctx.interactive()
+            && interactive::confirm_default_yes(
+                &format!(
+                    "Switch {r} to identity-based AI services access ('{subdomain}', no key on disk)?"
+                ),
+                ctx.no_color,
+            )?
+        {
+            credentials::set_ai_services_identity(&mut doc, &subdomain);
+            store.write(&r, &doc)?;
+            println!("  {} {} switched to AIServicesByIdentity", "✓".green(), r);
+            if let Some(account) = credentials::ai_services_account_name(&subdomain) {
+                credentials::print_ai_services_rbac_hint(account);
+            }
+            return Ok(());
+        }
+    }
+    println!(
+        "  {} {} has a key-based cognitiveServices connection without a usable key — \
+         push will offer the identity-based rewrite, or edit the file manually",
+        "!".yellow(),
+        r
     );
     Ok(())
 }

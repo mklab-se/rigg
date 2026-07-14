@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-07-14
+
+### Fixed
+
+- **Skillset AI services connections join the credential preflight.** A
+  copied/migrated skillset carries a key-based `cognitiveServices` connection
+  whose key Azure never returned (`"<redacted>"`) — pushing it failed with
+  `Provided key is not a valid key`. Push and the migrate wizard now detect
+  this before anything mutates and offer the keyless identity-based rewrite
+  (`AIServicesByIdentity`, subdomain preserved); non-interactive pushes exit 3
+  with nothing touched. `rigg validate` warns about it too.
+
+### Added
+
+- **`rigg auth doctor` sees more of the identity graph.** New edges derived
+  from workspace files: identity-based skillset AI services connections
+  (verifies/grants *Cognitive Services User* on the specific AI services
+  account, resolved by name through ARM), and custom Web API skills
+  (informational: AAD `authResourceId` app authorization, or a nudge toward
+  it when a skill has no AAD auth). Knowledge-base→model and
+  skillset/vectorizer→Azure OpenAI edges were already covered.
+
 ## [1.4.0] - 2026-07-14
 
 ### Added

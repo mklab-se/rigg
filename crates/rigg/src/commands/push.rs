@@ -282,6 +282,34 @@ async fn push_project(
         );
     }
 
+    // Same for skillsets: a key-based AI services connection whose key was
+    // redacted (Azure never returns keys) fails at PUT time. The identity-
+    // based rewrite needs only the subdomain already in the file.
+    let mut key_missing: Vec<(ResourceRef, Option<String>)> = Vec::new();
+    for item in &to_push {
+        if item.r.kind == ResourceKind::Skillset && !item.exists_remotely {
+            if let Some(subdomain) = credentials::skillset_missing_ai_services_key(&item.body) {
+                key_missing.push((item.r.clone(), subdomain));
+            }
+        }
+    }
+    for bundle in &replaces {
+        for (r, body) in &bundle.sub {
+            if r.kind == ResourceKind::Skillset {
+                if let Some(subdomain) = credentials::skillset_missing_ai_services_key(body) {
+                    key_missing.push((r.clone(), subdomain));
+                }
+            }
+        }
+    }
+    for (r, _) in &key_missing {
+        println!(
+            "  {} {} has a key-based cognitiveServices connection without a usable key — switch to identity-based (AIServicesByIdentity)",
+            "!".yellow(),
+            r
+        );
+    }
+
     if args.dry_run {
         println!("  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
@@ -332,6 +360,50 @@ async fn push_project(
                 "{} has no credentials.connectionString — set an identity-based connection \
                  (`ResourceId=/subscriptions/.../storageAccounts/<name>;`) in the file, or run \
                  `rigg push` interactively to auto-discover the storage account",
+                names.join(", ")
+            ))));
+        }
+    }
+    if !key_missing.is_empty() {
+        if ctx.interactive() {
+            let pending = key_missing.clone();
+            for (r, subdomain) in pending {
+                let Some(subdomain) = subdomain else {
+                    continue; // no subdomain in the file — cannot rewrite automatically
+                };
+                if interactive::confirm_default_yes(
+                    &format!(
+                        "Switch {r} to identity-based AI services access ('{subdomain}', no key on disk)?"
+                    ),
+                    ctx.no_color,
+                )? {
+                    let mut doc = store.read(&r)?;
+                    credentials::set_ai_services_identity(&mut doc, &subdomain);
+                    store.write(&r, &doc)?;
+                    if let Some(item) = to_push.iter_mut().find(|p| p.r == r) {
+                        credentials::set_ai_services_identity(&mut item.body, &subdomain);
+                    }
+                    for bundle in &mut replaces {
+                        if let Some((_, body)) = bundle.sub.iter_mut().find(|(sr, _)| *sr == r) {
+                            credentials::set_ai_services_identity(body, &subdomain);
+                        }
+                    }
+                    println!("  {} {} switched to AIServicesByIdentity", "✓".green(), r);
+                    if let Some(account) = credentials::ai_services_account_name(&subdomain) {
+                        credentials::print_ai_services_rbac_hint(account);
+                    }
+                    key_missing.retain(|(x, _)| x != &r);
+                }
+            }
+        }
+        if !key_missing.is_empty() {
+            let names: Vec<String> = key_missing.iter().map(|(r, _)| r.to_string()).collect();
+            return Err(anyhow!(CommandError::Validation(format!(
+                "{} has a key-based cognitiveServices connection without a usable key — \
+                 rigg never stores keys; use the identity-based form \
+                 (`{{\"@odata.type\": \"#Microsoft.Azure.Search.AIServicesByIdentity\", \
+                 \"subdomainUrl\": \"https://<account>.cognitiveservices.azure.com/\"}}`), \
+                 or run `rigg push` interactively to rewrite it automatically",
                 names.join(", ")
             ))));
         }

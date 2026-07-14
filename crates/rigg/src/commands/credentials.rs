@@ -136,3 +136,123 @@ fn manual_entry(plain: bool) -> Result<Option<String>> {
     let entered = entered.trim().to_string();
     Ok((!entered.is_empty()).then_some(entered))
 }
+
+/// A skillset whose `cognitiveServices` connection is key-based but carries
+/// no usable key (Azure never returns keys on GET, so copied definitions
+/// arrive with a null or `<redacted>` placeholder). Returns the subdomain
+/// URL when one is declared — the ingredient needed for the identity-based
+/// rewrite.
+pub fn skillset_missing_ai_services_key(doc: &Value) -> Option<Option<String>> {
+    let cs = doc.get("cognitiveServices")?.as_object()?;
+    let odata = cs.get("@odata.type").and_then(Value::as_str).unwrap_or("");
+    if !odata.ends_with("ByKey") {
+        return None;
+    }
+    let key = cs.get("key").and_then(Value::as_str).unwrap_or("");
+    if !key.trim().is_empty() && key != "<redacted>" {
+        return None; // a real key — validate rejects it elsewhere
+    }
+    Some(
+        cs.get("subdomainUrl")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    )
+}
+
+/// Rewrite a skillset's AI services connection to the keyless
+/// identity-based form (the search service's system-assigned managed
+/// identity authenticates; nothing secret on disk).
+pub fn set_ai_services_identity(doc: &mut Value, subdomain_url: &str) {
+    doc["cognitiveServices"] = serde_json::json!({
+        "@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity",
+        "subdomainUrl": subdomain_url,
+        "identity": null
+    });
+}
+
+/// The account name in an AI services subdomain URL
+/// (`https://<name>.cognitiveservices.azure.com/` → `<name>`).
+pub fn ai_services_account_name(subdomain_url: &str) -> Option<&str> {
+    subdomain_url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('.').next())
+        .filter(|s| !s.is_empty())
+}
+
+/// RBAC pointer for the identity-based AI services connection.
+pub fn print_ai_services_rbac_hint(account: &str) {
+    println!(
+        "  hint: the search service's managed identity needs 'Cognitive Services User' on AI services account '{account}' — run `rigg auth doctor --fix` to verify/grant"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn detects_key_based_ai_services_with_placeholder() {
+        let doc = json!({"name": "s", "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByKey",
+            "key": "<redacted>",
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }});
+        assert_eq!(
+            skillset_missing_ai_services_key(&doc),
+            Some(Some("https://acc.cognitiveservices.azure.com/".to_string()))
+        );
+    }
+
+    #[test]
+    fn ignores_identity_based_and_real_keys() {
+        let identity = json!({"name": "s", "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity",
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }});
+        assert_eq!(skillset_missing_ai_services_key(&identity), None);
+        let real = json!({"name": "s", "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByKey",
+            "key": "abc123",
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }});
+        assert_eq!(skillset_missing_ai_services_key(&real), None);
+        let none = json!({"name": "s", "skills": []});
+        assert_eq!(skillset_missing_ai_services_key(&none), None);
+    }
+
+    #[test]
+    fn rewrite_sets_identity_form() {
+        let mut doc = json!({"name": "s", "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByKey",
+            "key": null,
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }});
+        set_ai_services_identity(&mut doc, "https://acc.cognitiveservices.azure.com/");
+        assert_eq!(
+            doc["cognitiveServices"]["@odata.type"],
+            "#Microsoft.Azure.Search.AIServicesByIdentity"
+        );
+        assert!(doc["cognitiveServices"].get("key").is_none());
+    }
+
+    #[test]
+    fn account_name_from_subdomain() {
+        assert_eq!(
+            ai_services_account_name("https://mklabaisrvc.cognitiveservices.azure.com/"),
+            Some("mklabaisrvc")
+        );
+        assert_eq!(ai_services_account_name("nonsense"), None);
+    }
+
+    #[test]
+    fn missing_credentials_detection() {
+        assert!(missing_credentials(
+            &json!({"credentials": {"connectionString": null}})
+        ));
+        assert!(missing_credentials(&json!({"name": "x"})));
+        assert!(!missing_credentials(
+            &json!({"credentials": {"connectionString": "ResourceId=/x;"}})
+        ));
+    }
+}

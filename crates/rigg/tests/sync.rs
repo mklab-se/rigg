@@ -1893,3 +1893,41 @@ async fn push_replace_refuses_without_datasource_credentials_before_destroying()
         .count();
     assert_eq!(mutations, 0, "nothing may be unlinked or deleted");
 }
+
+#[tokio::test]
+async fn push_refuses_creating_skillset_with_redacted_ai_services_key() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/skillsets/nokey"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "nokey",
+        &json!({"name": "nokey", "skills": [], "cognitiveServices": {
+            "@odata.type": "#Microsoft.Azure.Search.AIServicesByKey",
+            "key": "<redacted>",
+            "subdomainUrl": "https://acc.cognitiveservices.azure.com/"
+        }}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("AIServicesByIdentity"));
+
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "must fail before any mutation");
+}

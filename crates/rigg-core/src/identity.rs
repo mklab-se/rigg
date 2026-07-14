@@ -115,15 +115,7 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
                         ),
                     ));
                 }
-                ResourceKind::Skillset if value.to_string().contains("AzureOpenAI") => {
-                    edges.push(IdentityEdge::rbac(
-                        Principal::SearchService,
-                        None,
-                        "Foundry account (model access)",
-                        roles::COGNITIVE_SERVICES_OPENAI_USER,
-                        format!("skillset '{}' calls Azure OpenAI", r.name),
-                    ));
-                }
+                ResourceKind::Skillset => skillset_edges(&r.name, &value, &mut edges),
                 ResourceKind::Index => {
                     let has_vectorizer = value
                         .get("vectorSearch")
@@ -176,6 +168,97 @@ pub fn identity_edges(ws: &Workspace, env: &str) -> Vec<IdentityEdge> {
         }
     }
     dedup(edges)
+}
+
+/// Skillset edges: Azure OpenAI skills need model access on the Foundry
+/// account; an identity-based `cognitiveServices` connection
+/// (AIServicesByIdentity) needs 'Cognitive Services User' on that specific
+/// AI services account (named by its subdomain URL).
+fn skillset_edges(name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
+    if value.to_string().contains("AzureOpenAI") {
+        edges.push(IdentityEdge::rbac(
+            Principal::SearchService,
+            None,
+            "Foundry account (model access)",
+            roles::COGNITIVE_SERVICES_OPENAI_USER,
+            format!("skillset '{name}' calls Azure OpenAI"),
+        ));
+    }
+    // Custom Web API skills: AAD auth via `authResourceId` means the search
+    // identity must be authorized on the target app — app-level, not ARM
+    // RBAC, so informational.
+    if let Some(skills) = value.get("skills").and_then(Value::as_array) {
+        for skill in skills {
+            let is_webapi = skill
+                .get("@odata.type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.ends_with("WebApiSkill"));
+            if !is_webapi {
+                continue;
+            }
+            let uri = skill.get("uri").and_then(Value::as_str).unwrap_or("?");
+            if let Some(auth) = skill.get("authResourceId").and_then(Value::as_str) {
+                if !auth.trim().is_empty() {
+                    edges.push(IdentityEdge {
+                        principal: Principal::SearchService,
+                        scope: None,
+                        target: format!("custom Web API {uri}"),
+                        role_id: String::new(),
+                        role_name: "app authorization (AAD)".into(),
+                        kind: EdgeKind::Informational,
+                        reason: format!(
+                            "skillset '{name}' calls a custom Web API with AAD auth \
+                             (authResourceId: {auth}) — the search identity must be \
+                             assigned/permitted on that app registration"
+                        ),
+                    });
+                }
+            } else {
+                edges.push(IdentityEdge {
+                    principal: Principal::SearchService,
+                    scope: None,
+                    target: format!("custom Web API {uri}"),
+                    role_id: String::new(),
+                    role_name: "endpoint authorization".into(),
+                    kind: EdgeKind::Informational,
+                    reason: format!(
+                        "skillset '{name}' calls a custom Web API without AAD auth \
+                         (no authResourceId) — the endpoint must accept the call \
+                         (function key in httpHeaders, or make it identity-based \
+                         with authResourceId)"
+                    ),
+                });
+            }
+        }
+    }
+    let cs = value.get("cognitiveServices");
+    let identity_based = cs
+        .and_then(|c| c.get("@odata.type"))
+        .and_then(Value::as_str)
+        .is_some_and(|t| t.ends_with("AIServicesByIdentity"));
+    if identity_based {
+        if let Some(account) = cs
+            .and_then(|c| c.get("subdomainUrl"))
+            .and_then(Value::as_str)
+            .and_then(ai_services_account_from_subdomain)
+        {
+            edges.push(IdentityEdge::rbac(
+                Principal::SearchService,
+                None,
+                format!("AI services account '{account}'"),
+                roles::COGNITIVE_SERVICES_USER,
+                format!("skillset '{name}' uses identity-based AI services enrichment"),
+            ));
+        }
+    }
+}
+
+/// `https://<name>.cognitiveservices.azure.com/` → `<name>`.
+fn ai_services_account_from_subdomain(url: &str) -> Option<String> {
+    url.strip_prefix("https://")
+        .and_then(|rest| rest.split('.').next())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn datasource_edges(name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
@@ -358,6 +441,54 @@ mod tests {
             .find(|e| e.role_name == "Search Index Data Reader")
             .unwrap();
         assert_eq!(grounding.principal, Principal::FoundryProject);
+    }
+
+    #[test]
+    fn skillset_identity_ai_services_yields_account_edge() {
+        let (_tmp, ws) = ws_with(&[(
+            ResourceKind::Skillset,
+            "ss",
+            json!({"name": "ss", "skills": [], "cognitiveServices": {
+                "@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity",
+                "subdomainUrl": "https://myaisvc.cognitiveservices.azure.com/"
+            }}),
+        )]);
+        let edges = identity_edges(&ws, "dev");
+        let edge = edges
+            .iter()
+            .find(|e| e.target == "AI services account 'myaisvc'")
+            .expect("ai services edge");
+        assert_eq!(edge.kind, EdgeKind::Rbac);
+        assert_eq!(edge.role_name, "Cognitive Services User");
+        assert_eq!(edge.principal, Principal::SearchService);
+    }
+
+    #[test]
+    fn skillset_webapi_edges_are_informational() {
+        let (_tmp, ws) = ws_with(&[(
+            ResourceKind::Skillset,
+            "ss",
+            json!({"name": "ss", "skills": [
+                {"@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                 "uri": "https://fn.azurewebsites.net/api/enrich",
+                 "authResourceId": "api://12345"},
+                {"@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                 "uri": "https://fn2.azurewebsites.net/api/other"}
+            ]}),
+        )]);
+        let edges = identity_edges(&ws, "dev");
+        let webapi: Vec<_> = edges
+            .iter()
+            .filter(|e| e.target.starts_with("custom Web API"))
+            .collect();
+        assert_eq!(webapi.len(), 2);
+        assert!(webapi.iter().all(|e| e.kind == EdgeKind::Informational));
+        assert!(
+            webapi
+                .iter()
+                .any(|e| e.reason.contains("authResourceId: api://12345"))
+        );
+        assert!(webapi.iter().any(|e| e.reason.contains("without AAD auth")));
     }
 
     #[test]
