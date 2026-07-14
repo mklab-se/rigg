@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-14
+
+### Added
+
+- **Data-source connection auto-discovery (ARM).** Rigg now figures out
+  identity-based connections instead of asking you to hand-type an ARM
+  resource id: it looks up which storage account holds the data source's
+  blob container across every subscription your Azure CLI login can see,
+  and writes the keyless `ResourceId=<account-id>;` reference (confirm on a
+  single match, pick-list on several, manual entry as fallback). No key is
+  ever fetched or stored. Wired into:
+  - `rigg migrate knowledge-source` — the credential step of the wizard;
+  - `rigg push` — interactively offered for any credential-less data source
+    about to be created (see below).
+  After a connection is set, rigg reminds you the search service's managed
+  identity needs *Storage Blob Data Reader* on the account —
+  `rigg auth doctor --fix` verifies/grants it.
+
+### Fixed
+
+- **Push refuses to destroy before it can rebuild.** A data source about to
+  be *created* (plain create, or the re-create half of a knowledge-source
+  replace) with no `credentials.connectionString` previously failed at PUT
+  time — for a replace, *after* the old knowledge source and its pipeline
+  were already deleted. Push now preflights this before any remote mutation:
+  interactively it offers the ARM auto-discovery above; non-interactively it
+  exits 3 (validation) with the file named and nothing touched. Updates that
+  omit credentials are still allowed (the service keeps the existing secret).
+
 ## [1.3.0] - 2026-07-14
 
 ### Added

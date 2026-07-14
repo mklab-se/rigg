@@ -21,6 +21,7 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use rigg_core::{graph, migrate, registry};
 
 use crate::cli::PushArgs;
+use crate::commands::credentials;
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
     CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
@@ -252,9 +253,88 @@ async fn push_project(
         }
     }
 
+    // Credential preflight: a data source about to be CREATED (plain create
+    // or replace re-create) without a usable connection fails at PUT time —
+    // for a replace, AFTER the old pipeline was already destroyed. Detect it
+    // here, before anything mutates. Updates that omit credentials are legal
+    // (the service keeps the existing secret), so only creations are gated.
+    let mut cred_missing: Vec<ResourceRef> = Vec::new();
+    for item in &to_push {
+        if item.r.kind == ResourceKind::DataSource
+            && !item.exists_remotely
+            && credentials::missing_credentials(&item.body)
+        {
+            cred_missing.push(item.r.clone());
+        }
+    }
+    for bundle in &replaces {
+        for (r, body) in &bundle.sub {
+            if r.kind == ResourceKind::DataSource && credentials::missing_credentials(body) {
+                cred_missing.push(r.clone());
+            }
+        }
+    }
+    for r in &cred_missing {
+        println!(
+            "  {} {} has no credentials.connectionString — a created data source needs a connection (identity-based ResourceId=...)",
+            "!".yellow(),
+            r
+        );
+    }
+
     if args.dry_run {
         println!("  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
+    }
+
+    // Resolve missing connections before any gate: interactively, discover
+    // the storage account by container via ARM (the user is logged in with
+    // Azure CLI — rigg figures it out instead of asking for an id); anything
+    // still unresolved refuses the push before a single remote call.
+    if !cred_missing.is_empty() {
+        if ctx.interactive() {
+            let pending: Vec<ResourceRef> = cred_missing.clone();
+            for r in pending {
+                let mut doc = store.read(&r)?;
+                let container = credentials::container_name(&doc).map(str::to_string);
+                let found = credentials::discover_connection_interactive(
+                    &r.to_string(),
+                    container.as_deref(),
+                    ctx.no_color,
+                )
+                .await?;
+                if let Some(conn) = found {
+                    credentials::set_connection(&mut doc, &conn);
+                    store.write(&r, &doc)?;
+                    if let Some(item) = to_push.iter_mut().find(|p| p.r == r) {
+                        credentials::set_connection(&mut item.body, &conn);
+                    }
+                    for bundle in &mut replaces {
+                        if let Some((_, body)) = bundle.sub.iter_mut().find(|(sr, _)| *sr == r) {
+                            credentials::set_connection(body, &conn);
+                        }
+                    }
+                    println!(
+                        "  {} {} connection set (identity-based, no key on disk)",
+                        "✓".green(),
+                        r
+                    );
+                    if let Some(account) = conn.strip_prefix("ResourceId=") {
+                        credentials::print_rbac_hint(account.trim_end_matches(';'));
+                    }
+                    cred_missing.retain(|x| x != &r);
+                }
+            }
+        }
+        if !cred_missing.is_empty() {
+            let names: Vec<String> = cred_missing.iter().map(|r| r.to_string()).collect();
+            return Err(anyhow!(CommandError::Validation(format!(
+                "{} has no credentials.connectionString — set an identity-based connection \
+                 (`ResourceId=/subscriptions/.../storageAccounts/<name>;`) in the file, or run \
+                 `rigg push` interactively to auto-discover the storage account",
+                names.join(", ")
+            ))));
+        }
     }
 
     // Protected-env gate: fires before any mutating call (creates/updates

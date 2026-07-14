@@ -1822,3 +1822,74 @@ async fn diff_notes_immutable_kind_change_as_replace() {
         .stdout(predicate::str::contains("'kind' is immutable"))
         .stdout(predicate::str::contains("REPLACE"));
 }
+
+#[tokio::test]
+async fn push_refuses_creating_datasource_without_credentials() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/nocreds"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "data-sources",
+        "nocreds",
+        &json!({"name": "nocreds", "type": "azureblob",
+                "credentials": {"connectionString": null},
+                "container": {"name": "docs"}}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("no credentials.connectionString"));
+
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "must fail before any mutation");
+}
+
+#[tokio::test]
+async fn push_replace_refuses_without_datasource_credentials_before_destroying() {
+    let server = MockServer::start().await;
+    mount_blob_ks(&server, "test-ks").await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_migrated_files(ws.path(), "test-ks");
+    // strip the credentials from the migrated data source
+    write_resource(
+        ws.path(),
+        "data-sources",
+        "test-ks-datasource",
+        &json!({"name": "test-ks-datasource", "type": "azureblob",
+                "credentials": {"connectionString": null},
+                "container": {"name": "docs"}}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes", "--allow-replace"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("no credentials.connectionString"));
+
+    // Crucially: the old knowledge source and its pipeline are untouched.
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "nothing may be unlinked or deleted");
+}

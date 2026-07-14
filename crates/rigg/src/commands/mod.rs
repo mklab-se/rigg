@@ -8,6 +8,7 @@ pub mod ci;
 pub mod completion;
 pub mod concepts;
 pub mod copy;
+pub mod credentials;
 pub mod delete;
 pub mod describe;
 pub mod dev;

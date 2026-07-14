@@ -642,6 +642,106 @@ impl ArmClient {
         Ok(result.value)
     }
 
+    /// List storage accounts across a whole subscription.
+    pub async fn list_storage_accounts_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<StorageAccount>, ClientError> {
+        let url = format!(
+            "{}/subscriptions/{}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01",
+            ARM_BASE_URL, subscription_id
+        );
+        debug!("Listing storage accounts (subscription-wide): {}", url);
+
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+
+        let result: ArmListResponse<StorageAccount> = response.json().await?;
+        Ok(result.value)
+    }
+
+    /// Whether a storage account contains a blob container with this name
+    /// (checked via ARM with the caller's CLI token — no data-plane access
+    /// or account keys involved).
+    pub async fn storage_account_has_container(
+        &self,
+        account_id: &str,
+        container: &str,
+    ) -> Result<bool, ClientError> {
+        let url = format!(
+            "{ARM_BASE_URL}{account_id}/blobServices/default/containers/{container}?api-version=2023-05-01"
+        );
+        debug!("Checking container: {}", url);
+
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            status => {
+                let body = response.text().await?;
+                Err(ClientError::from_response(status, &body))
+            }
+        }
+    }
+
+    /// Find every storage account (across all visible subscriptions) that
+    /// holds a blob container named `container`. Used to auto-construct
+    /// identity-based `ResourceId=` data-source connections — the user is
+    /// already logged in via Azure CLI, so rigg discovers instead of asking.
+    /// Accounts that fail the container check (e.g. insufficient RBAC on an
+    /// unrelated subscription) are skipped, not fatal.
+    pub async fn find_storage_accounts_with_container(
+        &self,
+        container: &str,
+    ) -> Result<Vec<StorageAccount>, ClientError> {
+        let mut matches = Vec::new();
+        for sub in self.list_subscriptions().await? {
+            let accounts = match self
+                .list_storage_accounts_subscription(&sub.subscription_id)
+                .await
+            {
+                Ok(a) => a,
+                Err(e) => {
+                    debug!(
+                        "skipping subscription {} ({}): {e}",
+                        sub.display_name, sub.subscription_id
+                    );
+                    continue;
+                }
+            };
+            for account in accounts {
+                if account.id.is_empty() {
+                    continue;
+                }
+                match self
+                    .storage_account_has_container(&account.id, container)
+                    .await
+                {
+                    Ok(true) => matches.push(account),
+                    Ok(false) => {}
+                    Err(e) => debug!("skipping account {} ({e})", account.name),
+                }
+            }
+        }
+        Ok(matches)
+    }
+
     /// Get the primary access key for a storage account.
     pub async fn get_storage_account_key(
         &self,

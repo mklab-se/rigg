@@ -18,6 +18,7 @@ use rigg_core::resources::{ResourceKind, ResourceRef, validate_resource_name};
 use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
 use crate::cli::{MigrateCommands, MigrateKsArgs};
+use crate::commands::credentials;
 use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
     CommandError, GlobalContext, interactive, load_workspace, resolve_env, select_projects,
@@ -116,7 +117,8 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
                 &index_name,
                 &created,
                 &sub_docs,
-            )?;
+            )
+            .await?;
             state.save(&ws, &env.name, &project.name)?;
         }
         Mode::SideBySide(new_name) => {
@@ -168,9 +170,9 @@ fn resolve_mode(ctx: &GlobalContext, args: &MigrateKsArgs) -> Result<Mode> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn in_place(
+async fn in_place(
     ctx: &GlobalContext,
-    store: &Store,
+    store: &Store<'_>,
     state: &mut ProjectState,
     ks_ref: &ResourceRef,
     remote_ks: &Value,
@@ -201,7 +203,7 @@ fn in_place(
     store.write(ks_ref, &new_ks)?;
     println!("  {} {} (kind: searchIndex)", "wrote".cyan(), ks_ref);
 
-    check_datasource_credentials(ctx, store, created)?;
+    check_datasource_credentials(ctx, store, created).await?;
 
     println!();
     println!(
@@ -302,7 +304,7 @@ async fn side_by_side(
     store.write(&new_ks_ref, &new_ks)?;
     println!("  {} {} (kind: searchIndex)", "wrote".cyan(), new_ks_ref);
 
-    check_datasource_credentials_named(ctx, store, names.get(&ResourceKind::DataSource))?;
+    check_datasource_credentials_named(ctx, store, names.get(&ResourceKind::DataSource)).await?;
 
     println!();
     println!("Next steps:");
@@ -320,19 +322,19 @@ async fn side_by_side(
 }
 
 /// The generated data source's credentials never leave Azure (write-only) —
-/// the copied file has none. Offer an identity-based connection so the
-/// recreated data source works; otherwise warn.
-fn check_datasource_credentials(
+/// the copied file has none. Discover the storage account by container via
+/// ARM and set an identity-based connection; otherwise warn.
+async fn check_datasource_credentials(
     ctx: &GlobalContext,
-    store: &Store,
+    store: &Store<'_>,
     created: &BTreeMap<ResourceKind, String>,
 ) -> Result<()> {
-    check_datasource_credentials_named(ctx, store, created.get(&ResourceKind::DataSource))
+    check_datasource_credentials_named(ctx, store, created.get(&ResourceKind::DataSource)).await
 }
 
-fn check_datasource_credentials_named(
+async fn check_datasource_credentials_named(
     ctx: &GlobalContext,
-    store: &Store,
+    store: &Store<'_>,
     ds_name: Option<&String>,
 ) -> Result<()> {
     let Some(ds_name) = ds_name else {
@@ -353,23 +355,32 @@ fn check_datasource_credentials_named(
     if ctx.interactive() {
         println!();
         println!("The data source's credentials are not stored in Azure's GET responses, so the");
-        println!("copied file has none. Identity-based access is recommended (no keys on disk):");
-        let entered = interactive::text_with_default(
-            "Storage connection (ResourceId=/subscriptions/.../storageAccounts/<name>;) — empty to skip:",
-            "",
+        println!("copied file has none. Identity-based access is recommended (no keys on disk).");
+        let container = credentials::container_name(&doc).map(str::to_string);
+        if let Some(conn) = credentials::discover_connection_interactive(
+            &r.to_string(),
+            container.as_deref(),
             ctx.no_color,
-        )?;
-        let entered = entered.trim().to_string();
-        if !entered.is_empty() {
-            doc["credentials"] = serde_json::json!({ "connectionString": entered });
+        )
+        .await?
+        {
+            credentials::set_connection(&mut doc, &conn);
             store.write(&r, &doc)?;
-            println!("  {} updated {} credentials", "✓".green(), r);
+            println!(
+                "  {} {} connection set (identity-based, no key on disk)",
+                "✓".green(),
+                r
+            );
+            if let Some(account) = conn.strip_prefix("ResourceId=") {
+                credentials::print_rbac_hint(account.trim_end_matches(';'));
+            }
             return Ok(());
         }
     }
     println!(
         "  {} {} has no usable credentials — set credentials.connectionString \
-         (identity-based `ResourceId=...`) before pushing",
+         (identity-based `ResourceId=...`) before pushing, or run `rigg push` \
+         interactively to auto-discover",
         "!".yellow(),
         r
     );
