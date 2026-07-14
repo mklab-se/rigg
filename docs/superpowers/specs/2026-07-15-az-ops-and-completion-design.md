@@ -63,8 +63,9 @@ rigg az agent ask <name> <prompt>
   fields (default: all retrievable fields, long strings truncated), total
   count. `--top` default 5.
 - `index stats`: document count + storage size (human units).
-- `kb ask`: the answer text, then a numbered source-reference list
-  (document titles/ids as returned by the retrieval response).
+- `kb ask`: the retrieved grounding text (extractive on the stable API),
+  then a numbered source-reference list (title, docKey/url, reranker
+  score).
 - `agent ask`: the agent's reply text.
 
 ### Safety
@@ -86,18 +87,24 @@ Search data plane (`client.rs`, api-version per registry channel):
 - `GET  /indexers/{name}/status`
 - `GET  /indexes/{name}/stats`
 - `POST /indexes/{name}/docs/search` — body `{search, top, filter, select, count: true}`
-- Knowledge base retrieve: the agentic retrieval endpoint on
-  `/knowledgebases/{name}` — exact path/body verified against the pinned
-  api-version's REST reference during implementation (docs list it as the
-  `retrieve` action; request carries the user prompt as messages, response
-  carries an answer/response plus references).
+- Knowledge base retrieve (contract verified against the 2026-04-01 REST
+  reference): `POST /knowledgebases('{name}')/retrieve` with body
+  `{"intents": [{"type": "semantic", "search": "<prompt>"}],
+  "includeActivity": true}`. Note: the stable API is extractive — the
+  response carries grounding content (`response[].content[].text`) plus
+  `references[]` (id, docKey/url, rerankerScore, sourceData.title/content)
+  and `activity[]`; synthesized answers are preview-only. `kb ask` renders
+  the grounding text followed by a numbered reference list. HTTP 206 =
+  partial (some sources errored) — rendered with a warning, exit 0.
 
 Foundry data plane (`foundry.rs`): agent invocation via the v1 responses
-API for a single-shot prompt against a named agent; exact contract verified
-against the Foundry v1 reference during implementation.
+API — `POST {project_endpoint}/openai/v1/responses` with body
+`{"agent_reference": {"name": "<agent>", "type": "agent_reference"},
+"input": "<prompt>"}`; the reply text is extracted from the OpenAI-shaped
+response (`output[] → content[] → output_text`).
 
-`FoundryConnection` gains an `endpoint:` override (like `SearchConnection`
-already has) if it lacks one, so foundry ops are wiremock-testable.
+`FoundryConnection` already has an `endpoint:` override, so foundry ops are
+wiremock-testable.
 
 The `Remote` façade gains thin wrappers for these ops (search-domain ones
 generic over name; kb/agent specific).
