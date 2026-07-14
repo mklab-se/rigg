@@ -341,7 +341,12 @@ async fn check_skillset_ai_services(
         return Ok(());
     };
     if let Some(subdomain) = subdomain {
-        if ctx.interactive()
+        let resolved = if ctx.interactive() {
+            credentials::resolve_ai_services_billing_target(&subdomain, ctx.no_color).await?
+        } else {
+            None
+        };
+        if let Some(subdomain) = resolved
             && interactive::confirm_default_yes(
                 &format!(
                     "Switch {r} to identity-based AI services access ('{subdomain}', no key on disk)?"

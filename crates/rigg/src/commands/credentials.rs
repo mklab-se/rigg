@@ -165,9 +165,109 @@ pub fn skillset_missing_ai_services_key(doc: &Value) -> Option<Option<String>> {
 pub fn set_ai_services_identity(doc: &mut Value, subdomain_url: &str) {
     doc["cognitiveServices"] = serde_json::json!({
         "@odata.type": "#Microsoft.Azure.Search.AIServicesByIdentity",
-        "subdomainUrl": subdomain_url,
+        "subdomainUrl": subdomain_url.trim_end_matches('/'),
         "identity": null
     });
+}
+
+/// Resolve WHERE a skillset's keyless billing should point. Keyless
+/// (`AIServicesByIdentity`) billing requires a Foundry resource (ARM kind
+/// `AIServices`); legacy `CognitiveServices`-kind accounts only support
+/// key-based billing, and an identity connection to one fails with
+/// "Unable to connect to AI Services using managed identity". So: keep the
+/// current subdomain when its account is Foundry-kind, otherwise discover
+/// the Foundry accounts the login can see and offer those. Falls back to
+/// the current subdomain (with a warning) when ARM is unavailable.
+pub async fn resolve_ai_services_billing_target(
+    current_subdomain: &str,
+    plain: bool,
+) -> Result<Option<String>> {
+    let normalized = current_subdomain.trim_end_matches('/').to_string();
+    let Some(account_name) = ai_services_account_name(&normalized).map(str::to_string) else {
+        return Ok(Some(normalized));
+    };
+    let Ok(arm) = ArmClient::new() else {
+        println!(
+            "  {} cannot verify account kind (no ARM access) — keeping '{account_name}'",
+            "!".yellow()
+        );
+        return Ok(Some(normalized));
+    };
+    match arm.find_cognitive_account(&account_name).await {
+        Ok(acct) if acct.kind.eq_ignore_ascii_case("AIServices") => Ok(Some(normalized)),
+        Ok(acct) => {
+            println!(
+                "  {} '{}' is a legacy Cognitive Services account (kind: {}) — keyless \
+                 identity-based billing requires a Foundry (AI Services) resource",
+                "!".yellow(),
+                acct.name,
+                acct.kind
+            );
+            offer_foundry_accounts(&arm, plain).await
+        }
+        Err(_) => {
+            println!(
+                "  {} account '{account_name}' not found via ARM — keeping it (verify manually)",
+                "!".yellow()
+            );
+            Ok(Some(normalized))
+        }
+    }
+}
+
+async fn offer_foundry_accounts(arm: &ArmClient, plain: bool) -> Result<Option<String>> {
+    let endpoint_of = |a: &rigg_client::arm::AiServicesAccount| -> String {
+        a.properties
+            .endpoint
+            .as_deref()
+            .map(|e| e.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| format!("https://{}.cognitiveservices.azure.com", a.name))
+    };
+    let accounts = arm.all_foundry_accounts().await.unwrap_or_default();
+    match accounts.as_slice() {
+        [] => {
+            println!(
+                "  {} no Foundry (AI Services) resource visible to your login — create one, or keep key-based billing",
+                "!".yellow()
+            );
+            Ok(None)
+        }
+        [only] => {
+            let endpoint = endpoint_of(only);
+            if interactive::confirm_default_yes(
+                &format!(
+                    "Bill skillset enrichment through '{}' ({endpoint})?",
+                    only.name
+                ),
+                plain,
+            )? {
+                Ok(Some(endpoint))
+            } else {
+                Ok(None)
+            }
+        }
+        many => {
+            const SKIP: &str = "skip (keep the file as is)";
+            let mut options: Vec<String> = many
+                .iter()
+                .map(|a| format!("{} — {}", a.name, endpoint_of(a)))
+                .collect();
+            options.push(SKIP.to_string());
+            let choice = interactive::select(
+                "Which Foundry resource should billing go through?",
+                options,
+                plain,
+            )?;
+            if choice == SKIP {
+                return Ok(None);
+            }
+            let acct = many
+                .iter()
+                .find(|a| choice.starts_with(&a.name))
+                .expect("choice derived from list");
+            Ok(Some(endpoint_of(acct)))
+        }
+    }
 }
 
 /// The account name in an AI services subdomain URL

@@ -373,6 +373,14 @@ async fn push_project(
                 let Some(subdomain) = subdomain else {
                     continue; // no subdomain in the file — cannot rewrite automatically
                 };
+                // Keyless billing only works against Foundry-kind resources;
+                // verify (and if needed re-target) before offering the switch.
+                let Some(subdomain) =
+                    credentials::resolve_ai_services_billing_target(&subdomain, ctx.no_color)
+                        .await?
+                else {
+                    continue;
+                };
                 if interactive::confirm_default_yes(
                     &format!(
                         "Switch {r} to identity-based AI services access ('{subdomain}', no key on disk)?"

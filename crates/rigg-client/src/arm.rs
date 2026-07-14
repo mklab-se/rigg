@@ -579,25 +579,20 @@ impl ArmClient {
     /// Foundry discovery and filters to kind AIServices), this covers e.g.
     /// the plain CognitiveServices accounts skillsets use for enrichment.
     pub async fn find_cognitive_account_id(&self, name: &str) -> Result<String, ClientError> {
+        self.find_cognitive_account(name).await.map(|a| a.id)
+    }
+
+    /// Find ANY Microsoft.CognitiveServices account by name (full document,
+    /// including its `kind` — needed to tell Foundry/AIServices resources
+    /// apart from legacy CognitiveServices accounts).
+    pub async fn find_cognitive_account(
+        &self,
+        name: &str,
+    ) -> Result<AiServicesAccount, ClientError> {
         for sub in self.list_subscriptions().await? {
-            let url = format!(
-                "{}/subscriptions/{}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01",
-                ARM_BASE_URL, sub.subscription_id
-            );
-            let response = self
-                .http
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", self.token))
-                .send()
-                .await?;
-            let status = response.status();
-            if !status.is_success() {
-                continue; // no access to this subscription — keep looking
-            }
-            let result: ArmListResponse<AiServicesAccount> = response.json().await?;
-            for acct in result.value {
+            for acct in self.list_cognitive_accounts(&sub.subscription_id).await? {
                 if acct.name.eq_ignore_ascii_case(name) && !acct.id.is_empty() {
-                    return Ok(acct.id);
+                    return Ok(acct);
                 }
             }
         }
@@ -605,6 +600,44 @@ impl ArmClient {
             kind: "Cognitive Services account".to_string(),
             name: name.to_string(),
         })
+    }
+
+    /// List every Microsoft.CognitiveServices account in a subscription
+    /// (any kind). Subscriptions the caller cannot read yield an empty list.
+    pub async fn list_cognitive_accounts(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<AiServicesAccount>, ClientError> {
+        let url = format!(
+            "{}/subscriptions/{}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01",
+            ARM_BASE_URL, subscription_id
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+        let result: ArmListResponse<AiServicesAccount> = response.json().await?;
+        Ok(result.value)
+    }
+
+    /// Every kind=AIServices (Foundry) account visible to the caller,
+    /// across all subscriptions.
+    pub async fn all_foundry_accounts(&self) -> Result<Vec<AiServicesAccount>, ClientError> {
+        let mut out = Vec::new();
+        for sub in self.list_subscriptions().await? {
+            out.extend(
+                self.list_cognitive_accounts(&sub.subscription_id)
+                    .await?
+                    .into_iter()
+                    .filter(|a| a.kind.eq_ignore_ascii_case("AIServices")),
+            );
+        }
+        Ok(out)
     }
 
     /// List Microsoft Foundry projects under a specific AI Services account.
