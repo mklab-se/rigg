@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-07-14
+
+### Fixed
+
+- **Credential-only file writes were silently dropped.** `Store::write`'s
+  no-op detection uses the semantic comparison, which deliberately excludes
+  write-only fields (the server never echoes them) — so a write whose only
+  change was a new `credentials.connectionString` was skipped as "no
+  change". The migrate wizard's and push's credential fixups applied the
+  connection to Azure but never persisted it to the file, leaving validate,
+  diff, and `auth doctor` blind to it. Write-only fields are now compared
+  separately when deciding whether a write is a no-op.
+
 ## [1.4.1] - 2026-07-14
 
 ### Fixed

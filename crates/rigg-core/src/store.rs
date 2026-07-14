@@ -316,7 +316,12 @@ impl<'w> Store<'w> {
             if let Ok(existing) = self.read_path(&path) {
                 carry_over_x_rigg(&existing, &mut normalized);
                 carry_over_write_only(r.kind, &existing, &mut normalized);
-                if crate::normalize::semantic_eq(r.kind, &existing, &normalized) {
+                // semantic_eq excludes write-only fields (the server never
+                // echoes them) — compare them separately so a credentials
+                // change alone still lands on disk.
+                if crate::normalize::semantic_eq(r.kind, &existing, &normalized)
+                    && write_only_eq(r.kind, &existing, &normalized)
+                {
                     return Ok(false);
                 }
             }
@@ -379,7 +384,9 @@ impl<'w> Store<'w> {
             }
             carry_over_x_rigg(&existing, &mut normalized);
             carry_over_write_only(kind, &existing, &mut normalized);
-            if crate::normalize::semantic_eq(kind, &existing, &normalized) {
+            if crate::normalize::semantic_eq(kind, &existing, &normalized)
+                && write_only_eq(kind, &existing, &normalized)
+            {
                 return Ok(false);
             }
         }
@@ -448,6 +455,22 @@ fn physical_name(path: &Path, fallback_stem: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| fallback_stem.to_string()))
+}
+
+/// Whether two documents agree on every write-only field. `semantic_eq`
+/// excludes these fields (the server never echoes them, so including them
+/// would read every canonicalization as drift) — but a LOCAL write that
+/// only changes a credential must still reach the disk.
+fn write_only_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
+    fn values_at(doc: &Value, spec: &str) -> Vec<Value> {
+        let mut out = Vec::new();
+        crate::registry::collect_path(doc, spec, &mut |v| out.push(v.clone()));
+        out
+    }
+    crate::registry::meta(kind)
+        .write_only_fields
+        .iter()
+        .all(|spec| values_at(a, spec) == values_at(b, spec))
 }
 
 /// Preserve write-only fields (server never echoes them) from the existing
@@ -1218,6 +1241,35 @@ mod tests {
             back.baselines.get("agents/new"),
             Some(Baseline::Doc(_))
         ));
+    }
+
+    #[test]
+    fn credential_only_change_still_writes() {
+        // Regression: semantic_eq excludes write-only fields, so a write
+        // whose ONLY change is a new credentials.connectionString used to be
+        // skipped as "no change" — the migrate/push credential fixups then
+        // never landed on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let r = ResourceRef::new(ResourceKind::DataSource, "ds");
+        let without = json!({
+            "name": "ds", "type": "azureblob",
+            "credentials": {"connectionString": null},
+            "container": {"name": "c"}
+        });
+        store.write(&r, &without).unwrap();
+        let mut with = without.clone();
+        with["credentials"]["connectionString"] = json!("ResourceId=/subscriptions/s/x;");
+        assert!(
+            store.write(&r, &with).unwrap(),
+            "credential change must write"
+        );
+        let read = store.read(&r).unwrap();
+        assert_eq!(
+            read["credentials"]["connectionString"],
+            json!("ResourceId=/subscriptions/s/x;")
+        );
     }
 
     #[test]
