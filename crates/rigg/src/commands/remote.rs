@@ -183,6 +183,38 @@ impl Remote {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Runtime operations (rigg az)
+    // ------------------------------------------------------------------
+
+    pub async fn indexer_run(&self, name: &str) -> Result<()> {
+        Ok(self.search().await?.indexer_run(name).await?)
+    }
+
+    pub async fn indexer_reset(&self, name: &str) -> Result<()> {
+        Ok(self.search().await?.indexer_reset(name).await?)
+    }
+
+    pub async fn indexer_status(&self, name: &str) -> Result<Value> {
+        Ok(self.search().await?.indexer_status(name).await?)
+    }
+
+    pub async fn index_stats(&self, name: &str) -> Result<Value> {
+        Ok(self.search().await?.index_stats(name).await?)
+    }
+
+    pub async fn search_docs(&self, index: &str, body: &Value) -> Result<Value> {
+        Ok(self.search().await?.search_docs(index, body).await?)
+    }
+
+    pub async fn kb_retrieve(&self, kb: &str, body: &Value) -> Result<Value> {
+        Ok(self.search().await?.kb_retrieve(kb, body).await?)
+    }
+
+    pub async fn agent_ask(&self, agent: &str, input: &str) -> Result<Value> {
+        Ok(self.foundry().await?.agent_respond(agent, input).await?)
+    }
+
     /// Delete a remote resource (idempotent: missing is not an error).
     pub async fn delete(&self, r: &ResourceRef) -> Result<()> {
         let result = match registry::meta(r.kind).domain {

@@ -4,6 +4,7 @@ pub mod adopt;
 pub mod ai;
 pub mod ai_assist;
 pub mod auth;
+pub mod az;
 pub mod ci;
 pub mod completion;
 pub mod concepts;

@@ -2043,3 +2043,257 @@ async fn push_warns_about_in_sync_skillset_with_redacted_webapi_key() {
         .stdout(predicate::str::contains("everything in sync"))
         .stdout(predicate::str::contains("redacted key"));
 }
+
+// ---------------------------------------------------------------------------
+// rigg az — runtime operations
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn az_indexer_status_renders_last_run() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexers/idxr/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "running",
+            "lastResult": {
+                "status": "success",
+                "startTime": "2026-07-15T00:00:00Z",
+                "endTime": "2026-07-15T00:05:00Z",
+                "itemsProcessed": 20,
+                "itemsFailed": 0,
+                "errors": [],
+                "warnings": []
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["az", "indexer", "status", "idxr"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("20 processed, 0 failed"));
+}
+
+#[tokio::test]
+async fn az_indexer_run_watch_reports_failure_with_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/indexers/idxr/run"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&server)
+        .await;
+    // First status poll: still running (mounted first, once); then failure.
+    Mock::given(method("GET"))
+        .and(path("/indexers/idxr/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "running",
+            "lastResult": {"status": "inProgress"}
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexers/idxr/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "running",
+            "lastResult": {
+                "status": "error",
+                "itemsProcessed": 5,
+                "itemsFailed": 2,
+                "errors": [
+                    {"key": "doc1", "errorMessage": "Web Api request failed"},
+                    {"key": "doc2", "errorMessage": "Web Api request failed"}
+                ]
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .env("RIGG_WATCH_INTERVAL_SECS", "0")
+        .args(["az", "indexer", "run", "idxr", "--watch"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("inProgress"))
+        .stdout(predicate::str::contains("Web Api request failed"))
+        .stderr(predicate::str::contains("ended in error"));
+}
+
+#[tokio::test]
+async fn az_indexer_reset_requires_yes_non_interactively() {
+    let server = MockServer::start().await;
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["az", "indexer", "reset", "idxr"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--yes"));
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0);
+
+    // with --yes it fires
+    Mock::given(method("POST"))
+        .and(path("/indexers/idxr/reset"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    rigg(ws.path())
+        .args(["az", "indexer", "reset", "idxr", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reset idxr"));
+}
+
+#[tokio::test]
+async fn az_index_query_and_stats_render() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/indexes/idx/docs/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.count": 2,
+            "value": [
+                {"@search.score": 3.14, "id": "a", "title": "GDPR fines overview"},
+                {"@search.score": 1.00, "id": "b", "title": "AI Act summary"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx/stats"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "documentCount": 42,
+            "storageSize": 5242880
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args([
+            "az", "index", "query", "idx", "gdpr", "--top", "2", "--select", "id,title",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 match(es)"))
+        .stdout(predicate::str::contains("GDPR fines overview"));
+    // request carried top/select
+    let req = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .find(|r| r.url.path() == "/indexes/idx/docs/search")
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap())
+        .unwrap();
+    assert_eq!(req["top"], 2);
+    assert_eq!(req["select"], "id,title");
+
+    rigg(ws.path())
+        .args(["az", "index", "stats", "idx"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("documents: 42"))
+        .stdout(predicate::str::contains("5.0 MiB"));
+}
+
+#[tokio::test]
+async fn az_kb_ask_renders_grounding_and_references() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/knowledgebases('test-kb')/retrieve"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response": [
+                {"content": [{"type": "text", "text": "The AI Act says important things."}]}
+            ],
+            "references": [
+                {"type": "searchIndex", "id": "r1", "docKey": "doc1",
+                 "rerankerScore": 3.5,
+                 "sourceData": {"title": "AI Act, Article 5"}}
+            ],
+            "activity": []
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["az", "kb", "ask", "test-kb", "What does the AI Act say?"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "The AI Act says important things.",
+        ))
+        .stdout(predicate::str::contains("AI Act, Article 5"))
+        .stdout(predicate::str::contains("score 3.50"));
+    // request body carried the semantic intent
+    let req = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .find(|r| r.url.path().contains("retrieve"))
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap())
+        .unwrap();
+    assert_eq!(req["intents"][0]["type"], "semantic");
+    assert_eq!(req["intents"][0]["search"], "What does the AI Act say?");
+}
+
+/// Workspace whose env also has a foundry connection pointed at the mock.
+fn workspace_with_foundry(endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "environments:\n  dev:\n    default: true\n    search: {{ service: mock, endpoint: \"{endpoint}\" }}\n    foundry: {{ account: mock, project: proj, endpoint: \"{endpoint}\" }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+#[tokio::test]
+async fn az_agent_ask_renders_reply() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/projects/proj/openai/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "Hello Kristofer!"}
+                ]}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    rigg(ws.path())
+        .args(["az", "agent", "ask", "Regulus", "Say hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hello Kristofer!"));
+    let req = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .find(|r| r.url.path().contains("responses"))
+        .map(|r| serde_json::from_slice::<Value>(&r.body).unwrap())
+        .unwrap();
+    assert_eq!(req["agent_reference"]["name"], "Regulus");
+    assert_eq!(req["input"], "Say hello");
+}

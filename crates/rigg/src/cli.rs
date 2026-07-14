@@ -114,6 +114,17 @@ pub enum Commands {
     /// it.
     Promote(PromoteArgs),
 
+    /// Operate the LIVE Azure resources: run indexers, query indexes,
+    /// prompt knowledge bases and agents
+    ///
+    /// Unlike the config commands (push/pull/diff), these act on the cloud
+    /// resources directly, addressed by physical name — no project
+    /// ownership required.
+    Az {
+        #[command(subcommand)]
+        command: AzCommands,
+    },
+
     /// Migrate a resource to an explicit, fully rigg-managed shape
     Migrate {
         #[command(subcommand)]
@@ -410,6 +421,127 @@ pub struct MigrateKsArgs {
     pub rename: Option<String>,
 }
 
+#[derive(Subcommand)]
+pub enum AzCommands {
+    /// Indexer operations (run, reset, status)
+    Indexer {
+        #[command(subcommand)]
+        command: AzIndexerCommands,
+    },
+    /// Index operations (query, stats)
+    Index {
+        #[command(subcommand)]
+        command: AzIndexCommands,
+    },
+    /// Knowledge-base operations (ask)
+    #[command(name = "knowledge-base", alias = "kb")]
+    KnowledgeBase {
+        #[command(subcommand)]
+        command: AzKbCommands,
+    },
+    /// Agent operations (ask)
+    Agent {
+        #[command(subcommand)]
+        command: AzAgentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AzIndexerCommands {
+    /// Trigger a run now
+    Run(AzIndexerRunArgs),
+    /// Clear change-tracking state — the NEXT run reprocesses every document
+    Reset(AzIndexerResetArgs),
+    /// Execution state, last run result, per-document errors
+    Status {
+        /// Indexer name
+        name: String,
+    },
+}
+
+#[derive(Args)]
+pub struct AzIndexerRunArgs {
+    /// Indexer name
+    pub name: String,
+
+    /// Poll until the run completes; exit non-zero if it fails
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Reset change tracking first (confirm-gated: full reprocess, costs
+    /// ingestion/embeddings)
+    #[arg(long)]
+    pub reset: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
+}
+
+#[derive(Args)]
+pub struct AzIndexerResetArgs {
+    /// Indexer name
+    pub name: String,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum AzIndexCommands {
+    /// Run a search query against the live index
+    Query(AzIndexQueryArgs),
+    /// Document count and storage size
+    Stats {
+        /// Index name
+        name: String,
+    },
+}
+
+#[derive(Args)]
+pub struct AzIndexQueryArgs {
+    /// Index name
+    pub name: String,
+
+    /// Search text (* matches all documents)
+    pub search: String,
+
+    /// Number of results
+    #[arg(long, default_value_t = 5)]
+    pub top: u32,
+
+    /// OData filter expression
+    #[arg(long)]
+    pub filter: Option<String>,
+
+    /// Comma-separated fields to return (default: all retrievable)
+    #[arg(long)]
+    pub select: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum AzKbCommands {
+    /// Retrieve grounding content for a prompt (agentic retrieval)
+    Ask {
+        /// Knowledge base name
+        name: String,
+        /// The question / semantic intent
+        prompt: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AzAgentCommands {
+    /// Send a single prompt to the agent and print its reply
+    Ask {
+        /// Agent name
+        name: String,
+        /// The prompt
+        prompt: String,
+    },
+}
+
 #[derive(Args)]
 pub struct StatusArgs {
     /// Project to check (default: all)
@@ -577,6 +709,7 @@ impl Cli {
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
             Commands::Promote(args) => commands::promote::run(&ctx, args),
+            Commands::Az { command } => commands::az::run(&ctx, command).await,
             Commands::Migrate { command } => commands::migrate::run(&ctx, command).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,
             Commands::Describe(args) => commands::describe::run(&ctx, args),
