@@ -127,7 +127,22 @@ async fn push_project(
             }
         }
         match state.classify(r, Some(body), remote_doc.as_ref()) {
-            SyncClass::InSync => {}
+            SyncClass::InSync => {
+                // A skill annotated `x-rigg-auth: function-key` delegates its
+                // credential to push time: the annotation is invisible to the
+                // semantic comparison (x-rigg-* is stripped), and the server
+                // echoes a redacted key — so "in sync" cannot certify the
+                // remote key. Re-push with a freshly resolved key every time
+                // (idempotent, and it heals key rotation for free).
+                if r.kind == ResourceKind::Skillset && body.to_string().contains("\"x-rigg-auth\"")
+                {
+                    to_push.push(PlanItem {
+                        r: r.clone(),
+                        body: body.clone(),
+                        exists_remotely: remote_doc.is_some(),
+                    });
+                }
+            }
             SyncClass::LocalAhead | SyncClass::LocalOnly | SyncClass::Untracked => {
                 to_push.push(PlanItem {
                     r: r.clone(),
@@ -311,6 +326,37 @@ async fn push_project(
         );
     }
 
+    // Custom Web API skills whose function key was lost to Azure's
+    // redaction: without auth the enrichment fails at indexing time for
+    // every document — resolve now (Entra ID or push-time key), not then.
+    // Scan EVERY local skillset — an in-sync one is not a healthy one here:
+    // the server echoes the key redacted, so both sides can "agree" on a
+    // placeholder that fails at enrichment time.
+    let mut webapi_missing: Vec<ResourceRef> = Vec::new();
+    for (r, body) in &items {
+        if r.kind == ResourceKind::Skillset
+            && !credentials::webapi_skills_missing_auth(body).is_empty()
+        {
+            webapi_missing.push(r.clone());
+        }
+    }
+    let in_plan: BTreeSet<String> = to_push
+        .iter()
+        .map(|p| p.r.key())
+        .chain(
+            replaces
+                .iter()
+                .flat_map(|b| b.sub.iter().map(|(sr, _)| sr.key())),
+        )
+        .collect();
+    for r in &webapi_missing {
+        println!(
+            "  {} {} calls a custom Web API with a redacted key — enrichment will fail until it is authorized (Entra ID or push-time function key)",
+            "!".yellow(),
+            r
+        );
+    }
+
     if args.dry_run {
         println!("  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
@@ -417,6 +463,76 @@ async fn push_project(
                  or run `rigg push` interactively to rewrite it automatically",
                 names.join(", ")
             ))));
+        }
+    }
+
+    if !webapi_missing.is_empty() {
+        if ctx.interactive() {
+            let pending = webapi_missing.clone();
+            for r in pending {
+                let mut doc = store.read(&r)?;
+                let mut resolved_any = false;
+                let mut all_resolved = true;
+                for idx in credentials::webapi_skills_missing_auth(&doc) {
+                    match credentials::resolve_webapi_auth(
+                        &mut doc,
+                        idx,
+                        &r.to_string(),
+                        ctx.no_color,
+                    )
+                    .await?
+                    {
+                        credentials::WebApiAuthOutcome::Skipped => all_resolved = false,
+                        _ => resolved_any = true,
+                    }
+                }
+                if resolved_any {
+                    store.write(&r, &doc)?;
+                    let mut placed = false;
+                    if let Some(item) = to_push.iter_mut().find(|p| p.r == r) {
+                        item.body = doc.clone();
+                        placed = true;
+                    }
+                    for bundle in &mut replaces {
+                        if let Some((_, body)) = bundle.sub.iter_mut().find(|(sr, _)| *sr == r) {
+                            *body = doc.clone();
+                            placed = true;
+                        }
+                    }
+                    if !placed {
+                        // In-sync-but-broken: force the fixed document out.
+                        to_push.push(PlanItem {
+                            r: r.clone(),
+                            body: doc.clone(),
+                            exists_remotely: true,
+                        });
+                    }
+                    fixed_credentials = true;
+                }
+                if all_resolved {
+                    webapi_missing.retain(|x| x != &r);
+                }
+            }
+            for r in &webapi_missing {
+                println!(
+                    "  {} {} left WITHOUT Web API authorization — its enrichment will fail until fixed",
+                    "!".yellow(),
+                    r
+                );
+            }
+        } else {
+            let blocking: Vec<String> = webapi_missing
+                .iter()
+                .filter(|r| in_plan.contains(&r.key()))
+                .map(|r| r.to_string())
+                .collect();
+            if !blocking.is_empty() {
+                return Err(anyhow!(CommandError::Validation(format!(
+                    "{} call(s) a custom Web API with a redacted key — run `rigg push` interactively to \
+                     choose Entra ID auth (authResourceId) or a push-time-resolved function key",
+                    blocking.join(", ")
+                ))));
+            }
         }
     }
 
@@ -610,6 +726,7 @@ async fn push_project(
         // that drive the resolution.
         let mut with_refs = item.body.clone();
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+        credentials::inject_function_keys(&mut with_refs).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
         match put_with_rbac_help(&remote, r, &body, ctx, search_service.as_deref()).await {
@@ -1159,6 +1276,7 @@ async fn execute_replace(
             .expect("ordered item");
         let mut with_refs = body.clone();
         resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+        credentials::inject_function_keys(&mut with_refs).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
         let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, search_service)
             .await

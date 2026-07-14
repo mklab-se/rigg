@@ -2,6 +2,7 @@
 
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::debug;
 
 use crate::auth::AzCliAuth;
@@ -638,6 +639,112 @@ impl ArmClient {
             );
         }
         Ok(out)
+    }
+
+    /// Find a Microsoft.Web site (function app / web app) by name across
+    /// all visible subscriptions; returns its ARM resource id.
+    pub async fn find_web_site_id(&self, name: &str) -> Result<String, ClientError> {
+        for sub in self.list_subscriptions().await? {
+            let url = format!(
+                "{}/subscriptions/{}/providers/Microsoft.Web/sites?api-version=2023-12-01",
+                ARM_BASE_URL, sub.subscription_id
+            );
+            let response = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                continue;
+            }
+            #[derive(Deserialize)]
+            struct Site {
+                name: String,
+                #[serde(default)]
+                id: String,
+            }
+            let result: ArmListResponse<Site> = response.json().await?;
+            for site in result.value {
+                if site.name.eq_ignore_ascii_case(name) && !site.id.is_empty() {
+                    return Ok(site.id);
+                }
+            }
+        }
+        Err(ClientError::NotFound {
+            kind: "function app".to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    /// Fetch a usable key for one function of a function app: the
+    /// function-scoped `default` key when present, else any function key,
+    /// else the host's `default` function key.
+    pub async fn function_key(
+        &self,
+        site_id: &str,
+        function_name: &str,
+    ) -> Result<String, ClientError> {
+        let url = format!(
+            "{ARM_BASE_URL}{site_id}/functions/{function_name}/listkeys?api-version=2023-12-01"
+        );
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Content-Length", "0")
+            .send()
+            .await?;
+        if response.status().is_success() {
+            let keys: serde_json::Value = response.json().await?;
+            if let Some(k) = keys.get("default").and_then(Value::as_str).or_else(|| {
+                keys.as_object()
+                    .and_then(|o| o.values().find_map(Value::as_str))
+            }) {
+                return Ok(k.to_string());
+            }
+        }
+        // Fallback: host-level function keys.
+        let url = format!("{ARM_BASE_URL}{site_id}/host/default/listkeys?api-version=2023-12-01");
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Content-Length", "0")
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let keys: serde_json::Value = response.json().await?;
+        keys.pointer("/functionKeys/default")
+            .and_then(Value::as_str)
+            .or_else(|| keys.get("masterKey").and_then(Value::as_str))
+            .map(str::to_string)
+            .ok_or_else(|| ClientError::NotFound {
+                kind: "function key".to_string(),
+                name: function_name.to_string(),
+            })
+    }
+
+    /// The site's Easy Auth (authSettingsV2) configuration.
+    pub async fn site_auth_settings(&self, site_id: &str) -> Result<Value, ClientError> {
+        let url =
+            format!("{ARM_BASE_URL}{site_id}/config/authsettingsV2/list?api-version=2023-12-01");
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        Ok(response.json().await?)
     }
 
     /// List Microsoft Foundry projects under a specific AI Services account.

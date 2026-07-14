@@ -1978,3 +1978,40 @@ async fn push_retries_rbac_shaped_rejections_and_says_how_to_resume() {
         .count();
     assert_eq!(puts, 3, "initial attempt + 2 propagation retries");
 }
+
+#[tokio::test]
+async fn push_gates_webapi_skill_with_redacted_key_non_interactively() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &json!({"name": "webss", "skills": [{
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": "https://fn.azurewebsites.net/api/enrich?code=<redacted>"
+        }]}),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("Entra ID"));
+
+    let mutations = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() != "GET")
+        .count();
+    assert_eq!(mutations, 0, "must fail before any mutation");
+}

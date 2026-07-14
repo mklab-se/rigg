@@ -286,10 +286,338 @@ pub fn print_ai_services_rbac_hint(account: &str) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Custom Web API skill authorization
+// ---------------------------------------------------------------------------
+
+/// Rigg-local annotation marking a Web API skill whose function key is
+/// resolved through ARM at push time (never stored on disk). Kept in the
+/// file, stripped before any PUT like every `x-rigg-*` key.
+pub const X_RIGG_AUTH: &str = "x-rigg-auth";
+pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
+
+/// Indices of Web API skills whose auth was lost to redaction: the URI
+/// carries Azure's `code=<redacted>` placeholder and the skill has neither
+/// AAD auth (`authResourceId`) nor the push-time key annotation.
+pub fn webapi_skills_missing_auth(doc: &Value) -> Vec<usize> {
+    let Some(skills) = doc.get("skills").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    skills
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| {
+            s.get("@odata.type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.ends_with("WebApiSkill"))
+                && s.get("uri")
+                    .and_then(Value::as_str)
+                    .is_some_and(|u| u.contains("code=<redacted>"))
+                && s.get("authResourceId")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                && s.get(X_RIGG_AUTH).and_then(Value::as_str) != Some(X_RIGG_AUTH_FUNCTION_KEY)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// `https://<site>.azurewebsites.net/api/<function>?...` → (site, function).
+pub fn parse_function_uri(uri: &str) -> Option<(String, String)> {
+    let rest = uri.strip_prefix("https://")?;
+    let (host, path) = rest.split_once('/')?;
+    let site = host.strip_suffix(".azurewebsites.net")?;
+    let path = path.split('?').next().unwrap_or(path);
+    let function = path.rsplit('/').next().filter(|s| !s.is_empty())?;
+    Some((site.to_string(), function.to_string()))
+}
+
+/// Replace (or append) the `code` query parameter of a URI.
+pub fn set_code_param(uri: &str, key: &str) -> String {
+    let (base, query) = match uri.split_once('?') {
+        Some((b, q)) => (b, q),
+        None => (uri, ""),
+    };
+    let mut params: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && !p.starts_with("code="))
+        .map(str::to_string)
+        .collect();
+    params.push(format!("code={key}"));
+    format!("{base}?{}", params.join("&"))
+}
+
+/// Remove the `code` query parameter from a URI.
+pub fn strip_code_param(uri: &str) -> String {
+    let (base, query) = match uri.split_once('?') {
+        Some((b, q)) => (b, q),
+        None => return uri.to_string(),
+    };
+    let params: Vec<&str> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && !p.starts_with("code="))
+        .collect();
+    if params.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", params.join("&"))
+    }
+}
+
+/// How one Web API skill's authorization got resolved.
+pub enum WebApiAuthOutcome {
+    /// `authResourceId` written — durable, keyless (Entra ID).
+    EntraId,
+    /// `x-rigg-auth: function-key` annotated — key injected at push time.
+    FunctionKey,
+    /// User skipped; the skill will fail at enrichment time until fixed.
+    Skipped,
+}
+
+/// Interactively resolve authorization for the Web API skill at `idx`:
+/// Entra ID (`authResourceId`, recommended — offered ready-made when the
+/// function app already has Easy Auth, otherwise with concrete enablement
+/// guidance) or a push-time-resolved function key (never stored on disk).
+pub async fn resolve_webapi_auth(
+    doc: &mut Value,
+    idx: usize,
+    ds_display: &str,
+    plain: bool,
+) -> Result<WebApiAuthOutcome> {
+    let uri = doc["skills"][idx]["uri"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let parsed = parse_function_uri(&uri);
+    println!();
+    println!("{ds_display} calls a custom Web API whose key was redacted by Azure:\n    {uri}");
+
+    // Diagnose the function app's Entra (Easy Auth) state via ARM.
+    let arm = ArmClient::new().ok();
+    let mut site_id = None;
+    let mut entra_audience: Option<String> = None;
+    if let (Some(arm), Some((site, _))) = (&arm, &parsed) {
+        if let Ok(id) = arm.find_web_site_id(site).await {
+            if let Ok(auth) = arm.site_auth_settings(&id).await {
+                let enabled = auth
+                    .pointer("/properties/platform/enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && auth
+                        .pointer("/properties/identityProviders/azureActiveDirectory/enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                if enabled {
+                    entra_audience = auth
+                        .pointer(
+                            "/properties/identityProviders/azureActiveDirectory/validation/allowedAudiences/0",
+                        )
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            auth.pointer("/properties/identityProviders/azureActiveDirectory/registration/clientId")
+                                .and_then(Value::as_str)
+                                .map(|c| format!("api://{c}"))
+                        });
+                }
+            }
+            site_id = Some(id);
+        }
+    }
+
+    const ENTRA_READY: &str =
+        "identity-based (Entra ID) — recommended: keyless, verifiable by auth doctor";
+    const ENTRA_GUIDE: &str = "identity-based (Entra ID) — recommended, but the function app has no Entra auth yet (show what's needed)";
+    const KEY: &str = "function key, resolved at push time — key stays in Azure, never on disk";
+    const SKIP: &str = "skip for now (enrichment will fail until authorized)";
+    let entra_option = if entra_audience.is_some() {
+        ENTRA_READY
+    } else {
+        ENTRA_GUIDE
+    };
+    let choice = interactive::select(
+        "How should the search service authenticate to this function?",
+        vec![entra_option.to_string(), KEY.to_string(), SKIP.to_string()],
+        plain,
+    )?;
+
+    if choice == ENTRA_READY {
+        let audience = entra_audience.expect("ready implies audience");
+        doc["skills"][idx]["authResourceId"] = Value::String(audience.clone());
+        doc["skills"][idx]["uri"] = Value::String(strip_code_param(&uri));
+        println!(
+            "  {} authResourceId set to '{audience}' (uri key parameter removed)",
+            "✓".green()
+        );
+        println!(
+            "  note: if the app's Entra config requires assignment, permit the search identity on it"
+        );
+        return Ok(WebApiAuthOutcome::EntraId);
+    }
+    if choice == ENTRA_GUIDE {
+        let site = parsed
+            .as_ref()
+            .map(|(s, _)| s.clone())
+            .unwrap_or_else(|| "<app>".to_string());
+        println!("  to make this keyless, enable Entra auth on the function app:");
+        println!("    az webapp auth microsoft update -g <rg> -n {site} \\");
+        println!("        --client-id <app-registration-id> --yes");
+        println!("    (portal: Function App → Authentication → Add identity provider → Microsoft)");
+        println!(
+            "  then run `rigg push` again — rigg will detect it and offer the ready-made option."
+        );
+        // Fall through to offering the key so the user is not stuck.
+        if !interactive::confirm_default_yes("Use the push-time function key until then?", plain)? {
+            return Ok(WebApiAuthOutcome::Skipped);
+        }
+    } else if choice == SKIP {
+        return Ok(WebApiAuthOutcome::Skipped);
+    }
+
+    // Function-key mode: verify the key is retrievable NOW so push-time
+    // injection cannot surprise-fail later.
+    let (Some(arm), Some((_, function))) = (&arm, &parsed) else {
+        println!(
+            "  {} cannot reach ARM or parse the function URI — fix the uri or use Entra auth",
+            "!".yellow()
+        );
+        return Ok(WebApiAuthOutcome::Skipped);
+    };
+    let Some(site_id) = &site_id else {
+        println!(
+            "  {} function app not found via ARM — is it in a subscription this login can see?",
+            "!".yellow()
+        );
+        return Ok(WebApiAuthOutcome::Skipped);
+    };
+    match arm.function_key(site_id, function).await {
+        Ok(_) => {
+            doc["skills"][idx][X_RIGG_AUTH] = Value::String(X_RIGG_AUTH_FUNCTION_KEY.to_string());
+            println!(
+                "  {} key verified retrievable; the skill is annotated `{}: {}` — rigg fetches and injects it on every push, the file keeps the placeholder",
+                "✓".green(),
+                X_RIGG_AUTH,
+                X_RIGG_AUTH_FUNCTION_KEY
+            );
+            Ok(WebApiAuthOutcome::FunctionKey)
+        }
+        Err(e) => {
+            println!(
+                "  {} could not retrieve the function key ({e})",
+                "!".yellow()
+            );
+            Ok(WebApiAuthOutcome::Skipped)
+        }
+    }
+}
+
+/// Push-time key injection: for every Web API skill annotated
+/// `x-rigg-auth: function-key`, fetch the function key via ARM and set the
+/// `code` parameter in the PUSHED body. The annotation itself is stripped
+/// with the other `x-rigg-*` keys before the PUT; the file never changes.
+pub async fn inject_function_keys(body: &mut Value) -> Result<()> {
+    let Some(skills) = body.get_mut("skills").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let mut arm: Option<ArmClient> = None;
+    for skill in skills {
+        if skill.get(X_RIGG_AUTH).and_then(Value::as_str) != Some(X_RIGG_AUTH_FUNCTION_KEY) {
+            continue;
+        }
+        let uri = skill.get("uri").and_then(Value::as_str).unwrap_or_default();
+        let Some((site, function)) = parse_function_uri(uri) else {
+            anyhow::bail!("cannot parse function app URI '{uri}' for push-time key injection");
+        };
+        if arm.is_none() {
+            arm = Some(ArmClient::new().map_err(|e| {
+                anyhow::anyhow!("push-time key injection needs ARM access (az login): {e}")
+            })?);
+        }
+        let arm = arm.as_ref().expect("just initialized");
+        let site_id = arm.find_web_site_id(&site).await?;
+        let key = arm.function_key(&site_id, &function).await?;
+        let injected = set_code_param(uri, &key);
+        skill["uri"] = Value::String(injected);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn webapi_skillset(uri: &str, extra: Value) -> Value {
+        let mut skill = json!({
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": uri
+        });
+        if let (Some(s), Some(e)) = (skill.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                s.insert(k.clone(), v.clone());
+            }
+        }
+        json!({"name": "ss", "skills": [skill]})
+    }
+
+    #[test]
+    fn detects_webapi_skill_with_redacted_code() {
+        let doc = webapi_skillset(
+            "https://fn.azurewebsites.net/api/enrich?code=<redacted>",
+            json!({}),
+        );
+        assert_eq!(webapi_skills_missing_auth(&doc), vec![0]);
+        // authResourceId set → not missing
+        let doc = webapi_skillset(
+            "https://fn.azurewebsites.net/api/enrich?code=<redacted>",
+            json!({"authResourceId": "api://x"}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+        // annotated for push-time key → not missing
+        let doc = webapi_skillset(
+            "https://fn.azurewebsites.net/api/enrich?code=<redacted>",
+            json!({"x-rigg-auth": "function-key"}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+        // real key (hand-authored) → not missing
+        let doc = webapi_skillset(
+            "https://fn.azurewebsites.net/api/enrich?code=abc",
+            json!({}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+    }
+
+    #[test]
+    fn parses_function_uris() {
+        assert_eq!(
+            parse_function_uri(
+                "https://mklab.azurewebsites.net/api/enrichRegulatoryMetadata?code=<redacted>"
+            ),
+            Some(("mklab".to_string(), "enrichRegulatoryMetadata".to_string()))
+        );
+        assert_eq!(parse_function_uri("https://example.com/api/x"), None);
+    }
+
+    #[test]
+    fn code_param_roundtrip() {
+        let uri = "https://f.azurewebsites.net/api/x?code=<redacted>&v=1";
+        assert_eq!(
+            set_code_param(uri, "KEY"),
+            "https://f.azurewebsites.net/api/x?v=1&code=KEY"
+        );
+        assert_eq!(
+            strip_code_param(uri),
+            "https://f.azurewebsites.net/api/x?v=1"
+        );
+        assert_eq!(
+            strip_code_param("https://f.azurewebsites.net/api/x?code=only"),
+            "https://f.azurewebsites.net/api/x"
+        );
+        assert_eq!(
+            set_code_param("https://f.azurewebsites.net/api/x", "KEY"),
+            "https://f.azurewebsites.net/api/x?code=KEY"
+        );
+    }
 
     #[test]
     fn detects_key_based_ai_services_with_placeholder() {

@@ -183,6 +183,16 @@ fn validate_project(
             warn_missing_credentials(&value, &display);
         }
 
+        // custom Web API skills with a redacted function key and no auth
+        if r.kind == ResourceKind::Skillset
+            && !crate::commands::credentials::webapi_skills_missing_auth(&value).is_empty()
+        {
+            eprintln!(
+                "{} [{display}] a custom Web API skill's key was redacted — enrichment will fail; run `rigg push` interactively to choose Entra ID auth or a push-time function key",
+                "warning:".yellow()
+            );
+        }
+
         // skillset with a key-based AI services connection but no usable key
         if r.kind == ResourceKind::Skillset {
             if let Some(subdomain) =

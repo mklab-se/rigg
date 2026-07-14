@@ -205,6 +205,7 @@ async fn in_place(
 
     check_datasource_credentials(ctx, store, created).await?;
     check_skillset_ai_services(ctx, store, created.get(&ResourceKind::Skillset)).await?;
+    check_webapi_auth(ctx, store, created.get(&ResourceKind::Skillset)).await?;
 
     println!();
     println!(
@@ -306,6 +307,8 @@ async fn side_by_side(
     println!("  {} {} (kind: searchIndex)", "wrote".cyan(), new_ks_ref);
 
     check_datasource_credentials_named(ctx, store, names.get(&ResourceKind::DataSource)).await?;
+    check_skillset_ai_services(ctx, store, names.get(&ResourceKind::Skillset)).await?;
+    check_webapi_auth(ctx, store, names.get(&ResourceKind::Skillset)).await?;
 
     println!();
     println!("Next steps:");
@@ -319,6 +322,48 @@ async fn side_by_side(
         "  4. delete {} and its files, then `rigg push --prune` to remove the old pipeline",
         old_ks_ref
     );
+    Ok(())
+}
+
+/// Custom Web API skills lose their function key to Azure's redaction —
+/// offer the authorization choice (Entra ID / push-time key) right away.
+async fn check_webapi_auth(
+    ctx: &GlobalContext,
+    store: &Store<'_>,
+    ss_name: Option<&String>,
+) -> Result<()> {
+    let Some(ss_name) = ss_name else {
+        return Ok(());
+    };
+    let r = ResourceRef::new(ResourceKind::Skillset, ss_name.clone());
+    if store.locate(&r)?.is_none() {
+        return Ok(());
+    }
+    let mut doc = store.read(&r)?;
+    let missing = credentials::webapi_skills_missing_auth(&doc);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    if !ctx.interactive() {
+        println!(
+            "  {} {} calls a custom Web API with a redacted key — run `rigg push` interactively to authorize it",
+            "!".yellow(),
+            r
+        );
+        return Ok(());
+    }
+    let mut resolved_any = false;
+    for idx in missing {
+        if !matches!(
+            credentials::resolve_webapi_auth(&mut doc, idx, &r.to_string(), ctx.no_color).await?,
+            credentials::WebApiAuthOutcome::Skipped
+        ) {
+            resolved_any = true;
+        }
+    }
+    if resolved_any {
+        store.write(&r, &doc)?;
+    }
     Ok(())
 }
 
