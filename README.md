@@ -193,6 +193,11 @@ rigg push my-rag --dry-run      # show the dependency-ordered plan, change nothi
 rigg push my-rag                # create/update, in dependency order
 rigg push my-rag --prune        # also delete remote resources whose files were removed
 
+rigg migrate knowledge-source <name> --in-place       # convert a portal-created (azureBlob, ...)
+                                #   knowledge source to explicit searchIndex form; the next push
+                                #   REPLACES it (index rebuild — gated by --allow-replace)
+rigg migrate ks <name> --rename <new>   # or build a side-by-side pipeline under new names
+
 rigg delete my-rag --remote     # delete the project's resources from Azure (files kept)
 rigg status                     # per-resource sync state across all projects
 ```

@@ -118,6 +118,7 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `prune` | bool? | Also delete remote resources whose local files were removed |
 | `force` | bool? | Without force: returns the push plan (dry run). With `force: true`: executes |
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
+| `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
 
 Run `rigg_validate` first — the tool description tells the AI to, and well-behaved agents will.
 

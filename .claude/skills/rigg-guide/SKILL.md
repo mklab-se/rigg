@@ -79,6 +79,15 @@ never satisfies this gate.
 - Knowledge sources are explicit: they point at an existing index
   (`searchIndex` kind). Build data source → index → (skillset) → indexer →
   knowledge source → knowledge base step by step, pushing and testing per step.
+- Portal-created indexed knowledge sources (azureBlob, azureSql, ...) hide an
+  Azure-generated pipeline. `rigg migrate knowledge-source <name>` (alias
+  `ks`) converts them to explicit `searchIndex` form: `--in-place` keeps all
+  names (the next push REPLACES the knowledge source — delete + recreate, the
+  index is REBUILT; gated behind `--allow-replace` non-interactively), or
+  `--rename <new>` builds a side-by-side pipeline under new names while the
+  old one keeps serving (cut over the knowledge base, then delete the old KS
+  file and `push --prune`). Push orchestrates knowledge-base unlink/relink
+  automatically and resumes an interrupted replace on the next run.
 - Index fields cannot be removed in Azure — pushing a field removal fails with
   a clear API error; to recreate: delete the file, `push --prune`, restore, push.
 - Exit codes: 0 ok · 1 error · 2 usage · 3 validation · 4 auth · 5 drift/conflict.

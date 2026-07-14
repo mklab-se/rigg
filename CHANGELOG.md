@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-07-14
+
+### Added
+
+- **`rigg migrate knowledge-source <name>`** (alias `ks`) — convert a
+  portal-created indexed knowledge source (azureBlob, azureSql, oneLake, ...)
+  into the explicit `searchIndex` kind, materializing its Azure-generated
+  pipeline (data source, index, skillset, indexer) as first-class project
+  files. Names come from the live `createdResources` — never guessed.
+  Local-only: nothing mutates Azure until you push.
+  - **In-place** (`--in-place`): keeps every name. The next push *replaces*
+    the knowledge source.
+  - **Side-by-side** (`--rename <new-name>`): builds a parallel pipeline
+    under new names (derived by prefix-swap, individually editable
+    interactively) while the old knowledge source keeps serving; cut over
+    your knowledge bases at your own pace, then delete the old files and
+    `push --prune`.
+  - The copied data source has no credentials (Azure never returns them) —
+    the wizard offers an identity-based `ResourceId=` connection, and
+    `rigg validate` warns until one is set.
+
+- **Push `replace` verb.** A knowledge source whose immutable `kind` differs
+  between local file and remote is now planned as `replace` (delete +
+  recreate) instead of a doomed in-place update — whether it got that way via
+  `rigg migrate` or a hand edit. The plan spells out the consequence: the
+  generated pipeline is cascade-deleted and the index is **rebuilt from
+  source data** (time, ingestion/embedding cost, and the source is
+  unavailable to knowledge bases until repopulated).
+  - Gated separately: interactively a dedicated default-No confirmation;
+    non-interactively the new `--allow-replace` flag is required — `--yes`
+    alone never executes a replace (same philosophy as `--confirm-env`).
+  - Push orchestrates the whole dance: temporarily unlinks every referencing
+    knowledge base (Azure refuses to delete a knowledge source in use),
+    deletes the old knowledge source, recreates the explicit pipeline in
+    dependency order, creates the new `searchIndex` knowledge source, and
+    restores the knowledge bases byte-for-byte — including ones owned by
+    other projects (with a notice). A knowledge base left with an empty
+    `knowledgeSources` list is deleted and re-created afterwards.
+  - Crash-safe: a recovery file under `.rigg/<env>/<project>/` records the
+    original knowledge-base documents before anything is touched; re-running
+    `rigg push` resumes an interrupted replace and finishes the relink.
+  - `rigg diff` flags immutable-field drift with an explicit REPLACE note.
+  - MCP: `rigg_push` gains `allow_replace` (maps to `--allow-replace`).
+
 ## [1.2.4] - 2026-07-14
 
 ### Added

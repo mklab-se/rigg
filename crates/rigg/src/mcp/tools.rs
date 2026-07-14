@@ -86,6 +86,11 @@ pub struct PushParams {
     /// Ignored unless force=true.
     #[schemars(default)]
     pub confirm_env: Option<String>,
+    /// Required when the plan contains a replace (delete + recreate, e.g. a
+    /// knowledge-source kind change): the index is REBUILT from source data
+    /// (time, ingestion cost, downtime). Ignored unless force=true.
+    #[schemars(default)]
+    pub allow_replace: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -263,7 +268,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Always rigg_validate first."
+        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Plans containing a replace (e.g. a knowledge-source kind change after `rigg migrate`) additionally require allow_replace=true — the replaced index is rebuilt from source data. Always rigg_validate first."
     )]
     async fn rigg_push(&self, Parameters(params): Parameters<PushParams>) -> String {
         let mut args = vec!["push"];
@@ -277,6 +282,9 @@ impl RiggMcpServer {
             args.push("--yes");
             if let Some(confirm_env) = &params.confirm_env {
                 args.extend(["--confirm-env", confirm_env]);
+            }
+            if params.allow_replace.unwrap_or(false) {
+                args.push("--allow-replace");
             }
         } else {
             args.push("--dry-run");
