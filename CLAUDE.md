@@ -104,6 +104,6 @@ Required secrets: `CARGO_REGISTRY_TOKEN` (crates.io env), `HOMEBREW_TAP_TOKEN`.
 
 ## AI Agent Integration
 
-- MCP server: `rigg mcp serve` — 8 project-scoped stdio tools (`rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_diff`, `rigg_pull`, `rigg_push`, `rigg_delete`). Mutating tools use the preview/`force: true` pattern. Tools shell out to `rigg --output json` subprocesses (stdout stays JSON-RPC clean).
+- MCP server: `rigg mcp serve` — 12 stdio tools: 8 config-plane (`rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_diff`, `rigg_pull`, `rigg_push`, `rigg_delete`) + 4 runtime (`rigg_indexer_run`, `rigg_indexer_status`, `rigg_query`, `rigg_ask`). Mutating tools use the preview/`force: true` pattern. Tools shell out to `rigg --output json` subprocesses (stdout stays JSON-RPC clean).
 - Skills in `.claude/skills/` (`rigg-guide` + slash commands) — being rewritten for the project model in the 1.0 phase.
 - `rigg ai …` manages ailloy-powered features (explanations; conflict merge/NL scaffolding land in 0.20). `rigg new <kind> <name> --describe "…"` drafts definitions via AI when ailloy is enabled.
