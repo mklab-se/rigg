@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-07-14
+
+### Added
+
+- **`rigg promote`** — reviewable environment-to-environment promotion.
+  Copies a project's definitions from a source env to a target env while
+  preserving *pinned* fields (env-specific values like connection strings,
+  deployment capacity, and knowledge-source blob connections) on the target
+  side, including target-only array elements. The plan is previewed as a
+  diff before anything is written.
+- **Protected environments** — mark an environment `protected: true` in
+  `rigg.yaml` and every cloud mutation against it (push, delete, prune)
+  requires explicit consent: typing the environment name interactively or
+  passing `--confirm-env <name>` in scripts. MCP mutating tools surface the
+  same consent requirement, and the generated CI deploy template passes
+  `--confirm-env` for the target environment.
+- **`rigg env add` wizard** — interactive environment creation with
+  connection selection; `rigg init` now explains the environment model, and
+  `rigg concepts` covers environments alongside workspaces and projects.
+
+### Changed
+
+- **BREAKING:** projects now keep one definition tree per environment —
+  `projects/<name>/envs/<env>/{search,foundry}/...` replaces the single
+  flat tree. A resource's identity is its physical file name within an
+  environment. Samples, skills, and docs are migrated to the new layout.
+
+### Fixed
+
+- `rigg new` no longer overwrites a renamed resource file on create;
+  existence checks locate resources by content, not just canonical path.
+- `Store::write` validates physical names as defense in depth against
+  path-escape names.
+
 ## [1.1.0] - 2026-07-10
 
 ### Added
