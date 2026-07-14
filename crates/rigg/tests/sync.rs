@@ -2161,7 +2161,7 @@ async fn az_index_query_and_stats_render() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "@odata.count": 2,
             "value": [
-                {"@search.score": 3.14, "id": "a", "title": "GDPR fines overview"},
+                {"@search.score": 3.25, "id": "a", "title": "GDPR fines overview"},
                 {"@search.score": 1.00, "id": "b", "title": "AI Act summary"}
             ]
         })))
