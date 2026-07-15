@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.2] - 2026-07-15
+
+Fixes [#4](https://github.com/mklab-se/rigg/issues/4): a Web API skill whose
+Azure Functions key lives in the `x-functions-key` HTTP header could be
+migrated and pushed with a literal `<redacted>` placeholder, and side-by-side
+migration could leave the new skillset projecting into the OLD index.
+
+### Fixed
+
+- **Redacted `x-functions-key` headers are now detected** wherever the
+  `code=<redacted>` uri form already was: migration offers the
+  authentication choices (Entra ID / push-time key / skip), interactive
+  push runs the same resolution, and non-interactive push blocks with
+  exit 3 before any mutation — uniform with the data-source and AI-services
+  credential preflights. Header names match case-insensitively; empty and
+  null values count as unusable.
+- **Push-time key injection respects the skill's carrier**: the real key
+  goes into the `x-functions-key` header when that is what the skill uses
+  (name casing preserved, uri untouched), otherwise into the uri `code`
+  parameter as before. Choosing Entra ID removes the unusable header the
+  same way it strips the `code` parameter.
+- **Side-by-side migration rewires every registry-known reference** from the
+  old generated sub-resources to the new names. The registry gains the
+  previously missing skillset→index reference
+  (`indexProjections.selectors[].targetIndexName`), so enrichment now
+  projects into the NEW side-by-side index — and dependency-ordered push
+  sees the edge too. The old hardcoded indexer field list is gone in favor
+  of a registry-driven `rename_reference`.
+- **`validate` rejects a real function key** in a skill's `httpHeaders`
+  (exit 3) — same no-secrets policy as connection strings; the
+  `<redacted>` placeholder plus `x-rigg-auth: function-key` remains the
+  supported on-disk shape.
+
 ## [1.6.1] - 2026-07-15
 
 `rigg status` now answers the question it always should have: what is the
