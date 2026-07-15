@@ -118,10 +118,11 @@ the same resource in another.
 ### Promoting between environments
 
 `rigg promote` copies one environment's project tree into another, entirely
-locally — it never talks to Azure:
+locally — the only optional Azure contact is discovering function apps when
+an interactive run resolves a new Web API skill URL (below):
 
 ```bash
-rigg promote my-rag --from dev --to prod --dry-run   # preview only
+rigg promote --from dev --to prod --dry-run          # preview only (project optional when there is exactly one)
 rigg promote my-rag --from dev --to prod             # write prod's tree
 rigg push my-rag --env prod                          # then sync it to Azure
 ```
@@ -130,11 +131,21 @@ Promotion preserves the target environment's **pinned fields** instead of
 overwriting them: the resource's `name` (always — physical names are never
 promoted), each kind's registry-default env-pinned fields (secrets,
 write-only fields, and genuinely per-environment values like an agent's
-`tools[].server_url`), and anything named in the file's own `x-rigg-pin`
-annotation. Resources new in the source are created verbatim (logical id
-preserved, physical name copied as-is); resources that only exist in the
-target are left untouched. A→B and B→A are the same operation — you choose
-the sync direction with `--from`/`--to`, not a fixed "deploy" direction.
+`tools[].server_url` or a Web API skill's function `uri` and auth carrier),
+and anything named in the file's own `x-rigg-pin` annotation. Resources new
+in the source are created verbatim (logical id preserved, physical name
+copied as-is); resources that only exist in the target are left untouched.
+A→B and B→A are the same operation — you choose the sync direction with
+`--from`/`--to`, not a fixed "deploy" direction.
+
+A skillset that is **new** in the target has no URL to pin: its custom Web
+API skills would silently keep calling the SOURCE environment's function.
+Interactive promotes resolve each such URL — automatically kept when your
+login sees only that one function app (the environments share it), otherwise
+rigg lists the visible function apps (ARM) or asks for the URL. A skill's
+`x-rigg-auth` annotation never crosses environments; authorize the new env's
+function on the next `rigg push`, which gates on it. Non-interactive
+promotes copy the URL as-is and flag it for review.
 
 ### Protected environments
 

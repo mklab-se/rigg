@@ -315,10 +315,10 @@ environments:
     foundry: { account: my-foundry, project: my-project-prod }
 ```
 
-`rigg promote` copies one environment's project tree into another, locally — preserving the target's pinned fields (`name`, secrets/write-only fields, `x-rigg-pin`-annotated paths) instead of overwriting them:
+`rigg promote` copies one environment's project tree into another, locally — preserving the target's pinned fields (`name`, secrets/write-only fields, env-specific URLs like an agent's MCP server or a Web API skill's function endpoint, `x-rigg-pin`-annotated paths) instead of overwriting them. New-in-target skillsets get their function URLs resolved interactively (ARM-discovered candidates or manual entry) so a promoted pipeline never silently calls the source environment's function:
 
 ```bash
-rigg promote my-rag --from dev --to prod --dry-run   # preview
+rigg promote --from dev --to prod --dry-run          # preview (project optional when there is exactly one)
 rigg promote my-rag --from dev --to prod             # write prod's tree
 rigg push my-rag --env prod                          # then sync it to Azure
 rigg diff my-rag -e test --compare-env prod          # or just compare, env vs env

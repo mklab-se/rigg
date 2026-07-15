@@ -22,8 +22,12 @@ use rigg_core::store::Store;
 use rigg_diff::output::SideLabels;
 use rigg_diff::semantic::DiffResult;
 
+use rigg_client::arm::ArmClient;
+
 use crate::cli::PromoteArgs;
-use crate::commands::{CommandError, GlobalContext, interactive, load_workspace};
+use crate::commands::{
+    CommandError, GlobalContext, credentials, interactive, load_workspace, select_one_project,
+};
 
 /// One logical resource's promotion plan: what it looks like in the source
 /// env, what (if anything) it looks like in the target env today, and what
@@ -52,7 +56,7 @@ struct Plan {
     kept_only_in_to: Vec<(ResourceKind, String)>,
 }
 
-pub fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
+pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     let ws = load_workspace()?;
     if !ws.config.environments.contains_key(&args.from) {
         return Err(anyhow!(CommandError::Usage(format!(
@@ -72,14 +76,14 @@ pub fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         )));
     }
 
-    let project = ws.project(&args.project)?;
+    let project = select_one_project(&ws, args.project.as_deref())?;
     let store_from = Store::new(project, &args.from);
     let store_to = Store::new(project, &args.to);
 
-    let plan = build_plan(&store_from, &store_to)?;
+    let mut plan = build_plan(&store_from, &store_to)?;
 
     if !ctx.json() {
-        print_preview(&args, &plan);
+        print_preview(&args, &project.name, &plan);
     }
 
     let nothing_to_do = plan.changed.is_empty() && plan.new.is_empty();
@@ -118,6 +122,8 @@ pub fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         )));
     }
 
+    resolve_new_webapi_uris(ctx, &args.from, &args.to, &mut plan.new).await?;
+
     for item in &plan.changed {
         let name = item
             .merged
@@ -135,11 +141,125 @@ pub fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         print_json(&plan, false);
     } else {
         println!();
-        println!("hint: rigg diff {} -e {}", args.project, args.to);
-        println!("      rigg push {} -e {}", args.project, args.to);
+        println!("hint: rigg diff {} -e {}", project.name, args.to);
+        println!("      rigg push {} -e {}", project.name, args.to);
         print_new_file_hints(&args, &plan);
     }
     Ok(())
+}
+
+/// A skillset that is NEW in the target env carries its Web API skill URLs
+/// verbatim from the source env — usually the WRONG function for the target
+/// (the pinned paths protect existing files, but a new file has nothing to
+/// pin from). Resolve each URL: automatically when Azure shows the source's
+/// function app as the only one visible (both envs share it), interactively
+/// otherwise; non-interactively the copy is kept but flagged loudly.
+async fn resolve_new_webapi_uris(
+    ctx: &GlobalContext,
+    from: &str,
+    to: &str,
+    new_items: &mut [Item],
+) -> Result<()> {
+    let mut sites: Option<Vec<String>> = None; // ARM site list, fetched once on demand
+    for item in new_items
+        .iter_mut()
+        .filter(|i| i.kind == ResourceKind::Skillset)
+    {
+        let Some(skills) = item.merged.get_mut("skills").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for skill in skills {
+            let is_webapi = skill
+                .get("@odata.type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.ends_with("WebApiSkill"));
+            if !is_webapi {
+                continue;
+            }
+            let uri = skill
+                .get("uri")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let Some((site, _)) = credentials::parse_function_uri(&uri) else {
+                continue;
+            };
+            let skill_name = skill
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unnamed>")
+                .to_string();
+
+            if !ctx.interactive() || ctx.json() {
+                if !ctx.json() {
+                    println!(
+                        "  {} skill '{skill_name}' calls {uri} — copied from env '{from}'; \
+                         verify this is the right function for '{to}' (edit the file, then `rigg push -e {to}`)",
+                        "!".yellow()
+                    );
+                }
+                continue;
+            }
+
+            if sites.is_none() {
+                sites = Some(match ArmClient::new() {
+                    Ok(arm) => arm.list_web_sites().await.unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                });
+            }
+            let known = sites.as_ref().expect("filled above");
+            let others: Vec<&String> = known
+                .iter()
+                .filter(|s| !s.eq_ignore_ascii_case(&site))
+                .collect();
+            if others.is_empty() && known.iter().any(|s| s.eq_ignore_ascii_case(&site)) {
+                println!(
+                    "  {} skill '{skill_name}': '{site}' is the only function app your login can see — both environments share it, keeping {uri}",
+                    "✓".green()
+                );
+                continue;
+            }
+
+            let keep = format!("keep {uri} (same function app as '{from}')");
+            const MANUAL: &str = "enter a URL manually";
+            let mut options = vec![keep.clone()];
+            for other in &others {
+                options.push(swap_function_site(&uri, &site, other));
+            }
+            options.push(MANUAL.to_string());
+            let choice = interactive::select(
+                &format!(
+                    "Skill '{skill_name}' calls a function in env '{from}' — which URL should '{to}' use?"
+                ),
+                options,
+                ctx.no_color,
+            )?;
+            let new_uri = if choice == keep {
+                uri.clone()
+            } else if choice == MANUAL {
+                interactive::text_with_default(
+                    &format!("Function URL for env '{to}':"),
+                    &uri,
+                    ctx.no_color,
+                )?
+            } else {
+                choice
+            };
+            if new_uri != uri {
+                skill["uri"] = Value::String(new_uri);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `https://<site>.azurewebsites.net/<path>` with the site swapped.
+fn swap_function_site(uri: &str, old_site: &str, new_site: &str) -> String {
+    uri.replacen(
+        &format!("https://{old_site}.azurewebsites.net"),
+        &format!("https://{new_site}.azurewebsites.net"),
+        1,
+    )
 }
 
 /// Build the promotion plan: correlate FROM/TO by (kind, stem), merge each
@@ -160,7 +280,7 @@ fn build_plan(store_from: &Store, store_to: &Store) -> Result<Plan> {
             None => None,
         };
         let pinned = pinned_paths(*kind, target.as_ref());
-        let merged = merge_promote(&source, target.as_ref(), &pinned);
+        let merged = merge_promote(*kind, &source, target.as_ref(), &pinned);
         let diff =
             rigg_diff::semantic::diff(target.as_ref().unwrap_or(&Value::Null), &merged, "name");
         let item = Item {
@@ -236,13 +356,32 @@ fn pinned_paths(kind: ResourceKind, target: Option<&Value>) -> Vec<String> {
 /// brand-new resource has nothing to pin from, and is created verbatim).
 /// Target-only array elements along pinned array paths survive wholesale
 /// (see `registry::restore_path`).
-fn merge_promote(source: &Value, target: Option<&Value>, pinned: &[String]) -> Value {
+fn merge_promote(
+    kind: ResourceKind,
+    source: &Value,
+    target: Option<&Value>,
+    pinned: &[String],
+) -> Value {
     let mut merged = source.clone();
     // The x-rigg-pin annotation belongs to the TARGET env's file only — a
     // source-side copy must not leak across; the target's own annotation (if
     // any) is restored below via the pinned X_RIGG_PIN path.
     if let Some(map) = merged.as_object_mut() {
         map.remove(X_RIGG_PIN);
+    }
+    // Same for a skill's x-rigg-auth: it authorizes THE SOURCE env's
+    // function URL, and unlike other pinned paths it must not survive when
+    // the target has no counterpart — an annotation pointing at the wrong
+    // env's function would silence push's Web API auth gate. Strip it here;
+    // the target's own annotation (if any) is restored via the pinned path.
+    if kind == ResourceKind::Skillset {
+        if let Some(skills) = merged.get_mut("skills").and_then(Value::as_array_mut) {
+            for skill in skills {
+                if let Some(map) = skill.as_object_mut() {
+                    map.remove(credentials::X_RIGG_AUTH);
+                }
+            }
+        }
     }
     if let Some(target) = target {
         for path in pinned {
@@ -252,11 +391,11 @@ fn merge_promote(source: &Value, target: Option<&Value>, pinned: &[String]) -> V
     merged
 }
 
-fn print_preview(args: &PromoteArgs, plan: &Plan) {
+fn print_preview(args: &PromoteArgs, project_name: &str, plan: &Plan) {
     println!(
         "{} project '{}': {} {} {}",
         "Promote".bold(),
-        args.project,
+        project_name,
         args.from,
         "→".dimmed(),
         args.to
@@ -355,7 +494,12 @@ mod tests {
     fn merge_promote_keeps_name_from_target() {
         let source = json!({"name": "a-name", "model": "m"});
         let target = json!({"name": "b-name", "model": "old"});
-        let merged = merge_promote(&source, Some(&target), &["name".to_string()]);
+        let merged = merge_promote(
+            ResourceKind::Agent,
+            &source,
+            Some(&target),
+            &["name".to_string()],
+        );
         assert_eq!(merged["name"], json!("b-name"));
         assert_eq!(
             merged["model"],
@@ -380,7 +524,7 @@ mod tests {
         });
         let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
         assert!(pinned.iter().any(|p| p == "tools[].server_url"));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         assert_eq!(
             merged["tools"][0]["server_url"],
             json!("https://prod.search.windows.net/x"),
@@ -409,7 +553,7 @@ mod tests {
             ]
         });
         let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         let tools = merged["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 3, "target-only tools survive: {tools:?}");
         assert_eq!(
@@ -447,7 +591,7 @@ mod tests {
             "tools": [{"type": "mcp", "server_url": "https://prod/x"}]
         });
         let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         let tools = merged["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 2, "source's extra tool is promoted: {tools:?}");
         assert_eq!(tools[0]["server_url"], json!("https://prod/x"), "paired");
@@ -463,7 +607,7 @@ mod tests {
             "x-rigg-pin": ["properties.description"]
         });
         let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         assert_eq!(
             merged["properties"]["description"],
             json!("prod description"),
@@ -474,7 +618,12 @@ mod tests {
     #[test]
     fn merge_promote_target_none_is_source_verbatim() {
         let source = json!({"name": "a", "model": "m", "tools": []});
-        let merged = merge_promote(&source, None, &["name".to_string(), "model".to_string()]);
+        let merged = merge_promote(
+            ResourceKind::Agent,
+            &source,
+            None,
+            &["name".to_string(), "model".to_string()],
+        );
         assert_eq!(merged, source);
     }
 
@@ -487,7 +636,7 @@ mod tests {
             "x-rigg-pin": ["properties.description"]
         });
         let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         assert_eq!(
             merged["x-rigg-pin"],
             json!(["properties.description"]),
@@ -512,13 +661,13 @@ mod tests {
         });
         let target = json!({"name": "conn", "properties": {"target": "https://prod"}});
         let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(&source, Some(&target), &pinned);
+        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
         assert!(
             merged.get(X_RIGG_PIN).is_none(),
             "source's annotation must not leak: {merged:?}"
         );
         // and target None (new file) also drops it — the fresh copy starts clean
-        let created = merge_promote(&source, None, &pinned);
+        let created = merge_promote(ResourceKind::Agent, &source, None, &pinned);
         assert!(created.get(X_RIGG_PIN).is_none());
     }
 

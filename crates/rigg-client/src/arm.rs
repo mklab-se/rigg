@@ -641,6 +641,36 @@ impl ArmClient {
         Ok(out)
     }
 
+    /// All Microsoft.Web sites (function apps / web apps) visible to this
+    /// login, by name, across every subscription. Sorted, de-duplicated.
+    pub async fn list_web_sites(&self) -> Result<Vec<String>, ClientError> {
+        let mut out: Vec<String> = Vec::new();
+        for sub in self.list_subscriptions().await? {
+            let url = format!(
+                "{}/subscriptions/{}/providers/Microsoft.Web/sites?api-version=2023-12-01",
+                ARM_BASE_URL, sub.subscription_id
+            );
+            let response = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                continue;
+            }
+            #[derive(Deserialize)]
+            struct Site {
+                name: String,
+            }
+            let result: ArmListResponse<Site> = response.json().await?;
+            out.extend(result.value.into_iter().map(|s| s.name));
+        }
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
     /// Find a Microsoft.Web site (function app / web app) by name across
     /// all visible subscriptions; returns its ARM resource id.
     pub async fn find_web_site_id(&self, name: &str) -> Result<String, ClientError> {

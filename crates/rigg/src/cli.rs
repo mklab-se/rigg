@@ -387,9 +387,9 @@ pub struct DeleteArgs {
 
 #[derive(Args)]
 pub struct PromoteArgs {
-    /// Project to promote
+    /// Project to promote (omit when the workspace has exactly one)
     #[arg(add = ArgValueCandidates::new(complete::projects))]
-    pub project: String,
+    pub project: Option<String>,
 
     /// Source environment
     #[arg(long)]
@@ -739,7 +739,7 @@ impl Cli {
             Commands::Push(args) => commands::push::run(&ctx, args).await,
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
-            Commands::Promote(args) => commands::promote::run(&ctx, args),
+            Commands::Promote(args) => commands::promote::run(&ctx, args).await,
             Commands::Az { command } => commands::az::run(&ctx, command).await,
             Commands::Migrate { command } => commands::migrate::run(&ctx, command).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,

@@ -434,6 +434,15 @@ fn env_pinned_extra(kind: ResourceKind) -> &'static [&'static str] {
     match kind {
         ResourceKind::Agent => &["tools[].server_url", "tools[].project_connection_id"],
         ResourceKind::Connection => &["properties.target"],
+        // A custom Web API skill's endpoint and how the search service
+        // authenticates to it are environment infrastructure, not pipeline
+        // content — each env keeps its own function URL and auth carrier.
+        ResourceKind::Skillset => &[
+            "skills[].uri",
+            "skills[].authResourceId",
+            "skills[].httpHeaders.x-functions-key",
+            "skills[].x-rigg-auth",
+        ],
         _ => &[],
     }
 }
@@ -1323,5 +1332,23 @@ mod index_projection_ref_tests {
             idxr["targetIndexName"], "old-index",
             "other kinds untouched"
         );
+    }
+}
+
+#[cfg(test)]
+mod skillset_env_pinned_tests {
+    use super::*;
+
+    #[test]
+    fn skillset_webapi_auth_carriers_are_env_pinned() {
+        let pinned = env_pinned(ResourceKind::Skillset);
+        for path in [
+            "skills[].uri",
+            "skills[].authResourceId",
+            "skills[].httpHeaders.x-functions-key",
+            "skills[].x-rigg-auth",
+        ] {
+            assert!(pinned.contains(&path), "missing env-pinned path: {path}");
+        }
     }
 }

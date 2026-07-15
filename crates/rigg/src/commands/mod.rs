@@ -184,6 +184,21 @@ pub fn select_projects<'w>(
     }
 }
 
+/// Resolve exactly one project: the named one, or the workspace's only one
+/// when the name is omitted — the CLI-wide single-project convention.
+pub fn select_one_project<'w>(ws: &'w Workspace, project: Option<&str>) -> Result<&'w Project> {
+    match project {
+        Some(name) => Ok(ws.project(name)?),
+        None => match ws.projects.len() {
+            0 => bail!("workspace has no projects (create one with `rigg new project <name>`)"),
+            1 => Ok(&ws.projects[0]),
+            n => Err(anyhow!(CommandError::Usage(format!(
+                "workspace has {n} projects; name one"
+            )))),
+        },
+    }
+}
+
 /// Resolve the environment for this invocation.
 pub fn resolve_env(ws: &Workspace, ctx: &GlobalContext) -> Result<ResolvedEnv> {
     Ok(ws.resolve_env(ctx.env.as_deref())?)

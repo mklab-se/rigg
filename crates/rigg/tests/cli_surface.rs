@@ -1346,3 +1346,133 @@ fn validate_accepts_redacted_functions_key_header() {
         .assert()
         .success();
 }
+
+#[test]
+fn promote_defaults_to_the_only_project() {
+    let ws = two_env_workspace();
+    let dev_agents = ws.path().join("projects/demo/envs/dev/foundry/agents");
+    write_json(
+        &dev_agents.join("helper.json"),
+        &serde_json::json!({"name": "helper", "model": "gpt-5-mini"}),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success();
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/prod/foundry/agents/helper.json")
+            .is_file(),
+        "the only project is promoted without naming it"
+    );
+}
+
+#[test]
+fn promote_multi_project_without_name_is_usage_error() {
+    let ws = two_env_workspace();
+    let other = ws.path().join("projects/other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("project.yaml"), "{}\n").unwrap();
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("name one"));
+}
+
+#[test]
+fn promote_keeps_target_env_function_url_and_auth() {
+    let ws = two_env_workspace();
+    let dev = ws.path().join("projects/demo/envs/dev/search/skillsets");
+    let prod = ws.path().join("projects/demo/envs/prod/search/skillsets");
+    write_json(
+        &dev.join("enrich.json"),
+        &serde_json::json!({
+            "name": "enrich",
+            "description": "v2 with better prompts",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "name": "ExtractMetadata",
+                "uri": "https://fn-dev.azurewebsites.net/api/ExtractMetadata",
+                "x-rigg-auth": "function-key",
+                "httpHeaders": {"x-functions-key": "<redacted>"}
+            }]
+        }),
+    );
+    write_json(
+        &prod.join("enrich.json"),
+        &serde_json::json!({
+            "name": "enrich",
+            "description": "old",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "name": "ExtractMetadata",
+                "uri": "https://fn-prod.azurewebsites.net/api/ExtractMetadata",
+                "authResourceId": "api://prod-fn"
+            }]
+        }),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success();
+
+    let promoted = read_json(&prod.join("enrich.json"));
+    assert_eq!(
+        promoted["description"], "v2 with better prompts",
+        "non-pinned fields promote"
+    );
+    assert_eq!(
+        promoted["skills"][0]["uri"], "https://fn-prod.azurewebsites.net/api/ExtractMetadata",
+        "the target env keeps its own function URL"
+    );
+    assert_eq!(
+        promoted["skills"][0]["authResourceId"], "api://prod-fn",
+        "the target env keeps its own auth method"
+    );
+    assert!(
+        promoted["skills"][0].get("x-rigg-auth").is_none(),
+        "the source env's auth annotation must not leak into the target"
+    );
+}
+
+#[test]
+fn promote_new_skillset_warns_about_source_env_function_url() {
+    let ws = two_env_workspace();
+    let dev = ws.path().join("projects/demo/envs/dev/search/skillsets");
+    write_json(
+        &dev.join("enrich.json"),
+        &serde_json::json!({
+            "name": "enrich",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "name": "ExtractMetadata",
+                "uri": "https://fn-dev.azurewebsites.net/api/ExtractMetadata"
+            }]
+        }),
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args(["promote", "--from", "dev", "--to", "prod", "-y"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fn-dev.azurewebsites.net"))
+        .stdout(predicate::str::contains("verify"));
+
+    // Non-interactive: the uri is copied as-is (nothing invented), but loudly flagged.
+    let promoted = read_json(
+        &ws.path()
+            .join("projects/demo/envs/prod/search/skillsets/enrich.json"),
+    );
+    assert_eq!(
+        promoted["skills"][0]["uri"],
+        "https://fn-dev.azurewebsites.net/api/ExtractMetadata"
+    );
+}
