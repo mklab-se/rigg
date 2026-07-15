@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.4] - 2026-07-15
+
+Two fixes: knowledge bases finally carry their retrieval & output
+configuration, and in-sync Web API skills stop being falsely reported as
+broken ([#5](https://github.com/mklab-se/rigg/issues/5)).
+
+### Fixed
+
+- **Knowledge bases are now managed on the preview api-version
+  (`2026-05-01-preview`).** The retrieval & output configuration —
+  `retrievalInstructions`, `answerInstructions`, `outputMode`,
+  `retrievalReasoningEffort`, per-source `enableImageServing`/
+  `enableFreshness` — does not exist in the stable `2026-04-01` API: a
+  stable GET silently omits it and a stable PUT cannot set it, so adopt and
+  pull captured an incomplete document and push never carried these
+  settings. Existing knowledge-base files stay in sync (comparisons are
+  null-insensitive); a `rigg pull` refreshes them with the full
+  configuration.
+- **An in-sync skillset with a server-redacted Function key is no longer
+  reported broken (#5).** Azure redacts stored secrets on every GET —
+  that says nothing about the remote key. The Web API auth gate now covers
+  only planned mutations (uniform with the other credential preflights):
+  ordinary pushes of in-sync resources stay quiet no-ops with a one-line
+  informational note, no failure claim, no forced prompt, zero PUTs. New or
+  changed skillsets with an unusable key still block before any mutation.
+- **`rigg push` is idempotent again for `x-rigg-auth` annotated skillsets** —
+  they are no longer re-PUT on every push. Key refresh is explicit:
+
+### Added
+
+- **`rigg push --refresh-credentials`** re-authorizes Web API skills on
+  in-sync skillsets: unresolved redacted skills enter the interactive
+  Entra-ID/function-key resolution flow, and annotated skills are re-PUT
+  with a freshly fetched key (heals key rotation on demand).
+
 ## [1.6.3] - 2026-07-15
 
 Promote gets two uniformity fixes: the project name is optional like
