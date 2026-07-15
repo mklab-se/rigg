@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1] - 2026-07-15
+
+`rigg status` now answers the question it always should have: what is the
+state of the WHOLE workspace — every environment, not just the default one.
+And adopt finally tells you (and asks you) which environment it is acting on.
+
+### Changed
+
+- **`rigg status` covers all environments by default.** Output is grouped
+  per environment (default env first), with the full per-resource sync table
+  and unmanaged detection for each. `--env <name>` or `RIGG_ENV` narrows to
+  one environment as before. Environments are fetched concurrently. JSON
+  output is now a top-level array of `{env, default, error, projects}`
+  objects (breaking shape change).
+- **An unreachable environment no longer hides the others.** Its section
+  shows a single `unreachable: <reason>` line (with a `rigg auth doctor`
+  hint for auth failures) while the remaining environments render fully.
+  Exit code 4 only when every environment fails auth.
+- **`rigg adopt` names its target.** Before touching the cloud it prints
+  `Adopt into project 'x' from environment 'y':` plus the same service →
+  URL target lines as push/pull. The context-free "unmanaged resources from
+  the configured service" legend is gone.
+- **`rigg adopt` no longer guesses the environment.** With several
+  environments configured and no `--env`/`RIGG_ENV`, interactive runs get an
+  environment picker and non-interactive runs exit 2 naming the candidates —
+  the `default: true` marker alone is not enough for adoption.
+- "Nothing to adopt/delete" messages name the environment they inspected.
+- MCP `rigg_status` tool description updated for the multi-env behavior.
+
+### Performance
+
+- **Azure CLI tokens are cached per resource scope** (5-minute reuse,
+  process-wide). Previously every REST request spawned
+  `az account get-access-token`; now it is one spawn per scope per run —
+  noticeable on multi-env status and large pulls.
+
 ## [1.6.0] - 2026-07-15
 
 Rigg grows an operations plane: `rigg az` acts on the LIVE cloud resources
