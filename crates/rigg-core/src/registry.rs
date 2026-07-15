@@ -235,7 +235,12 @@ static KINDS: &[KindMeta] = &[
         domain: Domain::Search,
         collection_path: "knowledgeBases",
         dir_name: "knowledge-bases",
-        channel: Channel::Stable,
+        // Preview: the retrieval & output configuration
+        // (retrievalInstructions, answerInstructions, outputMode,
+        // retrievalReasoningEffort, per-source serving flags) does not
+        // exist in the stable api-version — a stable GET silently omits it
+        // and a stable PUT cannot set it.
+        channel: Channel::Preview,
         volatile_fields: COMMON_VOLATILE,
         read_only_fields: &[],
         secret_fields: &["models[].apiKey", "models[].azureOpenAIParameters.apiKey"],

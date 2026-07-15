@@ -439,11 +439,12 @@ mod tests {
             url,
             "https://test-svc.search.windows.net/indexes?api-version=2026-04-01"
         );
-        // agentic retrieval is GA in 2026-04-01
+        // Knowledge bases are GA, but their retrieval & output configuration
+        // only exists in preview — rigg manages them on the preview channel.
         let url = client.collection_url(ResourceKind::KnowledgeBase);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgeBases?api-version=2026-04-01"
+            "https://test-svc.search.windows.net/knowledgeBases?api-version=2026-05-01-preview"
         );
         let url = client.resource_url(ResourceKind::KnowledgeSource, "ks");
         assert_eq!(
