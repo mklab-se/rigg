@@ -69,6 +69,21 @@ environments unless `env` is set". No schema change (the `env` param already exi
 - `crates/rigg/tests/cli_surface.rs`: envs without connections → LocalOnly rows per env.
 - Token cache unit test in `auth.rs`.
 
+## Addendum (same patch): adopt env clarity
+
+User-requested during implementation:
+
+- `rigg adopt` prints the same target block as push/pull before touching the
+  cloud: `Adopt into project 'x' from environment 'y':` + service names and
+  resolved URLs (`Remote::print_targets`). The old context-free legend
+  ("unmanaged resources from the configured service") is removed.
+- With several environments configured and no explicit selection
+  (`--env`/`RIGG_ENV`), adopt no longer silently uses the `default: true`
+  env: interactive runs get an environment picker; non-interactive runs get
+  a usage error (exit 2) naming the environments. A lone environment is
+  used as-is. (`resolve_env_or_choose` in `commands/mod.rs`.)
+- "Nothing to adopt/delete" messages name the environment they looked at.
+
 ## Out of scope
 
 `rigg env list`, `promote`, `diff --compare-env` unchanged.

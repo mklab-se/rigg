@@ -56,12 +56,12 @@ Mutating tools (`rigg_pull`, `rigg_push`, `rigg_delete`) follow a **preview/forc
 
 ### rigg_status
 
-Sync status per project: which resources are in sync, local-ahead, remote-ahead, or conflicted, plus unmanaged remote resources.
+Sync status per project: which resources are in sync, local-ahead, remote-ahead, or conflicted, plus unmanaged remote resources. Covers all environments unless `env` narrows to one; an unreachable environment is reported per env without hiding the others.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `project` | string? | Project name (omit when the workspace has exactly one project) |
-| `env` | string? | Environment name |
+| `env` | string? | Environment name (omit for all environments) |
 
 ### rigg_describe
 

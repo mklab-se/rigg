@@ -205,7 +205,8 @@ rigg az kb ask <name> "What does..."    # agentic retrieval: grounding + referen
 rigg az agent ask <name> "Summarize..." # single-shot prompt to a Foundry agent
 
 rigg delete my-rag --remote     # delete the project's resources from Azure (files kept)
-rigg status                     # per-resource sync state across all projects
+rigg status                     # per-resource sync state, all projects & environments
+rigg status --env prod          # narrow to one environment
 ```
 
 After every successful push, rigg fetches the document back from Azure, normalizes it, and updates the local file and sync baseline — so server-side defaults never show up as false drift.

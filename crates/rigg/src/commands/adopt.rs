@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow};
+use colored::Colorize;
 use serde_json::{Value, json};
 
 use rigg_core::registry::{self, Domain};
@@ -11,7 +12,9 @@ use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
 use crate::cli::AdoptArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
-use crate::commands::{CommandError, GlobalContext, interactive, load_workspace, new, resolve_env};
+use crate::commands::{
+    CommandError, GlobalContext, interactive, load_workspace, new, resolve_env_or_choose,
+};
 
 /// What the user asked to adopt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +77,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
 
     let ws = load_workspace()?;
-    let env = resolve_env(&ws, ctx)?;
+    let env = resolve_env_or_choose(&ws, ctx, "Adopt")?;
     assert_exclusive_ownership(&ws, &env.name)?;
     let plain = ctx.no_color;
 
@@ -133,6 +136,15 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 
     let remote = Remote::for_project(&env, project);
     ensure_any_connection(&remote, project)?;
+    if !ctx.json() {
+        println!(
+            "{} into project '{}' from environment '{}':",
+            "Adopt".bold(),
+            project.name.bold(),
+            env.name.bold()
+        );
+        remote.print_targets();
+    }
     let snapshot = remote.snapshot().await?;
     let snap_map: BTreeMap<String, (ResourceRef, Value)> = snapshot
         .iter()
@@ -146,15 +158,11 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     if selectors.is_empty() {
         let candidates = wizard_candidates(&snapshot, &owned_by_any, &auto_created, &project.name);
         if candidates.is_empty() {
-            println!("Nothing to adopt — everything visible is already managed.");
+            println!(
+                "Nothing to adopt in environment '{}' — everything visible there is already managed.",
+                env.name
+            );
             return Ok(());
-        }
-        // Service legend
-        if remote.has_foundry() {
-            println!("Foundry: unmanaged resources from the configured account/project");
-        }
-        if remote.has_search() {
-            println!("Search:  unmanaged resources from the configured service");
         }
         let labels: Vec<String> = candidates.iter().map(|(_, l)| l.clone()).collect();
         let picked = interactive::multi_select(
@@ -378,7 +386,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
 
     if args.dry_run {
-        report(ctx, &to_adopt, &skipped, &dep_keys, true)?;
+        report(ctx, &env.name, &to_adopt, &skipped, &dep_keys, true)?;
         return Ok(());
     }
 
@@ -389,7 +397,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         state.set_baseline(r, doc);
     }
     state.save(&ws, &env.name, &project.name)?;
-    report(ctx, &to_adopt, &skipped, &dep_keys, false)?;
+    report(ctx, &env.name, &to_adopt, &skipped, &dep_keys, false)?;
 
     // ---- teach the scriptable form ----
     if wizard && !wizard_chosen.is_empty() && !args.dry_run {
@@ -534,6 +542,7 @@ fn equivalent_command(project: &str, chosen: &[String], with_deps: bool) -> Stri
 
 fn report(
     ctx: &GlobalContext,
+    env_name: &str,
     to_adopt: &[(ResourceRef, Value)],
     skipped: &[(String, String)],
     dep_keys: &BTreeSet<String>,
@@ -553,7 +562,7 @@ fn report(
         return Ok(());
     }
     if to_adopt.is_empty() {
-        println!("Nothing to adopt (no unmanaged resources matched).");
+        println!("Nothing to adopt in environment '{env_name}' (no unmanaged resources matched).");
     }
     for (r, _) in to_adopt {
         let tag = if dep_keys.contains(&r.key()) {

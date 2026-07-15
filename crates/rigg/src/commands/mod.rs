@@ -91,13 +91,14 @@ pub fn exit_code_for(result: Result<()>) -> ExitCode {
     }
 }
 
-fn is_auth_error(err: &rigg_client::error::ClientError) -> bool {
+pub fn is_auth_error(err: &rigg_client::error::ClientError) -> bool {
     matches!(
         err,
         rigg_client::error::ClientError::Api {
             status: 401 | 403,
             ..
-        }
+        } | rigg_client::error::ClientError::Auth(_)
+            | rigg_client::error::ClientError::Forbidden { .. }
     )
 }
 
@@ -186,6 +187,52 @@ pub fn select_projects<'w>(
 /// Resolve the environment for this invocation.
 pub fn resolve_env(ws: &Workspace, ctx: &GlobalContext) -> Result<ResolvedEnv> {
     Ok(ws.resolve_env(ctx.env.as_deref())?)
+}
+
+/// Resolve the environment for commands where silently acting on the wrong
+/// one is costly (adopt): an explicit selection (`--env` / `RIGG_ENV`) always
+/// wins and a lone configured environment is used as-is, but with several
+/// environments the user must choose — interactively when possible, otherwise
+/// a usage error naming the candidates. The `default: true` marker is
+/// deliberately NOT enough here.
+pub fn resolve_env_or_choose(
+    ws: &Workspace,
+    ctx: &GlobalContext,
+    verb: &str,
+) -> Result<ResolvedEnv> {
+    if ctx.env.is_some() || std::env::var("RIGG_ENV").is_ok() {
+        return resolve_env(ws, ctx);
+    }
+    let names: Vec<String> = ws.config.environments.keys().cloned().collect();
+    match names.as_slice() {
+        [] => resolve_env(ws, ctx), // standard "no environment" error
+        [only] => Ok(ws.resolve_env(Some(only))?),
+        _ if ctx.interactive() => {
+            let default = ws.default_env_name();
+            let labels: Vec<String> = names
+                .iter()
+                .map(|n| {
+                    if Some(n.as_str()) == default {
+                        format!("{n} (default)")
+                    } else {
+                        n.clone()
+                    }
+                })
+                .collect();
+            let picked = interactive::select(
+                &format!("{verb} from which environment?"),
+                labels,
+                ctx.no_color,
+            )?;
+            let name = picked.trim_end_matches(" (default)");
+            Ok(ws.resolve_env(Some(name))?)
+        }
+        _ => Err(anyhow!(CommandError::Usage(format!(
+            "multiple environments configured ({}); pass --env <name> (or set RIGG_ENV) to say which one to {} from",
+            names.join(", "),
+            verb.to_lowercase(),
+        )))),
+    }
 }
 
 /// Gate a cloud-mutating operation (`push` apply/`--prune`, `delete

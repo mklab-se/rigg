@@ -1,7 +1,51 @@
 //! Azure authentication providers
 
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use thiserror::Error;
+
+/// Process-wide cache of Azure CLI tokens per resource scope. Every `az
+/// account get-access-token` call spawns a subprocess; multi-env commands
+/// (e.g. `rigg status` fanning out over all environments) would otherwise
+/// pay that cost once per request. Entries are reused well below Azure's
+/// token lifetime; the single lock also serializes fetches so concurrent
+/// requests can't stampede `az`.
+struct TokenCache {
+    ttl: Duration,
+    entries: Mutex<HashMap<String, (String, Instant)>>,
+}
+
+impl TokenCache {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get_or_fetch(
+        &self,
+        scope: &str,
+        fetch: impl FnOnce() -> Result<String, AuthError>,
+    ) -> Result<String, AuthError> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some((token, acquired)) = entries.get(scope)
+            && acquired.elapsed() < self.ttl
+        {
+            return Ok(token.clone());
+        }
+        let token = fetch()?;
+        entries.insert(scope.to_string(), (token.clone(), Instant::now()));
+        Ok(token)
+    }
+}
+
+fn az_token_cache() -> &'static TokenCache {
+    static CACHE: OnceLock<TokenCache> = OnceLock::new();
+    CACHE.get_or_init(|| TokenCache::new(Duration::from_secs(300)))
+}
 
 /// Authentication errors
 #[derive(Debug, Error)]
@@ -137,6 +181,10 @@ impl AzCliAuth {
 
     /// Get an access token for Azure Resource Manager (management.azure.com)
     pub fn get_arm_token() -> Result<String, AuthError> {
+        az_token_cache().get_or_fetch("https://management.azure.com", Self::fetch_arm_token)
+    }
+
+    fn fetch_arm_token() -> Result<String, AuthError> {
         let output = Command::new("az")
             .args([
                 "account",
@@ -181,6 +229,16 @@ impl Default for AzCliAuth {
 
 impl AuthProvider for AzCliAuth {
     fn get_token(&self) -> Result<String, AuthError> {
+        az_token_cache().get_or_fetch(self.resource_scope, || self.fetch_token())
+    }
+
+    fn method_name(&self) -> &'static str {
+        "Azure CLI"
+    }
+}
+
+impl AzCliAuth {
+    fn fetch_token(&self) -> Result<String, AuthError> {
         let output = Command::new("az")
             .args([
                 "account",
@@ -226,10 +284,6 @@ impl AuthProvider for AzCliAuth {
         }
 
         Ok(token)
-    }
-
-    fn method_name(&self) -> &'static str {
-        "Azure CLI"
     }
 }
 
@@ -625,5 +679,65 @@ mod tests {
             .expect("failed to run `false`");
         let detail = token_error_detail("  ERROR: something specific broke  ", status);
         assert_eq!(detail, "ERROR: something specific broke");
+    }
+}
+
+#[cfg(test)]
+mod token_cache_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    #[test]
+    fn second_lookup_within_ttl_reuses_token_without_fetching() {
+        let cache = TokenCache::new(Duration::from_secs(300));
+        let fetches = Cell::new(0u32);
+        let fetch = || {
+            fetches.set(fetches.get() + 1);
+            Ok("tok-1".to_string())
+        };
+        assert_eq!(cache.get_or_fetch("scope-a", fetch).unwrap(), "tok-1");
+        assert_eq!(
+            cache
+                .get_or_fetch("scope-a", || panic!("must not fetch"))
+                .unwrap(),
+            "tok-1"
+        );
+        assert_eq!(fetches.get(), 1);
+    }
+
+    #[test]
+    fn expired_entry_is_refetched() {
+        let cache = TokenCache::new(Duration::ZERO);
+        cache
+            .get_or_fetch("scope-a", || Ok("old".to_string()))
+            .unwrap();
+        let got = cache
+            .get_or_fetch("scope-a", || Ok("new".to_string()))
+            .unwrap();
+        assert_eq!(got, "new");
+    }
+
+    #[test]
+    fn scopes_are_cached_independently() {
+        let cache = TokenCache::new(Duration::from_secs(300));
+        cache
+            .get_or_fetch("scope-a", || Ok("tok-a".to_string()))
+            .unwrap();
+        let got = cache
+            .get_or_fetch("scope-b", || Ok("tok-b".to_string()))
+            .unwrap();
+        assert_eq!(got, "tok-b");
+    }
+
+    #[test]
+    fn fetch_errors_are_not_cached() {
+        let cache = TokenCache::new(Duration::from_secs(300));
+        let err = cache.get_or_fetch("scope-a", || Err(AuthError::TokenError("boom".to_string())));
+        assert!(err.is_err());
+        let got = cache
+            .get_or_fetch("scope-a", || Ok("recovered".to_string()))
+            .unwrap();
+        assert_eq!(got, "recovered");
     }
 }

@@ -2298,3 +2298,257 @@ async fn az_agent_ask_renders_reply() {
     assert_eq!(req["agent_reference"]["name"], "Regulus");
     assert_eq!(req["input"], "Say hello");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-environment status
+// ---------------------------------------------------------------------------
+
+/// Workspace with `dev` (default) and `prod` envs pointed at two different
+/// mock servers.
+fn workspace_two_env_servers(dev_endpoint: &str, prod_endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "environments:\n  dev:\n    default: true\n    search: {{ service: mock-dev, endpoint: \"{dev_endpoint}\" }}\n  prod:\n    search: {{ service: mock-prod, endpoint: \"{prod_endpoint}\" }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+async fn mock_auth_failure(server: &MockServer) {
+    for p in [
+        "datasources",
+        "indexes",
+        "skillsets",
+        "indexers",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+                "error": {"code": "Unauthorized", "message": "token expired"}
+            })))
+            .mount(server)
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn status_reports_all_environments_by_default() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "docs", "fields": []}]
+        })))
+        .mount(&dev)
+        .await;
+    mock_empty_lists(&dev).await;
+    mock_empty_lists(&prod).await;
+
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "docs",
+        &json!({"name": "docs", "fields": []}),
+    );
+    // prod only exists locally
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "docs",
+        &json!({"name": "docs", "fields": []}),
+    );
+    // make prod remote genuinely empty: nothing extra needed (empty lists)
+
+    rigg(ws.path())
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("env: dev (default)"))
+        .stdout(predicate::str::contains("env: prod"))
+        .stdout(predicate::str::contains("in sync"))
+        .stdout(predicate::str::contains("local only"));
+}
+
+#[tokio::test]
+async fn status_env_selection_narrows_to_one_environment() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_empty_lists(&dev).await;
+    mock_empty_lists(&prod).await;
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+
+    // --env flag narrows
+    rigg(ws.path())
+        .args(["status", "--env", "prod"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("env: prod"))
+        .stdout(predicate::str::contains("env: dev").not());
+
+    // RIGG_ENV narrows too (explicit selection)
+    let mut cmd = rigg(ws.path());
+    cmd.env("RIGG_ENV", "dev");
+    cmd.args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("env: dev"))
+        .stdout(predicate::str::contains("env: prod").not());
+}
+
+#[tokio::test]
+async fn status_degrades_per_env_when_one_env_fails_auth() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_empty_lists(&dev).await;
+    mock_auth_failure(&prod).await;
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "docs",
+        &json!({"name": "docs", "fields": []}),
+    );
+
+    // dev renders fully; prod shows one error line; overall exit 0
+    rigg(ws.path())
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("env: dev (default)"))
+        .stdout(predicate::str::contains("local only"))
+        .stdout(predicate::str::contains("unreachable"))
+        .stdout(predicate::str::contains("401"))
+        .stdout(predicate::str::contains("rigg auth doctor"));
+}
+
+#[tokio::test]
+async fn status_exits_4_when_all_envs_fail_auth() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_auth_failure(&dev).await;
+    mock_auth_failure(&prod).await;
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "docs",
+        &json!({"name": "docs", "fields": []}),
+    );
+
+    rigg(ws.path()).args(["status"]).assert().code(4);
+}
+
+#[tokio::test]
+async fn status_json_groups_by_environment() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_empty_lists(&dev).await;
+    mock_auth_failure(&prod).await;
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "docs",
+        &json!({"name": "docs", "fields": []}),
+    );
+
+    let out = rigg(ws.path())
+        .args(["status", "--output", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: Value = serde_json::from_slice(&out).unwrap();
+    let envs = v.as_array().expect("top-level array of environments");
+    assert_eq!(envs.len(), 2);
+    // default env first
+    assert_eq!(envs[0]["env"], "dev");
+    assert_eq!(envs[0]["default"], true);
+    assert!(envs[0]["error"].is_null());
+    assert_eq!(envs[0]["projects"][0]["project"], "demo");
+    assert!(
+        envs[0]["projects"][0]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["resource"].as_str().unwrap().contains("docs"))
+    );
+    assert_eq!(envs[1]["env"], "prod");
+    assert!(envs[1]["error"].as_str().unwrap().contains("401"));
+    assert!(envs[1]["projects"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn adopt_prints_environment_and_target_urls() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_empty_lists(&dev).await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "hotels", "fields": [{"name":"id","type":"Edm.String","key":true}]}]
+        })))
+        .mount(&prod)
+        .await;
+    for p in [
+        "datasources",
+        "skillsets",
+        "indexers",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(&prod)
+            .await;
+    }
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+
+    rigg(ws.path())
+        .args(["adopt", "demo", "indexes/hotels", "--env", "prod"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("environment 'prod'"))
+        .stdout(predicate::str::contains(prod.uri()));
+}
+
+#[tokio::test]
+async fn adopt_multi_env_without_selection_requires_explicit_env() {
+    let dev = MockServer::start().await;
+    let prod = MockServer::start().await;
+    mock_empty_lists(&dev).await;
+    mock_empty_lists(&prod).await;
+    let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
+
+    // Non-interactive with several environments: refuse to guess, even though
+    // dev is marked default — adopting from the wrong env is too costly.
+    rigg(ws.path())
+        .args(["adopt", "demo", "all"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("dev"))
+        .stderr(predicate::str::contains("prod"))
+        .stderr(predicate::str::contains("--env"));
+
+    // RIGG_ENV counts as an explicit selection.
+    let mut cmd = rigg(ws.path());
+    cmd.env("RIGG_ENV", "dev");
+    cmd.args(["adopt", "demo", "all"]).assert().success();
+}

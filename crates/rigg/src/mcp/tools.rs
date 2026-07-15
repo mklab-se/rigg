@@ -235,7 +235,7 @@ fn with_common<'a>(mut args: Vec<&'a str>, env: &'a Option<String>, json: bool) 
 #[tool_router]
 impl RiggMcpServer {
     #[tool(
-        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources. Scoped to ONE environment (the default unless `env` is set)."
+        description = "Show sync status per project: which resources are in sync, local-ahead, remote-ahead, conflicted, plus unmanaged remote resources. Covers ALL environments unless `env` is set (then just that one). Unreachable environments are reported per env without failing the others."
     )]
     async fn rigg_status(&self, Parameters(params): Parameters<ProjectParams>) -> String {
         let mut args = vec!["status"];

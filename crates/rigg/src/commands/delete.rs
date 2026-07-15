@@ -41,8 +41,8 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     }
     if items.is_empty() {
         println!(
-            "Nothing to delete: no remote resources found for project '{}'.",
-            project.name
+            "Nothing to delete: no remote resources found for project '{}' in environment '{}'.",
+            project.name, env.name
         );
         return Ok(());
     }
