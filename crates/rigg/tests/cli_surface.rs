@@ -1302,3 +1302,47 @@ fn az_surface_parses() {
     // reset without name fails parse
     rigg().args(["az", "indexer", "reset"]).assert().code(2);
 }
+
+#[test]
+fn validate_rejects_real_functions_key_header_exit_3() {
+    let ws = workspace();
+    let dir = ws.path().join("projects/demo/envs/dev/search/skillsets");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("enrich.json"),
+        r##"{"name": "enrich", "skills": [{
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": "https://fn.azurewebsites.net/api/enrich",
+            "httpHeaders": {"X-Functions-Key": "abc123realkey=="}
+        }]}"##,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("never stores secrets"));
+}
+
+#[test]
+fn validate_accepts_redacted_functions_key_header() {
+    let ws = workspace();
+    let dir = ws.path().join("projects/demo/envs/dev/search/skillsets");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("enrich.json"),
+        r##"{"name": "enrich", "skills": [{
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": "https://fn.azurewebsites.net/api/enrich",
+            "x-rigg-auth": "function-key",
+            "httpHeaders": {"x-functions-key": "<redacted>"}
+        }]}"##,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate"])
+        .assert()
+        .success();
+}

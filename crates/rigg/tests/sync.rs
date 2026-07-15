@@ -2552,3 +2552,124 @@ async fn adopt_multi_env_without_selection_requires_explicit_env() {
     cmd.env("RIGG_ENV", "dev");
     cmd.args(["adopt", "demo", "all"]).assert().success();
 }
+
+// ---------------------------------------------------------------------------
+// Issue #4: redacted x-functions-key header + side-by-side index projections
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn push_blocks_non_interactively_on_redacted_functions_key_header() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "enrich",
+        &json!({
+            "name": "enrich",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "name": "ExtractMetadata",
+                "uri": "https://example-fn.azurewebsites.net/api/ExtractMetadata",
+                "httpMethod": "POST",
+                "authResourceId": null,
+                "httpHeaders": {"x-functions-key": "<redacted>"}
+            }]
+        }),
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("Web API"));
+
+    // Blocked BEFORE mutation: nothing was PUT.
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 0, "no mutation may happen before the auth gate");
+}
+
+#[tokio::test]
+async fn migrate_side_by_side_rewrites_index_projection_targets() {
+    let server = MockServer::start().await;
+    // The generated skillset carries a WebApi skill (header-keyed) and index
+    // projections bound to the old generated index. Mounted BEFORE
+    // mount_blob_ks's plain skillset: first matching mock wins.
+    Mock::given(method("GET"))
+        .and(path("/skillsets/support-ks-skillset"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xSS2\"",
+            "name": "support-ks-skillset",
+            "skills": [{
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "name": "ExtractMetadata",
+                "uri": "https://example-fn.azurewebsites.net/api/ExtractMetadata",
+                "httpMethod": "POST",
+                "httpHeaders": {"x-functions-key": "<redacted>"}
+            }],
+            "indexProjections": {
+                "selectors": [{
+                    "targetIndexName": "support-ks-index",
+                    "parentKeyFieldName": "parent_id",
+                    "sourceContext": "/document/pages/*",
+                    "mappings": []
+                }]
+            }
+        })))
+        .mount(&server)
+        .await;
+    mount_blob_ks(&server, "support-ks").await;
+    for p in [
+        "/knowledgeSources/support2-ks",
+        "/datasources/support2-ks-datasource",
+        "/indexes/support2-ks-index",
+        "/skillsets/support2-ks-skillset",
+        "/indexers/support2-ks-indexer",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(p.to_string()))
+            .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+            .mount(&server)
+            .await;
+    }
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "support-ks",
+        &json!({"name": "support-ks", "kind": "azureBlob",
+                "azureBlobParameters": {"containerName": "docs"}}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "support-ks",
+            "--rename",
+            "support2-ks",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        // Non-interactive migrate warns about the unauthorized Web API skill.
+        .stdout(predicate::str::contains("Web API"));
+
+    let base = "projects/demo/envs/dev/search";
+    let ss = read_json(
+        ws.path(),
+        &format!("{base}/skillsets/support2-ks-skillset.json"),
+    );
+    assert_eq!(
+        ss["indexProjections"]["selectors"][0]["targetIndexName"], "support2-ks-index",
+        "index projections must follow the side-by-side rename"
+    );
+}

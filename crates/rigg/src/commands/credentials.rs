@@ -299,6 +299,50 @@ pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
 /// Indices of Web API skills whose auth was lost to redaction: the URI
 /// carries Azure's `code=<redacted>` placeholder and the skill has neither
 /// AAD auth (`authResourceId`) nor the push-time key annotation.
+/// The Azure Functions key header. Azure redacts its value on GET exactly
+/// like the `code` uri parameter; header names are matched case-insensitively.
+pub const FUNCTIONS_KEY_HEADER: &str = "x-functions-key";
+
+/// The skill's function-key header entry, if any: (exact key as written, value).
+pub fn function_key_header(skill: &Value) -> Option<(&String, &Value)> {
+    skill
+        .get("httpHeaders")?
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(FUNCTIONS_KEY_HEADER))
+}
+
+/// A key value Azure Search cannot authenticate with: redacted, empty, null.
+fn unusable_key_value(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::String(s) => s.trim().is_empty() || s.contains("<redacted>"),
+        _ => false,
+    }
+}
+
+/// Put a real function key into the carrier the skill actually uses: the
+/// `x-functions-key` header when present (name case preserved, uri left
+/// alone), otherwise the uri's `code` parameter.
+pub fn place_function_key(skill: &mut Value, key: &str) {
+    let header_name = function_key_header(skill).map(|(k, _)| k.clone());
+    if let Some(name) = header_name {
+        skill["httpHeaders"][name] = Value::String(key.to_string());
+        return;
+    }
+    let uri = skill.get("uri").and_then(Value::as_str).unwrap_or_default();
+    let injected = set_code_param(uri, key);
+    skill["uri"] = Value::String(injected);
+}
+
+/// Remove the function-key header (any casing) — the Entra ID counterpart of
+/// `strip_code_param`.
+pub fn remove_function_key_header(skill: &mut Value) {
+    if let Some(headers) = skill.get_mut("httpHeaders").and_then(Value::as_object_mut) {
+        headers.retain(|k, _| !k.eq_ignore_ascii_case(FUNCTIONS_KEY_HEADER));
+    }
+}
+
 pub fn webapi_skills_missing_auth(doc: &Value) -> Vec<usize> {
     let Some(skills) = doc.get("skills").and_then(Value::as_array) else {
         return Vec::new();
@@ -307,12 +351,16 @@ pub fn webapi_skills_missing_auth(doc: &Value) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, s)| {
+            let unusable_uri_key = s
+                .get("uri")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.contains("code=<redacted>"));
+            let unusable_header_key =
+                function_key_header(s).is_some_and(|(_, v)| unusable_key_value(v));
             s.get("@odata.type")
                 .and_then(Value::as_str)
                 .is_some_and(|t| t.ends_with("WebApiSkill"))
-                && s.get("uri")
-                    .and_then(Value::as_str)
-                    .is_some_and(|u| u.contains("code=<redacted>"))
+                && (unusable_uri_key || unusable_header_key)
                 && s.get("authResourceId")
                     .and_then(Value::as_str)
                     .is_none_or(str::is_empty)
@@ -445,8 +493,9 @@ pub async fn resolve_webapi_auth(
         let audience = entra_audience.expect("ready implies audience");
         doc["skills"][idx]["authResourceId"] = Value::String(audience.clone());
         doc["skills"][idx]["uri"] = Value::String(strip_code_param(&uri));
+        remove_function_key_header(&mut doc["skills"][idx]);
         println!(
-            "  {} authResourceId set to '{audience}' (uri key parameter removed)",
+            "  {} authResourceId set to '{audience}' (uri key parameter and x-functions-key header removed)",
             "✓".green()
         );
         println!(
@@ -536,8 +585,7 @@ pub async fn inject_function_keys(body: &mut Value) -> Result<()> {
         let arm = arm.as_ref().expect("just initialized");
         let site_id = arm.find_web_site_id(&site).await?;
         let key = arm.function_key(&site_id, &function).await?;
-        let injected = set_code_param(uri, &key);
-        skill["uri"] = Value::String(injected);
+        place_function_key(skill, &key);
     }
     Ok(())
 }
@@ -682,5 +730,123 @@ mod tests {
         assert!(!missing_credentials(
             &json!({"credentials": {"connectionString": "ResourceId=/x;"}})
         ));
+    }
+}
+
+#[cfg(test)]
+mod function_key_header_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn webapi_skillset(uri: &str, extra: Value) -> Value {
+        let mut skill = json!({
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": uri
+        });
+        if let (Some(s), Some(e)) = (skill.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                s.insert(k.clone(), v.clone());
+            }
+        }
+        json!({"name": "ss", "skills": [skill]})
+    }
+
+    const URI: &str = "https://fn.azurewebsites.net/api/enrich";
+
+    #[test]
+    fn detects_redacted_functions_key_header() {
+        let doc = webapi_skillset(
+            URI,
+            json!({"httpHeaders": {"x-functions-key": "<redacted>"}}),
+        );
+        assert_eq!(webapi_skills_missing_auth(&doc), vec![0]);
+    }
+
+    #[test]
+    fn header_name_matching_is_case_insensitive() {
+        let doc = webapi_skillset(
+            URI,
+            json!({"httpHeaders": {"X-Functions-Key": "<redacted>"}}),
+        );
+        assert_eq!(webapi_skills_missing_auth(&doc), vec![0]);
+    }
+
+    #[test]
+    fn empty_or_null_header_values_are_unusable() {
+        let doc = webapi_skillset(URI, json!({"httpHeaders": {"x-functions-key": ""}}));
+        assert_eq!(webapi_skills_missing_auth(&doc), vec![0]);
+        let doc = webapi_skillset(URI, json!({"httpHeaders": {"x-functions-key": null}}));
+        assert_eq!(webapi_skills_missing_auth(&doc), vec![0]);
+    }
+
+    #[test]
+    fn absent_header_is_not_flagged() {
+        // Anonymous functions are legitimate — no header, no code param, no flag.
+        let doc = webapi_skillset(
+            URI,
+            json!({"httpHeaders": {"content-type": "application/json"}}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+        let doc = webapi_skillset(URI, json!({}));
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+    }
+
+    #[test]
+    fn auth_resource_id_or_annotation_suppresses_header_detection() {
+        let doc = webapi_skillset(
+            URI,
+            json!({"httpHeaders": {"x-functions-key": "<redacted>"}, "authResourceId": "api://x"}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+        let doc = webapi_skillset(
+            URI,
+            json!({"httpHeaders": {"x-functions-key": "<redacted>"}, "x-rigg-auth": "function-key"}),
+        );
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+    }
+
+    #[test]
+    fn real_header_value_is_not_flagged_as_missing() {
+        // A real key is not "missing auth" — validate rejects it separately
+        // under the no-secrets policy.
+        let doc = webapi_skillset(URI, json!({"httpHeaders": {"x-functions-key": "real-key"}}));
+        assert!(webapi_skills_missing_auth(&doc).is_empty());
+    }
+
+    #[test]
+    fn place_function_key_prefers_header_carrier_preserving_name_case() {
+        let mut skill = json!({
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": URI,
+            "httpHeaders": {"X-Functions-Key": "<redacted>"}
+        });
+        place_function_key(&mut skill, "real-key");
+        assert_eq!(skill["httpHeaders"]["X-Functions-Key"], "real-key");
+        assert_eq!(
+            skill["uri"], URI,
+            "uri untouched when header is the carrier"
+        );
+    }
+
+    #[test]
+    fn place_function_key_falls_back_to_code_param() {
+        let mut skill = json!({
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": format!("{URI}?code=<redacted>")
+        });
+        place_function_key(&mut skill, "real-key");
+        assert_eq!(skill["uri"], format!("{URI}?code=real-key"));
+    }
+
+    #[test]
+    fn remove_function_key_header_strips_any_casing() {
+        let mut skill = json!({
+            "httpHeaders": {"X-FUNCTIONS-KEY": "<redacted>", "content-type": "application/json"}
+        });
+        remove_function_key_header(&mut skill);
+        assert_eq!(
+            skill["httpHeaders"],
+            json!({"content-type": "application/json"})
+        );
     }
 }

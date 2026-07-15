@@ -137,6 +137,11 @@ static KINDS: &[KindMeta] = &[
                 path: "knowledgeStore.projections[].objects[].storageContainer",
                 to: ResourceKind::Index,
             },
+            // Index projections write enriched documents into an index by name.
+            RefField {
+                path: "indexProjections.selectors[].targetIndexName",
+                to: ResourceKind::Index,
+            },
         ],
         immutable_fields: &[],
     },
@@ -451,6 +456,56 @@ pub fn env_pinned(kind: ResourceKind) -> Vec<&'static str> {
         }
     }
     out
+}
+
+/// Mutable counterpart of [`collect_path`]: visit every value at `path`.
+fn collect_path_mut(v: &mut Value, path: &str, f: &mut dyn FnMut(&mut Value)) {
+    fn walk(v: &mut Value, segments: &[&str], f: &mut dyn FnMut(&mut Value)) {
+        let Some((head, rest)) = segments.split_first() else {
+            f(v);
+            return;
+        };
+        if let Some(key) = head.strip_suffix("[]") {
+            let target = if key.is_empty() {
+                Some(v)
+            } else {
+                v.get_mut(key)
+            };
+            if let Some(Value::Array(arr)) = target {
+                for item in arr {
+                    walk(item, rest, f);
+                }
+            }
+        } else if let Some(next) = v.get_mut(*head) {
+            walk(next, rest, f);
+        }
+    }
+    let segments: Vec<&str> = path.split('.').collect();
+    walk(v, &segments, f);
+}
+
+/// Rewrite reference values in `body`: every `reference_fields` path of
+/// `kind` that points at `to` and currently equals `old` is set to `new`.
+/// Registry-driven so renames (e.g. side-by-side migration) follow the same
+/// table as graph ordering — a reference the graph can see is a reference a
+/// rename will rewrite.
+pub fn rename_reference(
+    kind: ResourceKind,
+    body: &mut Value,
+    to: ResourceKind,
+    old: &str,
+    new: &str,
+) {
+    for rf in meta(kind).reference_fields {
+        if rf.to != to {
+            continue;
+        }
+        collect_path_mut(body, rf.path, &mut |v| {
+            if v.as_str() == Some(old) {
+                *v = Value::String(new.to_string());
+            }
+        });
+    }
 }
 
 /// Extract all references from `body` per the kind's `reference_fields`,
@@ -1195,5 +1250,78 @@ mod tests {
         let src = json!({"name": "a"});
         restore_path(&mut dst, &src, "tools[].server_url");
         assert_eq!(dst["tools"][0]["server_url"], json!("kept"));
+    }
+}
+
+#[cfg(test)]
+mod index_projection_ref_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn skillset_index_projections_reference_the_index() {
+        let ss = json!({
+            "name": "ss",
+            "skills": [],
+            "indexProjections": {
+                "selectors": [
+                    {"targetIndexName": "proj-index-a"},
+                    {"targetIndexName": "proj-index-b"}
+                ]
+            }
+        });
+        let refs = extract_references(ResourceKind::Skillset, &ss);
+        assert!(refs.contains(&(ResourceKind::Index, "proj-index-a".into())));
+        assert!(refs.contains(&(ResourceKind::Index, "proj-index-b".into())));
+    }
+
+    #[test]
+    fn rename_reference_rewrites_only_matching_values() {
+        let mut ss = json!({
+            "name": "ss",
+            "indexProjections": {
+                "selectors": [
+                    {"targetIndexName": "old-index"},
+                    {"targetIndexName": "other-index"}
+                ]
+            }
+        });
+        rename_reference(
+            ResourceKind::Skillset,
+            &mut ss,
+            ResourceKind::Index,
+            "old-index",
+            "new-index",
+        );
+        assert_eq!(
+            ss["indexProjections"]["selectors"][0]["targetIndexName"],
+            "new-index"
+        );
+        assert_eq!(
+            ss["indexProjections"]["selectors"][1]["targetIndexName"],
+            "other-index"
+        );
+    }
+
+    #[test]
+    fn rename_reference_rewrites_indexer_fields() {
+        let mut idxr = json!({
+            "name": "i",
+            "dataSourceName": "old-ds",
+            "targetIndexName": "old-index",
+            "skillsetName": "old-ss"
+        });
+        rename_reference(
+            ResourceKind::Indexer,
+            &mut idxr,
+            ResourceKind::DataSource,
+            "old-ds",
+            "new-ds",
+        );
+        assert_eq!(idxr["dataSourceName"], "new-ds");
+        assert_eq!(
+            idxr["targetIndexName"], "old-index",
+            "other kinds untouched"
+        );
     }
 }

@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use rigg_core::migrate as core_migrate;
 use rigg_core::normalize::normalize_for_disk;
+use rigg_core::registry;
 use rigg_core::resources::{ResourceKind, ResourceRef, validate_resource_name};
 use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 
@@ -274,22 +275,17 @@ async fn side_by_side(
         }
     }
 
-    // Write the new pipeline: renamed docs with the indexer rewired.
+    // Write the new pipeline: renamed docs with every registry-known
+    // reference to an old generated sub-resource rewired to its new name
+    // (indexer dataSourceName/targetIndexName/skillsetName, skillset
+    // indexProjections selectors, ...).
     for (kind, doc) in sub_docs {
         let name = names[kind].clone();
         let mut disk = normalize_for_disk(*kind, doc);
         disk["name"] = Value::String(name.clone());
-        if *kind == ResourceKind::Indexer {
-            for (field, to_kind) in [
-                ("dataSourceName", ResourceKind::DataSource),
-                ("targetIndexName", ResourceKind::Index),
-                ("skillsetName", ResourceKind::Skillset),
-            ] {
-                if disk.get(field).and_then(Value::as_str).is_some() {
-                    if let Some(new) = names.get(&to_kind) {
-                        disk[field] = Value::String(new.clone());
-                    }
-                }
+        for (to_kind, new) in &names {
+            if let Some(old) = created.get(to_kind) {
+                registry::rename_reference(*kind, &mut disk, *to_kind, old, new);
             }
         }
         let r = ResourceRef::new(*kind, name);

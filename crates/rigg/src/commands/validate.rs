@@ -285,6 +285,27 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
              'ResourceId=...' connection and delete/rotate the leaked key"
         ));
     }
+    // Azure Functions keys in Web API skill headers. The header name is
+    // matched case-insensitively, which the registry's path table cannot
+    // express — hence checked here instead of via `secret_fields`.
+    if kind == ResourceKind::Skillset {
+        if let Some(skills) = value.get("skills").and_then(Value::as_array) {
+            for skill in skills {
+                if let Some((name, v)) = crate::commands::credentials::function_key_header(skill) {
+                    let real = v
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty() && !s.starts_with('<'));
+                    if real {
+                        problems.push(format!(
+                            "[{display}] header '{name}' contains a function key — rigg never stores secrets locally. \
+                             Keep the '<redacted>' placeholder and run `rigg push` interactively to choose Entra ID \
+                             auth (authResourceId) or push-time key resolution (x-rigg-auth: function-key)"
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn check_api_links(ws: &Workspace, value: &Value, display: &str, problems: &mut Vec<String>) {
