@@ -334,6 +334,12 @@ pub struct PushArgs {
     /// (time, ingestion cost, downtime)
     #[arg(long)]
     pub allow_replace: bool,
+
+    /// Also re-authorize Web API skills on IN-SYNC skillsets: re-resolve
+    /// redacted function keys (interactive) and re-PUT annotated skills with
+    /// a freshly fetched key. Ordinary pushes leave in-sync resources alone
+    #[arg(long)]
+    pub refresh_credentials: bool,
 }
 
 #[derive(Args)]

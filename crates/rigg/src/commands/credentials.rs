@@ -543,7 +543,7 @@ pub async fn resolve_webapi_auth(
         Ok(_) => {
             doc["skills"][idx][X_RIGG_AUTH] = Value::String(X_RIGG_AUTH_FUNCTION_KEY.to_string());
             println!(
-                "  {} key verified retrievable; the skill is annotated `{}: {}` — rigg fetches and injects it on every push, the file keeps the placeholder",
+                "  {} key verified retrievable; the skill is annotated `{}: {}` — rigg fetches and injects it whenever the skillset is pushed (or on `rigg push --refresh-credentials`), the file keeps the placeholder",
                 "✓".green(),
                 X_RIGG_AUTH,
                 X_RIGG_AUTH_FUNCTION_KEY

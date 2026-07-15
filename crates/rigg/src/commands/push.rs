@@ -128,13 +128,17 @@ async fn push_project(
         }
         match state.classify(r, Some(body), remote_doc.as_ref()) {
             SyncClass::InSync => {
-                // A skill annotated `x-rigg-auth: function-key` delegates its
-                // credential to push time: the annotation is invisible to the
-                // semantic comparison (x-rigg-* is stripped), and the server
-                // echoes a redacted key — so "in sync" cannot certify the
-                // remote key. Re-push with a freshly resolved key every time
-                // (idempotent, and it heals key rotation for free).
-                if r.kind == ResourceKind::Skillset && body.to_string().contains("\"x-rigg-auth\"")
+                // Azure redacts stored secrets on every GET, so "in sync"
+                // cannot certify the remote key of a Web API skill — but it
+                // cannot condemn it either (issue #5). Ordinary pushes leave
+                // in-sync resources alone; `--refresh-credentials` makes the
+                // re-authorization explicit: annotated skills re-PUT with a
+                // freshly fetched key, unresolved redacted ones enter the
+                // auth gate like any planned mutation.
+                if args.refresh_credentials
+                    && r.kind == ResourceKind::Skillset
+                    && (body.to_string().contains("\"x-rigg-auth\"")
+                        || !credentials::webapi_skills_missing_auth(body).is_empty())
                 {
                     to_push.push(PlanItem {
                         r: r.clone(),
@@ -188,34 +192,50 @@ async fn push_project(
         }
     }
 
-    // Scan EVERY local skillset for Web API skills whose key was lost to
-    // redaction — an in-sync one is not a healthy one here: the server
-    // echoes the key redacted, so both sides can "agree" on a placeholder
-    // that fails at enrichment time. Interactively this pulls an otherwise
-    // empty push into the resolution flow.
+    // Web API skills with unusable (redacted) auth are gated ONLY when this
+    // push would actually PUT them — like the other credential preflights.
+    // For everything else (typically in-sync resources) Azure's redaction is
+    // routine secret hygiene, not evidence of a broken key (issue #5): those
+    // are surfaced as a non-blocking note pointing at --refresh-credentials.
     let mut webapi_missing: Vec<ResourceRef> = Vec::new();
-    for (r, body) in &items {
-        if r.kind == ResourceKind::Skillset
-            && !credentials::webapi_skills_missing_auth(body).is_empty()
+    for item in &to_push {
+        if item.r.kind == ResourceKind::Skillset
+            && !credentials::webapi_skills_missing_auth(&item.body).is_empty()
         {
-            webapi_missing.push(r.clone());
+            webapi_missing.push(item.r.clone());
         }
     }
-
-    // Report the plan.
-    if to_push.is_empty()
-        && orphans.is_empty()
-        && conflicts.is_empty()
-        && replaces.is_empty()
-        && (webapi_missing.is_empty() || !ctx.interactive())
-    {
-        for r in &webapi_missing {
+    for bundle in &replaces {
+        for (r, body) in &bundle.sub {
+            if r.kind == ResourceKind::Skillset
+                && !credentials::webapi_skills_missing_auth(body).is_empty()
+            {
+                webapi_missing.push(r.clone());
+            }
+        }
+    }
+    let mut webapi_unknown: Vec<ResourceRef> = Vec::new();
+    for (r, body) in &items {
+        if r.kind == ResourceKind::Skillset
+            && !webapi_missing.contains(r)
+            && !credentials::webapi_skills_missing_auth(body).is_empty()
+        {
+            webapi_unknown.push(r.clone());
+        }
+    }
+    let print_webapi_unknown_notes = |unknown: &[ResourceRef]| {
+        for r in unknown {
             println!(
-                "  {} {} calls a custom Web API with a redacted key — enrichment will fail until it is authorized (run `rigg push` interactively)",
-                "!".yellow(),
-                r
+                "  note: {r} has a server-redacted Web API key (normal on Azure GETs, says nothing about the stored key) — if enrichment is failing, run `rigg push --refresh-credentials` to re-authorize"
             );
         }
+    };
+
+    // Report the plan. webapi_missing is empty whenever the plan is empty
+    // (it only flags planned mutations), so an ordinary no-op push stays a
+    // no-op — in-sync redacted skills get the note, nothing more.
+    if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() && replaces.is_empty() {
+        print_webapi_unknown_notes(&webapi_unknown);
         if !pending_relinks.is_empty() && !args.dry_run {
             finish_pending_relinks(
                 &remote,
@@ -352,25 +372,17 @@ async fn push_project(
         );
     }
 
-    // Custom Web API skills whose function key was lost to Azure's
-    // redaction: without auth the enrichment fails at indexing time for
+    // Custom Web API skills whose outgoing body would carry an unusable
+    // (redacted) key: PUTting the literal placeholder breaks enrichment for
     // every document — resolve now (Entra ID or push-time key), not then.
-    let in_plan: BTreeSet<String> = to_push
-        .iter()
-        .map(|p| p.r.key())
-        .chain(
-            replaces
-                .iter()
-                .flat_map(|b| b.sub.iter().map(|(sr, _)| sr.key())),
-        )
-        .collect();
     for r in &webapi_missing {
         println!(
-            "  {} {} calls a custom Web API with a redacted key — enrichment will fail until it is authorized (Entra ID or push-time function key)",
+            "  {} {} would push a custom Web API skill with an unusable (redacted) key — authorize it first (Entra ID or push-time function key)",
             "!".yellow(),
             r
         );
     }
+    print_webapi_unknown_notes(&webapi_unknown);
 
     if args.dry_run {
         println!("  (dry run — nothing pushed)");
@@ -536,18 +548,15 @@ async fn push_project(
                 );
             }
         } else {
-            let blocking: Vec<String> = webapi_missing
-                .iter()
-                .filter(|r| in_plan.contains(&r.key()))
-                .map(|r| r.to_string())
-                .collect();
-            if !blocking.is_empty() {
-                return Err(anyhow!(CommandError::Validation(format!(
-                    "{} call(s) a custom Web API with a redacted key — run `rigg push` interactively to \
-                     choose Entra ID auth (authResourceId) or a push-time-resolved function key",
-                    blocking.join(", ")
-                ))));
-            }
+            // webapi_missing only ever holds planned mutations, so blocking
+            // here can never trip on an untouched in-sync resource.
+            let blocking: Vec<String> = webapi_missing.iter().map(|r| r.to_string()).collect();
+            return Err(anyhow!(CommandError::Validation(format!(
+                "{} would push a custom Web API skill with an unusable (redacted) key — run \
+                 `rigg push` interactively to choose Entra ID auth (authResourceId) or a \
+                 push-time-resolved function key",
+                blocking.join(", ")
+            ))));
         }
     }
 

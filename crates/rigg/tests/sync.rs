@@ -6,7 +6,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 fn rigg(dir: &std::path::Path) -> Command {
@@ -2034,14 +2034,134 @@ async fn push_warns_about_in_sync_skillset_with_redacted_webapi_key() {
     let ws = workspace(&server.uri());
     write_resource(ws.path(), "skillsets", "webss", &ss);
 
-    // Non-interactive + in sync: no mutation, but the broken enrichment is
-    // called out instead of a silent "everything in sync".
+    // In sync: Azure redacts stored secrets on every GET, which says NOTHING
+    // about the remote key's validity (issue #5) — an ordinary push stays a
+    // quiet no-op with a non-blocking note, never a failure claim or prompt.
     rigg(ws.path())
         .args(["push", "demo", "--yes"])
         .assert()
         .success()
         .stdout(predicate::str::contains("everything in sync"))
-        .stdout(predicate::str::contains("redacted key"));
+        .stdout(predicate::str::contains("note:"))
+        .stdout(predicate::str::contains("--refresh-credentials"))
+        .stdout(predicate::str::contains("will fail").not());
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 0, "an in-sync redacted skill must not be re-PUT");
+}
+
+#[tokio::test]
+async fn push_in_sync_annotated_skillset_is_idempotent() {
+    let server = MockServer::start().await;
+    // Remote: redacted header, no annotation (Azure never sees x-rigg-*).
+    let remote_ss = json!({"name": "webss", "skills": [{
+        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+        "name": "enrich",
+        "uri": "https://fn.azurewebsites.net/api/enrich",
+        "httpHeaders": {"x-functions-key": "<redacted>"}
+    }]});
+    // Local: same skill, annotated for push-time key resolution.
+    let mut local_ss = remote_ss.clone();
+    local_ss["skills"][0]["x-rigg-auth"] = json!("function-key");
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(remote_ss))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "skillsets", "webss", &local_ss);
+
+    // Issue #5: an in-sync annotated skillset is NOT re-PUT on every push —
+    // ordinary pushes are idempotent; key refresh is explicit.
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("everything in sync"));
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(
+        puts, 0,
+        "annotated in-sync skillset re-PUTs only on --refresh-credentials"
+    );
+}
+
+#[tokio::test]
+async fn push_refresh_credentials_pulls_in_sync_redacted_into_the_gate() {
+    let server = MockServer::start().await;
+    let ss = json!({"name": "webss", "skills": [{
+        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+        "name": "enrich",
+        "uri": "https://fn.azurewebsites.net/api/enrich",
+        "httpHeaders": {"x-functions-key": "<redacted>"}
+    }]});
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(ss.clone()))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "skillsets", "webss", &ss);
+
+    // --refresh-credentials makes the unknown state explicit work: the
+    // in-sync skillset joins the plan and the auth gate applies — which
+    // non-interactively means blocking (exit 3), before any mutation.
+    rigg(ws.path())
+        .args(["push", "demo", "--yes", "--refresh-credentials"])
+        .assert()
+        .code(3);
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 0);
+}
+
+#[tokio::test]
+async fn push_local_ahead_redacted_webapi_key_still_blocks() {
+    let server = MockServer::start().await;
+    // Remote has an older description → local is ahead → the skillset is in
+    // the mutation plan and the redacted key must still block (issue #4
+    // safety is preserved).
+    let remote_ss = json!({"name": "webss", "description": "old", "skills": [{
+        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+        "name": "enrich",
+        "uri": "https://fn.azurewebsites.net/api/enrich",
+        "httpHeaders": {"x-functions-key": "<redacted>"}
+    }]});
+    let mut local_ss = remote_ss.clone();
+    local_ss["description"] = json!("new");
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(remote_ss))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "skillsets", "webss", &local_ss);
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .code(3);
 }
 
 // ---------------------------------------------------------------------------
@@ -2672,4 +2792,62 @@ async fn migrate_side_by_side_rewrites_index_projection_targets() {
         ss["indexProjections"]["selectors"][0]["targetIndexName"], "support2-ks-index",
         "index projections must follow the side-by-side rename"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge bases: retrieval/output configuration needs the preview channel
+// ---------------------------------------------------------------------------
+
+/// The retrieval & output configuration (retrievalInstructions,
+/// answerInstructions, outputMode, retrievalReasoningEffort, per-source
+/// serving flags) only exists in the preview api-version — the stable GET
+/// silently omits it. Rigg must manage knowledge bases on the preview
+/// channel or adopt/pull capture an incomplete document and push can never
+/// set those fields.
+#[tokio::test]
+async fn knowledge_base_adopt_uses_preview_api_and_captures_retrieval_config() {
+    let server = MockServer::start().await;
+    let kb = json!({
+        "@odata.etag": "\"0xKB\"",
+        "name": "support-kb",
+        "retrievalInstructions": "Prioritize official EU regulations.",
+        "answerInstructions": null,
+        "outputMode": "answerSynthesis",
+        "retrievalReasoningEffort": "minimal",
+        "knowledgeSources": [{"name": "regulatory", "enableImageServing": false, "enableFreshness": null}],
+        "models": []
+    });
+    // These mocks match ONLY the preview api-version; a stable-channel
+    // request falls through to mock_empty_lists' catch-alls below.
+    Mock::given(method("GET"))
+        .and(path("/knowledgeBases"))
+        .and(query_param("api-version", "2026-05-01-preview"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [kb.clone()]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/knowledgeBases/support-kb"))
+        .and(query_param("api-version", "2026-05-01-preview"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(kb))
+        .mount(&server)
+        .await;
+    mock_empty_lists(&server).await;
+
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "knowledge-bases/support-kb"])
+        .assert()
+        .success();
+
+    let file: Value = read_json(
+        ws.path(),
+        "projects/demo/envs/dev/search/knowledge-bases/support-kb.json",
+    );
+    assert_eq!(
+        file["retrievalInstructions"], "Prioritize official EU regulations.",
+        "retrieval instructions must be captured"
+    );
+    assert_eq!(file["outputMode"], "answerSynthesis");
+    assert_eq!(file["retrievalReasoningEffort"], "minimal");
+    assert_eq!(file["knowledgeSources"][0]["enableImageServing"], false);
 }
