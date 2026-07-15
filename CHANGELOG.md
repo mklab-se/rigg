@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.3] - 2026-07-15
+
+Promote gets two uniformity fixes: the project name is optional like
+everywhere else, and Web API function URLs stop silently crossing
+environments.
+
+### Changed
+
+- **`rigg promote` no longer requires the project name** when the workspace
+  has exactly one project — same convention as every other command. With
+  several projects and no name it is a usage error (exit 2).
+- **Each environment keeps its own Web API function endpoint on promote.**
+  A skill's `uri`, `authResourceId`, `x-functions-key` header, and
+  `x-rigg-auth` annotation are now registry env-pinned (like an agent's
+  `tools[].server_url`): promoting over an existing target skillset
+  preserves the target's function URL and auth method. The source's
+  `x-rigg-auth` annotation never crosses environments — it would silence
+  push's Web API auth gate while pointing at the wrong env's function.
+- **New-in-target skillsets resolve their function URLs during promote.**
+  Interactively, rigg keeps the URL automatically when your login sees only
+  that one function app (the environments share it) and otherwise offers the
+  ARM-discovered function apps or manual entry. Non-interactive promotes
+  copy the URL unchanged and flag it for review; the next `rigg push`
+  against the target still gates on unresolved Web API auth.
+
 ## [1.6.2] - 2026-07-15
 
 Fixes [#4](https://github.com/mklab-se/rigg/issues/4): a Web API skill whose
