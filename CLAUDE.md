@@ -93,14 +93,13 @@ projects/<name>/
 
 ## Releasing
 
-Releases are automated via `.github/workflows/release.yml`:
+Releases are driven by the `/release` skill (`.claude/skills/release/SKILL.md`, run with `major`/`minor`/`patch`): it runs `cargo update` and the pre-flight gates, bumps `version` in the workspace `Cargo.toml` (incl. the internal `rigg-core`/`rigg-client`/`rigg-diff` dependency versions), dates the `[Unreleased]` changelog section, commits `Release vX.Y.Z`, pushes, and tags `vX.Y.Z`.
 
-1. Bump `version` in the workspace `Cargo.toml` (incl. the internal `rigg-core`/`rigg-client`/`rigg-diff` dependency versions)
-2. Update CHANGELOG.md
-3. Commit and push to `main`
-4. Tag and push: `git tag v0.X.Y && git push origin v0.X.Y`
+Pushing the tag triggers `.github/workflows/release.yml`: it re-runs CI, builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries for Linux/macOS/Windows with a CycloneDX 1.5 SBOM per target (`rigg-vX.Y.Z-<target>.cdx.json`), creates the GitHub Release, publishes `rigg-diff` → `rigg-core` → `rigg-client` → `rigg` to crates.io, and updates the Homebrew formula in `mklab-se/homebrew-tap`.
 
 Required secrets: `CARGO_REGISTRY_TOKEN` (crates.io env), `HOMEBREW_TAP_TOKEN`.
+
+MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (set by Ailloy 2.x / `rmcp` 3.x); CI runs latest stable. `reqwest` stays on 0.12 to share Ailloy's TLS stack.
 
 ## AI Agent Integration
 

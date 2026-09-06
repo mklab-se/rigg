@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Supply-chain transparency for release builds: binaries are built with `cargo auditable`
+  (dependency list embedded in the executable, readable with `cargo audit bin` or `syft`), and
+  a per-target CycloneDX 1.5 SBOM (`rigg-vX.Y.Z-<target>.cdx.json`) is attached to every
+  GitHub release. See the SBOM section in [INSTALL.md](INSTALL.md).
+
+### Changed
+
+- Dependencies upgraded to current majors: Ailloy 1.0 → 2.1, `rmcp` 0.16 → 3.2, `toml` 0.8 → 1.1,
+  `similar` 2 → 3, `colored` 2 → 3, `dirs` 5 → 7, `inquire` 0.7 → 0.9, `termimad` 0.31 → 0.35,
+  `sha2` 0.10 → 0.11, `hmac` 0.12 → 0.13, `base64` 0.22 → 0.23, plus `clap` 4.6, `tokio` 1.53 and
+  a `cargo update` across the lockfile. `reqwest` stays on 0.12 to share a single TLS stack with
+  Ailloy. No user-visible behaviour change.
+- Minimum supported Rust version raised from 1.85 to 1.88 (required by Ailloy 2.x and `rmcp` 3.x).
+- GitHub Actions moved to the Node 24 majors (`actions/checkout@v7`, `actions/upload-artifact@v7`,
+  `actions/download-artifact@v8`, `softprops/action-gh-release@v3`, `actions/github-script@v9`).
+
 ## [1.6.4] - 2026-07-15
 
 Two fixes: knowledge bases finally carry their retrieval & output

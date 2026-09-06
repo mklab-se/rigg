@@ -34,9 +34,29 @@ tar xzf rigg-v*-*.tar.gz
 sudo mv rigg /usr/local/bin/
 ```
 
+## Software bill of materials (SBOM)
+
+Every release asset above has a matching CycloneDX 1.5 SBOM listing the exact crate versions
+compiled into that platform's binary:
+
+```
+rigg-vX.Y.Z-<target>.cdx.json
+```
+
+The binaries are also built with [`cargo auditable`](https://github.com/rust-secure-code/cargo-auditable),
+so the dependency list travels inside the executable itself. Check a downloaded binary against the
+RustSec advisory database with:
+
+```sh
+cargo install cargo-audit --features=fix
+cargo audit bin ./rigg
+```
+
+`syft` and `trivy` also understand this format.
+
 ## cargo install
 
-Compile from source via crates.io (requires Rust 1.82+):
+Compile from source via crates.io (requires Rust 1.88+):
 
 ```bash
 cargo install rigg
@@ -50,7 +70,7 @@ cd rigg
 cargo build --release
 ```
 
-The binary is at `target/release/rigg`. Requires Rust 1.82 or later.
+The binary is at `target/release/rigg`. Requires Rust 1.88 or later.
 
 ## cargo binstall
 
