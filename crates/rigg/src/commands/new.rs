@@ -140,13 +140,12 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     if store.locate(&r)?.is_some() {
         bail!("{r} already exists in project '{}'", project.name);
     }
-    if kind == ResourceKind::DataSource {
-        if let Some(warning) =
+    if kind == ResourceKind::DataSource
+        && let Some(warning) =
             scaffold::check_datasource_type(args.ds_type.as_deref().unwrap_or("azureblob"))
                 .map_err(|e| anyhow!(CommandError::Validation(e)))?
-        {
-            eprintln!("{} {warning}", "warning:".yellow().bold());
-        }
+    {
+        eprintln!("{} {warning}", "warning:".yellow().bold());
     }
 
     let mut value = scaffold::scaffold(kind, &args.name, args.ds_type.as_deref())

@@ -19,10 +19,10 @@ fn workspace() -> Option<Workspace> {
 /// The environment completion should resolve against: `RIGG_ENV` when set,
 /// else the workspace default.
 fn env_name(ws: &Workspace) -> Option<String> {
-    if let Ok(env) = std::env::var("RIGG_ENV") {
-        if !env.is_empty() {
-            return Some(env);
-        }
+    if let Ok(env) = std::env::var("RIGG_ENV")
+        && !env.is_empty()
+    {
+        return Some(env);
     }
     ws.resolve_env(None).ok().map(|e| e.name)
 }

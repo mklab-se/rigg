@@ -434,22 +434,17 @@ impl RiggMcpServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for RiggMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some(
-                "rigg manages Azure AI Search and Microsoft Foundry configuration as code. \
-                 A workspace contains projects; each project owns its resources exclusively, \
-                 and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
-                 understand the workspace, rigg_validate before changes, rigg_diff to inspect \
-                 drift, rigg_push (preview first, then force=true). Resource definitions are \
-                 JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
-                 stored in files — identity-based access only."
-                    .to_string(),
-            ),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "rigg manages Azure AI Search and Microsoft Foundry configuration as code. \
+             A workspace contains projects; each project owns its resources exclusively, \
+             and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
+             understand the workspace, rigg_validate before changes, rigg_diff to inspect \
+             drift, rigg_push (preview first, then force=true). Resource definitions are \
+             JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
+             stored in files — identity-based access only.",
+        )
     }
 }

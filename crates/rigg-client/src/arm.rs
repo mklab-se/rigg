@@ -93,10 +93,10 @@ impl AiServicesAccount {
     /// (which may differ from the resource name), then constructs the
     /// AI services endpoint. Falls back to the resource name.
     pub fn agents_endpoint(&self) -> String {
-        if let Some(ref endpoint) = self.properties.endpoint {
-            if let Some(subdomain) = extract_subdomain(endpoint) {
-                return format!("https://{}.services.ai.azure.com", subdomain);
-            }
+        if let Some(ref endpoint) = self.properties.endpoint
+            && let Some(subdomain) = extract_subdomain(endpoint)
+        {
+            return format!("https://{}.services.ai.azure.com", subdomain);
         }
         format!("https://{}.services.ai.azure.com", self.name)
     }

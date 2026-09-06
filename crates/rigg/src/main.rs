@@ -64,11 +64,11 @@ async fn main() -> std::process::ExitCode {
     let code = cli.run().await;
 
     // Print update notification (if any) after the command completes
-    if let Some(handle) = check_update {
-        if let Ok(Some(message)) = handle.await {
-            eprintln!();
-            eprintln!("{message}");
-        }
+    if let Some(handle) = check_update
+        && let Ok(Some(message)) = handle.await
+    {
+        eprintln!();
+        eprintln!("{message}");
     }
 
     code.into()

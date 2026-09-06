@@ -13,7 +13,7 @@ edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
 repository = "https://github.com/mklab-se/rigg"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Serialization
@@ -22,46 +22,46 @@ serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
 
 # Async runtime
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 futures = "0.3"
 
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 # Configuration
-toml = "0.8"
+toml = "1.1"
 
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
 
 # Templating
-handlebars = "6.0"
+handlebars = "6.4"
 
 # Diff
-similar = "2.6"
+similar = "3.2"
 
 # Version parsing
 semver = "1.0"
 
 # Terminal colors
-colored = "2.1"
+colored = "3.1"
 
 # Terminal markdown rendering
-termimad = "0.31"
+termimad = "0.35"
 
 # Interactive prompts (already in-tree via ailloy config-tui)
-inquire = "0.7"
+inquire = "0.9"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # File utilities
-dirs = "5.0"
+dirs = "7.0"
 walkdir = "2.5"
 glob = "0.3"
 
@@ -72,14 +72,14 @@ chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2"
 
 # MCP server
-rmcp = { version = "0.16", features = ["server", "transport-io"] }
+rmcp = { version = "3.2", features = ["server", "transport-io"] }
 schemars = "1.2"
 
 # Testing
-tempfile = "3.10"
+tempfile = "3.27"
 
 # AI integration
-ailloy = { version = "1.0", default-features = false, features = ["config-tui"] }
+ailloy = { version = "2.1", default-features = false, features = ["config-tui"] }
 
 # Internal crates
 rigg-core = { version = "1.6.4", path = "crates/rigg-core" }

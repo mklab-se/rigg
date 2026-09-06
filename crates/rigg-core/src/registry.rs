@@ -528,10 +528,10 @@ pub fn extract_references(kind: ResourceKind, body: &Value) -> Vec<(ResourceKind
     let mut out = Vec::new();
     for rf in meta(kind).reference_fields {
         collect_path(body, rf.path, &mut |v| {
-            if let Some(s) = v.as_str() {
-                if !s.is_empty() {
-                    out.push((rf.to, s.to_string()));
-                }
+            if let Some(s) = v.as_str()
+                && !s.is_empty()
+            {
+                out.push((rf.to, s.to_string()));
             }
         });
     }
@@ -551,10 +551,10 @@ pub fn extract_references(kind: ResourceKind, body: &Value) -> Vec<(ResourceKind
 fn collect_portal_agent_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
     match v {
         Value::Object(map) => {
-            if let Some(url) = map.get("server_url").and_then(Value::as_str) {
-                if let Some(kb) = parse_kb_mcp_url(url) {
-                    out.push((ResourceKind::KnowledgeBase, kb));
-                }
+            if let Some(url) = map.get("server_url").and_then(Value::as_str)
+                && let Some(kb) = parse_kb_mcp_url(url)
+            {
+                out.push((ResourceKind::KnowledgeBase, kb));
             }
             for val in map.values() {
                 collect_portal_agent_refs(val, out);
@@ -696,12 +696,11 @@ fn collect_x_rigg_refs(v: &Value, out: &mut Vec<(ResourceKind, String)>) {
         Value::Object(map) => {
             for (k, val) in map {
                 if k == X_RIGG_REF {
-                    if let Some(s) = val.as_str() {
-                        if let Some((dir, name)) = s.split_once('/') {
-                            if let Some(kind) = ResourceKind::from_directory_name(dir) {
-                                out.push((kind, name.to_string()));
-                            }
-                        }
+                    if let Some(s) = val.as_str()
+                        && let Some((dir, name)) = s.split_once('/')
+                        && let Some(kind) = ResourceKind::from_directory_name(dir)
+                    {
+                        out.push((kind, name.to_string()));
                     }
                 } else {
                     collect_x_rigg_refs(val, out);

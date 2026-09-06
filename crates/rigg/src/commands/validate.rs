@@ -194,21 +194,20 @@ fn validate_project(
         }
 
         // skillset with a key-based AI services connection but no usable key
-        if r.kind == ResourceKind::Skillset {
-            if let Some(subdomain) =
+        if r.kind == ResourceKind::Skillset
+            && let Some(subdomain) =
                 crate::commands::credentials::skillset_missing_ai_services_key(&value)
-            {
-                let hint = match subdomain {
-                    Some(s) => format!("switch to AIServicesByIdentity (subdomainUrl: {s})"),
-                    None => "add an identity-based cognitiveServices connection \
+        {
+            let hint = match subdomain {
+                Some(s) => format!("switch to AIServicesByIdentity (subdomainUrl: {s})"),
+                None => "add an identity-based cognitiveServices connection \
                              (AIServicesByIdentity + subdomainUrl)"
-                        .to_string(),
-                };
-                eprintln!(
-                    "{} [{display}] key-based cognitiveServices connection without a usable key — push will fail; {hint}",
-                    "warning:".yellow()
-                );
-            }
+                    .to_string(),
+            };
+            eprintln!(
+                "{} [{display}] key-based cognitiveServices connection without a usable key — push will fail; {hint}",
+                "warning:".yellow()
+            );
         }
     }
     problems
@@ -266,14 +265,16 @@ fn warn_missing_deletion_tracking(ds_type: &str, value: &Value, display: &str) {
 fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mut Vec<String>) {
     for spec in registry::meta(kind).secret_fields {
         registry::collect_path(value, spec, &mut |v| {
-            if let Some(s) = v.as_str() {
-                if !s.is_empty() && !s.starts_with("ResourceId=") && !s.starts_with('<') {
-                    problems.push(format!(
+            if let Some(s) = v.as_str()
+                && !s.is_empty()
+                && !s.starts_with("ResourceId=")
+                && !s.starts_with('<')
+            {
+                problems.push(format!(
                         "[{display}] field '{spec}' contains a credential — rigg never stores secrets locally. \
                          Use a managed identity (connection string 'ResourceId=/subscriptions/...') and grant the \
                          identity RBAC access instead; secrets belong in Azure Key Vault, never in files"
                     ));
-                }
             }
         });
     }
@@ -288,20 +289,20 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
     // Azure Functions keys in Web API skill headers. The header name is
     // matched case-insensitively, which the registry's path table cannot
     // express — hence checked here instead of via `secret_fields`.
-    if kind == ResourceKind::Skillset {
-        if let Some(skills) = value.get("skills").and_then(Value::as_array) {
-            for skill in skills {
-                if let Some((name, v)) = crate::commands::credentials::function_key_header(skill) {
-                    let real = v
-                        .as_str()
-                        .is_some_and(|s| !s.is_empty() && !s.starts_with('<'));
-                    if real {
-                        problems.push(format!(
+    if kind == ResourceKind::Skillset
+        && let Some(skills) = value.get("skills").and_then(Value::as_array)
+    {
+        for skill in skills {
+            if let Some((name, v)) = crate::commands::credentials::function_key_header(skill) {
+                let real = v
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty() && !s.starts_with('<'));
+                if real {
+                    problems.push(format!(
                             "[{display}] header '{name}' contains a function key — rigg never stores secrets locally. \
                              Keep the '<redacted>' placeholder and run `rigg push` interactively to choose Entra ID \
                              auth (authResourceId) or push-time key resolution (x-rigg-auth: function-key)"
                         ));
-                    }
                 }
             }
         }
@@ -367,18 +368,18 @@ fn check_skill_contract(
     problems: &mut Vec<String>,
 ) {
     // URI path must match one of the spec's paths (compared by path suffix).
-    if let Some(uri) = skill.get("uri").and_then(Value::as_str) {
-        if let Ok(parsed) = reqwest::Url::parse(uri) {
-            let uri_path = parsed.path();
-            if !uri_path.is_empty()
-                && uri_path != "/"
-                && !spec.paths.iter().any(|p| uri_path.ends_with(p.as_str()))
-            {
-                problems.push(format!(
+    if let Some(uri) = skill.get("uri").and_then(Value::as_str)
+        && let Ok(parsed) = reqwest::Url::parse(uri)
+    {
+        let uri_path = parsed.path();
+        if !uri_path.is_empty()
+            && uri_path != "/"
+            && !spec.paths.iter().any(|p| uri_path.ends_with(p.as_str()))
+        {
+            problems.push(format!(
                     "[{display}] WebApiSkill uri path '{uri_path}' does not match any path in apis/{api}.json ({})",
                     spec.paths.join(", ")
                 ));
-            }
         }
     }
     if !spec.open_props {

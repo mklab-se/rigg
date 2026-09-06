@@ -100,19 +100,18 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
         // Targets naming an AI services account (skillset enrichment) are
         // resolved by account name through ARM — any Cognitive Services
         // kind, not just Foundry's AIServices accounts.
-        if scope.is_none() {
-            if let Some(account) = edge
+        if scope.is_none()
+            && let Some(account) = edge
                 .target
                 .strip_prefix("AI services account '")
                 .and_then(|s| s.strip_suffix('\''))
-            {
-                match arm.find_cognitive_account_id(account).await {
-                    Ok(id) => scope = Some(id),
-                    Err(e) => println!(
-                        "  {} could not resolve AI services account '{account}' via ARM: {e}",
-                        "?".yellow()
-                    ),
-                }
+        {
+            match arm.find_cognitive_account_id(account).await {
+                Ok(id) => scope = Some(id),
+                Err(e) => println!(
+                    "  {} could not resolve AI services account '{account}' via ARM: {e}",
+                    "?".yellow()
+                ),
             }
         }
 
@@ -138,21 +137,19 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
             .map(|i| i.principal_ids().iter().map(|s| s.to_string()).collect())
             .unwrap_or_default();
         if principal_ids.is_empty() {
-            if fix {
-                if let Some(resource) = &identity_resource {
-                    println!(
-                        "  {} enabling system-assigned identity on {principal_desc}...",
-                        "fix".cyan().bold()
-                    );
-                    arm.enable_system_identity(resource, identity_api).await?;
-                    println!(
-                        "    identity enabled — rerun `rigg auth doctor` to verify role assignments"
-                    );
-                    failures.push(format!(
-                        "identity newly enabled for {principal_desc}; rerun doctor"
-                    ));
-                    continue;
-                }
+            if fix && let Some(resource) = &identity_resource {
+                println!(
+                    "  {} enabling system-assigned identity on {principal_desc}...",
+                    "fix".cyan().bold()
+                );
+                arm.enable_system_identity(resource, identity_api).await?;
+                println!(
+                    "    identity enabled — rerun `rigg auth doctor` to verify role assignments"
+                );
+                failures.push(format!(
+                    "identity newly enabled for {principal_desc}; rerun doctor"
+                ));
+                continue;
             }
             println!(
                 "  {} {principal_desc} has no managed identity — run with --fix or:\n      az search service update ... --identity-type SystemAssigned",
@@ -218,13 +215,14 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&value)?);
     }
 
-    if !failures.is_empty() && crate::commands::ai_assist::ai_on(ctx) {
-        if let Ok(advice) = crate::commands::ai_assist::explain_doctor(&failures).await {
-            println!();
-            println!("AI advice (ailloy):");
-            for line in advice.lines() {
-                println!("  {line}");
-            }
+    if !failures.is_empty()
+        && crate::commands::ai_assist::ai_on(ctx)
+        && let Ok(advice) = crate::commands::ai_assist::explain_doctor(&failures).await
+    {
+        println!();
+        println!("AI advice (ailloy):");
+        for line in advice.lines() {
+            println!("  {line}");
         }
     }
 

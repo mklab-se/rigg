@@ -203,17 +203,17 @@ impl ArmResourceClient {
         const MAX_POLLS: u32 = 100; // 5 minutes
         for _ in 0..MAX_POLLS {
             tokio::time::sleep(POLL_INTERVAL).await;
-            if let Some(current) = self.get(kind, name).await? {
-                if is_terminal(Some(&current)) {
-                    let state = provisioning_state(&current).unwrap_or_default();
-                    if state.eq_ignore_ascii_case("succeeded") || state.is_empty() {
-                        return Ok(current);
-                    }
-                    return Err(ClientError::Api {
-                        status: 500,
-                        message: format!("{kind} '{name}' ended in state '{state}'"),
-                    });
+            if let Some(current) = self.get(kind, name).await?
+                && is_terminal(Some(&current))
+            {
+                let state = provisioning_state(&current).unwrap_or_default();
+                if state.eq_ignore_ascii_case("succeeded") || state.is_empty() {
+                    return Ok(current);
                 }
+                return Err(ClientError::Api {
+                    status: 500,
+                    message: format!("{kind} '{name}' ended in state '{state}'"),
+                });
             }
         }
         Err(ClientError::Api {

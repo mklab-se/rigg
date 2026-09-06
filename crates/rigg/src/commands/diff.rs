@@ -173,14 +173,14 @@ async fn diff_project(
         // remote resources with a baseline here but no local file (deleted locally)
         let state = rigg_core::store::ProjectState::load(ws, &env_b.name, &project.name);
         for key in state.baselines.keys() {
-            if let Some((dir, name)) = key.split_once('/') {
-                if let Some(kind) = ResourceKind::from_directory_name(dir) {
-                    let r = ResourceRef::new(kind, name.to_string());
-                    if !seen.contains(&r) && remote_b.supported_kinds().contains(&kind) {
-                        let remote_doc = remote_b.get(&r).await?;
-                        if remote_doc.is_some() {
-                            pairs.push((r, None, remote_doc));
-                        }
+            if let Some((dir, name)) = key.split_once('/')
+                && let Some(kind) = ResourceKind::from_directory_name(dir)
+            {
+                let r = ResourceRef::new(kind, name.to_string());
+                if !seen.contains(&r) && remote_b.supported_kinds().contains(&kind) {
+                    let remote_doc = remote_b.get(&r).await?;
+                    if remote_doc.is_some() {
+                        pairs.push((r, None, remote_doc));
                     }
                 }
             }
@@ -189,28 +189,28 @@ async fn diff_project(
 
     let mut out = Vec::new();
     for (r, left, right) in pairs {
-        if let Some(only) = only {
-            if &r != only {
-                continue;
-            }
+        if let Some(only) = only
+            && &r != only
+        {
+            continue;
         }
         if !remote_b.supported_kinds().contains(&r.kind) {
             continue;
         }
         // Immutable-field drift (local vs Azure only): pushing this is not an
         // update — surface the replace consequence alongside the diff.
-        if args.compare_env.is_none() {
-            if let (Some(local), Some(remote)) = (&left, &right) {
-                for (path, remote_val, local_val) in
-                    rigg_core::registry::immutable_diff(r.kind, local, remote)
-                {
-                    notes.push(format!(
-                        "note: {}/{r} — '{path}' is immutable ({remote_val} → {local_val}): \
+        if args.compare_env.is_none()
+            && let (Some(local), Some(remote)) = (&left, &right)
+        {
+            for (path, remote_val, local_val) in
+                rigg_core::registry::immutable_diff(r.kind, local, remote)
+            {
+                notes.push(format!(
+                    "note: {}/{r} — '{path}' is immutable ({remote_val} → {local_val}): \
                          push will REPLACE this resource (delete + recreate; a knowledge \
                          source's index is rebuilt from source data)",
-                        project.name
-                    ));
-                }
+                    project.name
+                ));
             }
         }
         let left_n = left

@@ -50,10 +50,8 @@ fn extract_reply(result: &Value) -> Option<String> {
                 .get("type")
                 .and_then(Value::as_str)
                 .is_none_or(|t| t == "output_text" || t == "text");
-            if is_text {
-                if let Some(text) = content.get("text").and_then(Value::as_str) {
-                    parts.push(text.to_string());
-                }
+            if is_text && let Some(text) = content.get("text").and_then(Value::as_str) {
+                parts.push(text.to_string());
             }
         }
     }

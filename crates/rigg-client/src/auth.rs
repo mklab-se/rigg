@@ -411,10 +411,10 @@ impl AuthProvider for StaticTokenAuth {
 /// Get the best available authentication provider for a specific resource scope
 fn get_auth_provider_for_scope(scope: &'static str) -> Result<Box<dyn AuthProvider>, AuthError> {
     // A pre-minted token wins over everything.
-    if let Ok(token) = std::env::var("RIGG_ACCESS_TOKEN") {
-        if !token.is_empty() {
-            return Ok(Box::new(StaticTokenAuth { token }));
-        }
+    if let Ok(token) = std::env::var("RIGG_ACCESS_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(Box::new(StaticTokenAuth { token }));
     }
     // First try environment variables
     if EnvAuth::is_configured() {

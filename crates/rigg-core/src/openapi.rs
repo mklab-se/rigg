@@ -71,12 +71,12 @@ pub fn parse(doc: &Value) -> Result<ApiSpec, String> {
 
 /// Resolve a local `$ref` (`#/components/...`), or return the schema as-is.
 fn resolve_ref(doc: &Value, schema: &Value) -> Value {
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        if let Some(path) = reference.strip_prefix("#/") {
-            let pointer = format!("/{}", path);
-            if let Some(resolved) = doc.pointer(&pointer) {
-                return resolve_ref(doc, resolved);
-            }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str)
+        && let Some(path) = reference.strip_prefix("#/")
+    {
+        let pointer = format!("/{}", path);
+        if let Some(resolved) = doc.pointer(&pointer) {
+            return resolve_ref(doc, resolved);
         }
     }
     schema.clone()

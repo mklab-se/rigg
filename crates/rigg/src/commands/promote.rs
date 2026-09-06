@@ -374,12 +374,12 @@ fn merge_promote(
     // the target has no counterpart — an annotation pointing at the wrong
     // env's function would silence push's Web API auth gate. Strip it here;
     // the target's own annotation (if any) is restored via the pinned path.
-    if kind == ResourceKind::Skillset {
-        if let Some(skills) = merged.get_mut("skills").and_then(Value::as_array_mut) {
-            for skill in skills {
-                if let Some(map) = skill.as_object_mut() {
-                    map.remove(credentials::X_RIGG_AUTH);
-                }
+    if kind == ResourceKind::Skillset
+        && let Some(skills) = merged.get_mut("skills").and_then(Value::as_array_mut)
+    {
+        for skill in skills {
+            if let Some(map) = skill.as_object_mut() {
+                map.remove(credentials::X_RIGG_AUTH);
             }
         }
     }

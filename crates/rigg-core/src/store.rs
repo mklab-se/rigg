@@ -312,18 +312,18 @@ impl<'w> Store<'w> {
 
         // Preserve any x-rigg-* annotations the user added locally: they are
         // Rigg-local and never come back from Azure.
-        if path.is_file() {
-            if let Ok(existing) = self.read_path(&path) {
-                carry_over_x_rigg(&existing, &mut normalized);
-                carry_over_write_only(r.kind, &existing, &mut normalized);
-                // semantic_eq excludes write-only fields (the server never
-                // echoes them) — compare them separately so a credentials
-                // change alone still lands on disk.
-                if crate::normalize::semantic_eq(r.kind, &existing, &normalized)
-                    && write_only_eq(r.kind, &existing, &normalized)
-                {
-                    return Ok(false);
-                }
+        if path.is_file()
+            && let Ok(existing) = self.read_path(&path)
+        {
+            carry_over_x_rigg(&existing, &mut normalized);
+            carry_over_write_only(r.kind, &existing, &mut normalized);
+            // semantic_eq excludes write-only fields (the server never
+            // echoes them) — compare them separately so a credentials
+            // change alone still lands on disk.
+            if crate::normalize::semantic_eq(r.kind, &existing, &normalized)
+                && write_only_eq(r.kind, &existing, &normalized)
+            {
+                return Ok(false);
             }
         }
 
@@ -523,13 +523,12 @@ fn carry_over_x_rigg(from: &Value, to: &mut Value) {
         (Value::Array(src), Value::Array(dst)) => {
             for sv in src {
                 let key = sv.get("name").or_else(|| sv.get("type"));
-                if let Some(key) = key {
-                    if let Some(dv) = dst
+                if let Some(key) = key
+                    && let Some(dv) = dst
                         .iter_mut()
                         .find(|d| d.get("name").or_else(|| d.get("type")) == Some(key))
-                    {
-                        carry_over_x_rigg(sv, dv);
-                    }
+                {
+                    carry_over_x_rigg(sv, dv);
                 }
             }
         }

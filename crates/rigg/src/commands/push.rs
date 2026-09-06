@@ -185,10 +185,11 @@ async fn push_project(
         if local_set.contains(key) {
             continue;
         }
-        if let Some(r) = parse_key(key) {
-            if remote.supported_kinds().contains(&r.kind) && remote.get(&r).await?.is_some() {
-                orphans.push(r);
-            }
+        if let Some(r) = parse_key(key)
+            && remote.supported_kinds().contains(&r.kind)
+            && remote.get(&r).await?.is_some()
+        {
+            orphans.push(r);
         }
     }
 
@@ -349,18 +350,19 @@ async fn push_project(
     // based rewrite needs only the subdomain already in the file.
     let mut key_missing: Vec<(ResourceRef, Option<String>)> = Vec::new();
     for item in &to_push {
-        if item.r.kind == ResourceKind::Skillset && !item.exists_remotely {
-            if let Some(subdomain) = credentials::skillset_missing_ai_services_key(&item.body) {
-                key_missing.push((item.r.clone(), subdomain));
-            }
+        if item.r.kind == ResourceKind::Skillset
+            && !item.exists_remotely
+            && let Some(subdomain) = credentials::skillset_missing_ai_services_key(&item.body)
+        {
+            key_missing.push((item.r.clone(), subdomain));
         }
     }
     for bundle in &replaces {
         for (r, body) in &bundle.sub {
-            if r.kind == ResourceKind::Skillset {
-                if let Some(subdomain) = credentials::skillset_missing_ai_services_key(body) {
-                    key_missing.push((r.clone(), subdomain));
-                }
+            if r.kind == ResourceKind::Skillset
+                && let Some(subdomain) = credentials::skillset_missing_ai_services_key(body)
+            {
+                key_missing.push((r.clone(), subdomain));
             }
         }
     }
@@ -568,13 +570,12 @@ async fn push_project(
         if interactive::confirm_default_yes(
             "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
             ctx.no_color,
-        )? {
-            if let Err(e) = crate::commands::doctor::run(ctx, true).await {
-                println!(
-                    "  {} auth doctor could not fix everything ({e:#}) — continuing; the push may fail until the roles exist",
-                    "!".yellow()
-                );
-            }
+        )? && let Err(e) = crate::commands::doctor::run(ctx, true).await
+        {
+            println!(
+                "  {} auth doctor could not fix everything ({e:#}) — continuing; the push may fail until the roles exist",
+                "!".yellow()
+            );
         }
     }
 

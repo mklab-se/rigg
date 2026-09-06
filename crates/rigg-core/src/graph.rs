@@ -30,10 +30,10 @@ pub fn push_order(items: &[(ResourceRef, Value)]) -> Result<Vec<ResourceRef>, Gr
         let entry = deps.entry(r).or_default();
         for (kind, name) in registry::extract_references(r.kind, body) {
             let dep = ResourceRef { kind, name };
-            if let Some(&found) = in_set.get(&dep) {
-                if found != r {
-                    entry.insert(found);
-                }
+            if let Some(&found) = in_set.get(&dep)
+                && found != r
+            {
+                entry.insert(found);
             }
         }
     }

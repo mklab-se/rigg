@@ -259,20 +259,19 @@ fn skillset_edges(name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
         .and_then(|c| c.get("@odata.type"))
         .and_then(Value::as_str)
         .is_some_and(|t| t.ends_with("AIServicesByIdentity"));
-    if identity_based {
-        if let Some(account) = cs
+    if identity_based
+        && let Some(account) = cs
             .and_then(|c| c.get("subdomainUrl"))
             .and_then(Value::as_str)
             .and_then(ai_services_account_from_subdomain)
-        {
-            edges.push(IdentityEdge::rbac(
-                Principal::SearchService,
-                None,
-                format!("AI services account '{account}'"),
-                roles::COGNITIVE_SERVICES_USER,
-                format!("skillset '{name}' uses identity-based AI services enrichment"),
-            ));
-        }
+    {
+        edges.push(IdentityEdge::rbac(
+            Principal::SearchService,
+            None,
+            format!("AI services account '{account}'"),
+            roles::COGNITIVE_SERVICES_USER,
+            format!("skillset '{name}' uses identity-based AI services enrichment"),
+        ));
     }
 }
 

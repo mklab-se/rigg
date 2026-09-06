@@ -165,15 +165,14 @@ pub fn format_json(value: &Value) -> String {
 pub fn redact_credentials(value: &mut Value) {
     if let Some(obj) = value.as_object_mut() {
         // Redact connection strings
-        if let Some(creds) = obj.get_mut("credentials") {
-            if let Some(creds_obj) = creds.as_object_mut() {
-                if creds_obj.contains_key("connectionString") {
-                    creds_obj.insert(
-                        "connectionString".to_string(),
-                        Value::String("<REDACTED>".to_string()),
-                    );
-                }
-            }
+        if let Some(creds) = obj.get_mut("credentials")
+            && let Some(creds_obj) = creds.as_object_mut()
+            && creds_obj.contains_key("connectionString")
+        {
+            creds_obj.insert(
+                "connectionString".to_string(),
+                Value::String("<REDACTED>".to_string()),
+            );
         }
 
         // Redact storage connection strings

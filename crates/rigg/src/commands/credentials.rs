@@ -444,19 +444,20 @@ pub async fn resolve_webapi_auth(
     let arm = ArmClient::new().ok();
     let mut site_id = None;
     let mut entra_audience: Option<String> = None;
-    if let (Some(arm), Some((site, _))) = (&arm, &parsed) {
-        if let Ok(id) = arm.find_web_site_id(site).await {
-            if let Ok(auth) = arm.site_auth_settings(&id).await {
-                let enabled = auth
-                    .pointer("/properties/platform/enabled")
+    if let (Some(arm), Some((site, _))) = (&arm, &parsed)
+        && let Ok(id) = arm.find_web_site_id(site).await
+    {
+        if let Ok(auth) = arm.site_auth_settings(&id).await {
+            let enabled = auth
+                .pointer("/properties/platform/enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && auth
+                    .pointer("/properties/identityProviders/azureActiveDirectory/enabled")
                     .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                    && auth
-                        .pointer("/properties/identityProviders/azureActiveDirectory/enabled")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                if enabled {
-                    entra_audience = auth
+                    .unwrap_or(false);
+            if enabled {
+                entra_audience = auth
                         .pointer(
                             "/properties/identityProviders/azureActiveDirectory/validation/allowedAudiences/0",
                         )
@@ -467,10 +468,9 @@ pub async fn resolve_webapi_auth(
                                 .and_then(Value::as_str)
                                 .map(|c| format!("api://{c}"))
                         });
-                }
             }
-            site_id = Some(id);
         }
+        site_id = Some(id);
     }
 
     const ENTRA_READY: &str =

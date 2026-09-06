@@ -74,10 +74,10 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
 
     for (project, resources, edges, apis) in &out_projects {
         println!("{} (env: {})", project.name.bold(), env.name);
-        if let Some(desc) = &project.manifest.description {
-            if !desc.is_empty() {
-                println!("  {}", desc.dimmed());
-            }
+        if let Some(desc) = &project.manifest.description
+            && !desc.is_empty()
+        {
+            println!("  {}", desc.dimmed());
         }
         if resources.is_empty() {
             println!("  (no resources)");
