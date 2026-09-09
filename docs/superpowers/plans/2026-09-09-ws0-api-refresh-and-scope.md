@@ -1170,3 +1170,29 @@ git commit -m "fix(registry): hold CognitiveServices ARM at 2026-05-01 (connecti
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
+
+---
+
+## Execution record (2026-09-10)
+
+Executed on branch `rigg-2`, commits 3ab15aa..e5e50aa (15 commits). Rulings made by the controller during execution:
+
+- Workspace: in-place on branch `rigg-2` (not main). Ruling: no separate worktree — Kristofer's `rigg` symlink points at this checkout's target/debug, and a worktree would build elsewhere; cost if wrong: none beyond convention.
+- | T2 guard test vs Global gate | `no_api_version_literals` fails until T3+T4 land, but every commit must pass the gate | CONFLICT — Ruling: T2 adds the guard with `#[ignore = "enabled in Task 4 once client.rs and sync.rs are migrated"]`; T4 removes the ignore. Cost if wrong: one extra edit. |
+- Task 1: implemented 3ab15aa (DONE_WITH_CONCERNS: test literals 'cosmosdb' kept as rejected inputs — Ruling: acceptable, the grep expectation targeted implementation code; README auth-doctor sentence updated beyond file list — accepted)
+- Task 4: BASE 88eaa2d. Ruling: the literal guard's regex is narrowed to the URL form `api-version=20\d\d-\d\d-\d\d` (the spec's wording) so bare date strings in dev.rs's version_ordering test stop matching; remaining URL-form hits (arm.rs test assertion, error.rs) are rewritten to use registry constants. Cost if wrong: a bare-date literal could slip in unguarded — the provider_table test still pins values.
+- Task 4: review — Important (plan-mandated): list() has no guard against a non-terminating @odata.nextLink chain. Ruling: real and cheap — add a max-pages cap (1000) and a same-link cycle check, error out with a clear message; fix round 1. Cost if wrong: none (a legit listing never hits 1000 pages).
+- Task 6: review — Important (plan-mandated): canary misfires on every Foundry ARM kind (schema_definition names sub-objects; ARM envelope keys never in fixture). Ruling: restrict the canary to Domain::Search kinds (return empty for others) and add a unit test with scaffold_deployment; also apply Minor 2 (assert fixture "version" matches the registry constant in SchemaFixture::parse) in the same fix round because it is one line and protects the drift detector itself. Cost if wrong: Foundry kinds lose the canary (acceptable — their ARM schema rarely adds top-level keys).
+- Ruling: ARM_COGNITIVE_API_VERSION = 2026-05-01 — the newest version ARM registers for EVERY CognitiveServices resource type rigg uses (connections cap it; the 2026-05-01→2026-07-01 diff had no changes for rigg). The watchdog must not report this as BEHIND forever: new Task 8 adds an ARM-registration check to api-check (per provider: namespace + resource types; "held" when the spec repo is ahead but ARM does not register the newer version for all listed types). Smoke test command corrected to `rigg status` + `rigg diff regulus` (both read-only). README "Resource Kinds" API-version sentence to be fixed in Task 8. Cost if wrong: a version bump is one constant edit later.
+- Task 8: implemented e2ed477 (DONE; live smoke green: status/diff/api-check). Deviation: ResourcesArm.spec_path set to None to satisfy every_arm_provider_declares_its_registration — Ruling: restore the spec_path (keep watchdog coverage of the subscriptions API) and exempt ResourcesArm in that test with a comment; handled in the fix round together with review findings. Cost if wrong: none.
+- Final review (opus): mergeable after fixes. Important 1: CS schema fixture pinned at 2026-07-01 while constant is 2026-05-01 → latent panic. Important 2: KnowledgeSource networkAccessMode immutable entry on a stable-channel kind where the field cannot exist. Ruling: single fix wave covering I1 (regenerate fixture at 2026-05-01 from scratchpad cs-2026-05-01.json, rename include_str + regenerate list), I2 (drop the immutable entry; KnowledgeSource stays on the stable channel; changelog line removed), Minor 3 (CLAUDE.md:57), Minor 5 (migrate guard + help text), Minor 6 (CHANGELOG removed library API), Minor 9 (forward-looking comments), Minor 10 (arm_resources doc comment). Deferred to the polish pass: Minor 4 (deep-path registry guard), 7, 8 and the can-wait ledger items. Cost if wrong: none of the deferred items affect the supported path.
+
+Deferred to a later polish pass (final review: can wait):
+
+- Task 1: minor (deferred): validate.rs warn_missing_deletion_tracking `integrated_sql` branch is now unreachable dead logic — clean up in a later pass.
+- Task 2: minor (deferred): stale #[ignore] reason on no_version_literals guard — Task 4 removes the ignore anyway.
+- Task 3: minor (deferred): list_web_sites/find_web_site_id duplicate the per-subscription sites URL loop (pre-existing).
+- Task 4: minor (deferred): mount_empty_lists_except duplicates mock_empty_lists' kind list.
+- Task 5: minor (deferred): route-versioned JSON rows hardcode channel "stable".
+- Task 6: minor (deferred): KS read_only_fields completeness unguarded (registry test idea); Indexer read_only_fields now empty — hand-pasted status fields would reach PUT; parse_provider substring match too loose; api_fixture uses compile-time CARGO_MANIFEST_DIR; SchemaFixture::parse panics on malformed fixture; diff_definitions subtype folding undocumented.
+- Task 7: minor (deferred): CLAUDE.md sentence carries an extra file-path clause (accurate).
