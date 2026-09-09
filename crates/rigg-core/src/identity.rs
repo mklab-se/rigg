@@ -50,8 +50,8 @@ pub enum Principal {
 pub enum EdgeKind {
     /// ARM RBAC role assignment — verifiable and fixable.
     Rbac,
-    /// Data-plane permission model outside ARM RBAC (Cosmos SQL roles,
-    /// Azure SQL contained users) — reported with guidance only.
+    /// Data-plane permission model outside ARM RBAC (e.g. a custom Web API
+    /// skill's app-level authorization) — reported with guidance only.
     Informational,
 }
 
@@ -295,41 +295,17 @@ fn datasource_edges(name: &str, value: &Value, edges: &mut Vec<IdentityEdge>) {
         .unwrap_or_default();
     let scope = parse_resource_id(conn);
     match ds_type {
-        "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" | "azuretable" => {
+        "azureblob" | "adlsgen2" => {
             edges.push(IdentityEdge::rbac(
                 Principal::SearchService,
                 scope.clone(),
-                scope
-                    .clone()
-                    .unwrap_or_else(|| "storage account (set ResourceId= in the connection string)".into()),
+                scope.clone().unwrap_or_else(|| {
+                    "storage account (set ResourceId= in the connection string)".into()
+                }),
                 roles::STORAGE_BLOB_DATA_READER,
                 format!("data source '{name}' ({ds_type}) reads from storage"),
             ));
         }
-        "cosmosdb" => edges.push(IdentityEdge {
-            principal: Principal::SearchService,
-            scope: scope.clone(),
-            target: scope.unwrap_or_else(|| "Cosmos DB account".into()),
-            role_id: String::new(),
-            role_name: "Cosmos DB Built-in Data Reader (SQL role)".into(),
-            kind: EdgeKind::Informational,
-            reason: format!(
-                "data source '{name}' reads Cosmos DB — grant via `az cosmosdb sql role assignment create` \
-                 (Cosmos data-plane roles are not ARM RBAC)"
-            ),
-        }),
-        "azuresql" => edges.push(IdentityEdge {
-            principal: Principal::SearchService,
-            scope: scope.clone(),
-            target: scope.unwrap_or_else(|| "Azure SQL database".into()),
-            role_id: String::new(),
-            role_name: "db_datareader (contained AAD user)".into(),
-            kind: EdgeKind::Informational,
-            reason: format!(
-                "data source '{name}' reads Azure SQL — CREATE USER [search-service-name] FROM EXTERNAL PROVIDER; \
-                 ALTER ROLE db_datareader ADD MEMBER [...] (SQL AAD users are not ARM RBAC)"
-            ),
-        }),
         _ => {}
     }
 }
@@ -410,25 +386,6 @@ mod tests {
                 "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct"
             )
         );
-    }
-
-    #[test]
-    fn cosmos_and_sql_are_informational() {
-        let (_tmp, ws) = ws_with(&[
-            (
-                ResourceKind::DataSource,
-                "cds",
-                json!({"name": "cds", "type": "cosmosdb", "credentials": {"connectionString": "ResourceId=/subscriptions/s/resourceGroups/r/providers/Microsoft.DocumentDB/databaseAccounts/c;Database=d"}, "container": {"name": "x"}}),
-            ),
-            (
-                ResourceKind::DataSource,
-                "sds",
-                json!({"name": "sds", "type": "azuresql", "credentials": {"connectionString": "ResourceId=/subscriptions/s/resourceGroups/r/providers/Microsoft.Sql/servers/sv;Database=d"}, "container": {"name": "t"}}),
-            ),
-        ]);
-        let edges = identity_edges(&ws, "dev");
-        assert_eq!(edges.len(), 2);
-        assert!(edges.iter().all(|e| e.kind == EdgeKind::Informational));
     }
 
     #[test]

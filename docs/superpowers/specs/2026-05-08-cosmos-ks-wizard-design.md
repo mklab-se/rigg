@@ -1,3 +1,5 @@
+**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0 — see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**
+
 # Cosmos DB → Knowledge Source Wizard
 
 **Status:** approved design, not yet implemented

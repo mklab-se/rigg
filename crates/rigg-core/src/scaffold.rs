@@ -30,79 +30,33 @@ pub fn scaffold(kind: ResourceKind, name: &str, ds_type: Option<&str>) -> Result
     })
 }
 
-/// Validate a data source `type` string. Returns `Ok(warning)` where the
-/// warning is set for preview-only types.
-pub fn check_datasource_type(ds_type: &str) -> Result<Option<String>, String> {
-    let preview = registry::valid_datasource_types(Channel::Preview);
-    if !preview.contains(&ds_type) {
-        return Err(format!(
-            "unknown data source type '{ds_type}' (valid: {})",
-            preview.join(", ")
-        ));
+/// Validate a data source `type` string.
+pub fn check_datasource_type(ds_type: &str) -> Result<(), String> {
+    let valid = registry::valid_datasource_types(Channel::Stable);
+    if valid.contains(&ds_type) {
+        Ok(())
+    } else {
+        Err(format!(
+            "unsupported data source type '{ds_type}' — rigg supports Azure Blob Storage only (valid: {})",
+            valid.join(", ")
+        ))
     }
-    if registry::preview_only_datasource_types().contains(&ds_type) {
-        return Ok(Some(format!(
-            "data source type '{ds_type}' requires a preview api-version; \
-             pin `preview-api-version` on the search connection if pushes fail \
-             (note: Azure spells Azure Files 'azurefile' in stable and 'azurefiles' in preview)"
-        )));
-    }
-    Ok(None)
 }
 
 fn scaffold_datasource(name: &str, ds_type: &str) -> Result<Value, String> {
     check_datasource_type(ds_type)?;
-    let (connection_string, container) = match ds_type {
-        "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" | "azuretable" => (
-            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>;",
-            json!({"name": "<container-name>"}),
-        ),
-        "cosmosdb" => (
-            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.DocumentDB/databaseAccounts/<cosmos-account>;Database=<database>;IdentityAuthType=AccessToken",
-            json!({"name": "<collection-name>"}),
-        ),
-        "azuresql" => (
-            "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Sql/servers/<server>;Database=<database>;Connection Timeout=30;",
-            json!({"name": "[dbo].[<table-name>]"}),
-        ),
-        "onelake" => (
-            "ResourceId=<fabric-workspace-guid>;",
-            json!({"name": "<lakehouse-guid>"}),
-        ),
-        _ => (
-            "ResourceId=<resource-id-of-the-data-store>;",
-            json!({"name": "<container-or-table>"}),
-        ),
-    };
+    let (connection_string, container) = (
+        "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>;",
+        json!({"name": "<container-name>"}),
+    );
     // Deletion tracking is on by default: without it, deleted source data
     // stays in the index forever — almost never what anyone wants.
-    let (change_policy, deletion_policy) = match ds_type {
-        "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" => (
-            json!(null),
-            json!({
-                "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"
-            }),
-        ),
-        "cosmosdb" => (
-            json!({
-                "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
-                "highWaterMarkColumnName": "_ts"
-            }),
-            json!({
-                "@odata.type": "#Microsoft.Azure.Search.SoftDeleteColumnDeletionDetectionPolicy",
-                "softDeleteColumnName": "isDeleted",
-                "softDeleteMarkerValue": "true"
-            }),
-        ),
-        "azuresql" => (
-            // Integrated change tracking detects deletes too; no separate policy.
-            json!({
-                "@odata.type": "#Microsoft.Azure.Search.SqlIntegratedChangeTrackingPolicy"
-            }),
-            json!(null),
-        ),
-        _ => (json!(null), json!(null)),
-    };
+    let (change_policy, deletion_policy) = (
+        json!(null),
+        json!({
+            "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"
+        }),
+    );
     Ok(json!({
         "name": name,
         "type": ds_type,
@@ -419,13 +373,11 @@ mod tests {
 
     #[test]
     fn datasource_type_validation() {
-        assert!(check_datasource_type("cosmosdb").unwrap().is_none());
-        assert!(
-            check_datasource_type("sharepoint").unwrap().is_some(),
-            "preview warns"
-        );
-        assert!(check_datasource_type("azurefiles").unwrap().is_some());
-        assert!(check_datasource_type("bogus").is_err());
+        assert!(check_datasource_type("azureblob").is_ok());
+        assert!(check_datasource_type("adlsgen2").is_ok());
+        let err = check_datasource_type("cosmosdb").unwrap_err();
+        assert!(err.contains("azureblob, adlsgen2"), "{err}");
+        assert!(scaffold(ResourceKind::DataSource, "x", Some("azuresql")).is_err());
     }
 
     #[test]
@@ -475,7 +427,7 @@ mod tests {
 
     #[test]
     fn without_skillset_pipeline_has_five_parts() {
-        let parts = scaffold_pipeline("p", "cosmosdb", false).unwrap();
+        let parts = scaffold_pipeline("p", "adlsgen2", false).unwrap();
         assert_eq!(parts.len(), 5);
         let indexer = parts
             .iter()

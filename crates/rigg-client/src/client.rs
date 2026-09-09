@@ -6,7 +6,6 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
-use rigg_core::config::SearchServiceConfig;
 use rigg_core::resources::ResourceKind;
 
 use crate::auth::{AuthProvider, get_auth_provider};
@@ -64,22 +63,6 @@ impl AzureSearchClient {
                 .preview_api_version
                 .clone()
                 .unwrap_or_else(|| rigg_core::registry::SEARCH_PREVIEW_API_VERSION.to_string()),
-        })
-    }
-
-    /// Create client from a specific search service config (legacy).
-    pub fn from_service_config(service: &SearchServiceConfig) -> Result<Self, ClientError> {
-        let auth = get_auth_provider()?;
-        let http = Client::builder()
-            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-            .build()?;
-
-        Ok(Self {
-            http,
-            auth,
-            base_url: service.service_url(),
-            api_version: rigg_core::registry::SEARCH_STABLE_API_VERSION.to_string(),
-            preview_api_version: service.preview_api_version.clone(),
         })
     }
 

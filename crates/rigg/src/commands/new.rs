@@ -98,11 +98,7 @@ fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
     let project = resolve_project(&ws, args)?;
     let store = Store::new(project, &env.name);
     let ds_type = args.ds_type.as_deref().unwrap_or("azureblob");
-    if let Some(warning) = scaffold::check_datasource_type(ds_type)
-        .map_err(|e| anyhow!(CommandError::Validation(e)))?
-    {
-        eprintln!("{} {warning}", "warning:".yellow().bold());
-    }
+    scaffold::check_datasource_type(ds_type).map_err(|e| anyhow!(CommandError::Validation(e)))?;
     let parts = scaffold::scaffold_pipeline(&args.name, ds_type, true)
         .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     for (kind, name, value) in &parts {
@@ -140,12 +136,9 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     if store.locate(&r)?.is_some() {
         bail!("{r} already exists in project '{}'", project.name);
     }
-    if kind == ResourceKind::DataSource
-        && let Some(warning) =
-            scaffold::check_datasource_type(args.ds_type.as_deref().unwrap_or("azureblob"))
-                .map_err(|e| anyhow!(CommandError::Validation(e)))?
-    {
-        eprintln!("{} {warning}", "warning:".yellow().bold());
+    if kind == ResourceKind::DataSource {
+        scaffold::check_datasource_type(args.ds_type.as_deref().unwrap_or("azureblob"))
+            .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     }
 
     let mut value = scaffold::scaffold(kind, &args.name, args.ds_type.as_deref())

@@ -9,8 +9,6 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::{Map, Value};
 use tracing::{debug, instrument, warn};
 
-use rigg_core::config::FoundryServiceConfig;
-
 use crate::auth::{AuthProvider, get_auth_provider_for};
 use crate::error::ClientError;
 
@@ -48,21 +46,6 @@ impl FoundryClient {
                 .api_version
                 .clone()
                 .unwrap_or_else(|| rigg_core::registry::FOUNDRY_API_VERSION.to_string()),
-            features: Vec::new(),
-        })
-    }
-
-    /// Create a new Foundry client from service configuration (legacy).
-    pub fn new(config: &FoundryServiceConfig) -> Result<Self, ClientError> {
-        let auth = get_auth_provider_for(rigg_core::ServiceDomain::Foundry)?;
-        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
-
-        Ok(Self {
-            http,
-            auth,
-            base_url: config.service_url(),
-            project: config.project.clone(),
-            api_version: rigg_core::registry::FOUNDRY_API_VERSION.to_string(),
             features: Vec::new(),
         })
     }

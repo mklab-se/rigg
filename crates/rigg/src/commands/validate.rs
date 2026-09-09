@@ -171,10 +171,8 @@ fn validate_project(
         // datasource type validity
         if r.kind == ResourceKind::DataSource {
             if let Some(ds_type) = value.get("type").and_then(Value::as_str) {
-                match rigg_core::scaffold::check_datasource_type(ds_type) {
-                    Ok(Some(warning)) => eprintln!("{} [{display}] {warning}", "warning:".yellow()),
-                    Ok(None) => {}
-                    Err(e) => problems.push(format!("[{display}] {e}")),
+                if let Err(e) = rigg_core::scaffold::check_datasource_type(ds_type) {
+                    problems.push(format!("[{display}] {e}"));
                 }
                 warn_missing_deletion_tracking(ds_type, &value, &display);
             } else {
@@ -244,12 +242,8 @@ fn warn_missing_deletion_tracking(ds_type: &str, value: &Value, display: &str) {
         .is_some_and(|t| t.contains("SqlIntegratedChangeTracking"));
     if !has_deletion_policy && !integrated_sql {
         let hint = match ds_type {
-            "azureblob" | "adlsgen2" | "azurefile" | "azurefiles" => {
+            "azureblob" | "adlsgen2" => {
                 "add NativeBlobSoftDeleteDeletionDetectionPolicy (and enable blob soft delete on the storage account)"
-            }
-            "cosmosdb" => "add SoftDeleteColumnDeletionDetectionPolicy on a soft-delete column",
-            "azuresql" => {
-                "use SqlIntegratedChangeTrackingPolicy (covers deletes) or a soft-delete column policy"
             }
             _ => "add a dataDeletionDetectionPolicy suited to the source",
         };

@@ -385,39 +385,10 @@ pub fn meta(kind: ResourceKind) -> &'static KindMeta {
 
 /// Valid `type` strings for Azure AI Search data sources per channel.
 ///
-/// Note Azure's own inconsistency: the stable reference spells Azure Files
-/// `azurefile`, the preview reference `azurefiles`. Both are accepted (and
-/// validation warns to double-check against the pinned api-version).
-pub fn valid_datasource_types(channel: Channel) -> &'static [&'static str] {
-    const GA: &[&str] = &[
-        "azureblob",
-        "adlsgen2",
-        "azuretable",
-        "azuresql",
-        "cosmosdb",
-        "onelake",
-    ];
-    const PREVIEW: &[&str] = &[
-        "azureblob",
-        "adlsgen2",
-        "azuretable",
-        "azuresql",
-        "cosmosdb",
-        "onelake",
-        "mysql",
-        "sharepoint",
-        "azurefile",
-        "azurefiles",
-    ];
-    match channel {
-        Channel::Stable => GA,
-        Channel::Preview => PREVIEW,
-    }
-}
-
-/// Data source types that are preview-only (or preview-spelled).
-pub fn preview_only_datasource_types() -> &'static [&'static str] {
-    &["mysql", "sharepoint", "azurefile", "azurefiles"]
+/// rigg supports Azure Blob Storage only (including ADLS Gen2, which is the
+/// same data source type with hierarchical namespace enabled).
+pub fn valid_datasource_types(_channel: Channel) -> &'static [&'static str] {
+    &["azureblob", "adlsgen2"]
 }
 
 /// The key used by Rigg-local cross-service references
@@ -1049,14 +1020,15 @@ mod tests {
     }
 
     #[test]
-    fn datasource_types_per_channel() {
-        assert!(valid_datasource_types(Channel::Stable).contains(&"cosmosdb"));
-        assert!(valid_datasource_types(Channel::Stable).contains(&"onelake"));
-        assert!(!valid_datasource_types(Channel::Stable).contains(&"sharepoint"));
-        assert!(valid_datasource_types(Channel::Preview).contains(&"sharepoint"));
-        // Azure's own spelling inconsistency: both accepted in preview.
-        assert!(valid_datasource_types(Channel::Preview).contains(&"azurefile"));
-        assert!(valid_datasource_types(Channel::Preview).contains(&"azurefiles"));
+    fn datasource_types_are_blob_only_on_both_channels() {
+        assert_eq!(
+            valid_datasource_types(Channel::Stable),
+            &["azureblob", "adlsgen2"]
+        );
+        assert_eq!(
+            valid_datasource_types(Channel::Preview),
+            &["azureblob", "adlsgen2"]
+        );
     }
 
     #[test]

@@ -2,11 +2,10 @@
 //!
 //! This crate provides:
 //! - Resource trait definitions and models (Search and Foundry)
-//! - Configuration management
+//! - Workspace and project model
 //! - JSON normalization
 //! - Constraint validation
 
-pub mod config;
 pub mod graph;
 pub mod identity;
 pub mod migrate;
@@ -20,9 +19,5 @@ pub mod sidecar;
 pub mod store;
 pub mod workspace;
 
-pub use config::{
-    Config, ConfigError, EnvironmentConfig, FoundryServiceConfig, ResolvedEnvironment,
-    SearchServiceConfig, SyncConfig,
-};
 pub use resources::ResourceKind;
 pub use service::ServiceDomain;

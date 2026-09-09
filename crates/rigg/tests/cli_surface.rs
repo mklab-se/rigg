@@ -248,7 +248,7 @@ fn new_datasource_type_validation() {
             "-p",
             "demo",
             "--type",
-            "cosmosdb",
+            "adlsgen2",
         ])
         .assert()
         .success();
@@ -261,16 +261,11 @@ fn new_datasource_type_validation() {
             "-p",
             "demo",
             "--type",
-            "sharepoint",
+            "cosmosdb",
         ])
         .assert()
-        .success()
-        .stderr(predicate::str::contains("preview"));
-    rigg()
-        .current_dir(ws.path())
-        .args(["new", "data-source", "ds3", "-p", "demo", "--type", "bogus"])
-        .assert()
-        .code(3);
+        .code(3)
+        .stderr(predicate::str::contains("azureblob, adlsgen2"));
 }
 
 #[test]

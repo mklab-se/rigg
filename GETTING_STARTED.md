@@ -175,4 +175,4 @@ Your Agentic RAG system is live, and its complete definition is a directory of r
 - **AI assistance** — `rigg ai enable` turns on diff summaries, conflict merging, and `--describe` drafting
 - **Existing resources?** — `rigg adopt <project> <selector>` brings selected unmanaged Azure resources into a project (a single `<kind>/<name>`, a whole `<kind>`, or `all`; add `--with-deps` to also pull a resource's dependencies); re-run with an already-managed resource to capture dependencies added later (e.g. via the portal)
 
-See [README.md](README.md) for the full feature reference and [`samples/`](samples/) for three complete projects, including Cosmos DB and Azure SQL data source patterns.
+See [README.md](README.md) for the full feature reference and [`samples/`](samples/) for two complete projects.

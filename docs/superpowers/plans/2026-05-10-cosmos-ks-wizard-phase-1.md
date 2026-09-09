@@ -1,3 +1,5 @@
+**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0 — see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**
+
 # Cosmos DB → Knowledge Source: Phase 1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

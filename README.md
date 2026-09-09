@@ -252,7 +252,7 @@ rigg new pipeline docs -p my-rag --type azureblob
 
 # Individual resources (12 kinds across both services)
 rigg new index products -p my-rag
-rigg new data-source orders -p my-rag --type cosmosdb
+rigg new data-source orders -p my-rag --type adlsgen2
 rigg new agent helper -p my-rag
 rigg new deployment gpt-4-1-mini -p my-rag
 
@@ -288,7 +288,7 @@ rigg validate my-rag --strict
 
 ### Samples
 
-The [`samples/`](samples/) directory is a complete working workspace with three projects: [`quickstart-blob`](samples/projects/quickstart-blob/) (the minimal explicit pipeline), [`agentic-stack`](samples/projects/agentic-stack/) (the full showcase — custom Web API skill, knowledge base, Foundry agent + deployment + guardrail), and [`cosmos-sql-patterns`](samples/projects/cosmos-sql-patterns/) (Cosmos DB and Azure SQL change/deletion-detection done right).
+The [`samples/`](samples/) directory is a complete working workspace with two projects: [`quickstart-blob`](samples/projects/quickstart-blob/) (the minimal explicit pipeline) and [`agentic-stack`](samples/projects/agentic-stack/) (the full showcase — custom Web API skill, knowledge base, Foundry agent + deployment + guardrail).
 
 ### Deployment Environments
 
@@ -342,7 +342,7 @@ rigg auth doctor      # verify service-to-service identities and RBAC
 rigg auth doctor --fix
 ```
 
-`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). Cosmos/SQL data-plane permissions are reported with guidance. For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation.
+`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation.
 
 In CI or automation, rigg also accepts service-principal environment variables (`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/…) or a static bearer token via `RIGG_ACCESS_TOKEN`. Sovereign clouds and test rigs can override the service endpoint with `endpoint:` on a connection in `rigg.yaml`.
 
