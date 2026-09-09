@@ -5,9 +5,9 @@ description: Check whether rigg's pinned Azure API versions are still the newest
 
 # Azure API version watchdog
 
-rigg pins Azure api-versions as constants in `crates/rigg-core/src/registry.rs`
-(search stable/preview, foundry data plane, CognitiveServices ARM). Azure ships
-new versions regularly; rigg should be updated promptly when they do.
+rigg pins every Azure api-version in the registry provider table (`providers()`
+in `crates/rigg-core/src/registry.rs`). Azure ships new versions regularly;
+rigg should be updated promptly when they do.
 
 ## Check (run this first)
 
@@ -18,13 +18,15 @@ cargo run -q --bin rigg -- dev api-check
 - **Exit 0, all ✓** — rigg is current. Say so briefly and move on.
 - **Exit 1, any ✗ BEHIND** — Azure has newer versions. Tell the user which API
   is behind, then offer to start the upgrade:
-  1. Research the new version's changelog (learn.microsoft.com; the release
+  1. Run `rigg dev api-diff <provider> --from <old> --to <new>` to see what
+     changed between the pinned and newest versions.
+  2. Research the new version's changelog (learn.microsoft.com; the release
      notes for Azure AI Search, and the azure-rest-api-specs folder diff).
-  2. Update the version constants and any capability/volatile-field changes in
+  3. Update the version constants and any capability/volatile-field changes in
      `crates/rigg-core/src/registry.rs`.
-  3. Cross-check section 2 of `docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md`
+  4. Cross-check section 2 of `docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md`
      and update it if resource shapes changed.
-  4. Run the full gate (`cargo fmt --all -- --check && cargo clippy --workspace
+  5. Run the full gate (`cargo fmt --all -- --check && cargo clippy --workspace
      --all-targets -- -D warnings && cargo test --workspace`) and the live smoke
      flow against mklabsrch/mklabaifndr before releasing.
 - **? lookup failed** — network problem; not an error. Mention it and continue.
