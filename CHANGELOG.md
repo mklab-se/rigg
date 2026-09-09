@@ -23,8 +23,6 @@ around that. No compatibility with 1.x workspaces.
   list operations follow `@odata.nextLink`. Knowledge-base MCP endpoints are
   written in the documented `knowledgebases/<kb>/mcp?api-version=2026-08-01-preview`
   form.
-- A knowledge source's `ingestionParameters.networkAccessMode` is immutable:
-  changing it locally shows `replace`.
 - Storage account `listKeys` is no longer called anywhere.
 
 ### Added
@@ -34,6 +32,18 @@ around that. No compatibility with 1.x workspaces.
   `rigg dev api-fixture` refreshes the pinned schema fixtures.
 - Pull and adopt report fields Azure returns that rigg's pinned schema does
   not know (API-drift canary; documents stay untouched).
+
+### Removed (library API)
+
+- `rigg_core::config` and everything in it: `Config`, `ConfigError`,
+  `EnvironmentConfig`, `FoundryServiceConfig`, `ResolvedEnvironment`,
+  `SearchServiceConfig`, `SyncConfig`.
+- `AzureSearchClient::from_service_config`.
+- `FoundryClient::new(&FoundryServiceConfig)`.
+- `AzCliAuth::for_cosmos`.
+- `ArmClient::get_storage_account_key` / `get_storage_connection_string`.
+- `ArmClient::get_resource_identity` and `enable_system_identity` now take a
+  `registry::Provider` instead of their previous signature.
 
 ## [1.7.0] - 2026-09-06
 

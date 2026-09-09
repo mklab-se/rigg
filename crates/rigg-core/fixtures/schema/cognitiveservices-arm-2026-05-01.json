@@ -1,6 +1,6 @@
 {
   "provider": "cognitiveservices-arm",
-  "version": "2026-07-01",
+  "version": "2026-05-01",
   "definitions": {
     "AADAuthTypeConnectionProperties": [
       "authType",
@@ -747,8 +747,6 @@
       "availableCapacity",
       "availableFinetuneCapacity",
       "model",
-      "scopeId",
-      "scopeType",
       "skuName"
     ],
     "MultiRegionSettings": [
@@ -979,7 +977,6 @@
       "renewalPeriod",
       "rules"
     ],
-    "QuotaScopeType": [],
     "QuotaTier": [
       "properties"
     ],
@@ -1320,8 +1317,6 @@
       "name",
       "nextResetTime",
       "quotaPeriod",
-      "scopeId",
-      "scopeType",
       "status",
       "unit"
     ],

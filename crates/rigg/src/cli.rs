@@ -412,8 +412,8 @@ pub struct PromoteArgs {
 
 #[derive(Subcommand)]
 pub enum MigrateCommands {
-    /// Convert an indexed knowledge source (azureBlob, azureSql, ...) to the
-    /// explicit searchIndex kind, materializing its Azure-generated pipeline
+    /// Convert an indexed blob knowledge source (azureBlob) to the explicit
+    /// searchIndex kind, materializing its Azure-generated pipeline
     /// (data source, index, skillset, indexer) as project files
     ///
     /// Local-only: writes/rewrites project files; the next `rigg push`

@@ -1,6 +1,6 @@
-//! `rigg migrate knowledge-source` — convert an indexed knowledge source
-//! (azureBlob, azureSql, ...) into the explicit `searchIndex` shape,
-//! materializing its Azure-generated pipeline as first-class project files.
+//! `rigg migrate knowledge-source` — convert an indexed blob knowledge
+//! source (azureBlob) into the explicit `searchIndex` shape, materializing
+//! its Azure-generated pipeline as first-class project files.
 //!
 //! Local-only: this command never mutates Azure. The next `rigg push`
 //! applies the change — for an in-place migration that is a REPLACE
@@ -103,6 +103,15 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
                 name
             ),
         }
+    }
+
+    // The generated data source may be a type rigg no longer supports
+    // (e.g. azureSql, oneLake) — reject before writing anything `validate`
+    // would reject anyway.
+    if let Some(ds_doc) = sub_docs.get(&ResourceKind::DataSource) {
+        let ds_type = ds_doc.get("type").and_then(Value::as_str).unwrap_or("");
+        rigg_core::scaffold::check_datasource_type(ds_type)
+            .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     }
 
     let mode = resolve_mode(ctx, &args)?;

@@ -1,6 +1,7 @@
 //! Generic ARM CRUD for Foundry control-plane resource kinds
 //! (model deployments, project connections, RAI policies / guardrails)
-//! under `Microsoft.CognitiveServices/accounts`, api-version 2026-05-01.
+//! under `Microsoft.CognitiveServices/accounts`, api-version from the
+//! registry provider table (`ARM_COGNITIVE_API_VERSION`).
 
 use std::time::Duration;
 

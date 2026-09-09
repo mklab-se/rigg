@@ -52,14 +52,15 @@ rigg-diff  (used by rigg-core & rigg)
 - `graph.rs` — reference-graph push/delete ordering (Kahn's algorithm over registry-extracted references).
 - `sidecar.rs` — `{"$file": "x.md"}` inline/extract for long text fields.
 - `scaffold.rs` — identity-first starter definitions for all 12 kinds, `scaffold_pipeline`, `scaffold_api_spec` (WebApiSkill contract).
+- `schema.rs` — pinned-version OpenAPI schema fixtures; `unknown_top_level_fields` is the pull/adopt API-drift canary.
 
 **rigg-client** — Azure REST:
-- `client.rs` — Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-05-01-preview`).
+- `client.rs` — Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-08-01-preview`).
 - `foundry.rs` — Foundry v1 data plane (`https://{account}.services.ai.azure.com/api/projects/{project}?api-version=v1`), agents + versions, `Foundry-Features` header support.
 - `arm_resources.rs` — generic ARM CRUD for deployments/connections/RAI policies (api-version `2026-05-01`) with LRO polling; `arm.rs` — typed ARM discovery.
 - `auth.rs` — chain: `RIGG_ACCESS_TOKEN` static > service-principal env vars > Azure CLI; per-domain token scoping.
 
-**rigg** — clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0/1/2/3/4/5), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands.
+**rigg** — clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0/1/2/3/4/5), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands. `commands/dev.rs` — `rigg dev api-check`, the watchdog that verifies pinned Azure API versions are current; `commands/dev_spec.rs` — `rigg dev api-diff` / `api-fixture`, fetching and diffing OpenAPI documents from azure-rest-api-specs.
 
 ## Key invariants
 

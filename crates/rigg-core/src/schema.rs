@@ -76,7 +76,7 @@ pub fn fixture_for(kind: ResourceKind) -> &'static SchemaFixture {
             SchemaFixture::parse(
                 "cognitiveservices-arm",
                 registry::ARM_COGNITIVE_API_VERSION,
-                include_str!("../fixtures/schema/cognitiveservices-arm-2026-07-01.json"),
+                include_str!("../fixtures/schema/cognitiveservices-arm-2026-05-01.json"),
             )
         }),
     }
@@ -304,6 +304,14 @@ mod tests {
     }
 
     #[test]
+    fn cognitive_arm_fixture_is_pinned_to_the_registry_api_version() {
+        assert_eq!(
+            fixture_for(ResourceKind::Deployment).version,
+            registry::ARM_COGNITIVE_API_VERSION
+        );
+    }
+
+    #[test]
     fn diff_definitions_lists_added_removed_and_enum_changes() {
         let old = json!({"definitions": {"A": {"properties": {"x": {}, "y": {"type": "string", "enum": ["p"]}}}}});
         let new = json!({"definitions": {"A": {"properties": {"x": {}, "z": {}, "y": {"type": "string", "enum": ["p", "q"]}}}}});
@@ -337,10 +345,10 @@ mod tests {
                 "search-data-2026-08-01-preview.json",
             ),
             (
-                "cs-2026-07-01.json",
+                "cs-2026-05-01.json",
                 "cognitiveservices-arm",
                 registry::ARM_COGNITIVE_API_VERSION,
-                "cognitiveservices-arm-2026-07-01.json",
+                "cognitiveservices-arm-2026-05-01.json",
             ),
         ];
         for (input, slug, version, output) in sources {

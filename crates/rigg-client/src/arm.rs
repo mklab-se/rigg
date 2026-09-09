@@ -850,6 +850,7 @@ impl ArmClient {
 
     /// Site configuration (`ipSecurityRestrictions`, `publicNetworkAccess`, …):
     /// not returned by `GET sites/{name}`; lives under `config/web`.
+    // Used by the identity-and-auth workstream (spec 2026-09-09-identity-and-auth-design.md).
     pub async fn site_config(&self, site_id: &str) -> Result<Value, ClientError> {
         let url = self.url(&format!("{site_id}/config/web"), Provider::WebArm);
         let response = self

@@ -231,6 +231,7 @@ static PROVIDERS: &[ProviderMeta] = &[
         arm: None,
         hold: None,
     },
+    // Used by the identity-and-auth workstream (spec 2026-09-09-identity-and-auth-design.md).
     ProviderMeta {
         provider: Provider::ManagedIdentityArm,
         label: "Microsoft.ManagedIdentity ARM",
@@ -248,6 +249,7 @@ static PROVIDERS: &[ProviderMeta] = &[
         }),
         hold: None,
     },
+    // Used by the identity-and-auth workstream (spec 2026-09-09-identity-and-auth-design.md).
     ProviderMeta {
         provider: Provider::KeyVaultArm,
         label: "Microsoft.KeyVault ARM",
@@ -265,6 +267,7 @@ static PROVIDERS: &[ProviderMeta] = &[
         }),
         hold: None,
     },
+    // Used by the identity-and-auth workstream (spec 2026-09-09-identity-and-auth-design.md).
     ProviderMeta {
         provider: Provider::KeyVaultData,
         label: "Key Vault data plane (secrets)",
@@ -277,6 +280,7 @@ static PROVIDERS: &[ProviderMeta] = &[
         arm: None,
         hold: None,
     },
+    // Used by the identity-and-auth workstream (spec 2026-09-09-identity-and-auth-design.md).
     ProviderMeta {
         provider: Provider::Graph,
         label: "Microsoft Graph",
@@ -532,13 +536,8 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::Index,
         }],
         // A knowledge source's kind (azureBlob, searchIndex, ...) cannot be
-        // changed by PUT — push replaces (delete + recreate) instead. The
-        // managed-ingestion network access mode is likewise fixed at
-        // creation; changing it requires delete + recreate too.
-        immutable_fields: &[
-            "kind",
-            "azureBlobParameters.ingestionParameters.networkAccessMode",
-        ],
+        // changed by PUT — push replaces (delete + recreate) instead.
+        immutable_fields: &["kind"],
         schema_definition: "KnowledgeSource",
     },
     KindMeta {
@@ -1426,13 +1425,6 @@ mod tests {
             diff,
             vec![("kind", String::new(), "searchIndex".to_string())]
         );
-    }
-
-    #[test]
-    fn knowledge_source_network_access_mode_is_immutable() {
-        let a = json!({"name": "ks", "kind": "azureBlob", "azureBlobParameters": {"ingestionParameters": {"networkAccessMode": "public"}}});
-        let b = json!({"name": "ks", "kind": "azureBlob", "azureBlobParameters": {"ingestionParameters": {"networkAccessMode": "private"}}});
-        assert!(!immutable_diff(ResourceKind::KnowledgeSource, &a, &b).is_empty());
     }
 
     #[test]

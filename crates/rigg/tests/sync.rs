@@ -1482,6 +1482,60 @@ async fn migrate_rejects_unmanaged_and_remote_kinds() {
 }
 
 #[tokio::test]
+async fn migrate_rejects_generated_datasource_type_validate_would_reject() {
+    let server = MockServer::start().await;
+    // An indexedOneLake knowledge source whose generated data source is a
+    // type rigg no longer supports (only azureblob/adlsgen2 are valid).
+    Mock::given(method("GET"))
+        .and(path("/knowledgeSources/onelake-ks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xKS\"",
+            "name": "onelake-ks",
+            "kind": "indexedOneLake",
+            "oneLakeParameters": {
+                "createdResources": {
+                    "datasource": "onelake-ks-datasource",
+                    "indexer": "onelake-ks-indexer",
+                    "skillset": "onelake-ks-skillset",
+                    "index": "onelake-ks-index"
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/onelake-ks-datasource"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0xDS\"",
+            "name": "onelake-ks-datasource",
+            "type": "onelake",
+            "credentials": {"connectionString": null}
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "knowledge-sources",
+        "onelake-ks",
+        &json!({"name": "onelake-ks", "kind": "indexedOneLake"}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "migrate",
+            "knowledge-source",
+            "onelake-ks",
+            "--in-place",
+            "--yes",
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("unsupported data source type"));
+}
+
+#[tokio::test]
 async fn migrate_requires_mode_non_interactively() {
     let server = MockServer::start().await;
     mount_blob_ks(&server, "test-ks").await;
