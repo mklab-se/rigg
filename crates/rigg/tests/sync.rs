@@ -2929,3 +2929,31 @@ async fn pull_follows_odata_next_link_across_pages() {
             .exists()
     );
 }
+
+/// A server that keeps returning the same `@odata.nextLink` forever must not
+/// hang `list` indefinitely (or grow memory without bound) — the client
+/// bounds paging and errors out with a clear message.
+#[tokio::test]
+async fn pull_fails_fast_on_a_cycling_odata_next_link() {
+    let server = MockServer::start().await;
+    let self_link = format!(
+        "{}/indexes?api-version={}",
+        server.uri(),
+        rigg_core::registry::SEARCH_STABLE_API_VERSION
+    );
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "idx-a", "fields": []}],
+            "@odata.nextLink": self_link
+        })))
+        .mount(&server)
+        .await;
+    mount_empty_lists_except(&server, "indexes").await;
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "all", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("did not terminate"));
+}

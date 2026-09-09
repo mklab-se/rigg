@@ -219,18 +219,38 @@ impl AzureSearchClient {
     /// List all resources of a given kind
     #[instrument(skip(self))]
     pub async fn list(&self, kind: ResourceKind) -> Result<Vec<Value>, ClientError> {
+        // Guards against a non-terminating `@odata.nextLink` chain: a server
+        // that repeats or cycles its next-page link would otherwise hang
+        // this loop forever with unbounded memory growth.
+        const MAX_LIST_PAGES: usize = 1000;
+
         let mut url = self.collection_url(kind);
         let mut items = Vec::new();
+        let mut pages = 0usize;
         loop {
             let Some(page) = self.request_with_retry(Method::GET, &url, None).await? else {
                 break;
             };
+            pages += 1;
             if let Some(arr) = page.get("value").and_then(Value::as_array) {
                 items.extend(arr.iter().cloned());
             }
             // 2026-08-01-preview pages list results; the link must be used verbatim.
             match page.get("@odata.nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    if next == url || pages >= MAX_LIST_PAGES {
+                        return Err(ClientError::Api {
+                            status: 502,
+                            message: format!(
+                                "listing {} did not terminate: Azure kept returning a next page link after {} pages ({})",
+                                kind.display_name(),
+                                pages,
+                                url
+                            ),
+                        });
+                    }
+                    url = next.to_string();
+                }
                 _ => break,
             }
         }
