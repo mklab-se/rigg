@@ -10,7 +10,7 @@ The 1.0 design spec lives at `docs/superpowers/specs/2026-07-07-rigg-1.0-redesig
 
 ## Session start
 
-Run `rigg dev api-check` (or ask the api-watchdog skill) to verify rigg's pinned Azure API versions are still current. Supported versions are constants in `crates/rigg-core/src/registry.rs`.
+Run `rigg dev api-check` (or ask the api-watchdog skill) to verify rigg's pinned Azure API versions are still current. Every API version is in the registry provider table (`providers()` in `crates/rigg-core/src/registry.rs`).
 
 ## Build & Test Commands
 

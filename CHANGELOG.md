@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — 2.0.0
+
+rigg 2.0 narrows to the Agentic RAG stack it does best — Microsoft Foundry
+agents grounded on Azure AI Search, fed from Azure Blob Storage, enriched by
+Azure Functions — and rebuilds environments, promotion and authentication
+around that. No compatibility with 1.x workspaces.
+
+### Changed (breaking)
+
+- **Blob Storage is the only data source** (`azureblob`, `adlsgen2`). Cosmos
+  DB, Azure SQL, OneLake, SharePoint, MySQL, Table and Files support is removed,
+  including the Cosmos client and the `cosmos-sql-patterns` sample.
+- **Every Azure API version now lives in the registry provider table** and is
+  the newest available: Search data plane 2026-04-01 / 2026-08-01-preview,
+  Microsoft.CognitiveServices 2026-07-01, Microsoft.Search 2025-05-01,
+  Microsoft.Storage 2026-06-01, Microsoft.Web 2026-07-15. Search list
+  operations follow `@odata.nextLink`. Knowledge-base MCP endpoints are written
+  in the documented `knowledgebases/<kb>/mcp?api-version=2026-08-01-preview` form.
+- A knowledge source's `ingestionParameters.networkAccessMode` is immutable:
+  changing it locally shows `replace`.
+- Storage account `listKeys` is no longer called anywhere.
+
+### Added
+
+- `rigg dev api-check` covers every provider; `rigg dev api-diff <provider>`
+  shows added/removed properties and enum values between two versions;
+  `rigg dev api-fixture` refreshes the pinned schema fixtures.
+- Pull and adopt report fields Azure returns that rigg's pinned schema does
+  not know (API-drift canary; documents stay untouched).
+
 ## [1.7.0] - 2026-09-06
 
 ### Added

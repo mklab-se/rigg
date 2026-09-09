@@ -260,6 +260,9 @@ rigg new deployment gpt-4-1-mini -p my-rag
 rigg new api doc-enrichment
 ```
 
+Blob Storage (`azureblob`, `adlsgen2`) is the only data source type rigg
+manages — it's the one source that fits the Agentic RAG stack rigg targets.
+
 With [AI features](#ai-assistance) enabled, `--describe` drafts the definition for you:
 
 ```bash
@@ -380,6 +383,18 @@ Once enabled:
 - **Drafting** — `rigg new <kind> <name> --describe "…"` drafts resource definitions from natural language
 
 Pass `--no-ai` on any command to disable AI assistance for that invocation.
+
+### Staying Current with Azure
+
+rigg pins every Azure api-version in one registry table and ships tools to keep it honest:
+
+```bash
+rigg dev api-check                                # is every pinned api-version still the newest?
+rigg dev api-diff <provider> [--from v] [--to v]  # added/removed properties and enum values between two versions
+rigg dev api-fixture <provider>                   # refresh the pinned schema fixtures used by pull's drift canary
+```
+
+A weekly GitHub Action runs `api-check` and opens an issue when Azure has shipped something newer.
 
 ## Resource Kinds
 
