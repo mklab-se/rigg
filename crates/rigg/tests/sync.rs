@@ -2821,13 +2821,19 @@ async fn knowledge_base_adopt_uses_preview_api_and_captures_retrieval_config() {
     // request falls through to mock_empty_lists' catch-alls below.
     Mock::given(method("GET"))
         .and(path("/knowledgeBases"))
-        .and(query_param("api-version", "2026-05-01-preview"))
+        .and(query_param(
+            "api-version",
+            rigg_core::registry::SEARCH_PREVIEW_API_VERSION,
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [kb.clone()]})))
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/knowledgeBases/support-kb"))
-        .and(query_param("api-version", "2026-05-01-preview"))
+        .and(query_param(
+            "api-version",
+            rigg_core::registry::SEARCH_PREVIEW_API_VERSION,
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(kb))
         .mount(&server)
         .await;

@@ -25,3 +25,4 @@ handlebars.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+regex-lite.workspace = true

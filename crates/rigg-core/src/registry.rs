@@ -13,12 +13,211 @@ use serde_json::Value;
 
 use crate::resources::traits::{ResourceKind, ResourceRef};
 
-/// Default data-plane api-versions. Overridable per connection in `rigg.yaml`.
+/// Azure AI Search data plane. Overridable per environment in `rigg.yaml`.
 pub const SEARCH_STABLE_API_VERSION: &str = "2026-04-01";
-pub const SEARCH_PREVIEW_API_VERSION: &str = "2026-05-01-preview";
+pub const SEARCH_PREVIEW_API_VERSION: &str = "2026-08-01-preview";
+/// Microsoft Foundry data plane (route-versioned).
 pub const FOUNDRY_API_VERSION: &str = "v1";
-/// ARM api-version for Microsoft.CognitiveServices (deployments, connections, RAI policies).
-pub const ARM_COGNITIVE_API_VERSION: &str = "2026-05-01";
+/// ARM: Microsoft.CognitiveServices (accounts, projects, deployments, connections, RAI policies).
+pub const ARM_COGNITIVE_API_VERSION: &str = "2026-07-01";
+/// ARM: Microsoft.Search (search services, identity, network, shared private links).
+pub const ARM_SEARCH_API_VERSION: &str = "2025-05-01";
+/// ARM: Microsoft.Storage (accounts, blob services, containers).
+pub const ARM_STORAGE_API_VERSION: &str = "2026-06-01";
+/// ARM: Microsoft.Web (sites, function keys, auth settings, site config).
+pub const ARM_WEB_API_VERSION: &str = "2026-07-15";
+/// ARM: Microsoft.Authorization (role assignments, permissions).
+pub const ARM_AUTHORIZATION_API_VERSION: &str = "2022-04-01";
+/// ARM: Microsoft.Resources (subscriptions, tenants).
+pub const ARM_RESOURCES_API_VERSION: &str = "2022-12-01";
+/// ARM: Microsoft.ManagedIdentity (user-assigned identities).
+pub const ARM_MANAGED_IDENTITY_API_VERSION: &str = "2024-11-30";
+/// ARM: Microsoft.KeyVault (vaults).
+pub const ARM_KEYVAULT_API_VERSION: &str = "2026-02-01";
+/// Key Vault data plane (secrets).
+pub const KEYVAULT_SECRETS_API_VERSION: &str = "2025-07-01";
+/// Microsoft Graph (route-versioned).
+pub const GRAPH_API_VERSION: &str = "v1.0";
+pub const ARM_BASE_URL: &str = "https://management.azure.com";
+pub const GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
+
+/// Every remote API rigg talks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Provider {
+    SearchData,
+    FoundryData,
+    CognitiveServicesArm,
+    SearchArm,
+    StorageArm,
+    WebArm,
+    AuthorizationArm,
+    ResourcesArm,
+    ManagedIdentityArm,
+    KeyVaultArm,
+    KeyVaultData,
+    Graph,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderMeta {
+    pub provider: Provider,
+    /// Human label for `rigg dev api-check`.
+    pub label: &'static str,
+    pub stable: &'static str,
+    pub preview: Option<&'static str>,
+    /// Token audience (scope base, without `/.default`).
+    pub audience: &'static str,
+    /// Folder in Azure/azure-rest-api-specs whose entries are version folders
+    /// (`None` for route-versioned APIs and APIs not in that repository).
+    pub spec_path: Option<&'static str>,
+    /// Preview folder in the specs repository, when rigg uses a preview.
+    pub preview_spec_path: Option<&'static str>,
+    pub route_versioned: bool,
+}
+
+static PROVIDERS: &[ProviderMeta] = &[
+    ProviderMeta {
+        provider: Provider::SearchData,
+        label: "Azure AI Search data plane",
+        stable: SEARCH_STABLE_API_VERSION,
+        preview: Some(SEARCH_PREVIEW_API_VERSION),
+        audience: "https://search.azure.com",
+        spec_path: Some("specification/search/data-plane/Search/stable"),
+        preview_spec_path: Some("specification/search/data-plane/Search/preview"),
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::FoundryData,
+        label: "Microsoft Foundry data plane",
+        stable: FOUNDRY_API_VERSION,
+        preview: None,
+        audience: "https://ai.azure.com",
+        spec_path: None,
+        preview_spec_path: None,
+        route_versioned: true,
+    },
+    ProviderMeta {
+        provider: Provider::CognitiveServicesArm,
+        label: "Microsoft.CognitiveServices ARM",
+        stable: ARM_COGNITIVE_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some(
+            "specification/cognitiveservices/resource-manager/Microsoft.CognitiveServices/stable",
+        ),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::SearchArm,
+        label: "Microsoft.Search ARM",
+        stable: ARM_SEARCH_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some("specification/search/resource-manager/Microsoft.Search/Search/stable"),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::StorageArm,
+        label: "Microsoft.Storage ARM",
+        stable: ARM_STORAGE_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some("specification/storage/resource-manager/Microsoft.Storage/stable"),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::WebArm,
+        label: "Microsoft.Web ARM",
+        stable: ARM_WEB_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some("specification/web/resource-manager/Microsoft.Web/AppService/stable"),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::AuthorizationArm,
+        label: "Microsoft.Authorization ARM",
+        stable: ARM_AUTHORIZATION_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some(
+            "specification/authorization/resource-manager/Microsoft.Authorization/Authorization/stable",
+        ),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::ResourcesArm,
+        label: "Microsoft.Resources ARM",
+        stable: ARM_RESOURCES_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some(
+            "specification/resources/resource-manager/Microsoft.Resources/subscriptions/stable",
+        ),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::ManagedIdentityArm,
+        label: "Microsoft.ManagedIdentity ARM",
+        stable: ARM_MANAGED_IDENTITY_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some(
+            "specification/msi/resource-manager/Microsoft.ManagedIdentity/ManagedIdentity/stable",
+        ),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::KeyVaultArm,
+        label: "Microsoft.KeyVault ARM",
+        stable: ARM_KEYVAULT_API_VERSION,
+        preview: None,
+        audience: "https://management.azure.com",
+        spec_path: Some(
+            "specification/keyvault/resource-manager/Microsoft.KeyVault/KeyVault/stable",
+        ),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::KeyVaultData,
+        label: "Key Vault data plane (secrets)",
+        stable: KEYVAULT_SECRETS_API_VERSION,
+        preview: None,
+        audience: "https://vault.azure.net",
+        spec_path: Some("specification/keyvault/data-plane/Secrets/stable"),
+        preview_spec_path: None,
+        route_versioned: false,
+    },
+    ProviderMeta {
+        provider: Provider::Graph,
+        label: "Microsoft Graph",
+        stable: GRAPH_API_VERSION,
+        preview: None,
+        audience: "https://graph.microsoft.com",
+        spec_path: None,
+        preview_spec_path: None,
+        route_versioned: true,
+    },
+];
+
+pub fn providers() -> &'static [ProviderMeta] {
+    PROVIDERS
+}
+
+pub fn provider(p: Provider) -> &'static ProviderMeta {
+    PROVIDERS
+        .iter()
+        .find(|m| m.provider == p)
+        .expect("every Provider has a table entry")
+}
 
 /// Which service/plane a kind is managed through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1235,6 +1434,45 @@ mod tests {
         let src = json!({"name": "a"});
         restore_path(&mut dst, &src, "tools[].server_url");
         assert_eq!(dst["tools"][0]["server_url"], json!("kept"));
+    }
+
+    #[test]
+    fn provider_table_is_complete_and_current() {
+        for p in [
+            Provider::SearchData,
+            Provider::FoundryData,
+            Provider::CognitiveServicesArm,
+            Provider::SearchArm,
+            Provider::StorageArm,
+            Provider::WebArm,
+            Provider::AuthorizationArm,
+            Provider::ResourcesArm,
+            Provider::ManagedIdentityArm,
+            Provider::KeyVaultArm,
+            Provider::KeyVaultData,
+            Provider::Graph,
+        ] {
+            let m = provider(p);
+            assert_eq!(m.provider, p);
+            assert!(!m.stable.is_empty());
+            assert!(m.audience.starts_with("https://"));
+        }
+        assert_eq!(provider(Provider::SearchData).stable, "2026-04-01");
+        assert_eq!(
+            provider(Provider::SearchData).preview,
+            Some("2026-08-01-preview")
+        );
+        assert_eq!(
+            provider(Provider::CognitiveServicesArm).stable,
+            "2026-07-01"
+        );
+        assert_eq!(provider(Provider::SearchArm).stable, "2025-05-01");
+        assert_eq!(provider(Provider::StorageArm).stable, "2026-06-01");
+        assert_eq!(provider(Provider::WebArm).stable, "2026-07-15");
+        assert_eq!(provider(Provider::KeyVaultData).stable, "2025-07-01");
+        assert!(provider(Provider::FoundryData).route_versioned);
+        assert!(provider(Provider::Graph).route_versioned);
+        assert_eq!(providers().len(), 12);
     }
 }
 

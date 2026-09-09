@@ -407,8 +407,8 @@ mod tests {
     fn make_client() -> AzureSearchClient {
         AzureSearchClient::with_auth(
             "https://test-svc.search.windows.net".to_string(),
-            "2026-04-01".to_string(),
-            "2026-05-01-preview".to_string(),
+            rigg_core::registry::SEARCH_STABLE_API_VERSION.to_string(),
+            rigg_core::registry::SEARCH_PREVIEW_API_VERSION.to_string(),
             Box::new(FakeAuth),
         )
         .unwrap()
@@ -420,19 +420,28 @@ mod tests {
         let url = client.collection_url(ResourceKind::Index);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/indexes?api-version=2026-04-01"
+            format!(
+                "https://test-svc.search.windows.net/indexes?api-version={}",
+                rigg_core::registry::SEARCH_STABLE_API_VERSION
+            )
         );
         // Knowledge bases are GA, but their retrieval & output configuration
         // only exists in preview — rigg manages them on the preview channel.
         let url = client.collection_url(ResourceKind::KnowledgeBase);
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgeBases?api-version=2026-05-01-preview"
+            format!(
+                "https://test-svc.search.windows.net/knowledgeBases?api-version={}",
+                rigg_core::registry::SEARCH_PREVIEW_API_VERSION
+            )
         );
         let url = client.resource_url(ResourceKind::KnowledgeSource, "ks");
         assert_eq!(
             url,
-            "https://test-svc.search.windows.net/knowledgeSources/ks?api-version=2026-04-01"
+            format!(
+                "https://test-svc.search.windows.net/knowledgeSources/ks?api-version={}",
+                rigg_core::registry::SEARCH_STABLE_API_VERSION
+            )
         );
     }
 
@@ -449,8 +458,12 @@ mod tests {
         for kind in ResourceKind::search_kinds() {
             let url = client.collection_url(kind);
             let expected = match rigg_core::registry::meta(kind).channel {
-                rigg_core::registry::Channel::Stable => "2026-04-01",
-                rigg_core::registry::Channel::Preview => "2026-05-01-preview",
+                rigg_core::registry::Channel::Stable => {
+                    rigg_core::registry::SEARCH_STABLE_API_VERSION
+                }
+                rigg_core::registry::Channel::Preview => {
+                    rigg_core::registry::SEARCH_PREVIEW_API_VERSION
+                }
             };
             assert!(
                 url.contains(expected),

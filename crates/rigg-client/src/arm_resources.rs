@@ -291,14 +291,20 @@ mod tests {
         let url = arm_url(&scope(), ResourceKind::Deployment, None, Some("gpt-5-mini")).unwrap();
         assert_eq!(
             url,
-            "https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.CognitiveServices/accounts/mklabaifndr/deployments/gpt-5-mini?api-version=2026-05-01"
+            format!(
+                "https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.CognitiveServices/accounts/mklabaifndr/deployments/gpt-5-mini?api-version={}",
+                registry::ARM_COGNITIVE_API_VERSION
+            )
         );
     }
 
     #[test]
     fn guardrail_url() {
         let url = arm_url(&scope(), ResourceKind::Guardrail, None, None).unwrap();
-        assert!(url.ends_with("accounts/mklabaifndr/raiPolicies?api-version=2026-05-01"));
+        assert!(url.ends_with(&format!(
+            "accounts/mklabaifndr/raiPolicies?api-version={}",
+            registry::ARM_COGNITIVE_API_VERSION
+        )));
     }
 
     #[test]
