@@ -1010,3 +1010,163 @@ git commit -m "docs: 2.0.0 changelog opening, api tooling docs
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 8: ARM-registered versions — hold CognitiveServices at 2026-05-01, teach api-check about ARM registration
+
+Added 2026-09-10 after the Task 7 live smoke: Azure rejects Microsoft.CognitiveServices `2026-07-01` for `accounts/projects/connections` (ARM registers at most `2026-05-01` stable / `2026-05-15-preview` for connections, while `accounts` and `accounts/projects` accept `2026-07-01`). The 2026-05-01 → 2026-07-01 diff had no changes for rigg's kinds, so one uniform version is correct. The watchdog must know why a pin is held so it does not report BEHIND forever, and it must be able to tell when the hold can be lifted.
+
+**Files:**
+- Modify: `crates/rigg-core/src/registry.rs` (`ARM_COGNITIVE_API_VERSION`, `ProviderMeta`, `PROVIDERS`, tests), `crates/rigg/src/commands/dev.rs` (`checks()`, status logic, output), `crates/rigg-client/src/arm.rs` (new `provider_api_versions`), `CHANGELOG.md` (CognitiveServices line), `README.md` ("Resource Kinds" API-version sentence), `crates/rigg-client/src/arm_resources.rs` test asserting the version
+- Test: registry inline; `dev.rs` inline; `arm.rs` inline
+
+**Interfaces:**
+- Produces:
+  ```rust
+  pub struct ArmRegistration { pub namespace: &'static str, pub resource_types: &'static [&'static str] }
+  pub struct Hold { pub newer: &'static str, pub reason: &'static str }
+  // ProviderMeta gains: pub arm: Option<ArmRegistration>, pub hold: Option<Hold>
+  // ArmClient:
+  pub async fn provider_api_versions(&self, subscription_id: &str, namespace: &str) -> Result<BTreeMap<String, Vec<String>>, ClientError> // resourceType → apiVersions
+  ```
+- api-check statuses: `current`, `BEHIND`, `held` (spec repo newest == `hold.newer`), `held — ARM now registers <v> for every type: lift the hold` (when ARM access is available and confirms), `?`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`registry.rs`:
+
+```rust
+#[test]
+fn cognitive_services_is_held_at_the_version_arm_registers_for_connections() {
+    let m = provider(Provider::CognitiveServicesArm);
+    assert_eq!(m.stable, "2026-05-01");
+    let hold = m.hold.expect("hold documented");
+    assert_eq!(hold.newer, "2026-07-01");
+    let arm = m.arm.expect("arm registration");
+    assert_eq!(arm.namespace, "Microsoft.CognitiveServices");
+    assert!(arm.resource_types.contains(&"accounts/projects/connections"));
+}
+
+#[test]
+fn every_arm_provider_declares_its_registration() {
+    for m in providers() {
+        if m.audience == "https://management.azure.com" && m.spec_path.is_some() {
+            assert!(m.arm.is_some(), "{} lacks ArmRegistration", m.label);
+        }
+    }
+}
+```
+
+`dev.rs`:
+
+```rust
+#[test]
+fn status_is_held_when_upstream_equals_the_documented_hold() {
+    let m = rigg_core::registry::provider(rigg_core::registry::Provider::CognitiveServicesArm);
+    assert_eq!(status_for(m.stable, "2026-07-01", m.hold.as_ref(), None), "held");
+    assert_eq!(status_for(m.stable, "2026-09-01", m.hold.as_ref(), None), "BEHIND");
+    assert_eq!(status_for(m.stable, m.stable, m.hold.as_ref(), None), "current");
+    // ARM confirms the newer version for every resource type → the hold can be lifted
+    let arm_ok = Some(true);
+    assert!(status_for(m.stable, "2026-07-01", m.hold.as_ref(), arm_ok).starts_with("held — ARM now registers"));
+}
+```
+
+`arm.rs`:
+
+```rust
+#[test]
+fn provider_api_versions_url_uses_resources_arm_version() {
+    let c = ArmClient::with_token("t".into());
+    assert_eq!(
+        c.url("/subscriptions/s/providers/Microsoft.CognitiveServices", rigg_core::registry::Provider::ResourcesArm),
+        format!("https://management.azure.com/subscriptions/s/providers/Microsoft.CognitiveServices?api-version={}", rigg_core::registry::ARM_RESOURCES_API_VERSION)
+    );
+}
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cargo test -p rigg-core cognitive_services_is_held every_arm_provider && cargo test -p rigg status_is_held`
+Expected: FAIL (fields/functions missing; stable still 2026-07-01).
+
+- [ ] **Step 3: Registry**
+
+`ARM_COGNITIVE_API_VERSION = "2026-05-01"` with the doc comment: "Newest version ARM registers for every CognitiveServices resource type rigg uses; `accounts/projects/connections` caps it (2026-07-01 is registered for accounts and projects only, and changed nothing rigg reads)." Add the two structs and the two `ProviderMeta` fields. Table values:
+
+| provider | arm | hold |
+|---|---|---|
+| CognitiveServicesArm | `Microsoft.CognitiveServices`, `["accounts", "accounts/projects", "accounts/projects/connections"]` | `newer: "2026-07-01", reason: "not registered for accounts/projects/connections (max 2026-05-01 stable)"` |
+| SearchArm | `Microsoft.Search`, `["searchServices"]` | None |
+| StorageArm | `Microsoft.Storage`, `["storageAccounts"]` | None |
+| WebArm | `Microsoft.Web`, `["sites"]` | None |
+| AuthorizationArm | `Microsoft.Authorization`, `["roleAssignments"]` | None |
+| ResourcesArm | None (it is the registration API itself) | None |
+| ManagedIdentityArm | `Microsoft.ManagedIdentity`, `["userAssignedIdentities"]` | None |
+| KeyVaultArm | `Microsoft.KeyVault`, `["vaults"]` | None |
+| others | None | None |
+
+Update `provider_table_is_complete_and_current` (2026-05-01) and the `arm_resources.rs` test string.
+
+- [ ] **Step 4: ARM registration lookup**
+
+`arm.rs`:
+
+```rust
+/// `resourceType → apiVersions` as ARM registers them for `namespace` in
+/// `subscription_id` (what `az provider show` prints). The ground truth for
+/// which api-version a call may use — the specs repository can be ahead of it.
+pub async fn provider_api_versions(&self, subscription_id: &str, namespace: &str) -> Result<BTreeMap<String, Vec<String>>, ClientError> {
+    let url = self.url(&format!("/subscriptions/{subscription_id}/providers/{namespace}"), Provider::ResourcesArm);
+    let response = self.http.get(&url).header("Authorization", format!("Bearer {}", self.token)).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await?;
+        return Err(ClientError::from_response(status.as_u16(), &body));
+    }
+    let value: Value = response.json().await?;
+    let mut out = BTreeMap::new();
+    for rt in value["resourceTypes"].as_array().into_iter().flatten() {
+        let name = rt["resourceType"].as_str().unwrap_or_default().to_string();
+        let versions = rt["apiVersions"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        out.insert(name, versions);
+    }
+    Ok(out)
+}
+```
+
+- [ ] **Step 5: api-check**
+
+In `dev.rs` add a pure status function and use it:
+
+```rust
+/// `arm_confirms`: Some(true) when ARM registers `latest` for every resource
+/// type of the provider, Some(false) when it does not, None without ARM access.
+fn status_for(supported: &str, latest: &str, hold: Option<&Hold>, arm_confirms: Option<bool>) -> String {
+    if !version_newer(latest, supported) { return "current".to_string(); }
+    match hold {
+        Some(h) if h.newer == latest => match arm_confirms {
+            Some(true) => format!("held — ARM now registers {latest} for every type: lift the hold"),
+            _ => "held".to_string(),
+        },
+        _ => "BEHIND".to_string(),
+    }
+}
+```
+
+`Check` carries the `ProviderMeta` (or its `arm` and `hold`). After fetching `latest`, if `arm` is `Some` and an `ArmClient::new()` succeeded once (lazily, first use; failure → `None` for all), call `provider_api_versions(first enabled subscription, namespace)` and compute `arm_confirms = Some(resource_types.iter().all(|t| versions.get(*t).is_some_and(|v| v.iter().any(|x| x == latest))))`. Text output prints the hold reason on a second indented line for `held` rows; JSON rows gain `"hold_reason"` when held. `held` never sets `behind`.
+
+- [ ] **Step 6: Docs and smoke**
+
+CHANGELOG: change the CognitiveServices line to `Microsoft.CognitiveServices 2026-05-01 (the newest version Azure registers for project connections; 2026-07-01 changed nothing rigg uses and is tracked as a documented hold by \`rigg dev api-check\`)`. README "Resource Kinds" section: replace the single-version sentence with one pointing at the provider table and `rigg dev api-check`. Then the live smoke, from `e2e-test/`: `cargo build -q --manifest-path ../Cargo.toml && ../target/debug/rigg status && ../target/debug/rigg diff regulus && ../target/debug/rigg dev api-check` — all read-only. Expected: status lists dev and staging with resources in sync; diff shows no drift (or only known content drift); api-check shows CognitiveServices `held` with the reason line.
+
+- [ ] **Step 7: Gate and commit**
+
+```bash
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+git add -A
+git commit -m "fix(registry): hold CognitiveServices ARM at 2026-05-01 (connections cap); api-check verifies against ARM registration
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
