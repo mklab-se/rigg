@@ -398,7 +398,7 @@ A weekly GitHub Action runs `api-check` and opens an issue when Azure has shippe
 
 ## Resource Kinds
 
-rigg manages 12 resource kinds. All are served by stable APIs — Azure AI Search `2026-04-01` (agentic retrieval is GA), preview `2026-05-01-preview` only for preview-gated features, Microsoft Foundry `v1` data plane, ARM `2026-05-01`.
+rigg manages 12 resource kinds, served by stable APIs — preview only for preview-gated features. Every pinned api-version (and any documented hold, such as Microsoft.CognitiveServices ARM) lives in the registry provider table; run `rigg dev api-check` to see what's current.
 
 | Azure AI Search | Microsoft Foundry |
 |---|---|

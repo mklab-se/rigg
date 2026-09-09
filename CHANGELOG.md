@@ -16,10 +16,13 @@ around that. No compatibility with 1.x workspaces.
   including the Cosmos client and the `cosmos-sql-patterns` sample.
 - **Every Azure API version now lives in the registry provider table** and is
   the newest available: Search data plane 2026-04-01 / 2026-08-01-preview,
-  Microsoft.CognitiveServices 2026-07-01, Microsoft.Search 2025-05-01,
-  Microsoft.Storage 2026-06-01, Microsoft.Web 2026-07-15. Search list
-  operations follow `@odata.nextLink`. Knowledge-base MCP endpoints are written
-  in the documented `knowledgebases/<kb>/mcp?api-version=2026-08-01-preview` form.
+  Microsoft.CognitiveServices 2026-05-01 (the newest version Azure registers
+  for project connections; 2026-07-01 changed nothing rigg uses and is
+  tracked as a documented hold by `rigg dev api-check`), Microsoft.Search
+  2025-05-01, Microsoft.Storage 2026-06-01, Microsoft.Web 2026-07-15. Search
+  list operations follow `@odata.nextLink`. Knowledge-base MCP endpoints are
+  written in the documented `knowledgebases/<kb>/mcp?api-version=2026-08-01-preview`
+  form.
 - A knowledge source's `ingestionParameters.networkAccessMode` is immutable:
   changing it locally shows `replace`.
 - Storage account `listKeys` is no longer called anywhere.

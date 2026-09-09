@@ -25,6 +25,12 @@ pub(crate) struct Check {
     channel: &'static str,
     spec_path: &'static str,
     supported: &'static str,
+    /// ARM registration coordinates, when this provider has one (stable rows
+    /// only — a preview row has no `ArmRegistration` of its own).
+    arm: Option<rigg_core::registry::ArmRegistration>,
+    /// Documented hold, when `supported` is deliberately pinned below the
+    /// newest spec-repo version.
+    hold: Option<rigg_core::registry::Hold>,
 }
 
 /// One check per spec-backed api-version in the registry provider table:
@@ -39,6 +45,8 @@ pub(crate) fn checks() -> Vec<Check> {
                 channel: "stable",
                 spec_path: path,
                 supported: p.stable,
+                arm: p.arm,
+                hold: p.hold,
             });
         }
         if let (Some(path), Some(preview)) = (p.preview_spec_path, p.preview) {
@@ -47,10 +55,69 @@ pub(crate) fn checks() -> Vec<Check> {
                 channel: "preview",
                 spec_path: path,
                 supported: preview,
+                arm: None,
+                hold: None,
             });
         }
     }
     out
+}
+
+/// api-check status for one row: `current`, `BEHIND`, `held` (upstream
+/// equals the documented [`Hold::newer`]), or `held — ARM now registers …`
+/// when ARM access confirmed the hold can be lifted. `arm_confirms`: `Some(true)`
+/// when ARM registers `latest` for every resource type of the provider,
+/// `Some(false)` when it does not, `None` without ARM access.
+fn status_for(
+    supported: &str,
+    latest: &str,
+    hold: Option<&rigg_core::registry::Hold>,
+    arm_confirms: Option<bool>,
+) -> String {
+    if !version_newer(latest, supported) {
+        return "current".to_string();
+    }
+    match hold {
+        Some(h) if h.newer == latest => match arm_confirms {
+            Some(true) => {
+                format!("held — ARM now registers {latest} for every type: lift the hold")
+            }
+            _ => "held".to_string(),
+        },
+        _ => "BEHIND".to_string(),
+    }
+}
+
+/// Lazily create an ARM client (once per `api_check` run; a failed attempt
+/// is remembered as `Some(None)` so later checks don't retry it) and ask it
+/// whether ARM registers `latest` for every resource type `reg` names.
+/// `None` whenever ARM access isn't available or the lookup fails —
+/// api-check must keep working without an Azure CLI login.
+async fn arm_confirms(
+    client: &mut Option<Option<(rigg_client::arm::ArmClient, String)>>,
+    reg: rigg_core::registry::ArmRegistration,
+    latest: &str,
+) -> Option<bool> {
+    if client.is_none() {
+        *client = Some(create_arm_client().await);
+    }
+    let (client, subscription_id) = client.as_ref().and_then(|c| c.as_ref())?;
+    let versions = client
+        .provider_api_versions(subscription_id, reg.namespace)
+        .await
+        .ok()?;
+    Some(reg.resource_types.iter().all(|t| {
+        versions
+            .get(*t)
+            .is_some_and(|v| v.iter().any(|x| x == latest))
+    }))
+}
+
+/// One Azure CLI login attempt + the first enabled subscription it can see.
+async fn create_arm_client() -> Option<(rigg_client::arm::ArmClient, String)> {
+    let client = rigg_client::arm::ArmClient::new().ok()?;
+    let subscription = client.list_subscriptions().await.ok()?.into_iter().next()?;
+    Some((client, subscription.subscription_id))
 }
 
 /// Compare rigg's supported Azure API versions against the newest published
@@ -65,6 +132,10 @@ async fn api_check(ctx: &GlobalContext) -> Result<()> {
     let mut behind = false;
     let mut rows = Vec::new();
     let checks = checks();
+    // Lazily created on the first provider with an ArmRegistration; a
+    // failed attempt (no Azure CLI login) is remembered for the rest of
+    // the run instead of retried per row.
+    let mut arm_client: Option<Option<(rigg_client::arm::ArmClient, String)>> = None;
 
     for check in &checks {
         let url = format!("{SPECS_REPO}/{}", check.spec_path);
@@ -83,12 +154,16 @@ async fn api_check(ctx: &GlobalContext) -> Result<()> {
                 continue;
             }
         };
-        let status = if version_newer(&latest, check.supported) {
-            behind = true;
-            "BEHIND".to_string()
-        } else {
-            "current".to_string()
+        let confirmed = match check.arm {
+            Some(reg) if version_newer(&latest, check.supported) => {
+                arm_confirms(&mut arm_client, reg, &latest).await
+            }
+            _ => None,
         };
+        let status = status_for(check.supported, &latest, check.hold.as_ref(), confirmed);
+        if status == "BEHIND" {
+            behind = true;
+        }
         rows.push((check, latest, status));
     }
 
@@ -103,13 +178,19 @@ async fn api_check(ctx: &GlobalContext) -> Result<()> {
         let mut value: Vec<_> = rows
             .iter()
             .map(|(c, latest, status)| {
-                serde_json::json!({
+                let mut row = serde_json::json!({
                     "api": c.label,
                     "channel": c.channel,
                     "supported": c.supported,
                     "latest_upstream": latest,
                     "status": status,
-                })
+                });
+                if status.starts_with("held")
+                    && let Some(h) = &c.hold
+                {
+                    row["hold_reason"] = serde_json::Value::String(h.reason.to_string());
+                }
+                row
             })
             .collect();
         value.extend(route_versioned.iter().map(|p| {
@@ -127,12 +208,18 @@ async fn api_check(ctx: &GlobalContext) -> Result<()> {
             let marker = match status.as_str() {
                 "current" => "✓".green().bold().to_string(),
                 "BEHIND" => "✗".red().bold().to_string(),
+                s if s.starts_with("held") => "●".yellow().bold().to_string(),
                 _ => "?".yellow().bold().to_string(),
             };
             println!(
                 "  {marker} {:<45} supported {:<20} upstream {:<20} {status}",
                 c.label, c.supported, latest
             );
+            if status.starts_with("held")
+                && let Some(h) = &c.hold
+            {
+                println!("      {} {}", "reason:".dimmed(), h.reason);
+            }
         }
         for p in &route_versioned {
             println!(
@@ -209,6 +296,29 @@ mod tests {
                 .collect();
         assert_eq!(latest_from_entries(&entries).as_deref(), Some("2025-05-01"));
         assert_eq!(latest_from_entries(&[]), None);
+    }
+
+    #[test]
+    fn status_is_held_when_upstream_equals_the_documented_hold() {
+        let m = rigg_core::registry::provider(rigg_core::registry::Provider::CognitiveServicesArm);
+        assert_eq!(
+            status_for(m.stable, "2026-07-01", m.hold.as_ref(), None),
+            "held"
+        );
+        assert_eq!(
+            status_for(m.stable, "2026-09-01", m.hold.as_ref(), None),
+            "BEHIND"
+        );
+        assert_eq!(
+            status_for(m.stable, m.stable, m.hold.as_ref(), None),
+            "current"
+        );
+        // ARM confirms the newer version for every resource type → the hold can be lifted
+        let arm_ok = Some(true);
+        assert!(
+            status_for(m.stable, "2026-07-01", m.hold.as_ref(), arm_ok)
+                .starts_with("held — ARM now registers")
+        );
     }
 
     #[test]

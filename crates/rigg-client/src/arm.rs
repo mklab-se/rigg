@@ -1,5 +1,7 @@
 //! Azure Resource Manager client for discovering Search and Foundry services
 
+use std::collections::BTreeMap;
+
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -298,6 +300,46 @@ impl ArmClient {
             path,
             registry::provider(provider).stable
         )
+    }
+
+    /// `resourceType → apiVersions` as ARM registers them for `namespace` in
+    /// `subscription_id` (what `az provider show` prints). The ground truth
+    /// for which api-version a call may use — the specs repository can be
+    /// ahead of it.
+    pub async fn provider_api_versions(
+        &self,
+        subscription_id: &str,
+        namespace: &str,
+    ) -> Result<BTreeMap<String, Vec<String>>, ClientError> {
+        let url = self.url(
+            &format!("/subscriptions/{subscription_id}/providers/{namespace}"),
+            Provider::ResourcesArm,
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let value: Value = response.json().await?;
+        let mut out = BTreeMap::new();
+        for rt in value["resourceTypes"].as_array().into_iter().flatten() {
+            let name = rt["resourceType"].as_str().unwrap_or_default().to_string();
+            let versions = rt["apiVersions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            out.insert(name, versions);
+        }
+        Ok(out)
     }
 
     /// Read a resource's managed identity block: `GET {id}?api-version=...`.
@@ -1259,6 +1301,21 @@ mod provider_table_tests {
                     "?api-version={}",
                     rigg_core::registry::ARM_RESOURCES_API_VERSION
                 ))
+        );
+    }
+
+    #[test]
+    fn provider_api_versions_url_uses_resources_arm_version() {
+        let c = ArmClient::with_token("t".into());
+        assert_eq!(
+            c.url(
+                "/subscriptions/s/providers/Microsoft.CognitiveServices",
+                rigg_core::registry::Provider::ResourcesArm
+            ),
+            format!(
+                "https://management.azure.com/subscriptions/s/providers/Microsoft.CognitiveServices?api-version={}",
+                rigg_core::registry::ARM_RESOURCES_API_VERSION
+            )
         );
     }
 }

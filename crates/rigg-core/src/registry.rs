@@ -19,7 +19,11 @@ pub const SEARCH_PREVIEW_API_VERSION: &str = "2026-08-01-preview";
 /// Microsoft Foundry data plane (route-versioned).
 pub const FOUNDRY_API_VERSION: &str = "v1";
 /// ARM: Microsoft.CognitiveServices (accounts, projects, deployments, connections, RAI policies).
-pub const ARM_COGNITIVE_API_VERSION: &str = "2026-07-01";
+/// Newest version ARM registers for every CognitiveServices resource type
+/// rigg uses; `accounts/projects/connections` caps it (2026-07-01 is
+/// registered for accounts and projects only, and changed nothing rigg
+/// reads).
+pub const ARM_COGNITIVE_API_VERSION: &str = "2026-05-01";
 /// ARM: Microsoft.Search (search services, identity, network, shared private links).
 pub const ARM_SEARCH_API_VERSION: &str = "2025-05-01";
 /// ARM: Microsoft.Storage (accounts, blob services, containers).
@@ -58,6 +62,26 @@ pub enum Provider {
     Graph,
 }
 
+/// What `az provider show -n <namespace>` (and [`crate::registry`]-driven
+/// callers of `ArmClient::provider_api_versions`) reports for the ARM
+/// resource types a provider's calls touch: the ground truth for which
+/// api-version a call may actually use, since the specs repository can be
+/// ahead of what ARM has registered.
+#[derive(Debug, Clone, Copy)]
+pub struct ArmRegistration {
+    pub namespace: &'static str,
+    pub resource_types: &'static [&'static str],
+}
+
+/// A stable-channel pin held below the newest version the specs repository
+/// publishes, and why — so `rigg dev api-check` can report `held` instead of
+/// `BEHIND` forever, and say when the hold can be lifted.
+#[derive(Debug, Clone, Copy)]
+pub struct Hold {
+    pub newer: &'static str,
+    pub reason: &'static str,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderMeta {
     pub provider: Provider,
@@ -73,6 +97,13 @@ pub struct ProviderMeta {
     /// Preview folder in the specs repository, when rigg uses a preview.
     pub preview_spec_path: Option<&'static str>,
     pub route_versioned: bool,
+    /// ARM registration coordinates for this provider's resource types
+    /// (`None` for data-plane/route-versioned APIs, and for the ARM
+    /// registration API itself).
+    pub arm: Option<ArmRegistration>,
+    /// Set when `stable` is deliberately held below the newest spec-repo
+    /// version.
+    pub hold: Option<Hold>,
 }
 
 static PROVIDERS: &[ProviderMeta] = &[
@@ -85,6 +116,8 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: Some("specification/search/data-plane/Search/stable"),
         preview_spec_path: Some("specification/search/data-plane/Search/preview"),
         route_versioned: false,
+        arm: None,
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::FoundryData,
@@ -95,6 +128,8 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: None,
         preview_spec_path: None,
         route_versioned: true,
+        arm: None,
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::CognitiveServicesArm,
@@ -107,6 +142,18 @@ static PROVIDERS: &[ProviderMeta] = &[
         ),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.CognitiveServices",
+            resource_types: &[
+                "accounts",
+                "accounts/projects",
+                "accounts/projects/connections",
+            ],
+        }),
+        hold: Some(Hold {
+            newer: "2026-07-01",
+            reason: "not registered for accounts/projects/connections (max 2026-05-01 stable)",
+        }),
     },
     ProviderMeta {
         provider: Provider::SearchArm,
@@ -117,6 +164,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: Some("specification/search/resource-manager/Microsoft.Search/Search/stable"),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.Search",
+            resource_types: &["searchServices"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::StorageArm,
@@ -127,6 +179,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: Some("specification/storage/resource-manager/Microsoft.Storage/stable"),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.Storage",
+            resource_types: &["storageAccounts"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::WebArm,
@@ -137,6 +194,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: Some("specification/web/resource-manager/Microsoft.Web/AppService/stable"),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.Web",
+            resource_types: &["sites"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::AuthorizationArm,
@@ -149,6 +211,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         ),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.Authorization",
+            resource_types: &["roleAssignments"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::ResourcesArm,
@@ -156,11 +223,14 @@ static PROVIDERS: &[ProviderMeta] = &[
         stable: ARM_RESOURCES_API_VERSION,
         preview: None,
         audience: "https://management.azure.com",
-        spec_path: Some(
-            "specification/resources/resource-manager/Microsoft.Resources/subscriptions/stable",
-        ),
+        // No spec-currency check and no ArmRegistration: this is the
+        // registration API itself (`provider_api_versions` calls through
+        // it), so there is nothing else to compare it against.
+        spec_path: None,
         preview_spec_path: None,
         route_versioned: false,
+        arm: None,
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::ManagedIdentityArm,
@@ -173,6 +243,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         ),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.ManagedIdentity",
+            resource_types: &["userAssignedIdentities"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::KeyVaultArm,
@@ -185,6 +260,11 @@ static PROVIDERS: &[ProviderMeta] = &[
         ),
         preview_spec_path: None,
         route_versioned: false,
+        arm: Some(ArmRegistration {
+            namespace: "Microsoft.KeyVault",
+            resource_types: &["vaults"],
+        }),
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::KeyVaultData,
@@ -195,6 +275,8 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: Some("specification/keyvault/data-plane/Secrets/stable"),
         preview_spec_path: None,
         route_versioned: false,
+        arm: None,
+        hold: None,
     },
     ProviderMeta {
         provider: Provider::Graph,
@@ -205,6 +287,8 @@ static PROVIDERS: &[ProviderMeta] = &[
         spec_path: None,
         preview_spec_path: None,
         route_versioned: true,
+        arm: None,
+        hold: None,
     },
 ];
 
@@ -1537,7 +1621,7 @@ mod tests {
         );
         assert_eq!(
             provider(Provider::CognitiveServicesArm).stable,
-            "2026-07-01"
+            "2026-05-01"
         );
         assert_eq!(provider(Provider::SearchArm).stable, "2025-05-01");
         assert_eq!(provider(Provider::StorageArm).stable, "2026-06-01");
@@ -1546,6 +1630,29 @@ mod tests {
         assert!(provider(Provider::FoundryData).route_versioned);
         assert!(provider(Provider::Graph).route_versioned);
         assert_eq!(providers().len(), 12);
+    }
+
+    #[test]
+    fn cognitive_services_is_held_at_the_version_arm_registers_for_connections() {
+        let m = provider(Provider::CognitiveServicesArm);
+        assert_eq!(m.stable, "2026-05-01");
+        let hold = m.hold.expect("hold documented");
+        assert_eq!(hold.newer, "2026-07-01");
+        let arm = m.arm.expect("arm registration");
+        assert_eq!(arm.namespace, "Microsoft.CognitiveServices");
+        assert!(
+            arm.resource_types
+                .contains(&"accounts/projects/connections")
+        );
+    }
+
+    #[test]
+    fn every_arm_provider_declares_its_registration() {
+        for m in providers() {
+            if m.audience == "https://management.azure.com" && m.spec_path.is_some() {
+                assert!(m.arm.is_some(), "{} lacks ArmRegistration", m.label);
+            }
+        }
     }
 }
 
