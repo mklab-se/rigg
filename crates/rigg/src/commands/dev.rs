@@ -9,6 +9,12 @@ use crate::commands::GlobalContext;
 pub async fn run(ctx: &GlobalContext, cmd: DevCommands) -> Result<()> {
     match cmd {
         DevCommands::ApiCheck => api_check(ctx).await,
+        DevCommands::ApiDiff { provider, from, to } => {
+            crate::commands::dev_spec::api_diff(&provider, from, to).await
+        }
+        DevCommands::ApiFixture { provider } => {
+            crate::commands::dev_spec::api_fixture(&provider).await
+        }
     }
 }
 

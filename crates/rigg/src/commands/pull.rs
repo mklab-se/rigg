@@ -94,6 +94,8 @@ async fn pull_project(
     let mut any_conflict = false;
     let mut unmanaged = 0usize;
     let mut written = 0usize;
+    // (resource, field) reported once per run — the canary is a note, not noise.
+    let mut unknown_fields_seen: BTreeSet<(String, String)> = BTreeSet::new();
 
     for (r, doc) in &snapshot {
         let key = r.key();
@@ -120,6 +122,7 @@ async fn pull_project(
                 if store.write(r, doc)? {
                     println!("  {} updated {}", "~".cyan(), r);
                     written += 1;
+                    report_unknown_fields(r, doc, &mut unknown_fields_seen);
                 }
                 state.set_baseline(r, doc);
             }
@@ -132,7 +135,9 @@ async fn pull_project(
                     .map(|l| conflict_summary(r.kind, l, doc))
                     .unwrap_or_else(|| "differs locally and remotely".to_string());
                 if ctx.yes {
-                    store.write(r, doc)?;
+                    if store.write(r, doc)? {
+                        report_unknown_fields(r, doc, &mut unknown_fields_seen);
+                    }
                     state.set_baseline(r, doc);
                     println!("  {} overwrote {}", "~".cyan(), r);
                     written += 1;
@@ -157,7 +162,9 @@ async fn pull_project(
                         };
                         match choice.as_str() {
                             OVERWRITE => {
-                                store.write(r, doc)?;
+                                if store.write(r, doc)? {
+                                    report_unknown_fields(r, doc, &mut unknown_fields_seen);
+                                }
                                 state.set_baseline(r, doc);
                                 println!("  {} overwrote {}", "~".cyan(), r);
                                 written += 1;
@@ -259,6 +266,22 @@ async fn pull_project(
         println!("  {} up to date", "✓".green());
     }
     Ok(any_conflict)
+}
+
+/// API-drift canary: note (stderr, once per resource+field per run) any
+/// top-level field Azure returned that rigg's pinned schema doesn't know
+/// about. Never blocks or strips anything — the document is written through
+/// unchanged; this is purely a heads-up to run `rigg dev api-check`.
+fn report_unknown_fields(r: &ResourceRef, doc: &Value, seen: &mut BTreeSet<(String, String)>) {
+    for field in rigg_core::schema::unknown_top_level_fields(r.kind, doc) {
+        if seen.insert((r.key(), field.clone())) {
+            eprintln!(
+                "{} {r}: field `{field}` is not in rigg's {} schema — Azure may have shipped a newer API; run `rigg dev api-check`",
+                "note:".dimmed(),
+                rigg_core::schema::fixture_for(r.kind).version
+            );
+        }
+    }
 }
 
 /// One-line conflict summary: change count + first few differing fields.

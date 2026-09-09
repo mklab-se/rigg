@@ -1,0 +1,3085 @@
+{
+  "provider": "search-data",
+  "version": "2026-08-01-preview",
+  "definitions": {
+    "AIFoundryModelCatalogName": [],
+    "AIServices": [
+      "apiKey",
+      "uri"
+    ],
+    "AIServicesAccountIdentity": [
+      "@odata.type",
+      "description",
+      "identity",
+      "subdomainUrl"
+    ],
+    "AIServicesAccountKey": [
+      "@odata.type",
+      "description",
+      "key",
+      "subdomainUrl"
+    ],
+    "AIServicesVisionParameters": [
+      "apiKey",
+      "authIdentity",
+      "modelVersion",
+      "resourceUri"
+    ],
+    "AIServicesVisionVectorizer": [
+      "aiServicesVisionParameters",
+      "kind",
+      "name"
+    ],
+    "AMLParameters": [
+      "key",
+      "modelName",
+      "region",
+      "resourceId",
+      "timeout",
+      "uri"
+    ],
+    "AMLVectorizer": [
+      "amlParameters",
+      "kind",
+      "name"
+    ],
+    "AnalyzeRequest": [
+      "analyzer",
+      "charFilters",
+      "normalizer",
+      "text",
+      "tokenFilters",
+      "tokenizer"
+    ],
+    "AnalyzeResult": [
+      "tokens"
+    ],
+    "AnalyzedTokenInfo": [
+      "endOffset",
+      "position",
+      "startOffset",
+      "token"
+    ],
+    "AsciiFoldingTokenFilter": [
+      "@odata.type",
+      "name",
+      "preserveOriginal"
+    ],
+    "AssetStore": [
+      "connectionString",
+      "containerName"
+    ],
+    "AutocompleteItem": [
+      "queryPlusText",
+      "text"
+    ],
+    "AutocompleteMode": [],
+    "AutocompleteRequest": [
+      "autocompleteMode",
+      "filter",
+      "fuzzy",
+      "highlightPostTag",
+      "highlightPreTag",
+      "minimumCoverage",
+      "search",
+      "searchFields",
+      "suggesterName",
+      "top"
+    ],
+    "AutocompleteResult": [
+      "@search.coverage",
+      "value"
+    ],
+    "Azure.Core.uuid": [],
+    "AzureActiveDirectoryApplicationCredentials": [
+      "applicationId",
+      "applicationSecret"
+    ],
+    "AzureBlobKnowledgeSource": [
+      "@odata.etag",
+      "azureBlobParameters",
+      "description",
+      "encryptionKey",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "AzureBlobKnowledgeSourceParameters": [
+      "connectionString",
+      "containerName",
+      "createdResources",
+      "folderPath",
+      "ingestionParameters",
+      "isADLSGen2",
+      "queryHints"
+    ],
+    "AzureBlobKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "AzureMachineLearningSkill": [
+      "@odata.type",
+      "context",
+      "degreeOfParallelism",
+      "description",
+      "inputs",
+      "key",
+      "name",
+      "outputs",
+      "region",
+      "resourceId",
+      "timeout",
+      "uri"
+    ],
+    "AzureOpenAIEmbeddingSkill": [
+      "@odata.type",
+      "apiKey",
+      "authIdentity",
+      "context",
+      "deploymentId",
+      "description",
+      "dimensions",
+      "inputs",
+      "modelName",
+      "name",
+      "outputs",
+      "resourceUri"
+    ],
+    "AzureOpenAIModelName": [],
+    "AzureOpenAITokenizerParameters": [
+      "allowedSpecialTokens",
+      "encoderModelName"
+    ],
+    "AzureOpenAIVectorizer": [
+      "azureOpenAIParameters",
+      "kind",
+      "name"
+    ],
+    "AzureOpenAIVectorizerParameters": [
+      "apiKey",
+      "authIdentity",
+      "deploymentId",
+      "modelName",
+      "resourceUri"
+    ],
+    "AzureOpenAiParameters": [
+      "apiKey",
+      "authIdentity",
+      "deploymentId",
+      "modelName",
+      "resourceUri"
+    ],
+    "BM25SimilarityAlgorithm": [
+      "@odata.type",
+      "b",
+      "k1"
+    ],
+    "BinaryQuantizationCompression": [
+      "kind",
+      "name",
+      "rescoringOptions",
+      "truncationDimension"
+    ],
+    "BlobIndexerDataToExtract": [],
+    "BlobIndexerImageAction": [],
+    "BlobIndexerPDFTextRotationAlgorithm": [],
+    "BlobIndexerParsingMode": [],
+    "CharFilter": [
+      "@odata.type",
+      "mappings",
+      "name",
+      "pattern",
+      "replacement"
+    ],
+    "CharFilterName": [],
+    "ChatCompletionCommonModelParameters": [
+      "frequencyPenalty",
+      "maxTokens",
+      "model",
+      "presencePenalty",
+      "seed",
+      "stop",
+      "temperature"
+    ],
+    "ChatCompletionExtraParametersBehavior": [],
+    "ChatCompletionResponseFormat": [
+      "jsonSchemaProperties",
+      "type"
+    ],
+    "ChatCompletionResponseFormatType": [],
+    "ChatCompletionSchema": [
+      "additionalProperties",
+      "properties",
+      "required",
+      "type"
+    ],
+    "ChatCompletionSchemaProperties": [
+      "description",
+      "name",
+      "schema",
+      "strict"
+    ],
+    "ChatCompletionSkill": [
+      "@odata.type",
+      "apiKey",
+      "authIdentity",
+      "commonModelParameters",
+      "context",
+      "description",
+      "extraParameters",
+      "extraParametersBehavior",
+      "inputs",
+      "name",
+      "outputs",
+      "responseFormat",
+      "uri"
+    ],
+    "CjkBigramTokenFilter": [
+      "@odata.type",
+      "ignoreScripts",
+      "name",
+      "outputUnigrams"
+    ],
+    "CjkBigramTokenFilterScripts": [],
+    "ClassicSimilarityAlgorithm": [
+      "@odata.type"
+    ],
+    "ClassicTokenizer": [
+      "@odata.type",
+      "maxTokenLength",
+      "name"
+    ],
+    "CognitiveServicesAccount": [
+      "@odata.type",
+      "description",
+      "identity",
+      "key",
+      "subdomainUrl"
+    ],
+    "CognitiveServicesAccountKey": [
+      "@odata.type",
+      "description",
+      "key"
+    ],
+    "CommonGramTokenFilter": [
+      "@odata.type",
+      "commonWords",
+      "ignoreCase",
+      "name",
+      "queryMode"
+    ],
+    "CompletedSynchronizationState": [
+      "endTime",
+      "itemsSkipped",
+      "itemsUpdatesFailed",
+      "itemsUpdatesProcessed",
+      "startTime"
+    ],
+    "ConditionalSkill": [
+      "@odata.type",
+      "context",
+      "description",
+      "inputs",
+      "name",
+      "outputs"
+    ],
+    "ContentColumnMapping": [
+      "name",
+      "searchFieldType",
+      "sourceField"
+    ],
+    "ContentUnderstandingSkill": [
+      "@odata.type",
+      "chunkingProperties",
+      "context",
+      "description",
+      "extractionOptions",
+      "inputs",
+      "name",
+      "outputs"
+    ],
+    "ContentUnderstandingSkillChunkingMethod": [],
+    "ContentUnderstandingSkillChunkingProperties": [
+      "maximumLength",
+      "method",
+      "overlapLength",
+      "unit"
+    ],
+    "ContentUnderstandingSkillChunkingUnit": [],
+    "ContentUnderstandingSkillExtractionOptions": [],
+    "CorsOptions": [
+      "allowedOrigins",
+      "maxAgeInSeconds"
+    ],
+    "CreatedResources": [],
+    "CustomAnalyzer": [
+      "@odata.type",
+      "charFilters",
+      "name",
+      "tokenFilters",
+      "tokenizer"
+    ],
+    "CustomEntity": [
+      "accentSensitive",
+      "aliases",
+      "caseSensitive",
+      "defaultAccentSensitive",
+      "defaultCaseSensitive",
+      "defaultFuzzyEditDistance",
+      "description",
+      "fuzzyEditDistance",
+      "id",
+      "name",
+      "subtype",
+      "type"
+    ],
+    "CustomEntityAlias": [
+      "accentSensitive",
+      "caseSensitive",
+      "fuzzyEditDistance",
+      "text"
+    ],
+    "CustomEntityLookupSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "entitiesDefinitionUri",
+      "globalDefaultAccentSensitive",
+      "globalDefaultCaseSensitive",
+      "globalDefaultFuzzyEditDistance",
+      "inlineEntitiesDefinition",
+      "inputs",
+      "name",
+      "outputs"
+    ],
+    "CustomEntityLookupSkillLanguage": [],
+    "CustomNormalizer": [
+      "@odata.type",
+      "charFilters",
+      "name",
+      "tokenFilters"
+    ],
+    "DataChangeDetectionPolicy": [
+      "@odata.type",
+      "highWaterMarkColumnName"
+    ],
+    "DataDeletionDetectionPolicy": [
+      "@odata.type",
+      "softDeleteColumnName",
+      "softDeleteMarkerValue"
+    ],
+    "DataSourceCredentials": [
+      "connectionString"
+    ],
+    "DebugInfo": [
+      "queryRewrites"
+    ],
+    "DefaultCognitiveServicesAccount": [
+      "@odata.type",
+      "description"
+    ],
+    "DictionaryDecompounderTokenFilter": [
+      "@odata.type",
+      "maxSubwordSize",
+      "minSubwordSize",
+      "minWordSize",
+      "name",
+      "onlyLongestMatch",
+      "wordList"
+    ],
+    "DistanceScoringFunction": [
+      "boost",
+      "distance",
+      "fieldName",
+      "interpolation",
+      "type"
+    ],
+    "DistanceScoringParameters": [
+      "boostingDistance",
+      "referencePointParameter"
+    ],
+    "DocumentDebugInfo": [
+      "innerHits",
+      "semantic",
+      "vectors"
+    ],
+    "DocumentExtractionSkill": [
+      "@odata.type",
+      "configuration",
+      "context",
+      "dataToExtract",
+      "description",
+      "inputs",
+      "name",
+      "outputs",
+      "parsingMode"
+    ],
+    "DocumentIntelligenceLayoutSkill": [
+      "@odata.type",
+      "chunkingProperties",
+      "context",
+      "description",
+      "extractionOptions",
+      "inputs",
+      "markdownHeaderDepth",
+      "name",
+      "outputFormat",
+      "outputMode",
+      "outputs"
+    ],
+    "DocumentIntelligenceLayoutSkillChunkingProperties": [
+      "maximumLength",
+      "overlapLength",
+      "unit"
+    ],
+    "DocumentIntelligenceLayoutSkillChunkingUnit": [],
+    "DocumentIntelligenceLayoutSkillExtractionOptions": [],
+    "DocumentIntelligenceLayoutSkillMarkdownHeaderDepth": [],
+    "DocumentIntelligenceLayoutSkillOutputFormat": [],
+    "DocumentIntelligenceLayoutSkillOutputMode": [],
+    "DocumentKeysOrIds": [
+      "datasourceDocumentIds",
+      "documentKeys"
+    ],
+    "EdgeNGramTokenFilter": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name",
+      "side"
+    ],
+    "EdgeNGramTokenFilterSide": [],
+    "EdgeNGramTokenFilterV2": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name",
+      "side"
+    ],
+    "EdgeNGramTokenizer": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name",
+      "tokenChars"
+    ],
+    "ElisionTokenFilter": [
+      "@odata.type",
+      "articles",
+      "name"
+    ],
+    "EmbeddingColumnMapping": [
+      "name",
+      "sourceField"
+    ],
+    "EntityCategory": [],
+    "EntityLinkingSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "inputs",
+      "minimumPrecision",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "EntityRecognitionSkillLanguage": [],
+    "EntityRecognitionSkillV3": [
+      "@odata.type",
+      "categories",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "inputs",
+      "minimumPrecision",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "EntraAppAuthentication": [
+      "applicationId",
+      "federatedCredentialId",
+      "tenantId"
+    ],
+    "ErrorAdditionalInfo": [
+      "info",
+      "type"
+    ],
+    "ErrorDetail": [
+      "additionalInfo",
+      "code",
+      "details",
+      "message",
+      "target"
+    ],
+    "ErrorResponse": [
+      "error"
+    ],
+    "ExhaustiveKnnAlgorithmConfiguration": [
+      "exhaustiveKnnParameters",
+      "kind",
+      "name"
+    ],
+    "ExhaustiveKnnParameters": [
+      "metric"
+    ],
+    "FabricDataAgentKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "fabricDataAgentParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "FabricDataAgentKnowledgeSourceParameters": [
+      "dataAgentId",
+      "workspaceId"
+    ],
+    "FabricDataAgentKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "FabricOntologyKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "fabricOntologyParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "FabricOntologyKnowledgeSourceParameters": [
+      "ontologyId",
+      "workspaceId"
+    ],
+    "FabricOntologyKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "FacetResult": [
+      "@search.facets",
+      "avg",
+      "cardinality",
+      "count",
+      "max",
+      "min",
+      "sum"
+    ],
+    "FieldMapping": [
+      "mappingFunction",
+      "sourceFieldName",
+      "targetFieldName"
+    ],
+    "FieldMappingFunction": [
+      "name",
+      "parameters"
+    ],
+    "FileKnowledgeSource": [
+      "@odata.etag",
+      "corsOptions",
+      "description",
+      "encryptionKey",
+      "fileParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "FileKnowledgeSourceExtractionMode": [],
+    "FileKnowledgeSourceParameters": [
+      "createdResources",
+      "ingestionParameters",
+      "queryHints"
+    ],
+    "FileKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "FileUploadMetadata": [
+      "fileName",
+      "metadata"
+    ],
+    "FreshnessPolicy": [
+      "boostingDuration"
+    ],
+    "FreshnessScoringFunction": [
+      "boost",
+      "fieldName",
+      "freshness",
+      "interpolation",
+      "type"
+    ],
+    "FreshnessScoringParameters": [
+      "boostingDuration"
+    ],
+    "GetIndexStatisticsResult": [
+      "documentCount",
+      "storageSize",
+      "vectorIndexSize"
+    ],
+    "HighWaterMarkChangeDetectionPolicy": [
+      "@odata.type",
+      "highWaterMarkColumnName"
+    ],
+    "HnswAlgorithmConfiguration": [
+      "hnswParameters",
+      "kind",
+      "name"
+    ],
+    "HnswParameters": [
+      "efConstruction",
+      "efSearch",
+      "m",
+      "metric"
+    ],
+    "HybridCountAndFacetMode": [],
+    "HybridSearch": [
+      "countAndFacetMode",
+      "maxTextRecallSize"
+    ],
+    "ImageAnalysisSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "details",
+      "inputs",
+      "name",
+      "outputs",
+      "visualFeatures"
+    ],
+    "ImageAnalysisSkillLanguage": [],
+    "ImageDetail": [],
+    "ImageServingStatistics": [
+      "imagesRetrieved",
+      "imagesSentToModel",
+      "servedImages",
+      "totalImageSizeBytes",
+      "verbalizationUsed"
+    ],
+    "IndexAction": [
+      "@search.action"
+    ],
+    "IndexActionType": [],
+    "IndexBatch": [
+      "value"
+    ],
+    "IndexDocumentsResult": [
+      "value"
+    ],
+    "IndexProjectionMode": [],
+    "IndexStatisticsSummary": [
+      "documentCount",
+      "name",
+      "storageSize",
+      "vectorIndexSize"
+    ],
+    "IndexedOneLakeKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "indexedOneLakeParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "IndexedOneLakeKnowledgeSourceParameters": [
+      "createdResources",
+      "fabricWorkspaceId",
+      "ingestionParameters",
+      "lakehouseId",
+      "queryHints",
+      "targetPath"
+    ],
+    "IndexedOneLakeKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "IndexedSharePointContainerName": [],
+    "IndexedSharePointKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "indexedSharePointParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "IndexedSharePointKnowledgeSourceParameters": [
+      "connectionString",
+      "containerName",
+      "createdResources",
+      "ingestionParameters",
+      "query",
+      "queryHints"
+    ],
+    "IndexedSharePointKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "IndexedSqlKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "indexedSqlParameters",
+      "kind",
+      "name",
+      "resultsProcessing"
+    ],
+    "IndexedSqlKnowledgeSourceParameters": [
+      "connectionString",
+      "contentColumns",
+      "createdResources",
+      "embeddingColumns",
+      "highWaterMarkColumnName",
+      "ingestionParameters",
+      "queryHints",
+      "tableOrView"
+    ],
+    "IndexedSqlKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "IndexerCurrentState": [
+      "allDocsFinalTrackingState",
+      "allDocsInitialTrackingState",
+      "mode",
+      "resetDatasourceDocumentIds",
+      "resetDocsFinalTrackingState",
+      "resetDocsInitialTrackingState",
+      "resetDocumentKeys",
+      "resyncFinalTrackingState",
+      "resyncInitialTrackingState"
+    ],
+    "IndexerExecutionEnvironment": [],
+    "IndexerExecutionResult": [
+      "endTime",
+      "errorMessage",
+      "errors",
+      "finalTrackingState",
+      "initialTrackingState",
+      "itemsFailed",
+      "itemsProcessed",
+      "mode",
+      "startTime",
+      "status",
+      "statusDetail",
+      "warnings"
+    ],
+    "IndexerExecutionStatus": [],
+    "IndexerExecutionStatusDetail": [],
+    "IndexerPermissionOption": [],
+    "IndexerResyncBody": [
+      "options"
+    ],
+    "IndexerResyncOption": [],
+    "IndexerRuntime": [
+      "beginningTime",
+      "endingTime",
+      "remainingSeconds",
+      "usedSeconds"
+    ],
+    "IndexerStatus": [],
+    "IndexingMode": [],
+    "IndexingParameters": [
+      "batchSize",
+      "configuration",
+      "maxFailedItems",
+      "maxFailedItemsPerBatch"
+    ],
+    "IndexingParametersConfiguration": [
+      "allowSkillsetToReadFileData",
+      "dataToExtract",
+      "delimitedTextDelimiter",
+      "delimitedTextHeaders",
+      "documentRoot",
+      "excludedFileNameExtensions",
+      "executionEnvironment",
+      "failOnUnprocessableDocument",
+      "failOnUnsupportedContentType",
+      "firstLineContainsHeaders",
+      "imageAction",
+      "indexStorageMetadataOnlyForOversizedDocuments",
+      "indexedFileNameExtensions",
+      "markdownHeaderDepth",
+      "markdownParsingSubmode",
+      "parsingMode",
+      "pdfTextRotationAlgorithm",
+      "queryTimeout"
+    ],
+    "IndexingResult": [
+      "errorMessage",
+      "key",
+      "status",
+      "statusCode"
+    ],
+    "IndexingSchedule": [
+      "interval",
+      "startTime"
+    ],
+    "InputFieldMappingEntry": [
+      "inputs",
+      "name",
+      "source",
+      "sourceContext"
+    ],
+    "KeepTokenFilter": [
+      "@odata.type",
+      "keepWords",
+      "keepWordsCase",
+      "name"
+    ],
+    "KeyPhraseExtractionSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "inputs",
+      "maxKeyPhraseCount",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "KeyPhraseExtractionSkillLanguage": [],
+    "KeywordMarkerTokenFilter": [
+      "@odata.type",
+      "ignoreCase",
+      "keywords",
+      "name"
+    ],
+    "KeywordTokenizer": [
+      "@odata.type",
+      "bufferSize",
+      "name"
+    ],
+    "KeywordTokenizerV2": [
+      "@odata.type",
+      "maxTokenLength",
+      "name"
+    ],
+    "KnowledgeBase": [
+      "@odata.etag",
+      "answerInstructions",
+      "corsOptions",
+      "description",
+      "encryptionKey",
+      "knowledgeSources",
+      "models",
+      "name",
+      "outputMode",
+      "retrievalInstructions",
+      "retrievalReasoningEffort",
+      "retrieveDefaults",
+      "tags"
+    ],
+    "KnowledgeBaseActivityRecord": [
+      "azureBlobArguments",
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "fabricDataAgentArguments",
+      "fabricOntologyArguments",
+      "fileArguments",
+      "id",
+      "imageServing",
+      "indexedOneLakeArguments",
+      "indexedSharePointArguments",
+      "indexedSqlArguments",
+      "inputTokens",
+      "knowledgeSourceName",
+      "logicalReasoningEffort",
+      "mcpServerArguments",
+      "model",
+      "outputTokens",
+      "queryHintProcessing",
+      "queryTime",
+      "reasoningTokens",
+      "remoteSharePointArguments",
+      "retrievalReasoningEffort",
+      "searchIndexArguments",
+      "startedAt",
+      "type",
+      "warning",
+      "webArguments",
+      "workIQArguments"
+    ],
+    "KnowledgeBaseActivityRecordModel": [
+      "deploymentId",
+      "modelName"
+    ],
+    "KnowledgeBaseActivityRecordType": [],
+    "KnowledgeBaseActivityStartedEvent": [
+      "id",
+      "knowledgeSourceName",
+      "startedAt",
+      "type"
+    ],
+    "KnowledgeBaseAgenticReasoningActivityRecord": [
+      "completedAt",
+      "elapsedMs",
+      "error",
+      "id",
+      "logicalReasoningEffort",
+      "reasoningTokens",
+      "retrievalReasoningEffort",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseAnswerCompletedEvent": [
+      "message",
+      "messageIndex"
+    ],
+    "KnowledgeBaseAzureBlobActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseAzureBlobActivityRecord": [
+      "azureBlobArguments",
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseAzureBlobReference": [
+      "activitySource",
+      "blobUrl",
+      "citationUrl",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseAzureOpenAIModel": [
+      "azureOpenAIParameters",
+      "kind"
+    ],
+    "KnowledgeBaseErrorAdditionalInfo": [
+      "info",
+      "type"
+    ],
+    "KnowledgeBaseErrorDetail": [
+      "additionalInfo",
+      "code",
+      "details",
+      "message",
+      "target"
+    ],
+    "KnowledgeBaseFabricDataAgentActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseFabricDataAgentActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "fabricDataAgentArguments",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseFabricDataAgentReference": [
+      "activitySource",
+      "dataAgentId",
+      "id",
+      "rerankerScore",
+      "sourceData",
+      "type",
+      "workspaceId"
+    ],
+    "KnowledgeBaseFabricOntologyActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseFabricOntologyActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "fabricOntologyArguments",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseFabricOntologyReference": [
+      "activitySource",
+      "id",
+      "ontologyId",
+      "rerankerScore",
+      "sourceData",
+      "type",
+      "workspaceId"
+    ],
+    "KnowledgeBaseFileActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseFileActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "fileArguments",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseFileReference": [
+      "activitySource",
+      "citationUrl",
+      "docName",
+      "id",
+      "rerankerScore",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseImageContent": [
+      "url"
+    ],
+    "KnowledgeBaseIndexedOneLakeActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseIndexedOneLakeActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "indexedOneLakeArguments",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseIndexedOneLakeReference": [
+      "activitySource",
+      "citationUrl",
+      "docUrl",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseIndexedSharePointActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseIndexedSharePointActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "indexedSharePointArguments",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseIndexedSharePointReference": [
+      "activitySource",
+      "citationUrl",
+      "docUrl",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseIndexedSqlActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseIndexedSqlActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "indexedSqlArguments",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseIndexedSqlReference": [
+      "activitySource",
+      "citationUrl",
+      "docUrl",
+      "id",
+      "rerankerScore",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseMcpServerActivityArguments": [
+      "toolArguments",
+      "toolName"
+    ],
+    "KnowledgeBaseMcpServerActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "mcpServerArguments",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseMcpServerReference": [
+      "activitySource",
+      "id",
+      "rerankerScore",
+      "sourceData",
+      "title",
+      "toolName",
+      "type"
+    ],
+    "KnowledgeBaseMessage": [
+      "content",
+      "role"
+    ],
+    "KnowledgeBaseMessageContent": [
+      "image",
+      "text",
+      "type"
+    ],
+    "KnowledgeBaseMessageContentType": [],
+    "KnowledgeBaseMessageImageContent": [
+      "image",
+      "type"
+    ],
+    "KnowledgeBaseMessageTextContent": [
+      "text",
+      "type"
+    ],
+    "KnowledgeBaseModel": [
+      "azureOpenAIParameters",
+      "kind"
+    ],
+    "KnowledgeBaseModelAnswerSynthesisActivityRecord": [
+      "completedAt",
+      "elapsedMs",
+      "error",
+      "id",
+      "inputTokens",
+      "model",
+      "outputTokens",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseModelKind": [],
+    "KnowledgeBaseModelQueryPlanningActivityRecord": [
+      "completedAt",
+      "elapsedMs",
+      "error",
+      "id",
+      "inputTokens",
+      "model",
+      "outputTokens",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseModelWebSummarizationActivityRecord": [
+      "completedAt",
+      "elapsedMs",
+      "error",
+      "id",
+      "inputTokens",
+      "model",
+      "outputTokens",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseQueryHintProcessing": [
+      "generatedBoost",
+      "generatedFilter"
+    ],
+    "KnowledgeBaseReference": [
+      "activitySource",
+      "blobUrl",
+      "citationUrl",
+      "dataAgentId",
+      "docKey",
+      "docName",
+      "docUrl",
+      "id",
+      "ontologyId",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "title",
+      "toolName",
+      "type",
+      "url",
+      "webUrl",
+      "workspaceId"
+    ],
+    "KnowledgeBaseReferenceType": [],
+    "KnowledgeBaseRemoteSharePointActivityArguments": [
+      "filterExpressionAddOn",
+      "search"
+    ],
+    "KnowledgeBaseRemoteSharePointActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime",
+      "remoteSharePointArguments",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseRemoteSharePointReference": [
+      "activitySource",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type",
+      "webUrl"
+    ],
+    "KnowledgeBaseResponseCompletedEvent": [
+      "response",
+      "statusCode"
+    ],
+    "KnowledgeBaseRetrievalActivityRecord": [
+      "count",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime"
+    ],
+    "KnowledgeBaseRetrievalPartialResponse": [
+      "body"
+    ],
+    "KnowledgeBaseRetrievalRequest": [
+      "includeActivity",
+      "intents",
+      "knowledgeSourceParams",
+      "maxOutputDocuments",
+      "maxOutputSize",
+      "maxOutputSizeInTokens",
+      "maxRuntimeInSeconds",
+      "messages",
+      "outputMode",
+      "retrievalReasoningEffort"
+    ],
+    "KnowledgeBaseRetrievalResponse": [
+      "activity",
+      "references",
+      "response",
+      "responseSensitivityLabelInfo"
+    ],
+    "KnowledgeBaseRetrievalStartedEvent": [
+      "knowledgeBaseName",
+      "outputMode",
+      "reasoningEffort",
+      "requestId"
+    ],
+    "KnowledgeBaseRetrievalStatusCode": [],
+    "KnowledgeBaseRetrievalStreamEvents": [],
+    "KnowledgeBaseRetrievalSuccessResponse": [
+      "body"
+    ],
+    "KnowledgeBaseRetrieveDefaults": [
+      "maxOutputDocuments",
+      "maxOutputSizeInTokens",
+      "maxRuntimeInSeconds"
+    ],
+    "KnowledgeBaseSearchIndexActivityArguments": [
+      "filter",
+      "queryType",
+      "search",
+      "searchFields",
+      "semanticConfigurationName",
+      "sourceDataFields"
+    ],
+    "KnowledgeBaseSearchIndexActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryHintProcessing",
+      "queryTime",
+      "searchIndexArguments",
+      "startedAt",
+      "type",
+      "warning"
+    ],
+    "KnowledgeBaseSearchIndexReference": [
+      "activitySource",
+      "citationUrl",
+      "docKey",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeBaseStreamErrorEvent": [
+      "activity",
+      "error"
+    ],
+    "KnowledgeBaseWebActivityArguments": [
+      "count",
+      "freshness",
+      "language",
+      "market",
+      "search"
+    ],
+    "KnowledgeBaseWebActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning",
+      "webArguments"
+    ],
+    "KnowledgeBaseWebReference": [
+      "activitySource",
+      "id",
+      "rerankerScore",
+      "sourceData",
+      "title",
+      "type",
+      "url"
+    ],
+    "KnowledgeBaseWorkIQActivityArguments": [
+      "search"
+    ],
+    "KnowledgeBaseWorkIQActivityRecord": [
+      "completedAt",
+      "count",
+      "elapsedMs",
+      "error",
+      "id",
+      "imageServing",
+      "knowledgeSourceName",
+      "queryTime",
+      "startedAt",
+      "type",
+      "warning",
+      "workIQArguments"
+    ],
+    "KnowledgeBaseWorkIQReference": [
+      "activitySource",
+      "id",
+      "rerankerScore",
+      "searchSensitivityLabelInfo",
+      "sourceData",
+      "type"
+    ],
+    "KnowledgeRetrievalAutoReasoningEffort": [
+      "kind"
+    ],
+    "KnowledgeRetrievalIntent": [
+      "search",
+      "type"
+    ],
+    "KnowledgeRetrievalIntentType": [],
+    "KnowledgeRetrievalLowReasoningEffort": [
+      "kind"
+    ],
+    "KnowledgeRetrievalMediumReasoningEffort": [
+      "kind"
+    ],
+    "KnowledgeRetrievalMinimalReasoningEffort": [
+      "kind"
+    ],
+    "KnowledgeRetrievalOutputMode": [],
+    "KnowledgeRetrievalReasoningEffort": [
+      "kind"
+    ],
+    "KnowledgeRetrievalReasoningEffortKind": [],
+    "KnowledgeRetrievalSemanticIntent": [
+      "search",
+      "type"
+    ],
+    "KnowledgeSource": [
+      "@odata.etag",
+      "azureBlobParameters",
+      "corsOptions",
+      "description",
+      "encryptionKey",
+      "fabricDataAgentParameters",
+      "fabricOntologyParameters",
+      "fileParameters",
+      "indexedOneLakeParameters",
+      "indexedSharePointParameters",
+      "indexedSqlParameters",
+      "kind",
+      "mcpServerParameters",
+      "name",
+      "remoteSharePointParameters",
+      "resultsProcessing",
+      "searchIndexParameters",
+      "webParameters",
+      "workIQParameters"
+    ],
+    "KnowledgeSourceAzureOpenAIVectorizer": [
+      "azureOpenAIParameters",
+      "kind"
+    ],
+    "KnowledgeSourceContentExtractionMode": [],
+    "KnowledgeSourceFile": [
+      "createdAt",
+      "errorMessage",
+      "extractionMode",
+      "fileId",
+      "fileName",
+      "fileSizeBytes",
+      "lastUpdatedAt",
+      "metadata",
+      "parsingMode",
+      "prefix"
+    ],
+    "KnowledgeSourceIngestionParameters": [
+      "aiServices",
+      "assetStore",
+      "chatCompletionModel",
+      "contentExtractionMode",
+      "disableImageVerbalization",
+      "embeddingModel",
+      "freshnessPolicy",
+      "identity",
+      "ingestionPermissionOptions",
+      "ingestionSchedule",
+      "networkAccessMode"
+    ],
+    "KnowledgeSourceIngestionPermissionOption": [],
+    "KnowledgeSourceKind": [],
+    "KnowledgeSourceNetworkAccessMode": [],
+    "KnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "count",
+      "enableImageServing",
+      "failOnError",
+      "filterAddOn",
+      "filterExpressionAddOn",
+      "freshness",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "language",
+      "market",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "KnowledgeSourceReference": [
+      "enableFreshness",
+      "enableImageServing",
+      "name"
+    ],
+    "KnowledgeSourceResultsProcessing": [],
+    "KnowledgeSourceStatistics": [
+      "averageItemsProcessedPerSynchronization",
+      "averageSynchronizationDuration",
+      "totalSynchronization"
+    ],
+    "KnowledgeSourceStatus": [
+      "currentSynchronizationState",
+      "kind",
+      "lastSynchronizationState",
+      "statistics",
+      "synchronizationInterval",
+      "synchronizationStatus"
+    ],
+    "KnowledgeSourceSynchronizationError": [
+      "details",
+      "docId",
+      "documentationLink",
+      "errorMessage",
+      "name",
+      "statusCode"
+    ],
+    "KnowledgeSourceSynchronizationStatus": [],
+    "KnowledgeSourceVectorizer": [
+      "azureOpenAIParameters",
+      "kind"
+    ],
+    "LanguageDetectionSkill": [
+      "@odata.type",
+      "context",
+      "defaultCountryHint",
+      "description",
+      "inputs",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "LengthTokenFilter": [
+      "@odata.type",
+      "max",
+      "min",
+      "name"
+    ],
+    "LexicalAnalyzer": [
+      "@odata.type",
+      "charFilters",
+      "flags",
+      "lowercase",
+      "maxTokenLength",
+      "name",
+      "pattern",
+      "stopwords",
+      "tokenFilters",
+      "tokenizer"
+    ],
+    "LexicalAnalyzerName": [],
+    "LexicalNormalizer": [
+      "@odata.type",
+      "charFilters",
+      "name",
+      "tokenFilters"
+    ],
+    "LexicalNormalizerName": [],
+    "LexicalTokenizer": [
+      "@odata.type",
+      "bufferSize",
+      "delimiter",
+      "flags",
+      "group",
+      "isSearchTokenizer",
+      "language",
+      "maxGram",
+      "maxTokenLength",
+      "minGram",
+      "name",
+      "pattern",
+      "replacement",
+      "reverse",
+      "skip",
+      "tokenChars"
+    ],
+    "LexicalTokenizerName": [],
+    "LimitTokenFilter": [
+      "@odata.type",
+      "consumeAllTokens",
+      "maxTokenCount",
+      "name"
+    ],
+    "ListAliasesResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListDataSourcesResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListIndexStatsSummary": [
+      "@odata.count",
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListIndexersResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListIndexesResult": [
+      "@odata.count",
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListIndexesSelectedResult": [
+      "@odata.count",
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListKnowledgeBasesResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListKnowledgeSourceFilesResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListKnowledgeSourcesResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListSkillsetsResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListSynonymMapsResult": [
+      "@odata.nextLink",
+      "value"
+    ],
+    "ListingSearchType": [],
+    "LookupDocument": [],
+    "LuceneStandardAnalyzer": [
+      "@odata.type",
+      "maxTokenLength",
+      "name",
+      "stopwords"
+    ],
+    "LuceneStandardTokenizer": [
+      "@odata.type",
+      "maxTokenLength",
+      "name"
+    ],
+    "LuceneStandardTokenizerV2": [
+      "@odata.type",
+      "maxTokenLength",
+      "name"
+    ],
+    "MagnitudeScoringFunction": [
+      "boost",
+      "fieldName",
+      "interpolation",
+      "magnitude",
+      "type"
+    ],
+    "MagnitudeScoringParameters": [
+      "boostingRangeEnd",
+      "boostingRangeStart",
+      "constantBoostBeyondRange"
+    ],
+    "MappingCharFilter": [
+      "@odata.type",
+      "mappings",
+      "name"
+    ],
+    "MarkdownHeaderDepth": [],
+    "MarkdownParsingSubmode": [],
+    "McpServerAuthentication": [
+      "foundryConnectionParameters",
+      "kind",
+      "storedHeadersParameters"
+    ],
+    "McpServerAuthenticationKind": [],
+    "McpServerAutoOutputParsing": [
+      "kind"
+    ],
+    "McpServerFoundryConnectionAuthentication": [
+      "foundryConnectionParameters",
+      "kind"
+    ],
+    "McpServerFoundryConnectionParameters": [
+      "connectionId"
+    ],
+    "McpServerHeaders": [],
+    "McpServerJsonOutputParsing": [
+      "jsonParameters",
+      "kind"
+    ],
+    "McpServerKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "kind",
+      "mcpServerParameters",
+      "name",
+      "resultsProcessing"
+    ],
+    "McpServerKnowledgeSourceParameters": [
+      "authentication",
+      "serverURL",
+      "tools"
+    ],
+    "McpServerKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "McpServerNoneOutputParsing": [
+      "kind"
+    ],
+    "McpServerOutputParsing": [
+      "jsonParameters",
+      "kind",
+      "splitParameters"
+    ],
+    "McpServerOutputParsingJsonParameters": [
+      "documentsPath",
+      "includeContext"
+    ],
+    "McpServerOutputParsingKind": [],
+    "McpServerOutputParsingSplitParameters": [
+      "defaultLanguageCode",
+      "maximumPageLength",
+      "maximumPagesToTake",
+      "pageOverlapLength",
+      "textSplitMode"
+    ],
+    "McpServerSplitOutputParsing": [
+      "kind",
+      "splitParameters"
+    ],
+    "McpServerStoredHeadersAuthentication": [
+      "kind",
+      "storedHeadersParameters"
+    ],
+    "McpServerStoredHeadersParameters": [
+      "headers"
+    ],
+    "McpServerTool": [
+      "maxOutputTokens",
+      "name",
+      "outputParsing",
+      "resultsProcessing"
+    ],
+    "MergeSkill": [
+      "@odata.type",
+      "context",
+      "description",
+      "inputs",
+      "insertPostTag",
+      "insertPreTag",
+      "name",
+      "outputs"
+    ],
+    "MicrosoftLanguageStemmingTokenizer": [
+      "@odata.type",
+      "isSearchTokenizer",
+      "language",
+      "maxTokenLength",
+      "name"
+    ],
+    "MicrosoftLanguageTokenizer": [
+      "@odata.type",
+      "isSearchTokenizer",
+      "language",
+      "maxTokenLength",
+      "name"
+    ],
+    "MicrosoftStemmingTokenizerLanguage": [],
+    "MicrosoftTokenizerLanguage": [],
+    "NGramTokenFilter": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name"
+    ],
+    "NGramTokenFilterV2": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name"
+    ],
+    "NGramTokenizer": [
+      "@odata.type",
+      "maxGram",
+      "minGram",
+      "name",
+      "tokenChars"
+    ],
+    "NativeBlobSoftDeleteDeletionDetectionPolicy": [
+      "@odata.type"
+    ],
+    "OcrLineEnding": [],
+    "OcrSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "detectOrientation",
+      "inputs",
+      "lineEnding",
+      "name",
+      "outputs"
+    ],
+    "OcrSkillLanguage": [],
+    "OutputFieldMappingEntry": [
+      "name",
+      "targetName"
+    ],
+    "PIIDetectionSkill": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "domain",
+      "inputs",
+      "maskingCharacter",
+      "maskingMode",
+      "minimumPrecision",
+      "modelVersion",
+      "name",
+      "outputs",
+      "piiCategories"
+    ],
+    "PIIDetectionSkillMaskingMode": [],
+    "PathHierarchyTokenizerV2": [
+      "@odata.type",
+      "delimiter",
+      "maxTokenLength",
+      "name",
+      "replacement",
+      "reverse",
+      "skip"
+    ],
+    "PatternAnalyzer": [
+      "@odata.type",
+      "flags",
+      "lowercase",
+      "name",
+      "pattern",
+      "stopwords"
+    ],
+    "PatternCaptureTokenFilter": [
+      "@odata.type",
+      "name",
+      "patterns",
+      "preserveOriginal"
+    ],
+    "PatternReplaceCharFilter": [
+      "@odata.type",
+      "name",
+      "pattern",
+      "replacement"
+    ],
+    "PatternReplaceTokenFilter": [
+      "@odata.type",
+      "name",
+      "pattern",
+      "replacement"
+    ],
+    "PatternTokenizer": [
+      "@odata.type",
+      "flags",
+      "group",
+      "name",
+      "pattern"
+    ],
+    "PermissionFilter": [],
+    "PhoneticEncoder": [],
+    "PhoneticTokenFilter": [
+      "@odata.type",
+      "encoder",
+      "name",
+      "replace"
+    ],
+    "PurviewSensitivityLabelInfo": [
+      "color",
+      "displayName",
+      "isEncrypted",
+      "priority",
+      "sensitivityLabelId",
+      "toolTip"
+    ],
+    "QueryAnswerResult": [
+      "highlights",
+      "key",
+      "score",
+      "text"
+    ],
+    "QueryAnswerType": [],
+    "QueryCaptionResult": [
+      "highlights",
+      "text"
+    ],
+    "QueryCaptionType": [],
+    "QueryDebugMode": [],
+    "QueryLanguage": [],
+    "QueryResultDocumentInnerHit": [
+      "ordinal",
+      "vectors"
+    ],
+    "QueryResultDocumentRerankerInput": [
+      "content",
+      "keywords",
+      "title"
+    ],
+    "QueryResultDocumentSemanticField": [
+      "name",
+      "state"
+    ],
+    "QueryResultDocumentSubscores": [
+      "documentBoost",
+      "text",
+      "vectors"
+    ],
+    "QueryRewritesDebugInfo": [
+      "text",
+      "vectors"
+    ],
+    "QueryRewritesType": [],
+    "QueryRewritesValuesDebugInfo": [
+      "inputQuery",
+      "rewrites"
+    ],
+    "QuerySpellerType": [],
+    "QueryType": [],
+    "RankingOrder": [],
+    "RegexFlags": [],
+    "RemoteSharePointKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "kind",
+      "name",
+      "remoteSharePointParameters",
+      "resultsProcessing"
+    ],
+    "RemoteSharePointKnowledgeSourceParameters": [
+      "containerTypeId",
+      "filterExpression",
+      "resourceMetadata"
+    ],
+    "RemoteSharePointKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "filterExpressionAddOn",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "RescoringOptions": [
+      "defaultOversampling",
+      "enableRescoring",
+      "rescoreStorageMethod"
+    ],
+    "ResourceCounter": [
+      "quota",
+      "usage"
+    ],
+    "ScalarQuantizationCompression": [
+      "kind",
+      "name",
+      "rescoringOptions",
+      "scalarQuantizationParameters",
+      "truncationDimension"
+    ],
+    "ScalarQuantizationParameters": [
+      "quantizedDataType"
+    ],
+    "ScoringFunction": [
+      "boost",
+      "distance",
+      "fieldName",
+      "freshness",
+      "interpolation",
+      "magnitude",
+      "tag",
+      "type"
+    ],
+    "ScoringFunctionAggregation": [],
+    "ScoringFunctionInterpolation": [],
+    "ScoringProfile": [
+      "functionAggregation",
+      "functions",
+      "name",
+      "text"
+    ],
+    "ScoringStatistics": [],
+    "SearchAlias": [
+      "@odata.etag",
+      "indexes",
+      "name"
+    ],
+    "SearchDocumentsResult": [
+      "@odata.count",
+      "@odata.nextLink",
+      "@search.answers",
+      "@search.coverage",
+      "@search.debug",
+      "@search.facets",
+      "@search.nextPageParameters",
+      "@search.semanticPartialResponseReason",
+      "@search.semanticPartialResponseType",
+      "@search.semanticQueryRewritesResultType",
+      "value"
+    ],
+    "SearchField": [
+      "analyzer",
+      "dimensions",
+      "facetable",
+      "fields",
+      "filterable",
+      "indexAnalyzer",
+      "key",
+      "name",
+      "normalizer",
+      "permissionFilter",
+      "retrievable",
+      "searchAnalyzer",
+      "searchable",
+      "sensitivityLabelId",
+      "sensitivityLabelName",
+      "sharepointSiteUrl",
+      "sortable",
+      "sourceDocumentId",
+      "stored",
+      "synonymMaps",
+      "type",
+      "vectorEncoding",
+      "vectorSearchProfile"
+    ],
+    "SearchFieldDataType": [],
+    "SearchIndex": [
+      "@odata.etag",
+      "analyzers",
+      "charFilters",
+      "corsOptions",
+      "defaultScoringProfile",
+      "description",
+      "encryptionKey",
+      "fields",
+      "name",
+      "normalizers",
+      "permissionFilterOption",
+      "purviewEnabled",
+      "scoringProfiles",
+      "semantic",
+      "sharePointConnectorAppRegistration",
+      "similarity",
+      "suggesters",
+      "tokenFilters",
+      "tokenizers",
+      "vectorSearch"
+    ],
+    "SearchIndexClientOptions": [
+      "indexName"
+    ],
+    "SearchIndexFieldReference": [
+      "name"
+    ],
+    "SearchIndexKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "kind",
+      "name",
+      "resultsProcessing",
+      "searchIndexParameters"
+    ],
+    "SearchIndexKnowledgeSourceBoost": [
+      "boost",
+      "boostInstructions",
+      "field",
+      "fieldValues",
+      "kind"
+    ],
+    "SearchIndexKnowledgeSourceBoostKind": [],
+    "SearchIndexKnowledgeSourceFieldValueBoost": [
+      "boost",
+      "boostInstructions",
+      "field",
+      "fieldValues",
+      "kind"
+    ],
+    "SearchIndexKnowledgeSourceFilterHint": [
+      "field",
+      "fieldValues",
+      "filterInstructions"
+    ],
+    "SearchIndexKnowledgeSourceMultiWordExpressionBoost": [
+      "boost",
+      "boostInstructions",
+      "fieldValues",
+      "kind"
+    ],
+    "SearchIndexKnowledgeSourceParameters": [
+      "baseFilter",
+      "queryHints",
+      "searchFields",
+      "searchIndexName",
+      "semanticConfigurationName",
+      "sourceDataFields"
+    ],
+    "SearchIndexKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "filterAddOn",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "queryHintOverrides",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "SearchIndexKnowledgeSourceQueryHints": [
+      "boosts",
+      "filters"
+    ],
+    "SearchIndexPermissionFilterOption": [],
+    "SearchIndexResponse": [
+      "@odata.etag",
+      "analyzers",
+      "charFilters",
+      "corsOptions",
+      "defaultScoringProfile",
+      "description",
+      "encryptionKey",
+      "fields",
+      "name",
+      "normalizers",
+      "permissionFilterOption",
+      "purviewEnabled",
+      "scoringProfiles",
+      "semantic",
+      "similarity",
+      "suggesters",
+      "tokenFilters",
+      "tokenizers",
+      "vectorSearch"
+    ],
+    "SearchIndexer": [
+      "@odata.etag",
+      "cache",
+      "dataSourceName",
+      "description",
+      "disabled",
+      "encryptionKey",
+      "fieldMappings",
+      "name",
+      "outputFieldMappings",
+      "parameters",
+      "schedule",
+      "skillsetName",
+      "targetIndexName"
+    ],
+    "SearchIndexerCache": [
+      "enableReprocessing",
+      "id",
+      "identity",
+      "storageConnectionString"
+    ],
+    "SearchIndexerDataContainer": [
+      "name",
+      "query"
+    ],
+    "SearchIndexerDataIdentity": [
+      "@odata.type",
+      "federatedIdentityClientId",
+      "userAssignedIdentity"
+    ],
+    "SearchIndexerDataNoneIdentity": [
+      "@odata.type"
+    ],
+    "SearchIndexerDataSource": [
+      "@odata.etag",
+      "container",
+      "credentials",
+      "dataChangeDetectionPolicy",
+      "dataDeletionDetectionPolicy",
+      "description",
+      "encryptionKey",
+      "identity",
+      "indexerPermissionOptions",
+      "name",
+      "subType",
+      "type"
+    ],
+    "SearchIndexerDataSourceType": [],
+    "SearchIndexerDataUserAssignedIdentity": [
+      "@odata.type",
+      "federatedIdentityClientId",
+      "userAssignedIdentity"
+    ],
+    "SearchIndexerError": [
+      "details",
+      "documentationLink",
+      "errorMessage",
+      "key",
+      "name",
+      "statusCode"
+    ],
+    "SearchIndexerIndexProjection": [
+      "parameters",
+      "selectors"
+    ],
+    "SearchIndexerIndexProjectionSelector": [
+      "mappings",
+      "parentKeyFieldName",
+      "sourceContext",
+      "targetIndexName"
+    ],
+    "SearchIndexerIndexProjectionsParameters": [
+      "projectionMode"
+    ],
+    "SearchIndexerKnowledgeStore": [
+      "identity",
+      "parameters",
+      "projections",
+      "storageConnectionString"
+    ],
+    "SearchIndexerKnowledgeStoreBlobProjectionSelector": [
+      "generatedKeyName",
+      "inputs",
+      "referenceKeyName",
+      "source",
+      "sourceContext",
+      "storageContainer"
+    ],
+    "SearchIndexerKnowledgeStoreFileProjectionSelector": [
+      "storageContainer"
+    ],
+    "SearchIndexerKnowledgeStoreObjectProjectionSelector": [
+      "storageContainer"
+    ],
+    "SearchIndexerKnowledgeStoreParameters": [
+      "synthesizeGeneratedKeyName"
+    ],
+    "SearchIndexerKnowledgeStoreProjection": [
+      "files",
+      "objects",
+      "tables"
+    ],
+    "SearchIndexerKnowledgeStoreProjectionSelector": [
+      "generatedKeyName",
+      "inputs",
+      "referenceKeyName",
+      "source",
+      "sourceContext"
+    ],
+    "SearchIndexerKnowledgeStoreTableProjectionSelector": [
+      "generatedKeyName",
+      "inputs",
+      "referenceKeyName",
+      "source",
+      "sourceContext",
+      "tableName"
+    ],
+    "SearchIndexerLimits": [
+      "maxDocumentContentCharactersToExtract",
+      "maxDocumentExtractionSize",
+      "maxRunTime"
+    ],
+    "SearchIndexerSkill": [
+      "@odata.type",
+      "apiKey",
+      "authIdentity",
+      "authResourceId",
+      "azureOpenAITokenizerParameters",
+      "batchSize",
+      "categories",
+      "chunkingProperties",
+      "commonModelParameters",
+      "configuration",
+      "context",
+      "dataToExtract",
+      "defaultCountryHint",
+      "defaultFromLanguageCode",
+      "defaultLanguageCode",
+      "defaultToLanguageCode",
+      "degreeOfParallelism",
+      "deploymentId",
+      "description",
+      "details",
+      "detectOrientation",
+      "dimensions",
+      "domain",
+      "entitiesDefinitionUri",
+      "extraParameters",
+      "extraParametersBehavior",
+      "extractionOptions",
+      "globalDefaultAccentSensitive",
+      "globalDefaultCaseSensitive",
+      "globalDefaultFuzzyEditDistance",
+      "httpHeaders",
+      "httpMethod",
+      "includeOpinionMining",
+      "inlineEntitiesDefinition",
+      "inputs",
+      "insertPostTag",
+      "insertPreTag",
+      "key",
+      "lineEnding",
+      "markdownHeaderDepth",
+      "maskingCharacter",
+      "maskingMode",
+      "maxKeyPhraseCount",
+      "maximumPageLength",
+      "maximumPagesToTake",
+      "minimumPrecision",
+      "modelName",
+      "modelVersion",
+      "name",
+      "outputFormat",
+      "outputMode",
+      "outputs",
+      "pageOverlapLength",
+      "parsingMode",
+      "piiCategories",
+      "region",
+      "resourceId",
+      "resourceUri",
+      "responseFormat",
+      "suggestedFrom",
+      "textSplitMode",
+      "timeout",
+      "unit",
+      "uri",
+      "visualFeatures"
+    ],
+    "SearchIndexerSkillset": [
+      "@odata.etag",
+      "cognitiveServices",
+      "description",
+      "encryptionKey",
+      "indexProjections",
+      "knowledgeStore",
+      "name",
+      "skills"
+    ],
+    "SearchIndexerStatus": [
+      "currentState",
+      "executionHistory",
+      "lastResult",
+      "limits",
+      "name",
+      "runtime",
+      "status"
+    ],
+    "SearchIndexerWarning": [
+      "details",
+      "documentationLink",
+      "key",
+      "message",
+      "name"
+    ],
+    "SearchMode": [],
+    "SearchRequest": [
+      "answers",
+      "captions",
+      "count",
+      "debug",
+      "facets",
+      "filter",
+      "highlight",
+      "highlightPostTag",
+      "highlightPreTag",
+      "hybridSearch",
+      "minimumCoverage",
+      "orderby",
+      "queryLanguage",
+      "queryRewrites",
+      "queryType",
+      "scoringParameters",
+      "scoringProfile",
+      "scoringStatistics",
+      "search",
+      "searchFields",
+      "searchMode",
+      "select",
+      "semanticConfiguration",
+      "semanticErrorHandling",
+      "semanticFields",
+      "semanticMaxWaitInMilliseconds",
+      "semanticQuery",
+      "sessionId",
+      "skip",
+      "speller",
+      "top",
+      "vectorFilterMode",
+      "vectorQueries"
+    ],
+    "SearchResourceEncryptionKey": [
+      "accessCredentials",
+      "identity",
+      "isServiceLevelKey",
+      "keyVaultKeyName",
+      "keyVaultKeyVersion",
+      "keyVaultUri"
+    ],
+    "SearchResult": [
+      "@search.captions",
+      "@search.documentDebugInfo",
+      "@search.highlights",
+      "@search.rerankerBoostedScore",
+      "@search.rerankerScore",
+      "@search.score"
+    ],
+    "SearchScoreThreshold": [
+      "kind",
+      "value"
+    ],
+    "SearchServiceCounters": [
+      "aliasesCount",
+      "dataSourcesCount",
+      "documentCount",
+      "indexersCount",
+      "indexesCount",
+      "knowledgeBasesCount",
+      "knowledgeSourcesCount",
+      "skillsetCount",
+      "storageSize",
+      "synonymMaps",
+      "vectorIndexSize"
+    ],
+    "SearchServiceLimits": [
+      "maxComplexCollectionFieldsPerIndex",
+      "maxComplexObjectsInCollectionsPerDocument",
+      "maxCumulativeIndexerRuntimeSeconds",
+      "maxFieldNestingDepthPerIndex",
+      "maxFieldsPerIndex",
+      "maxStoragePerIndex",
+      "maxVectorIndexSizePerIndexInBytes"
+    ],
+    "SearchServiceStatistics": [
+      "counters",
+      "indexersRuntime",
+      "limits"
+    ],
+    "SearchSuggester": [
+      "name",
+      "searchMode",
+      "sourceFields"
+    ],
+    "SemanticConfiguration": [
+      "flightingOptIn",
+      "name",
+      "prioritizedFields",
+      "rankingOrder"
+    ],
+    "SemanticDebugInfo": [
+      "contentFields",
+      "keywordFields",
+      "rerankerInput",
+      "titleField"
+    ],
+    "SemanticErrorMode": [],
+    "SemanticErrorReason": [],
+    "SemanticField": [
+      "fieldName"
+    ],
+    "SemanticFieldState": [],
+    "SemanticPrioritizedFields": [
+      "prioritizedContentFields",
+      "prioritizedKeywordsFields",
+      "titleField"
+    ],
+    "SemanticQueryRewritesResultType": [],
+    "SemanticSearch": [
+      "configurations",
+      "defaultConfiguration"
+    ],
+    "SemanticSearchResultsType": [],
+    "SentimentSkillLanguage": [],
+    "SentimentSkillV3": [
+      "@odata.type",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "includeOpinionMining",
+      "inputs",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "ServedImage": [
+      "imageId",
+      "imagePath",
+      "sizeBytes"
+    ],
+    "ServiceIndexersRuntime": [
+      "beginningTime",
+      "endingTime",
+      "remainingSeconds",
+      "usedSeconds"
+    ],
+    "ShaperSkill": [
+      "@odata.type",
+      "context",
+      "description",
+      "inputs",
+      "name",
+      "outputs"
+    ],
+    "SharePointConnectorAppRegistration": [
+      "applicationId",
+      "federatedCredentialId",
+      "tenantId"
+    ],
+    "ShingleTokenFilter": [
+      "@odata.type",
+      "filterToken",
+      "maxShingleSize",
+      "minShingleSize",
+      "name",
+      "outputUnigrams",
+      "outputUnigramsIfNoShingles",
+      "tokenSeparator"
+    ],
+    "SimilarityAlgorithm": [
+      "@odata.type",
+      "b",
+      "k1"
+    ],
+    "SingleVectorFieldResult": [
+      "searchScore",
+      "vectorSimilarity"
+    ],
+    "SkillNames": [
+      "skillNames"
+    ],
+    "SnowballTokenFilter": [
+      "@odata.type",
+      "language",
+      "name"
+    ],
+    "SnowballTokenFilterLanguage": [],
+    "SoftDeleteColumnDeletionDetectionPolicy": [
+      "@odata.type",
+      "softDeleteColumnName",
+      "softDeleteMarkerValue"
+    ],
+    "SplitSkill": [
+      "@odata.type",
+      "azureOpenAITokenizerParameters",
+      "context",
+      "defaultLanguageCode",
+      "description",
+      "inputs",
+      "maximumPageLength",
+      "maximumPagesToTake",
+      "name",
+      "outputs",
+      "pageOverlapLength",
+      "textSplitMode",
+      "unit"
+    ],
+    "SplitSkillEncoderModelName": [],
+    "SplitSkillLanguage": [],
+    "SplitSkillUnit": [],
+    "SqlIntegratedChangeTrackingPolicy": [
+      "@odata.type"
+    ],
+    "StemmerOverrideTokenFilter": [
+      "@odata.type",
+      "name",
+      "rules"
+    ],
+    "StemmerTokenFilter": [
+      "@odata.type",
+      "language",
+      "name"
+    ],
+    "StemmerTokenFilterLanguage": [],
+    "StopAnalyzer": [
+      "@odata.type",
+      "name",
+      "stopwords"
+    ],
+    "StopwordsList": [],
+    "StopwordsTokenFilter": [
+      "@odata.type",
+      "ignoreCase",
+      "name",
+      "removeTrailing",
+      "stopwords",
+      "stopwordsList"
+    ],
+    "SuggestDocumentsResult": [
+      "@search.coverage",
+      "value"
+    ],
+    "SuggestRequest": [
+      "filter",
+      "fuzzy",
+      "highlightPostTag",
+      "highlightPreTag",
+      "minimumCoverage",
+      "orderby",
+      "search",
+      "searchFields",
+      "select",
+      "suggesterName",
+      "top"
+    ],
+    "SuggestResult": [
+      "@search.text"
+    ],
+    "SynchronizationState": [
+      "errors",
+      "itemsSkipped",
+      "itemsUpdatesFailed",
+      "itemsUpdatesProcessed",
+      "startTime"
+    ],
+    "SynonymMap": [
+      "@odata.etag",
+      "encryptionKey",
+      "format",
+      "name",
+      "synonyms"
+    ],
+    "SynonymTokenFilter": [
+      "@odata.type",
+      "expand",
+      "ignoreCase",
+      "name",
+      "synonyms"
+    ],
+    "TagScoringFunction": [
+      "boost",
+      "fieldName",
+      "interpolation",
+      "tag",
+      "type"
+    ],
+    "TagScoringParameters": [
+      "tagsParameter"
+    ],
+    "TextResult": [
+      "searchScore"
+    ],
+    "TextSplitMode": [],
+    "TextTranslationSkill": [
+      "@odata.type",
+      "context",
+      "defaultFromLanguageCode",
+      "defaultToLanguageCode",
+      "description",
+      "inputs",
+      "name",
+      "outputs",
+      "suggestedFrom"
+    ],
+    "TextTranslationSkillLanguage": [],
+    "TextWeights": [
+      "weights"
+    ],
+    "TokenCharacterKind": [],
+    "TokenFilter": [
+      "@odata.type",
+      "articles",
+      "catenateAll",
+      "catenateNumbers",
+      "catenateWords",
+      "commonWords",
+      "consumeAllTokens",
+      "encoder",
+      "expand",
+      "filterToken",
+      "generateNumberParts",
+      "generateWordParts",
+      "ignoreCase",
+      "ignoreScripts",
+      "keepWords",
+      "keepWordsCase",
+      "keywords",
+      "language",
+      "length",
+      "max",
+      "maxGram",
+      "maxShingleSize",
+      "maxSubwordSize",
+      "maxTokenCount",
+      "min",
+      "minGram",
+      "minShingleSize",
+      "minSubwordSize",
+      "minWordSize",
+      "name",
+      "onlyLongestMatch",
+      "onlyOnSamePosition",
+      "outputUnigrams",
+      "outputUnigramsIfNoShingles",
+      "pattern",
+      "patterns",
+      "preserveOriginal",
+      "protectedWords",
+      "queryMode",
+      "removeTrailing",
+      "replace",
+      "replacement",
+      "rules",
+      "side",
+      "splitOnCaseChange",
+      "splitOnNumerics",
+      "stemEnglishPossessive",
+      "stopwords",
+      "stopwordsList",
+      "synonyms",
+      "tokenSeparator",
+      "wordList"
+    ],
+    "TokenFilterName": [],
+    "TruncateTokenFilter": [
+      "@odata.type",
+      "length",
+      "name"
+    ],
+    "UaxUrlEmailTokenizer": [
+      "@odata.type",
+      "maxTokenLength",
+      "name"
+    ],
+    "UniqueTokenFilter": [
+      "@odata.type",
+      "name",
+      "onlyOnSamePosition"
+    ],
+    "VectorEncodingFormat": [],
+    "VectorFilterMode": [],
+    "VectorQuery": [
+      "base64Image",
+      "exhaustive",
+      "fields",
+      "filterOverride",
+      "k",
+      "kind",
+      "oversampling",
+      "perDocumentVectorLimit",
+      "queryRewrites",
+      "text",
+      "threshold",
+      "url",
+      "vector",
+      "weight"
+    ],
+    "VectorQueryKind": [],
+    "VectorSearch": [
+      "algorithms",
+      "compressions",
+      "profiles",
+      "vectorizers"
+    ],
+    "VectorSearchAlgorithmConfiguration": [
+      "exhaustiveKnnParameters",
+      "hnswParameters",
+      "kind",
+      "name"
+    ],
+    "VectorSearchAlgorithmKind": [],
+    "VectorSearchAlgorithmMetric": [],
+    "VectorSearchCompression": [
+      "kind",
+      "name",
+      "rescoringOptions",
+      "scalarQuantizationParameters",
+      "truncationDimension"
+    ],
+    "VectorSearchCompressionKind": [],
+    "VectorSearchCompressionRescoreStorageMethod": [],
+    "VectorSearchCompressionTarget": [],
+    "VectorSearchProfile": [
+      "algorithm",
+      "compression",
+      "name",
+      "vectorizer"
+    ],
+    "VectorSearchVectorizer": [
+      "aiServicesVisionParameters",
+      "amlParameters",
+      "azureOpenAIParameters",
+      "customWebApiParameters",
+      "kind",
+      "name"
+    ],
+    "VectorSearchVectorizerKind": [],
+    "VectorSimilarityThreshold": [
+      "kind",
+      "value"
+    ],
+    "VectorThreshold": [
+      "kind",
+      "value"
+    ],
+    "VectorThresholdKind": [],
+    "VectorizableImageBinaryQuery": [
+      "base64Image",
+      "exhaustive",
+      "fields",
+      "filterOverride",
+      "k",
+      "kind",
+      "oversampling",
+      "perDocumentVectorLimit",
+      "threshold",
+      "weight"
+    ],
+    "VectorizableImageUrlQuery": [
+      "exhaustive",
+      "fields",
+      "filterOverride",
+      "k",
+      "kind",
+      "oversampling",
+      "perDocumentVectorLimit",
+      "threshold",
+      "url",
+      "weight"
+    ],
+    "VectorizableTextQuery": [
+      "exhaustive",
+      "fields",
+      "filterOverride",
+      "k",
+      "kind",
+      "oversampling",
+      "perDocumentVectorLimit",
+      "queryRewrites",
+      "text",
+      "threshold",
+      "weight"
+    ],
+    "VectorizedQuery": [
+      "exhaustive",
+      "fields",
+      "filterOverride",
+      "k",
+      "kind",
+      "oversampling",
+      "perDocumentVectorLimit",
+      "threshold",
+      "vector",
+      "weight"
+    ],
+    "VectorsDebugInfo": [
+      "subscores"
+    ],
+    "VisionVectorizeSkill": [
+      "@odata.type",
+      "context",
+      "description",
+      "inputs",
+      "modelVersion",
+      "name",
+      "outputs"
+    ],
+    "VisualFeature": [],
+    "WebApiHttpHeaders": [],
+    "WebApiSkill": [
+      "@odata.type",
+      "authIdentity",
+      "authResourceId",
+      "batchSize",
+      "context",
+      "degreeOfParallelism",
+      "description",
+      "httpHeaders",
+      "httpMethod",
+      "inputs",
+      "name",
+      "outputs",
+      "timeout",
+      "uri"
+    ],
+    "WebApiVectorizer": [
+      "customWebApiParameters",
+      "kind",
+      "name"
+    ],
+    "WebApiVectorizerParameters": [
+      "authIdentity",
+      "authResourceId",
+      "httpHeaders",
+      "httpMethod",
+      "timeout",
+      "uri"
+    ],
+    "WebKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "kind",
+      "name",
+      "resultsProcessing",
+      "webParameters"
+    ],
+    "WebKnowledgeSourceDomain": [
+      "address",
+      "includeSubpages"
+    ],
+    "WebKnowledgeSourceDomains": [
+      "allowedDomains",
+      "blockedDomains"
+    ],
+    "WebKnowledgeSourceParameters": [
+      "count",
+      "domains",
+      "freshness",
+      "language",
+      "market"
+    ],
+    "WebKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "count",
+      "enableImageServing",
+      "failOnError",
+      "freshness",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "language",
+      "market",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ],
+    "WordDelimiterTokenFilter": [
+      "@odata.type",
+      "catenateAll",
+      "catenateNumbers",
+      "catenateWords",
+      "generateNumberParts",
+      "generateWordParts",
+      "name",
+      "preserveOriginal",
+      "protectedWords",
+      "splitOnCaseChange",
+      "splitOnNumerics",
+      "stemEnglishPossessive"
+    ],
+    "WorkIQKnowledgeSource": [
+      "@odata.etag",
+      "description",
+      "encryptionKey",
+      "kind",
+      "name",
+      "resultsProcessing",
+      "workIQParameters"
+    ],
+    "WorkIQKnowledgeSourceParameters": [
+      "entraAppAuthentication"
+    ],
+    "WorkIQKnowledgeSourceParams": [
+      "alwaysQuerySource",
+      "enableImageServing",
+      "failOnError",
+      "includeReferenceSourceData",
+      "includeReferences",
+      "kind",
+      "knowledgeSourceName",
+      "maxOutputDocuments",
+      "neverQuerySource",
+      "rerankerThreshold",
+      "resultsProcessing"
+    ]
+  }
+}

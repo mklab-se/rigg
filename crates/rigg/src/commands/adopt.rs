@@ -392,8 +392,19 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 
     let store = Store::new(project, &env.name);
     let mut state = ProjectState::load(&ws, &env.name, &project.name);
+    let mut unknown_fields_seen: BTreeSet<(String, String)> = BTreeSet::new();
     for (r, doc) in &to_adopt {
-        store.write(r, doc)?;
+        if store.write(r, doc)? {
+            for field in rigg_core::schema::unknown_top_level_fields(r.kind, doc) {
+                if unknown_fields_seen.insert((r.key(), field.clone())) {
+                    eprintln!(
+                        "{} {r}: field `{field}` is not in rigg's {} schema — Azure may have shipped a newer API; run `rigg dev api-check`",
+                        "note:".dimmed(),
+                        rigg_core::schema::fixture_for(r.kind).version
+                    );
+                }
+            }
+        }
         state.set_baseline(r, doc);
     }
     state.save(&ws, &env.name, &project.name)?;

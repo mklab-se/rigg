@@ -279,6 +279,10 @@ pub struct KindMeta {
     /// means an in-place PUT cannot reconcile the documents and the resource
     /// must be deleted and re-created (`rigg push` shows `replace`).
     pub immutable_fields: &'static [&'static str],
+    /// OpenAPI `definitions` entry (in this kind's pinned schema fixture)
+    /// whose property names describe this kind's top-level document shape.
+    /// Empty for kinds with no fixture (Foundry data-plane agents).
+    pub schema_definition: &'static str,
 }
 
 const COMMON_VOLATILE: &[&str] = &["@odata.etag", "@odata.context", "e_tag", "etag"];
@@ -297,6 +301,7 @@ static KINDS: &[KindMeta] = &[
         sidecar_fields: &[],
         reference_fields: &[],
         immutable_fields: &[],
+        schema_definition: "SearchIndexerDataSource",
     },
     KindMeta {
         kind: ResourceKind::Index,
@@ -314,6 +319,7 @@ static KINDS: &[KindMeta] = &[
         sidecar_fields: &[],
         reference_fields: &[],
         immutable_fields: &[],
+        schema_definition: "SearchIndex",
     },
     KindMeta {
         kind: ResourceKind::Skillset,
@@ -343,6 +349,7 @@ static KINDS: &[KindMeta] = &[
             },
         ],
         immutable_fields: &[],
+        schema_definition: "SearchIndexerSkillset",
     },
     KindMeta {
         kind: ResourceKind::Indexer,
@@ -351,7 +358,12 @@ static KINDS: &[KindMeta] = &[
         dir_name: "indexers",
         channel: Channel::Stable,
         volatile_fields: COMMON_VOLATILE,
-        read_only_fields: &["status", "lastResult", "executionHistory", "limits"],
+        // GET /indexers('name') never returns status/lastResult/
+        // executionHistory/limits — those live on the separate
+        // /indexers('name')/status resource (SearchIndexerStatus), fetched
+        // by `rigg az indexer status` / `rigg_indexer_status`, never merged
+        // into the indexer document itself.
+        read_only_fields: &[],
         secret_fields: &[],
         write_only_fields: &[],
         sidecar_fields: &[],
@@ -370,6 +382,7 @@ static KINDS: &[KindMeta] = &[
             },
         ],
         immutable_fields: &[],
+        schema_definition: "SearchIndexer",
     },
     KindMeta {
         kind: ResourceKind::SynonymMap,
@@ -384,6 +397,7 @@ static KINDS: &[KindMeta] = &[
         sidecar_fields: &[],
         reference_fields: &[],
         immutable_fields: &[],
+        schema_definition: "SynonymMap",
     },
     KindMeta {
         kind: ResourceKind::Alias,
@@ -401,6 +415,7 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::Index,
         }],
         immutable_fields: &[],
+        schema_definition: "SearchAlias",
     },
     KindMeta {
         kind: ResourceKind::KnowledgeSource,
@@ -410,7 +425,15 @@ static KINDS: &[KindMeta] = &[
         channel: Channel::Stable,
         volatile_fields: COMMON_VOLATILE,
         // Explicit-only model: Rigg never manages Azure-created sub-resources.
-        read_only_fields: &["createdResources", "ingestionPermissionOptions"],
+        // `createdResources` is per-kind (nested under the active
+        // `<kind>Parameters` block); list every managed-ingestion kind that
+        // has one. `ingestionPermissionOptions` (preview-only, nested under
+        // `<kind>Parameters.ingestionParameters`) does not exist in the
+        // pinned stable channel this kind uses, so there is nothing to strip.
+        read_only_fields: &[
+            "azureBlobParameters.createdResources",
+            "indexedOneLakeParameters.createdResources",
+        ],
         // azureBlobParameters.connectionString is credential material for the
         // managed-ingestion (azureBlob) KS shape: rejecting key values in
         // validate AND keeping it env-pinned during promote (via env_pinned's
@@ -433,6 +456,7 @@ static KINDS: &[KindMeta] = &[
             "kind",
             "azureBlobParameters.ingestionParameters.networkAccessMode",
         ],
+        schema_definition: "KnowledgeSource",
     },
     KindMeta {
         kind: ResourceKind::KnowledgeBase,
@@ -455,6 +479,7 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::KnowledgeSource,
         }],
         immutable_fields: &[],
+        schema_definition: "KnowledgeBase",
     },
     KindMeta {
         kind: ResourceKind::Agent,
@@ -487,6 +512,7 @@ static KINDS: &[KindMeta] = &[
             },
         ],
         immutable_fields: &[],
+        schema_definition: "",
     },
     KindMeta {
         kind: ResourceKind::Deployment,
@@ -515,6 +541,7 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::Guardrail,
         }],
         immutable_fields: &[],
+        schema_definition: "Deployment",
     },
     KindMeta {
         kind: ResourceKind::Connection,
@@ -543,6 +570,7 @@ static KINDS: &[KindMeta] = &[
         sidecar_fields: &[],
         reference_fields: &[],
         immutable_fields: &[],
+        schema_definition: "ConnectionPropertiesV2",
     },
     KindMeta {
         kind: ResourceKind::Guardrail,
@@ -557,6 +585,7 @@ static KINDS: &[KindMeta] = &[
         sidecar_fields: &[],
         reference_fields: &[],
         immutable_fields: &[],
+        schema_definition: "RaiPolicy",
     },
 ];
 
@@ -1003,6 +1032,38 @@ fn pair_arrays(dst: &mut Value, src: &Value, rest: &[&str]) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn registry_paths_exist_in_the_pinned_schema() {
+        use crate::schema::fixture_for;
+        for kind in ResourceKind::search_kinds() {
+            let m = meta(kind);
+            let f = fixture_for(kind);
+            let props = f
+                .definition(m.schema_definition)
+                .expect(m.schema_definition);
+            for path in m
+                .volatile_fields
+                .iter()
+                .chain(m.read_only_fields)
+                .chain(m.secret_fields)
+                .chain(m.write_only_fields)
+                .chain(m.immutable_fields)
+                .chain(m.reference_fields.iter().map(|r| &r.path))
+            {
+                let head = path.split('.').next().unwrap().trim_end_matches("[]");
+                if head.starts_with("@odata") || head == "etag" || head == "e_tag" {
+                    continue;
+                }
+                assert!(
+                    props.contains(head),
+                    "{kind:?}: `{path}` not in {} ({})",
+                    m.schema_definition,
+                    f.version
+                );
+            }
+        }
+    }
 
     #[test]
     fn meta_is_total_and_consistent() {

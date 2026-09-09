@@ -13,6 +13,7 @@ pub mod credentials;
 pub mod delete;
 pub mod describe;
 pub mod dev;
+pub mod dev_spec;
 pub mod diff;
 pub mod discovery;
 pub mod doctor;

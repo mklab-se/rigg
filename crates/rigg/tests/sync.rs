@@ -1263,7 +1263,6 @@ async fn mount_blob_ks(server: &MockServer, name: &str) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "@odata.etag": "\"0xIXR\"",
             "name": format!("{name}-indexer"),
-            "status": "running",
             "dataSourceName": format!("{name}-datasource"),
             "targetIndexName": format!("{name}-index"),
             "skillsetName": format!("{name}-skillset")
@@ -1310,8 +1309,7 @@ async fn migrate_in_place_writes_explicit_pipeline() {
     );
     assert_eq!(ds["name"], "test-ks-datasource");
     assert!(ds.get("@odata.etag").is_none(), "volatile stripped");
-    let idxr = read_json(ws.path(), &format!("{base}/indexers/test-ks-indexer.json"));
-    assert!(idxr.get("status").is_none(), "read-only stripped");
+    read_json(ws.path(), &format!("{base}/indexers/test-ks-indexer.json"));
     read_json(ws.path(), &format!("{base}/indexes/test-ks-index.json"));
     read_json(
         ws.path(),
@@ -2956,4 +2954,42 @@ async fn pull_fails_fast_on_a_cycling_odata_next_link() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("did not terminate"));
+}
+
+/// A field Azure returns that rigg's pinned schema fixture does not know
+/// about is reported on stderr as a note — an API-drift canary — while the
+/// document itself is written through unchanged (rigg stays pass-through).
+#[tokio::test]
+async fn pull_reports_fields_unknown_to_the_pinned_schema() {
+    let server = MockServer::start().await;
+    mount_empty_lists_except(&server, "indexes").await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"value": [{"name": "idx", "fields": [], "brandNewSetting": true}]}),
+        ))
+        .mount(&server)
+        .await;
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "all", "--yes"])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("brandNewSetting")
+                .and(predicate::str::contains("rigg dev api-check")),
+        );
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            ws.path()
+                .join("projects/demo/envs/dev/search/indexes/idx.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        doc["brandNewSetting"],
+        json!(true),
+        "documents stay pass-through"
+    );
 }

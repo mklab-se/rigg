@@ -719,9 +719,20 @@ pub enum CiCommands {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::enum_variant_names)] // Api* mirrors the `api-*` subcommand names on purpose.
 pub enum DevCommands {
     /// Check whether newer Azure API versions are available
     ApiCheck,
+    /// Show what changed between two versions of a provider's OpenAPI definitions
+    ApiDiff {
+        provider: String,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Regenerate the pinned schema fixtures under crates/rigg-core/fixtures/schema
+    ApiFixture { provider: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

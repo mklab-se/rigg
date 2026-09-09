@@ -1,0 +1,1371 @@
+{
+  "provider": "cognitiveservices-arm",
+  "version": "2026-07-01",
+  "definitions": {
+    "AADAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "AbusePenalty": [
+      "action",
+      "expiration",
+      "rateLimitPercentage"
+    ],
+    "AbusePenaltyAction": [],
+    "AccessKeyAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "Account": [
+      "etag",
+      "identity",
+      "kind",
+      "location",
+      "properties",
+      "sku",
+      "tags"
+    ],
+    "AccountKeyAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "AccountListResult": [
+      "nextLink",
+      "value"
+    ],
+    "AccountModel": [
+      "baseModel",
+      "callRateLimit",
+      "capabilities",
+      "deprecation",
+      "finetuneCapabilities",
+      "format",
+      "isDefaultVersion",
+      "lifecycleStatus",
+      "maxCapacity",
+      "modelCatalogAssetId",
+      "name",
+      "publisher",
+      "replacementConfig",
+      "skus",
+      "source",
+      "sourceAccount",
+      "systemData",
+      "version"
+    ],
+    "AccountModelListResult": [
+      "nextLink",
+      "value"
+    ],
+    "AccountProperties": [
+      "abusePenalty",
+      "allowProjectManagement",
+      "allowedFqdnList",
+      "amlWorkspace",
+      "apiProperties",
+      "associatedProjects",
+      "callRateLimit",
+      "capabilities",
+      "commitmentPlanAssociations",
+      "customSubDomainName",
+      "dateCreated",
+      "defaultProject",
+      "deletionDate",
+      "disableLocalAuth",
+      "dynamicThrottlingEnabled",
+      "encryption",
+      "endpoint",
+      "endpoints",
+      "internalId",
+      "isMigrated",
+      "locations",
+      "migrationToken",
+      "networkAcls",
+      "networkInjections",
+      "privateEndpointConnections",
+      "provisioningState",
+      "publicNetworkAccess",
+      "quotaLimit",
+      "raiMonitorConfig",
+      "restore",
+      "restrictOutboundNetworkAccess",
+      "scheduledPurgeDate",
+      "skuChangeInfo",
+      "storedCompletionsDisabled",
+      "userOwnedStorage"
+    ],
+    "AccountSku": [
+      "resourceType",
+      "sku"
+    ],
+    "AccountSkuListResult": [
+      "value"
+    ],
+    "ActionType": [],
+    "AgentApplication": [
+      "properties"
+    ],
+    "AgentApplicationResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "AgentCard": [
+      "defaultInputModes",
+      "defaultOutputModes",
+      "description",
+      "documentationUrl",
+      "name",
+      "provider",
+      "skills",
+      "url",
+      "version"
+    ],
+    "AgentDeployment": [
+      "properties"
+    ],
+    "AgentDeploymentProperties": [
+      "agents",
+      "deploymentId",
+      "deploymentType",
+      "description",
+      "displayName",
+      "maxReplicas",
+      "minReplicas",
+      "protocols",
+      "provisioningState",
+      "state",
+      "tags"
+    ],
+    "AgentDeploymentProvisioningState": [],
+    "AgentDeploymentResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "AgentDeploymentState": [],
+    "AgentDeploymentType": [],
+    "AgentProtocol": [],
+    "AgentProtocolVersion": [
+      "protocol",
+      "version"
+    ],
+    "AgentReference": [
+      "properties"
+    ],
+    "AgentReferenceProperties": [
+      "agentId",
+      "agentName"
+    ],
+    "AgentReferenceResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "AgenticApplicationProperties": [
+      "agentIdentityBlueprint",
+      "agents",
+      "authorizationPolicy",
+      "baseUrl",
+      "defaultInstanceIdentity",
+      "description",
+      "displayName",
+      "isEnabled",
+      "provisioningState",
+      "tags",
+      "trafficRoutingPolicy"
+    ],
+    "AgenticApplicationProvisioningState": [],
+    "ApiKeyAuthConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "ApiKeys": [
+      "key1",
+      "key2"
+    ],
+    "ApiProperties": [
+      "aadClientId",
+      "aadTenantId",
+      "eventHubConnectionString",
+      "qnaAzureSearchEndpointId",
+      "qnaAzureSearchEndpointKey",
+      "qnaRuntimeEndpoint",
+      "statisticsEnabled",
+      "storageAccountConnectionString",
+      "superUser",
+      "websiteName"
+    ],
+    "ApplicationAuthorizationPolicy": [
+      "type"
+    ],
+    "ApplicationTrafficRoutingPolicy": [
+      "protocol",
+      "rules"
+    ],
+    "AssignedIdentity": [
+      "clientId",
+      "kind",
+      "principalId",
+      "provisioningState",
+      "subject",
+      "tenantId",
+      "type"
+    ],
+    "Azure.Core.uuid": [],
+    "BillingMeterInfo": [
+      "meterId",
+      "name",
+      "unit"
+    ],
+    "BuiltInAuthorizationScheme": [],
+    "ByPassSelection": [],
+    "CalculateModelCapacityParameter": [
+      "model",
+      "skuName",
+      "workloads"
+    ],
+    "CalculateModelCapacityResult": [
+      "estimatedCapacity",
+      "model",
+      "skuName"
+    ],
+    "CalculateModelCapacityResultEstimatedCapacity": [
+      "deployableValue",
+      "value"
+    ],
+    "CallRateLimit": [
+      "count",
+      "renewalPeriod",
+      "rules"
+    ],
+    "CapabilityHost": [
+      "properties"
+    ],
+    "CapabilityHostKind": [],
+    "CapabilityHostProperties": [
+      "aiServicesConnections",
+      "capabilityHostKind",
+      "customerSubnet",
+      "description",
+      "enablePublicHostingEnvironment",
+      "provisioningState",
+      "storageConnections",
+      "tags",
+      "threadStorageConnections",
+      "vectorStoreConnections"
+    ],
+    "CapabilityHostProvisioningState": [],
+    "CapabilityHostResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "CapacityConfig": [
+      "allowedValues",
+      "default",
+      "maximum",
+      "minimum",
+      "step"
+    ],
+    "ChannelsBuiltInAuthorizationPolicy": [
+      "type"
+    ],
+    "CheckDomainAvailabilityParameter": [
+      "kind",
+      "subdomainName",
+      "type"
+    ],
+    "CheckSkuAvailabilityParameter": [
+      "kind",
+      "skus",
+      "type"
+    ],
+    "CommitmentCost": [
+      "commitmentMeterId",
+      "overageMeterId"
+    ],
+    "CommitmentPeriod": [
+      "count",
+      "endDate",
+      "quota",
+      "startDate",
+      "tier"
+    ],
+    "CommitmentPlan": [
+      "etag",
+      "kind",
+      "location",
+      "properties",
+      "sku",
+      "tags"
+    ],
+    "CommitmentPlanAccountAssociation": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "CommitmentPlanAccountAssociationListResult": [
+      "nextLink",
+      "value"
+    ],
+    "CommitmentPlanAccountAssociationProperties": [
+      "accountId"
+    ],
+    "CommitmentPlanAssociation": [
+      "commitmentPlanId",
+      "commitmentPlanLocation"
+    ],
+    "CommitmentPlanListResult": [
+      "nextLink",
+      "value"
+    ],
+    "CommitmentPlanProperties": [
+      "autoRenew",
+      "commitmentPlanGuid",
+      "current",
+      "hostingModel",
+      "last",
+      "next",
+      "planType",
+      "provisioningIssues",
+      "provisioningState"
+    ],
+    "CommitmentPlanProvisioningState": [],
+    "CommitmentQuota": [
+      "quantity",
+      "unit"
+    ],
+    "CommitmentTier": [
+      "cost",
+      "hostingModel",
+      "kind",
+      "maxCount",
+      "planType",
+      "quota",
+      "skuName",
+      "tier"
+    ],
+    "CommitmentTierListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ConnectionAccessKey": [
+      "accessKeyId",
+      "secretAccessKey"
+    ],
+    "ConnectionAccountKey": [
+      "key"
+    ],
+    "ConnectionApiKey": [
+      "key"
+    ],
+    "ConnectionAuthType": [],
+    "ConnectionCategory": [],
+    "ConnectionGroup": [],
+    "ConnectionManagedIdentity": [
+      "clientId",
+      "resourceId"
+    ],
+    "ConnectionOAuth2": [
+      "authUrl",
+      "clientId",
+      "clientSecret",
+      "developerToken",
+      "password",
+      "refreshToken",
+      "tenantId",
+      "username"
+    ],
+    "ConnectionPersonalAccessToken": [
+      "pat"
+    ],
+    "ConnectionPropertiesV2": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "ConnectionPropertiesV2BasicResource": [
+      "properties"
+    ],
+    "ConnectionPropertiesV2BasicResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "ConnectionServicePrincipal": [
+      "clientId",
+      "clientSecret",
+      "tenantId"
+    ],
+    "ConnectionSharedAccessSignature": [
+      "sas"
+    ],
+    "ConnectionUpdateContent": [
+      "properties"
+    ],
+    "ConnectionUsernamePassword": [
+      "password",
+      "securityToken",
+      "username"
+    ],
+    "ContentLevel": [],
+    "CreatedByType": [],
+    "CustomBlocklistConfig": [
+      "blocking",
+      "blocklistName",
+      "source"
+    ],
+    "CustomKeys": [
+      "keys"
+    ],
+    "CustomKeysConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "DefenderForAISetting": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "DefenderForAISettingProperties": [
+      "state"
+    ],
+    "DefenderForAISettingResult": [
+      "nextLink",
+      "value"
+    ],
+    "DefenderForAISettingState": [],
+    "Deployment": [
+      "etag",
+      "properties",
+      "sku",
+      "tags"
+    ],
+    "DeploymentCapacitySettings": [
+      "designatedCapacity",
+      "priority"
+    ],
+    "DeploymentListResult": [
+      "nextLink",
+      "value"
+    ],
+    "DeploymentModel": [
+      "callRateLimit",
+      "format",
+      "name",
+      "publisher",
+      "source",
+      "sourceAccount",
+      "version"
+    ],
+    "DeploymentModelVersionUpgradeOption": [],
+    "DeploymentProperties": [
+      "callRateLimit",
+      "capabilities",
+      "capacitySettings",
+      "currentCapacity",
+      "deploymentState",
+      "dynamicThrottlingEnabled",
+      "model",
+      "parentDeploymentName",
+      "provisioningState",
+      "raiPolicyName",
+      "rateLimits",
+      "routing",
+      "scaleSettings",
+      "serviceTier",
+      "spilloverDeploymentName",
+      "versionUpgradeOption"
+    ],
+    "DeploymentProvisioningState": [],
+    "DeploymentRouting": [
+      "mode",
+      "models"
+    ],
+    "DeploymentScaleSettings": [
+      "activeCapacity",
+      "capacity",
+      "scaleType"
+    ],
+    "DeploymentScaleType": [],
+    "DeploymentSkuListResult": [
+      "nextLink",
+      "value"
+    ],
+    "DeploymentState": [],
+    "DeprecationStatus": [],
+    "DomainAvailability": [
+      "isSubdomainAvailable",
+      "kind",
+      "reason",
+      "subdomainName",
+      "type"
+    ],
+    "Encryption": [
+      "keySource",
+      "keyVaultProperties"
+    ],
+    "EncryptionScope": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "EncryptionScopeListResult": [
+      "nextLink",
+      "value"
+    ],
+    "EncryptionScopeProperties": [
+      "keySource",
+      "keyVaultProperties",
+      "provisioningState",
+      "state"
+    ],
+    "EncryptionScopeProvisioningState": [],
+    "EncryptionScopeState": [],
+    "FirewallSku": [],
+    "FqdnOutboundRule": [
+      "category",
+      "destination",
+      "errorInformation",
+      "parentRuleNames",
+      "status",
+      "type"
+    ],
+    "HostedAgentDeployment": [
+      "agents",
+      "deploymentId",
+      "deploymentType",
+      "displayName",
+      "maxReplicas",
+      "minReplicas",
+      "protocols",
+      "provisioningState",
+      "state"
+    ],
+    "HostingModel": [],
+    "Identity": [
+      "principalId",
+      "tenantId",
+      "type",
+      "userAssignedIdentities"
+    ],
+    "IdentityKind": [],
+    "IdentityManagementType": [],
+    "IdentityProvisioningState": [],
+    "IpRule": [
+      "value"
+    ],
+    "IsolationMode": [],
+    "KeyName": [],
+    "KeySource": [],
+    "KeyVaultProperties": [
+      "identityClientId",
+      "keyName",
+      "keyVaultUri",
+      "keyVersion"
+    ],
+    "ManagedAgentDeployment": [
+      "agents",
+      "deploymentId",
+      "deploymentType",
+      "displayName",
+      "protocols",
+      "provisioningState",
+      "state"
+    ],
+    "ManagedIdentityAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "ManagedNetworkKind": [],
+    "ManagedNetworkListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ManagedNetworkProvisionOptions": [],
+    "ManagedNetworkProvisionStatus": [
+      "status"
+    ],
+    "ManagedNetworkProvisioningState": [],
+    "ManagedNetworkSettings": [
+      "firewallPublicIpAddress",
+      "firewallSku",
+      "isolationMode",
+      "managedNetworkKind",
+      "networkId",
+      "outboundRules",
+      "provisioningState",
+      "status"
+    ],
+    "ManagedNetworkSettingsBasicResource": [
+      "properties"
+    ],
+    "ManagedNetworkSettingsEx": [
+      "changeableIsolationModes",
+      "firewallPublicIpAddress",
+      "firewallSku",
+      "isolationMode",
+      "managedNetworkKind",
+      "networkId",
+      "outboundRules",
+      "provisioningState",
+      "status"
+    ],
+    "ManagedNetworkSettingsProperties": [
+      "managedNetwork",
+      "provisioningState"
+    ],
+    "ManagedNetworkSettingsPropertiesBasicResource": [
+      "properties"
+    ],
+    "ManagedNetworkStatus": [],
+    "ManagedPERequirement": [],
+    "ManagedPEStatus": [],
+    "MetricName": [
+      "localizedValue",
+      "value"
+    ],
+    "Model": [
+      "description",
+      "kind",
+      "model",
+      "skuName"
+    ],
+    "ModelCapacityCalculatorWorkload": [
+      "requestParameters",
+      "requestPerMinute"
+    ],
+    "ModelCapacityCalculatorWorkloadRequestParam": [
+      "avgGeneratedTokens",
+      "avgPromptTokens"
+    ],
+    "ModelCapacityListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ModelCapacityListResultValueItem": [
+      "location",
+      "properties"
+    ],
+    "ModelDeprecationInfo": [
+      "deprecationStatus",
+      "fineTune",
+      "inference"
+    ],
+    "ModelLifecycleStatus": [],
+    "ModelListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ModelSku": [
+      "capacity",
+      "cost",
+      "deprecationDate",
+      "name",
+      "rateLimits",
+      "usageName"
+    ],
+    "ModelSkuCapacityProperties": [
+      "availableCapacity",
+      "availableFinetuneCapacity",
+      "model",
+      "scopeId",
+      "scopeType",
+      "skuName"
+    ],
+    "MultiRegionSettings": [
+      "regions",
+      "routingMethod"
+    ],
+    "NetworkInjection": [
+      "scenario",
+      "subnetArmId",
+      "useMicrosoftManagedNetwork"
+    ],
+    "NetworkRuleAction": [],
+    "NetworkRuleSet": [
+      "bypass",
+      "defaultAction",
+      "ipRules",
+      "virtualNetworkRules"
+    ],
+    "NetworkSecurityPerimeter": [
+      "id",
+      "location",
+      "perimeterGuid"
+    ],
+    "NetworkSecurityPerimeterAccessRule": [
+      "name",
+      "properties"
+    ],
+    "NetworkSecurityPerimeterAccessRuleProperties": [
+      "addressPrefixes",
+      "direction",
+      "fullyQualifiedDomainNames",
+      "networkSecurityPerimeters",
+      "subscriptions"
+    ],
+    "NetworkSecurityPerimeterAccessRulePropertiesSubscriptionsItem": [
+      "id"
+    ],
+    "NetworkSecurityPerimeterConfiguration": [
+      "properties"
+    ],
+    "NetworkSecurityPerimeterConfigurationAssociationInfo": [
+      "accessMode",
+      "name"
+    ],
+    "NetworkSecurityPerimeterConfigurationList": [
+      "nextLink",
+      "value"
+    ],
+    "NetworkSecurityPerimeterConfigurationProperties": [
+      "networkSecurityPerimeter",
+      "profile",
+      "provisioningIssues",
+      "provisioningState",
+      "resourceAssociation"
+    ],
+    "NetworkSecurityPerimeterProfileInfo": [
+      "accessRules",
+      "accessRulesVersion",
+      "diagnosticSettingsVersion",
+      "enabledLogCategories",
+      "name"
+    ],
+    "NoneAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "NspAccessRuleDirection": [],
+    "OAuth2AuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "OrganizationSharedBuiltInAuthorizationPolicy": [
+      "type"
+    ],
+    "Origin": [],
+    "OutboundRule": [
+      "category",
+      "destination",
+      "errorInformation",
+      "fqdns",
+      "parentRuleNames",
+      "status",
+      "type"
+    ],
+    "OutboundRuleBasicResource": [
+      "properties"
+    ],
+    "OutboundRuleListResult": [
+      "nextLink",
+      "value"
+    ],
+    "PATAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "PatchResourceTags": [
+      "tags"
+    ],
+    "PatchResourceTagsAndSku": [
+      "sku",
+      "tags"
+    ],
+    "PrivateEndpointConnection": [
+      "etag",
+      "location",
+      "properties"
+    ],
+    "PrivateEndpointConnectionListResult": [
+      "value"
+    ],
+    "PrivateEndpointConnectionProperties": [
+      "groupIds",
+      "privateEndpoint",
+      "privateLinkServiceConnectionState",
+      "provisioningState"
+    ],
+    "PrivateEndpointOutboundRule": [
+      "category",
+      "destination",
+      "errorInformation",
+      "fqdns",
+      "parentRuleNames",
+      "status",
+      "type"
+    ],
+    "PrivateEndpointOutboundRuleDestination": [
+      "serviceResourceId",
+      "subresourceTarget"
+    ],
+    "PrivateLinkResource": [
+      "properties"
+    ],
+    "PrivateLinkResourceListResult": [
+      "value"
+    ],
+    "PrivateLinkResourceProperties": [
+      "displayName",
+      "groupId",
+      "requiredMembers",
+      "requiredZoneNames"
+    ],
+    "Project": [
+      "etag",
+      "identity",
+      "location",
+      "properties",
+      "tags"
+    ],
+    "ProjectCapabilityHost": [
+      "properties"
+    ],
+    "ProjectCapabilityHostProperties": [
+      "aiServicesConnections",
+      "provisioningState",
+      "storageConnections",
+      "threadStorageConnections",
+      "vectorStoreConnections"
+    ],
+    "ProjectCapabilityHostResourceArmPaginatedResult": [
+      "nextLink",
+      "value"
+    ],
+    "ProjectListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ProjectProperties": [
+      "description",
+      "displayName",
+      "endpoints",
+      "isDefault",
+      "provisioningState"
+    ],
+    "ProviderInfo": [
+      "organization",
+      "url"
+    ],
+    "ProvisioningIssue": [
+      "name",
+      "properties"
+    ],
+    "ProvisioningIssueProperties": [
+      "description",
+      "issueType",
+      "severity",
+      "suggestedAccessRules",
+      "suggestedResourceIds"
+    ],
+    "ProvisioningState": [],
+    "PublicNetworkAccess": [],
+    "QuotaLimit": [
+      "count",
+      "renewalPeriod",
+      "rules"
+    ],
+    "QuotaScopeType": [],
+    "QuotaTier": [
+      "properties"
+    ],
+    "QuotaTierListResult": [
+      "nextLink",
+      "value"
+    ],
+    "QuotaTierProperties": [
+      "assignmentDate",
+      "currentTierName",
+      "tierUpgradeEligibilityInfo",
+      "tierUpgradePolicy"
+    ],
+    "QuotaTierUpgradeEligibilityInfo": [
+      "nextTierName",
+      "upgradeApplicableDate",
+      "upgradeAvailabilityStatus",
+      "upgradeUnavailabilityReason"
+    ],
+    "QuotaUsageStatus": [],
+    "RaiActionType": [],
+    "RaiBlockListItemsResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiBlockListResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiBlocklist": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiBlocklistConfig": [
+      "blocking",
+      "blocklistName"
+    ],
+    "RaiBlocklistItem": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiBlocklistItemBulkRequest": [
+      "name",
+      "properties"
+    ],
+    "RaiBlocklistItemProperties": [
+      "isRegex",
+      "pattern"
+    ],
+    "RaiBlocklistItemsBulkAddRequest": [],
+    "RaiBlocklistItemsBulkDeleteRequest": [],
+    "RaiBlocklistProperties": [
+      "description"
+    ],
+    "RaiContentFilter": [
+      "properties"
+    ],
+    "RaiContentFilterListResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiContentFilterProperties": [
+      "isMultiLevelFilter",
+      "name",
+      "source"
+    ],
+    "RaiExternalSafetyProviderResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiExternalSafetyProviderSchema": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiExternalSafetyProviderSchemaProperties": [
+      "createdAt",
+      "keyVaultUri",
+      "lastModifiedAt",
+      "managedIdentity",
+      "mode",
+      "providerId",
+      "providerName",
+      "secretName",
+      "url"
+    ],
+    "RaiMonitorConfig": [
+      "adxStorageResourceId",
+      "identityClientId"
+    ],
+    "RaiPolicy": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiPolicyContentFilter": [
+      "action",
+      "blocking",
+      "enabled",
+      "name",
+      "severityThreshold",
+      "source"
+    ],
+    "RaiPolicyContentSource": [],
+    "RaiPolicyListResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiPolicyMode": [],
+    "RaiPolicyProperties": [
+      "basePolicyName",
+      "contentFilters",
+      "customBlocklists",
+      "mode",
+      "safetyProviders",
+      "type"
+    ],
+    "RaiPolicyType": [],
+    "RaiSafetyProviderConfig": [
+      "blocking",
+      "safetyProviderName"
+    ],
+    "RaiToolLabel": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiToolLabelProperties": [
+      "accountScope",
+      "projectScopes",
+      "toolConnectionName"
+    ],
+    "RaiToolLabelPropertiesAccountScope": [
+      "labelValues"
+    ],
+    "RaiToolLabelPropertiesProjectScopesItem": [
+      "labelValues",
+      "project"
+    ],
+    "RaiToolLabelResult": [
+      "nextLink",
+      "value"
+    ],
+    "RaiTopic": [
+      "etag",
+      "properties",
+      "tags"
+    ],
+    "RaiTopicProperties": [
+      "createdAt",
+      "description",
+      "failedReason",
+      "lastModifiedAt",
+      "sampleBlobUrl",
+      "status",
+      "topicId",
+      "topicName"
+    ],
+    "RaiTopicResult": [
+      "nextLink",
+      "value"
+    ],
+    "RegenerateKeyParameters": [
+      "keyName"
+    ],
+    "RegionSetting": [
+      "customsubdomain",
+      "name",
+      "value"
+    ],
+    "ReplacementConfig": [
+      "autoUpgradeStartDate",
+      "targetModelName",
+      "targetModelVersion",
+      "upgradeOnExpiryLeadTimeDays"
+    ],
+    "RequestMatchPattern": [
+      "method",
+      "path"
+    ],
+    "ResourceBase": [
+      "description",
+      "tags"
+    ],
+    "ResourceIdentityType": [],
+    "ResourceSku": [
+      "kind",
+      "locations",
+      "name",
+      "resourceType",
+      "restrictions",
+      "tier"
+    ],
+    "ResourceSkuListResult": [
+      "nextLink",
+      "value"
+    ],
+    "ResourceSkuRestrictionInfo": [
+      "locations",
+      "zones"
+    ],
+    "ResourceSkuRestrictions": [
+      "reasonCode",
+      "restrictionInfo",
+      "type",
+      "values"
+    ],
+    "ResourceSkuRestrictionsReasonCode": [],
+    "ResourceSkuRestrictionsType": [],
+    "RoleBasedBuiltInAuthorizationPolicy": [
+      "type"
+    ],
+    "RoutingMethods": [],
+    "RoutingMode": [],
+    "RuleAction": [],
+    "RuleCategory": [],
+    "RuleStatus": [],
+    "RuleType": [],
+    "SASAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "SafetyProviderConfig": [
+      "blocking",
+      "safetyProviderName",
+      "source"
+    ],
+    "ScenarioType": [],
+    "ServicePrincipalAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "ServiceTagOutboundRule": [
+      "category",
+      "destination",
+      "errorInformation",
+      "parentRuleNames",
+      "status",
+      "type"
+    ],
+    "ServiceTagOutboundRuleDestination": [
+      "action",
+      "addressPrefixes",
+      "portRanges",
+      "protocol",
+      "serviceTag"
+    ],
+    "ServiceTier": [],
+    "Skill": [
+      "description",
+      "examples",
+      "id",
+      "inputModes",
+      "name",
+      "outputModes",
+      "tags"
+    ],
+    "Sku": [
+      "capacity",
+      "family",
+      "name",
+      "size",
+      "tier"
+    ],
+    "SkuAvailability": [
+      "kind",
+      "message",
+      "reason",
+      "skuAvailable",
+      "skuName",
+      "type"
+    ],
+    "SkuAvailabilityListResult": [
+      "value"
+    ],
+    "SkuCapability": [
+      "name",
+      "value"
+    ],
+    "SkuChangeInfo": [
+      "countOfDowngrades",
+      "countOfUpgradesAfterDowngrades",
+      "lastChangeDate"
+    ],
+    "SkuResource": [
+      "capacity",
+      "resourceType",
+      "sku"
+    ],
+    "SkuTier": [],
+    "ThrottlingRule": [
+      "count",
+      "dynamicThrottlingEnabled",
+      "key",
+      "matchPatterns",
+      "minCount",
+      "renewalPeriod"
+    ],
+    "TierUpgradePolicy": [],
+    "TrafficRoutingProtocol": [],
+    "TrafficRoutingRule": [
+      "deploymentId",
+      "description",
+      "ruleId",
+      "trafficPercentage"
+    ],
+    "UnitType": [],
+    "UpgradeAvailabilityStatus": [],
+    "Usage": [
+      "currentValue",
+      "limit",
+      "name",
+      "nextResetTime",
+      "quotaPeriod",
+      "scopeId",
+      "scopeType",
+      "status",
+      "unit"
+    ],
+    "UsageListResult": [
+      "nextLink",
+      "value"
+    ],
+    "UserAssignedIdentity": [
+      "clientId",
+      "principalId"
+    ],
+    "UserOwnedAmlWorkspace": [
+      "identityClientId",
+      "resourceId"
+    ],
+    "UserOwnedStorage": [
+      "identityClientId",
+      "resourceId"
+    ],
+    "UsernamePasswordAuthTypeConnectionProperties": [
+      "authType",
+      "category",
+      "createdByWorkspaceArmId",
+      "credentials",
+      "error",
+      "expiryTime",
+      "group",
+      "isSharedToAll",
+      "metadata",
+      "peRequirement",
+      "peStatus",
+      "sharedUserList",
+      "target",
+      "useWorkspaceManagedIdentity"
+    ],
+    "VersionedAgentReference": [
+      "agentId",
+      "agentName",
+      "agentVersion"
+    ],
+    "VirtualNetworkRule": [
+      "id",
+      "ignoreMissingVnetServiceEndpoint",
+      "state"
+    ]
+  }
+}

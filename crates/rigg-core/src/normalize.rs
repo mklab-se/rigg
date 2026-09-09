@@ -201,24 +201,33 @@ mod tests {
 
     #[test]
     fn disk_normalization_strips_volatile_and_read_only() {
-        let indexer = json!({
+        // KnowledgeSource has a real read-only field: `createdResources`,
+        // nested under the active `<kind>Parameters` block. Azure returns it
+        // on GET but rejects it on PUT, so rigg strips it before writing to
+        // disk.
+        let ks = json!({
             "@odata.etag": "0x123",
-            "name": "idxr",
-            "dataSourceName": "ds",
-            "status": "running",
-            "lastResult": {"status": "success"},
+            "name": "ks",
+            "kind": "azureBlob",
+            "azureBlobParameters": {
+                "containerName": "docs",
+                "createdResources": {"dataSourceName": "ks-auto-ds"}
+            },
             "nested": {"@odata.etag": "0x456", "keep": true}
         });
-        let out = normalize_for_disk(ResourceKind::Indexer, &indexer);
+        let out = normalize_for_disk(ResourceKind::KnowledgeSource, &ks);
         assert!(out.get("@odata.etag").is_none());
-        assert!(out.get("status").is_none(), "read-only stripped");
-        assert!(out.get("lastResult").is_none());
+        assert!(
+            out["azureBlobParameters"].get("createdResources").is_none(),
+            "read-only stripped"
+        );
         assert!(
             out["nested"].get("@odata.etag").is_none(),
             "etag stripped at depth"
         );
         assert_eq!(out["nested"]["keep"], json!(true));
-        assert_eq!(out["dataSourceName"], json!("ds"));
+        assert_eq!(out["azureBlobParameters"]["containerName"], json!("docs"));
+        assert_eq!(out["kind"], json!("azureBlob"));
     }
 
     #[test]

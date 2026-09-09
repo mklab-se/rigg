@@ -14,6 +14,7 @@ pub mod openapi;
 pub mod registry;
 pub mod resources;
 pub mod scaffold;
+pub mod schema;
 pub mod service;
 pub mod sidecar;
 pub mod store;
