@@ -1471,3 +1471,14 @@ fn promote_new_skillset_warns_about_source_env_function_url() {
         "https://fn-dev.azurewebsites.net/api/ExtractMetadata"
     );
 }
+
+#[test]
+fn unknown_answer_id_is_a_usage_error() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["status", "--answer", "nope=1"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown answer id 'nope'"));
+}

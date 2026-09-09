@@ -56,6 +56,14 @@ pub struct Cli {
     /// Disable AI assistance for this invocation (even when `rigg ai` is enabled)
     #[arg(long, global = true)]
     pub no_ai: bool,
+
+    /// Answer a question a guided flow would ask (repeatable): --answer <id>=<value>
+    #[arg(long = "answer", global = true, value_name = "ID=VALUE")]
+    pub answer: Vec<String>,
+
+    /// JSON file of answers ({"<id>": "<value>", …})
+    #[arg(long, global = true, value_name = "PATH")]
+    pub answers_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -746,7 +754,11 @@ pub enum Shell {
 impl Cli {
     /// Execute the parsed command. Returns the process exit code.
     pub async fn run(self) -> ExitCode {
-        let ctx = commands::GlobalContext::from_cli(&self);
+        let output = self.output;
+        let ctx = match commands::GlobalContext::from_cli(&self) {
+            Ok(ctx) => ctx,
+            Err(err) => return commands::exit_code_for(Err(err), output),
+        };
         let result = match self.command {
             Commands::Init(args) => commands::init::run(&ctx, args).await,
             Commands::New(args) => commands::new::run(&ctx, args).await,
@@ -779,6 +791,6 @@ impl Cli {
                 Ok(())
             }
         };
-        commands::exit_code_for(result)
+        commands::exit_code_for(result, output)
     }
 }
