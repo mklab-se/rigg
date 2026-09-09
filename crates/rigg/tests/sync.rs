@@ -89,6 +89,30 @@ async fn mock_empty_lists(server: &MockServer) {
     }
 }
 
+/// Mock empty list responses for every search kind except the named one, so
+/// a test can mount its own (possibly paginated) mocks for that kind alone.
+async fn mount_empty_lists_except(server: &MockServer, except: &str) {
+    for p in [
+        "datasources",
+        "indexes",
+        "skillsets",
+        "indexers",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        if p == except {
+            continue;
+        }
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(server)
+            .await;
+    }
+}
+
 #[tokio::test]
 async fn pull_writes_normalized_files_and_skips_volatile_noise() {
     let server = MockServer::start().await;
@@ -2856,4 +2880,52 @@ async fn knowledge_base_adopt_uses_preview_api_and_captures_retrieval_config() {
     assert_eq!(file["outputMode"], "answerSynthesis");
     assert_eq!(file["retrievalReasoningEffort"], "minimal");
     assert_eq!(file["knowledgeSources"][0]["enableImageServing"], false);
+}
+
+// ---------------------------------------------------------------------------
+// Paging: 2026-08-01-preview list responses may carry @odata.nextLink
+// ---------------------------------------------------------------------------
+
+/// The client must follow `@odata.nextLink` verbatim across pages rather
+/// than only reading the first page's `value` array.
+#[tokio::test]
+async fn pull_follows_odata_next_link_across_pages() {
+    let server = MockServer::start().await;
+    let page2 = format!(
+        "{}/indexes?api-version={}&$skiptoken=abc",
+        server.uri(),
+        rigg_core::registry::SEARCH_STABLE_API_VERSION
+    );
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .and(query_param("$skiptoken", "abc"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"value": [{"name": "idx-b", "fields": []}]})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"value": [{"name": "idx-a", "fields": []}], "@odata.nextLink": page2}),
+        ))
+        .mount(&server)
+        .await;
+    mount_empty_lists_except(&server, "indexes").await;
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "all", "--yes"])
+        .assert()
+        .success();
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/dev/search/indexes/idx-a.json")
+            .exists()
+    );
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/dev/search/indexes/idx-b.json")
+            .exists()
+    );
 }

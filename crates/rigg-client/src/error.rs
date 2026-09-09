@@ -286,11 +286,11 @@ mod tests {
     #[test]
     fn test_from_response_with_url_403_extracts_service() {
         let body = r#"{"error": {"message": "Access denied"}}"#;
-        let err = ClientError::from_response_with_url(
-            403,
-            body,
-            Some("https://irma-prod-aisearch.search.windows.net/indexes?api-version=2024-07-01"),
+        let url = format!(
+            "https://irma-prod-aisearch.search.windows.net/indexes?api-version={}",
+            rigg_core::registry::SEARCH_STABLE_API_VERSION
         );
+        let err = ClientError::from_response_with_url(403, body, Some(&url));
         match err {
             ClientError::Forbidden {
                 service,
@@ -306,11 +306,11 @@ mod tests {
 
     #[test]
     fn test_from_response_with_url_403_empty_body() {
-        let err = ClientError::from_response_with_url(
-            403,
-            "",
-            Some("https://my-svc.search.windows.net/indexes?api-version=2024-07-01"),
+        let url = format!(
+            "https://my-svc.search.windows.net/indexes?api-version={}",
+            rigg_core::registry::SEARCH_STABLE_API_VERSION
         );
+        let err = ClientError::from_response_with_url(403, "", Some(&url));
         match err {
             ClientError::Forbidden {
                 service,

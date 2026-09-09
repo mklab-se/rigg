@@ -1255,7 +1255,10 @@ mod provider_table_tests {
         );
         assert!(
             c.url("/subscriptions", Provider::ResourcesArm)
-                .ends_with("?api-version=2022-12-01")
+                .ends_with(&format!(
+                    "?api-version={}",
+                    rigg_core::registry::ARM_RESOURCES_API_VERSION
+                ))
         );
     }
 }

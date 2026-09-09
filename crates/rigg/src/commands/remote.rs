@@ -274,6 +274,15 @@ pub fn resolve_cross_service_refs(
     resolve_walk(&search.service, body)
 }
 
+/// The knowledge base's MCP endpoint as Foundry expects it (documented form;
+/// answers synthesized on the preview api-version).
+pub fn kb_mcp_url(search_service: &str, kb: &str) -> String {
+    format!(
+        "https://{search_service}.search.windows.net/knowledgebases/{kb}/mcp?api-version={}",
+        registry::SEARCH_PREVIEW_API_VERSION
+    )
+}
+
 fn resolve_walk(search_service: &str, value: &mut Value) -> Result<()> {
     match value {
         Value::Object(map) => {
@@ -288,10 +297,7 @@ fn resolve_walk(search_service: &str, value: &mut Value) -> Result<()> {
                 // grounding. The x-rigg-ref annotation is authoritative:
                 // the URL is (re)computed for the target environment on
                 // every push, so one file set promotes across environments.
-                let mcp_url = format!(
-                    "https://{search_service}.search.windows.net/knowledgeBases('{kb}')/mcp?api-version={}",
-                    registry::SEARCH_STABLE_API_VERSION
-                );
+                let mcp_url = kb_mcp_url(search_service, &kb);
                 let field = ["server_url", "url", "endpoint"]
                     .into_iter()
                     .find(|f| map.contains_key(*f))
@@ -321,4 +327,20 @@ pub fn ensure_any_connection(remote: &Remote, project: &Project) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kb_mcp_url_uses_the_documented_form_and_preview_version() {
+        assert_eq!(
+            kb_mcp_url("mklabsrch", "regulatory-kb"),
+            format!(
+                "https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version={}",
+                rigg_core::registry::SEARCH_PREVIEW_API_VERSION
+            )
+        );
+    }
 }

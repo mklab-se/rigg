@@ -426,8 +426,13 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::Index,
         }],
         // A knowledge source's kind (azureBlob, searchIndex, ...) cannot be
-        // changed by PUT — push replaces (delete + recreate) instead.
-        immutable_fields: &["kind"],
+        // changed by PUT — push replaces (delete + recreate) instead. The
+        // managed-ingestion network access mode is likewise fixed at
+        // creation; changing it requires delete + recreate too.
+        immutable_fields: &[
+            "kind",
+            "azureBlobParameters.ingestionParameters.networkAccessMode",
+        ],
     },
     KindMeta {
         kind: ResourceKind::KnowledgeBase,
@@ -1074,7 +1079,7 @@ mod tests {
             "tools": [{
                 "type": "mcp",
                 "server_label": "kb_regulatory_kb",
-                "server_url": "https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2025-11-01-Preview",
+                "server_url": "https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp?api-version=2026-08-01-preview",
                 "project_connection_id": "kb-regulatory-kb-9kdyn"
             }]
         });
@@ -1277,6 +1282,13 @@ mod tests {
             diff,
             vec![("kind", String::new(), "searchIndex".to_string())]
         );
+    }
+
+    #[test]
+    fn knowledge_source_network_access_mode_is_immutable() {
+        let a = json!({"name": "ks", "kind": "azureBlob", "azureBlobParameters": {"ingestionParameters": {"networkAccessMode": "public"}}});
+        let b = json!({"name": "ks", "kind": "azureBlob", "azureBlobParameters": {"ingestionParameters": {"networkAccessMode": "private"}}});
+        assert!(!immutable_diff(ResourceKind::KnowledgeSource, &a, &b).is_empty());
     }
 
     #[test]

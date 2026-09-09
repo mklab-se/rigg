@@ -219,21 +219,22 @@ impl AzureSearchClient {
     /// List all resources of a given kind
     #[instrument(skip(self))]
     pub async fn list(&self, kind: ResourceKind) -> Result<Vec<Value>, ClientError> {
-        let url = self.collection_url(kind);
-        let response = self.request_with_retry(Method::GET, &url, None).await?;
-
-        match response {
-            Some(value) => {
-                // Azure returns { "value": [...] }
-                let items = value
-                    .get("value")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                Ok(items)
+        let mut url = self.collection_url(kind);
+        let mut items = Vec::new();
+        loop {
+            let Some(page) = self.request_with_retry(Method::GET, &url, None).await? else {
+                break;
+            };
+            if let Some(arr) = page.get("value").and_then(Value::as_array) {
+                items.extend(arr.iter().cloned());
             }
-            None => Ok(Vec::new()),
+            // 2026-08-01-preview pages list results; the link must be used verbatim.
+            match page.get("@odata.nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => url = next.to_string(),
+                _ => break,
+            }
         }
+        Ok(items)
     }
 
     /// Get a specific resource
