@@ -1038,6 +1038,14 @@ async fn protected_env_push_non_interactive_emits_needs_input_with_exit_6() {
     assert_eq!(doc["status"], "needs-input");
     assert_eq!(doc["questions"][0]["id"], "confirm.protected.prod");
     assert_eq!(doc["questions"][0]["kind"], "confirm-env");
+    // The plan is shown ("explain, then act") before the gate is asked —
+    // in --output json mode, prose narration (including the plan) goes to
+    // stderr so stdout stays pure JSON, but it must still appear somewhere.
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("indexes/idx"),
+        "expected the plan line for indexes/idx on stderr, got: {stderr}"
+    );
 }
 
 #[tokio::test]

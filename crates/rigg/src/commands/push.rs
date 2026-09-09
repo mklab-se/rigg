@@ -27,6 +27,7 @@ use crate::commands::{
     CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
     select_projects,
 };
+use crate::say;
 
 pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
     let ws = load_workspace()?;
@@ -76,24 +77,13 @@ async fn push_project(
     project: &Project,
     args: &PushArgs,
 ) -> Result<bool> {
-    // Protected-env gate: fires before anything else — no plan display, no
-    // local credential-fixing writes, no remote call — so a scripted caller
-    // in `--output json` mode gets nothing on stdout but the `needs-input`
-    // document, and a rejected/missing typed confirmation never leaves
-    // side effects behind. Dry runs are exempt: they mutate nothing either
-    // way, and previewing a protected env's plan without confirming is the
-    // whole point of `--dry-run`.
-    if !args.dry_run && !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
-        println!("Aborted.");
-        return Ok(false);
-    }
-
     let store = Store::new(project, &env.name);
     let remote = Remote::for_project(env, project);
     ensure_any_connection(&remote, project)?;
     let mut state = ProjectState::load(ws, &env.name, &project.name);
 
-    println!(
+    say!(
+        ctx,
         "{} project '{}' (env: {}{})",
         "Push".bold(),
         project.name.bold(),
@@ -104,7 +94,12 @@ async fn push_project(
             String::new()
         }
     );
-    remote.print_targets();
+    // `Remote::print_targets` prints straight to stdout (shared with other
+    // commands; see commands/remote.rs) — skip it in json mode so stdout
+    // stays pure for the JSON document, matching the `adopt` convention.
+    if !ctx.json() {
+        remote.print_targets();
+    }
 
     // Collect local resources.
     let local_files = store.list()?;
@@ -115,7 +110,7 @@ async fn push_project(
 
     // Leftover relink obligations from an interrupted replace (see
     // execute_replace): ks name → original knowledge-base docs.
-    let mut pending_relinks = load_pending_relinks(ws, &env.name, &project.name)?;
+    let mut pending_relinks = load_pending_relinks(ctx, ws, &env.name, &project.name)?;
 
     // Classify each against remote + baseline.
     let mut to_push: Vec<PlanItem> = Vec::new();
@@ -238,7 +233,8 @@ async fn push_project(
     }
     let print_webapi_unknown_notes = |unknown: &[ResourceRef]| {
         for r in unknown {
-            println!(
+            say!(
+                ctx,
                 "  note: {r} has a server-redacted Web API key (normal on Azure GETs, says nothing about the stored key) — if enrichment is failing, run `rigg push --refresh-credentials` to re-authorize"
             );
         }
@@ -251,6 +247,7 @@ async fn push_project(
         print_webapi_unknown_notes(&webapi_unknown);
         if !pending_relinks.is_empty() && !args.dry_run {
             finish_pending_relinks(
+                ctx,
                 &remote,
                 ws,
                 env,
@@ -261,7 +258,7 @@ async fn push_project(
             )
             .await?;
         }
-        println!("  {} everything in sync", "✓".green());
+        say!(ctx, "  {} everything in sync", "✓".green());
         return Ok(false);
     }
     let order = graph::push_order(
@@ -277,11 +274,12 @@ async fn push_project(
         } else {
             "create"
         };
-        println!("  {} {}", verb.cyan(), r);
+        say!(ctx, "  {} {}", verb.cyan(), r);
     }
     for bundle in &replaces {
         let (path, remote_val, local_val) = &bundle.diff[0];
-        println!(
+        say!(
+            ctx,
             "  {} {}   {}: {} → {}",
             "replace".magenta().bold(),
             bundle.ks,
@@ -289,27 +287,39 @@ async fn push_project(
             remote_val,
             local_val
         );
-        println!(
+        say!(
+            ctx,
             "      {} deletes the knowledge source AND its generated pipeline, then",
             "⚠".yellow()
         );
-        println!("        recreates it explicitly. The index is REBUILT from source data:");
-        println!("        this takes time, costs ingestion/embeddings, and the source is");
-        println!("        unavailable to knowledge bases until repopulated.");
+        say!(
+            ctx,
+            "        recreates it explicitly. The index is REBUILT from source data:"
+        );
+        say!(
+            ctx,
+            "        this takes time, costs ingestion/embeddings, and the source is"
+        );
+        say!(
+            ctx,
+            "        unavailable to knowledge bases until repopulated."
+        );
         if !bundle.sub.is_empty() {
             let names: Vec<String> = bundle.sub.iter().map(|(r, _)| r.to_string()).collect();
-            println!("      recreates: {}", names.join(", "));
+            say!(ctx, "      recreates: {}", names.join(", "));
         }
     }
     for r in &skipped_remote_ahead {
-        println!(
+        say!(
+            ctx,
             "  {} {} (remote changed since last sync — pull first)",
             "skip".yellow(),
             r
         );
     }
     for r in &conflicts {
-        println!(
+        say!(
+            ctx,
             "  {} {} (both local and remote changed)",
             "conflict".red().bold(),
             r
@@ -317,9 +327,10 @@ async fn push_project(
     }
     for r in &orphans {
         if args.prune {
-            println!("  {} {}", "delete".red(), r);
+            say!(ctx, "  {} {}", "delete".red(), r);
         } else {
-            println!(
+            say!(
+                ctx,
                 "  {} {} (file deleted locally; pass --prune to delete remotely)",
                 "orphan".yellow(),
                 r
@@ -350,7 +361,8 @@ async fn push_project(
         }
     }
     for r in &cred_missing {
-        println!(
+        say!(
+            ctx,
             "  {} {} has no credentials.connectionString — a created data source needs a connection (identity-based ResourceId=...)",
             "!".yellow(),
             r
@@ -379,7 +391,8 @@ async fn push_project(
         }
     }
     for (r, _) in &key_missing {
-        println!(
+        say!(
+            ctx,
             "  {} {} has a key-based cognitiveServices connection without a usable key — switch to identity-based (AIServicesByIdentity)",
             "!".yellow(),
             r
@@ -390,7 +403,8 @@ async fn push_project(
     // (redacted) key: PUTting the literal placeholder breaks enrichment for
     // every document — resolve now (Entra ID or push-time key), not then.
     for r in &webapi_missing {
-        println!(
+        say!(
+            ctx,
             "  {} {} would push a custom Web API skill with an unusable (redacted) key — authorize it first (Entra ID or push-time function key)",
             "!".yellow(),
             r
@@ -399,7 +413,7 @@ async fn push_project(
     print_webapi_unknown_notes(&webapi_unknown);
 
     if args.dry_run {
-        println!("  (dry run — nothing pushed)");
+        say!(ctx, "  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
     }
 
@@ -430,7 +444,8 @@ async fn push_project(
                             credentials::set_connection(body, &conn);
                         }
                     }
-                    println!(
+                    say!(
+                        ctx,
                         "  {} {} connection set (identity-based, no key on disk)",
                         "✓".green(),
                         r
@@ -485,7 +500,12 @@ async fn push_project(
                             credentials::set_ai_services_identity(body, &subdomain);
                         }
                     }
-                    println!("  {} {} switched to AIServicesByIdentity", "✓".green(), r);
+                    say!(
+                        ctx,
+                        "  {} {} switched to AIServicesByIdentity",
+                        "✓".green(),
+                        r
+                    );
                     fixed_credentials = true;
                     if let Some(account) = credentials::ai_services_account_name(&subdomain) {
                         credentials::print_ai_services_rbac_hint(account);
@@ -555,7 +575,8 @@ async fn push_project(
                 }
             }
             for r in &webapi_missing {
-                println!(
+                say!(
+                    ctx,
                     "  {} {} left WITHOUT Web API authorization — its enrichment will fail until fixed",
                     "!".yellow(),
                     r
@@ -578,17 +599,31 @@ async fn push_project(
     // not have yet — offer to verify/grant them right here instead of
     // hinting and letting the push run into a predictable 400.
     if fixed_credentials && ctx.interactive() {
-        println!();
+        say!(ctx,);
         if interactive::confirm_default_yes(
             "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
             ctx.no_color,
         )? && let Err(e) = crate::commands::doctor::run(ctx, true).await
         {
-            println!(
+            say!(
+                ctx,
                 "  {} auth doctor could not fix everything ({e:#}) — continuing; the push may fail until the roles exist",
                 "!".yellow()
             );
         }
+    }
+
+    // Protected-env gate: fires after the plan is built and displayed (the
+    // "explain, then act" rule — show what would happen, then ask), and
+    // before any mutating call (creates/updates below, and the --prune
+    // deletion path), and before the routine apply confirmation so a
+    // rejected/missing typed confirmation short-circuits everything that
+    // follows. Dry runs never reach here — they return above, before this
+    // point, so previewing a protected env's plan without confirming is
+    // still the whole point of `--dry-run`.
+    if !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
+        say!(ctx, "Aborted.");
+        return Ok(false);
     }
 
     if !conflicts.is_empty() && !ctx.interactive() {
@@ -605,7 +640,7 @@ async fn push_project(
                 replaces.len()
             );
             if !interactive::confirm_default_no(&prompt, ctx.no_color)? {
-                println!("  aborted");
+                say!(ctx, "  aborted");
                 return Ok(false);
             }
         } else {
@@ -622,7 +657,7 @@ async fn push_project(
         if total > 0
             && !interactive::confirm_default_no(&format!("Apply {total} change(s)?"), ctx.no_color)?
         {
-            println!("  aborted");
+            say!(ctx, "  aborted");
             return Ok(false);
         }
     } else if !ctx.yes {
@@ -635,8 +670,8 @@ async fn push_project(
     for r in &conflicts {
         let local = store.read(r)?;
         let remote_doc = remote.get(r).await?.unwrap_or(Value::Null);
-        println!();
-        println!("{} {}", "Conflict:".red().bold(), r);
+        say!(ctx,);
+        say!(ctx, "{} {}", "Conflict:".red().bold(), r);
         let diff = rigg_diff::semantic::diff(
             &normalize_for_push(r.kind, &remote_doc),
             &normalize_for_push(r.kind, &local),
@@ -674,10 +709,10 @@ async fn push_project(
             KEEP_REMOTE => {
                 store.write(r, &remote_doc)?;
                 state.set_baseline(r, &remote_doc);
-                println!("  kept remote version for {r}");
+                say!(ctx, "  kept remote version for {r}");
             }
             AI_MERGE => {
-                println!("  asking ailloy for a merge proposal...");
+                say!(ctx, "  asking ailloy for a merge proposal...");
                 match crate::commands::ai_assist::propose_merge(&r.to_string(), &local, &remote_doc)
                     .await
                 {
@@ -692,7 +727,7 @@ async fn push_project(
                             &normalize_for_push(r.kind, &proposal),
                             "name",
                         );
-                        println!("  proposal vs LOCAL:");
+                        say!(ctx, "  proposal vs LOCAL:");
                         let vs_local_labels = rigg_diff::output::SideLabels {
                             new_side: "AI proposal".to_string(),
                             old_side: "local".to_string(),
@@ -705,7 +740,7 @@ async fn push_project(
                                 &vs_local_labels
                             )
                         );
-                        println!("  proposal vs REMOTE:");
+                        say!(ctx, "  proposal vs REMOTE:");
                         let vs_remote_labels = rigg_diff::output::SideLabels {
                             new_side: "AI proposal".to_string(),
                             old_side: format!("Azure ({})", env.name),
@@ -729,13 +764,13 @@ async fn push_project(
                                 exists_remotely: true,
                             });
                         } else {
-                            println!("  discarded proposal; skipped {r}");
+                            say!(ctx, "  discarded proposal; skipped {r}");
                         }
                     }
-                    Err(e) => println!("  AI merge failed ({e}); skipped {r}"),
+                    Err(e) => say!(ctx, "  AI merge failed ({e}); skipped {r}"),
                 }
             }
-            _ => println!("  skipped {r}"),
+            _ => say!(ctx, "  skipped {r}"),
         }
     }
 
@@ -762,7 +797,7 @@ async fn push_project(
                 store.write(r, &server_doc)?;
                 state.set_baseline(r, &server_doc);
                 state.save(ws, &env.name, &project.name)?;
-                println!("  {} {}", "✓".green(), r);
+                say!(ctx, "  {} {}", "✓".green(), r);
             }
             Err(e) => {
                 state.save(ws, &env.name, &project.name)?;
@@ -792,6 +827,7 @@ async fn push_project(
     }
     if !pending_relinks.is_empty() {
         finish_pending_relinks(
+            ctx,
             &remote,
             ws,
             env,
@@ -813,7 +849,7 @@ async fn push_project(
             remote.delete(r).await?;
             state.clear_baseline(r);
             state.save(ws, &env.name, &project.name)?;
-            println!("  {} deleted {}", "✓".green(), r);
+            say!(ctx, "  {} deleted {}", "✓".green(), r);
         }
     }
 
@@ -954,7 +990,8 @@ async fn put_with_rbac_help(
         Err(e) if is_rbac_error(&e) => e,
         Err(e) => return Err(e),
     };
-    println!(
+    say!(
+        ctx,
         "  {} {} rejected for a role/permission — diagnosing via ARM...",
         "!".yellow(),
         r
@@ -963,7 +1000,7 @@ async fn put_with_rbac_help(
         Some(svc) => match diagnose_rbac(r, body, svc).await {
             Ok(d) => d,
             Err(e) => {
-                println!("  {} diagnosis unavailable ({e:#})", "!".yellow());
+                say!(ctx, "  {} diagnosis unavailable ({e:#})", "!".yellow());
                 None
             }
         },
@@ -972,13 +1009,14 @@ async fn put_with_rbac_help(
     match diagnosis {
         Some(d) if !d.missing.is_empty() => {
             for m in &d.missing {
-                println!(
+                say!(
+                    ctx,
                     "  {} missing role: '{}' on {}",
                     "✗".red(),
                     m.role_name,
                     m.scope
                 );
-                println!("      needed because {}", m.reason);
+                say!(ctx, "      needed because {}", m.reason);
             }
             if !ctx.interactive() {
                 return Err(anyhow!(CommandError::Validation(format!(
@@ -1005,20 +1043,23 @@ async fn put_with_rbac_help(
                     .with_context(|| {
                         format!("failed to assign '{}' on {}", m.role_name, m.scope)
                     })?;
-                println!("  {} granted '{}'", "✓".green(), m.role_name);
+                say!(ctx, "  {} granted '{}'", "✓".green(), m.role_name);
             }
         }
-        Some(_) => println!(
+        Some(_) => say!(
+            ctx,
             "  {} the role assignments exist — Azure is still propagating them",
             "ℹ".cyan()
         ),
-        None => println!(
+        None => say!(
+            ctx,
             "  {} could not verify role assignments — retrying in case a fresh grant is propagating",
             "!".yellow()
         ),
     }
     let (delay, attempts) = rbac_retry_tuning();
-    println!(
+    say!(
+        ctx,
         "  waiting for RBAC propagation — retrying every {delay}s for up to ~{} min (Ctrl-C is safe; re-running push resumes)",
         (delay * attempts as u64).div_ceil(60)
     );
@@ -1027,11 +1068,15 @@ async fn put_with_rbac_help(
         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         match remote.put(r, body).await {
             Ok(v) => {
-                println!("  {} access propagated (attempt {attempt})", "✓".green());
+                say!(
+                    ctx,
+                    "  {} access propagated (attempt {attempt})",
+                    "✓".green()
+                );
                 return Ok(v);
             }
             Err(e) if is_rbac_error(&e) => {
-                println!("  … not yet ({attempt}/{attempts})");
+                say!(ctx, "  … not yet ({attempt}/{attempts})");
                 last = e;
             }
             Err(e) => return Err(e),
@@ -1059,6 +1104,7 @@ fn recovery_path(ws: &Workspace, env: &str, project: &str, ks_name: &str) -> std
 /// Load leftover relink obligations (`replace-*.json`) from interrupted runs:
 /// ks name → original knowledge-base docs.
 fn load_pending_relinks(
+    ctx: &GlobalContext,
     ws: &Workspace,
     env: &str,
     project: &str,
@@ -1085,7 +1131,8 @@ fn load_pending_relinks(
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        println!(
+        say!(
+            ctx,
             "  {} found interrupted replace of knowledge-sources/{ks} — will restore {} knowledge base link(s)",
             "↻".cyan(),
             kbs.len()
@@ -1099,6 +1146,7 @@ fn load_pending_relinks(
 /// replaced knowledge source exists again. Removes each finished file.
 #[allow(clippy::too_many_arguments)]
 async fn finish_pending_relinks(
+    ctx: &GlobalContext,
     remote: &Remote,
     ws: &Workspace,
     env: &ResolvedEnv,
@@ -1111,7 +1159,8 @@ async fn finish_pending_relinks(
     for ks_name in names {
         let ks_ref = ResourceRef::new(ResourceKind::KnowledgeSource, ks_name.clone());
         if remote.get(&ks_ref).await?.is_none() {
-            println!(
+            say!(
+                ctx,
                 "  {} knowledge-sources/{ks_name} still missing remotely — push its file, then run push again to restore knowledge base links",
                 "!".yellow()
             );
@@ -1121,7 +1170,8 @@ async fn finish_pending_relinks(
         relink_knowledge_bases(remote, store, state, &kbs).await?;
         state.save(ws, &env.name, &project.name)?;
         std::fs::remove_file(recovery_path(ws, &env.name, &project.name, &ks_name)).ok();
-        println!(
+        say!(
+            ctx,
             "  {} restored {} knowledge base link(s) for knowledge-sources/{ks_name}",
             "✓".green(),
             kbs.len()
@@ -1184,7 +1234,7 @@ async fn execute_replace(
     search_service: Option<&str>,
 ) -> Result<()> {
     let ks = &bundle.ks;
-    println!("  {} {}", "replace".magenta().bold(), ks);
+    say!(ctx, "  {} {}", "replace".magenta().bold(), ks);
 
     // 1. Snapshot referencing knowledge bases — ALL of them, this project's
     // or not: the delete fails while any reference exists. Foreign ones are
@@ -1203,7 +1253,8 @@ async fn execute_replace(
                 seen.insert(name.to_string());
                 let kb_ref = ResourceRef::new(ResourceKind::KnowledgeBase, name.to_string());
                 if store.locate(&kb_ref)?.is_none() && !state.has_baseline(&kb_ref) {
-                    println!(
+                    say!(
+                        ctx,
                         "      {} temporarily unlinking foreign knowledge base '{name}' (not managed by this project) — restored afterwards",
                         "!".yellow()
                     );
@@ -1261,7 +1312,7 @@ async fn execute_replace(
         }
         let result = remote.put(&kb_ref, &unlinked).await;
         match result {
-            Ok(_) => println!("      unlinked {kb_ref}"),
+            Ok(_) => say!(ctx, "      unlinked {kb_ref}"),
             Err(e) if now_empty => {
                 // The service may reject an empty knowledgeSources list —
                 // fall back to deleting the knowledge base (restored later
@@ -1271,7 +1322,10 @@ async fn execute_replace(
                     .delete(&kb_ref)
                     .await
                     .with_context(|| step("while unlinking knowledge bases"))?;
-                println!("      deleted {kb_ref} (empty after unlink; restored afterwards)");
+                say!(
+                    ctx,
+                    "      deleted {kb_ref} (empty after unlink; restored afterwards)"
+                );
             }
             Err(e) => {
                 return Err(e.context(step("while unlinking knowledge bases")));
@@ -1290,7 +1344,7 @@ async fn execute_replace(
         state.clear_baseline(&ResourceRef::new(kind, name));
     }
     state.save(ws, &env.name, &project.name)?;
-    println!("      deleted old {ks} (generated pipeline cascaded)");
+    say!(ctx, "      deleted old {ks} (generated pipeline cascaded)");
 
     // 5. Re-create the explicit pipeline in dependency order.
     let order = graph::push_order(&bundle.sub)?;
@@ -1310,7 +1364,7 @@ async fn execute_replace(
         store.write(r, &server_doc)?;
         state.set_baseline(r, &server_doc);
         state.save(ws, &env.name, &project.name)?;
-        println!("      {} {}", "✓".green(), r);
+        say!(ctx, "      {} {}", "✓".green(), r);
     }
 
     // 6. Create the new knowledge source.
@@ -1323,7 +1377,7 @@ async fn execute_replace(
     store.write(ks, &server_doc)?;
     state.set_baseline(ks, &server_doc);
     state.save(ws, &env.name, &project.name)?;
-    println!("      {} {} (kind: searchIndex)", "✓".green(), ks);
+    say!(ctx, "      {} {} (kind: searchIndex)", "✓".green(), ks);
 
     // 7. Restore the knowledge bases exactly as snapshotted.
     relink_knowledge_bases(remote, store, state, &referencing)
@@ -1332,13 +1386,15 @@ async fn execute_replace(
     state.save(ws, &env.name, &project.name)?;
     std::fs::remove_file(&recovery).ok();
     if !referencing.is_empty() {
-        println!(
+        say!(
+            ctx,
             "      {} restored {} knowledge base link(s)",
             "✓".green(),
             referencing.len()
         );
     }
-    println!(
+    say!(
+        ctx,
         "      {} index is repopulating — knowledge bases may return thin results until the indexer finishes",
         "ℹ".cyan()
     );

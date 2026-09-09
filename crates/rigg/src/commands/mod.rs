@@ -41,6 +41,19 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 
 use crate::cli::{Cli, OutputFormat};
 
+/// Human-readable prose: stdout in text mode, stderr when `--output json`
+/// (stdout must then carry only JSON documents). Every "explain, then act"
+/// narration line — plan items, progress, notes — goes through this so a
+/// scripted `--output json` caller sees nothing on stdout but the JSON
+/// documents it asked for, while a human still sees the same narration (on
+/// stderr) as the command runs.
+#[macro_export]
+macro_rules! say {
+    ($ctx:expr, $($arg:tt)*) => {
+        if $ctx.json() { eprintln!($($arg)*) } else { println!($($arg)*) }
+    };
+}
+
 /// Standardized process exit codes (documented, stable, scriptable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitCode {

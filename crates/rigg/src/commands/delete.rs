@@ -14,6 +14,7 @@ use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
     CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
 };
+use crate::say;
 
 pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     if !args.remote {
@@ -40,14 +41,17 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
         }
     }
     if items.is_empty() {
-        println!(
+        say!(
+            ctx,
             "Nothing to delete: no remote resources found for project '{}' in environment '{}'.",
-            project.name, env.name
+            project.name,
+            env.name
         );
         return Ok(());
     }
 
-    println!(
+    say!(
+        ctx,
         "{} the following resources of project '{}' from {} (env: {}{}):",
         "DELETING".red().bold(),
         project.name.bold(),
@@ -59,25 +63,30 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
             String::new()
         }
     );
-    remote.print_targets();
+    // `Remote::print_targets` prints straight to stdout (shared with other
+    // commands; see commands/remote.rs) — skip it in json mode so stdout
+    // stays pure for the JSON document, matching the `adopt` convention.
+    if !ctx.json() {
+        remote.print_targets();
+    }
     let order = graph::delete_order(&items)?;
     for r in &order {
-        println!("  {} {}", "delete".red(), r);
+        say!(ctx, "  {} {}", "delete".red(), r);
     }
 
     // Protected-env gate: separate from, and comes before, the typed
     // project-name confirmation below (which guards against deleting the
     // wrong project, not against mutating a protected environment).
     if !confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "delete")? {
-        println!("Aborted.");
+        say!(ctx, "Aborted.");
         return Ok(());
     }
 
     if ctx.interactive() {
-        println!();
+        say!(ctx,);
         let answer = interactive::text("Type the project name to confirm:", ctx.no_color)?;
         if answer.trim() != project.name {
-            println!("aborted");
+            say!(ctx, "aborted");
             return Ok(());
         }
     } else if !ctx.yes {
@@ -90,9 +99,10 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
         remote.delete(r).await?;
         state.clear_baseline(r);
         state.save(&ws, &env.name, &project.name)?;
-        println!("  {} deleted {}", "✓".green(), r);
+        say!(ctx, "  {} deleted {}", "✓".green(), r);
     }
-    println!(
+    say!(
+        ctx,
         "{} local files kept; push the project to re-create everything",
         "i".blue()
     );
