@@ -8,13 +8,11 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 use tracing::debug;
 
-use rigg_core::registry::{self, Domain};
+use rigg_core::registry::{self, ARM_BASE_URL, Domain};
 use rigg_core::resources::ResourceKind;
 
 use crate::arm::ArmClient;
 use crate::error::ClientError;
-
-const ARM_BASE_URL: &str = "https://management.azure.com";
 
 /// Where a Foundry account lives in ARM.
 #[derive(Debug, Clone, PartialEq, Eq)]

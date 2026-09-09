@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::debug;
 
+use rigg_core::registry::{self, ARM_BASE_URL, Provider};
+
 use crate::auth::AzCliAuth;
 use crate::error::ClientError;
-
-const ARM_BASE_URL: &str = "https://management.azure.com";
 
 /// Azure Resource Manager client for subscription/service discovery
 pub struct ArmClient {
@@ -169,18 +169,6 @@ impl std::fmt::Display for StorageAccount {
     }
 }
 
-/// Storage account key
-#[derive(Debug, Clone, Deserialize)]
-struct StorageKey {
-    value: String,
-}
-
-/// Storage account key list response
-#[derive(Debug, Deserialize)]
-struct StorageKeyList {
-    keys: Vec<StorageKey>,
-}
-
 /// Azure OpenAI model deployment
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelDeployment {
@@ -292,13 +280,33 @@ impl ArmClient {
         Ok(Self { http, token })
     }
 
+    /// Create a new ARM client from an already-obtained bearer token
+    /// (tests, and callers that already hold a token).
+    pub fn with_token(token: String) -> Self {
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("reqwest client builds");
+        Self { http, token }
+    }
+
+    /// ARM URL for `path` (leading `/`) on `provider`'s pinned api-version.
+    pub fn url(&self, path: &str, provider: Provider) -> String {
+        format!(
+            "{}{}?api-version={}",
+            ARM_BASE_URL,
+            path,
+            registry::provider(provider).stable
+        )
+    }
+
     /// Read a resource's managed identity block: `GET {id}?api-version=...`.
     pub async fn get_resource_identity(
         &self,
         resource_id: &str,
-        api_version: &str,
+        provider: Provider,
     ) -> Result<Option<ResourceIdentity>, ClientError> {
-        let url = format!("{ARM_BASE_URL}{resource_id}?api-version={api_version}");
+        let url = self.url(resource_id, provider);
         let response = self
             .http
             .get(&url)
@@ -350,7 +358,11 @@ impl ArmClient {
         principal_id: &str,
     ) -> Result<Vec<String>, ClientError> {
         let url = format!(
-            "{ARM_BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=principalId%20eq%20'{principal_id}'"
+            "{}&$filter=principalId%20eq%20'{principal_id}'",
+            self.url(
+                &format!("{scope}/providers/Microsoft.Authorization/roleAssignments"),
+                Provider::AuthorizationArm
+            )
         );
         let response = self
             .http
@@ -389,8 +401,9 @@ impl ArmClient {
     ) -> Result<(), ClientError> {
         let assignment_name =
             deterministic_uuid(&format!("{scope}|{principal_id}|{role_definition_guid}"));
-        let url = format!(
-            "{ARM_BASE_URL}{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}?api-version=2022-04-01"
+        let url = self.url(
+            &format!("{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}"),
+            Provider::AuthorizationArm,
         );
         let sub = scope.split('/').nth(2).unwrap_or_default();
         let body = serde_json::json!({
@@ -422,9 +435,9 @@ impl ArmClient {
     pub async fn enable_system_identity(
         &self,
         resource_id: &str,
-        api_version: &str,
+        provider: Provider,
     ) -> Result<(), ClientError> {
-        let url = format!("{ARM_BASE_URL}{resource_id}?api-version={api_version}");
+        let url = self.url(resource_id, provider);
         let response = self
             .http
             .patch(&url)
@@ -462,7 +475,7 @@ impl ArmClient {
 
     /// List subscriptions the user has access to
     pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>, ClientError> {
-        let url = format!("{}/subscriptions?api-version=2022-12-01", ARM_BASE_URL);
+        let url = self.url("/subscriptions", Provider::ResourcesArm);
         debug!("Listing subscriptions: {}", url);
 
         let response = self
@@ -492,9 +505,9 @@ impl ArmClient {
         &self,
         subscription_id: &str,
     ) -> Result<Vec<SearchService>, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/providers/Microsoft.Search/searchServices?api-version=2023-11-01",
-            ARM_BASE_URL, subscription_id
+        let url = self.url(
+            &format!("/subscriptions/{subscription_id}/providers/Microsoft.Search/searchServices"),
+            Provider::SearchArm,
         );
         debug!("Listing search services: {}", url);
 
@@ -547,9 +560,11 @@ impl ArmClient {
         &self,
         subscription_id: &str,
     ) -> Result<Vec<AiServicesAccount>, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01",
-            ARM_BASE_URL, subscription_id
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/providers/Microsoft.CognitiveServices/accounts"
+            ),
+            Provider::CognitiveServicesArm,
         );
         debug!("Listing AI Services accounts: {}", url);
 
@@ -609,9 +624,11 @@ impl ArmClient {
         &self,
         subscription_id: &str,
     ) -> Result<Vec<AiServicesAccount>, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01",
-            ARM_BASE_URL, subscription_id
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/providers/Microsoft.CognitiveServices/accounts"
+            ),
+            Provider::CognitiveServicesArm,
         );
         let response = self
             .http
@@ -646,9 +663,12 @@ impl ArmClient {
     pub async fn list_web_sites(&self) -> Result<Vec<String>, ClientError> {
         let mut out: Vec<String> = Vec::new();
         for sub in self.list_subscriptions().await? {
-            let url = format!(
-                "{}/subscriptions/{}/providers/Microsoft.Web/sites?api-version=2023-12-01",
-                ARM_BASE_URL, sub.subscription_id
+            let url = self.url(
+                &format!(
+                    "/subscriptions/{}/providers/Microsoft.Web/sites",
+                    sub.subscription_id
+                ),
+                Provider::WebArm,
             );
             let response = self
                 .http
@@ -675,9 +695,12 @@ impl ArmClient {
     /// all visible subscriptions; returns its ARM resource id.
     pub async fn find_web_site_id(&self, name: &str) -> Result<String, ClientError> {
         for sub in self.list_subscriptions().await? {
-            let url = format!(
-                "{}/subscriptions/{}/providers/Microsoft.Web/sites?api-version=2023-12-01",
-                ARM_BASE_URL, sub.subscription_id
+            let url = self.url(
+                &format!(
+                    "/subscriptions/{}/providers/Microsoft.Web/sites",
+                    sub.subscription_id
+                ),
+                Provider::WebArm,
             );
             let response = self
                 .http
@@ -715,8 +738,9 @@ impl ArmClient {
         site_id: &str,
         function_name: &str,
     ) -> Result<String, ClientError> {
-        let url = format!(
-            "{ARM_BASE_URL}{site_id}/functions/{function_name}/listkeys?api-version=2023-12-01"
+        let url = self.url(
+            &format!("{site_id}/functions/{function_name}/listkeys"),
+            Provider::WebArm,
         );
         let response = self
             .http
@@ -735,7 +759,10 @@ impl ArmClient {
             }
         }
         // Fallback: host-level function keys.
-        let url = format!("{ARM_BASE_URL}{site_id}/host/default/listkeys?api-version=2023-12-01");
+        let url = self.url(
+            &format!("{site_id}/host/default/listkeys"),
+            Provider::WebArm,
+        );
         let response = self
             .http
             .post(&url)
@@ -761,8 +788,28 @@ impl ArmClient {
 
     /// The site's Easy Auth (authSettingsV2) configuration.
     pub async fn site_auth_settings(&self, site_id: &str) -> Result<Value, ClientError> {
-        let url =
-            format!("{ARM_BASE_URL}{site_id}/config/authsettingsV2/list?api-version=2023-12-01");
+        let url = self.url(
+            &format!("{site_id}/config/authsettingsV2/list"),
+            Provider::WebArm,
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Site configuration (`ipSecurityRestrictions`, `publicNetworkAccess`, …):
+    /// not returned by `GET sites/{name}`; lives under `config/web`.
+    pub async fn site_config(&self, site_id: &str) -> Result<Value, ClientError> {
+        let url = self.url(&format!("{site_id}/config/web"), Provider::WebArm);
         let response = self
             .http
             .get(&url)
@@ -794,9 +841,12 @@ impl ArmClient {
             message: format!("Could not parse resource group from ARM ID: {}", account.id),
         })?;
 
-        let url = format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}/projects?api-version=2025-06-01",
-            ARM_BASE_URL, subscription_id, resource_group, account.name
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.CognitiveServices/accounts/{}/projects",
+                account.name
+            ),
+            Provider::CognitiveServicesArm,
         );
         debug!("Listing Foundry projects: {}", url);
 
@@ -823,9 +873,11 @@ impl ArmClient {
         subscription_id: &str,
         resource_group: &str,
     ) -> Result<Vec<StorageAccount>, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01",
-            ARM_BASE_URL, subscription_id, resource_group
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Storage/storageAccounts"
+            ),
+            Provider::StorageArm,
         );
         debug!("Listing storage accounts: {}", url);
 
@@ -851,9 +903,11 @@ impl ArmClient {
         &self,
         subscription_id: &str,
     ) -> Result<Vec<StorageAccount>, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/providers/Microsoft.Storage/storageAccounts?api-version=2023-05-01",
-            ARM_BASE_URL, subscription_id
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/providers/Microsoft.Storage/storageAccounts"
+            ),
+            Provider::StorageArm,
         );
         debug!("Listing storage accounts (subscription-wide): {}", url);
 
@@ -882,8 +936,9 @@ impl ArmClient {
         account_id: &str,
         container: &str,
     ) -> Result<bool, ClientError> {
-        let url = format!(
-            "{ARM_BASE_URL}{account_id}/blobServices/default/containers/{container}?api-version=2023-05-01"
+        let url = self.url(
+            &format!("{account_id}/blobServices/default/containers/{container}"),
+            Provider::StorageArm,
         );
         debug!("Checking container: {}", url);
 
@@ -946,45 +1001,6 @@ impl ArmClient {
         Ok(matches)
     }
 
-    /// Get the primary access key for a storage account.
-    pub async fn get_storage_account_key(
-        &self,
-        subscription_id: &str,
-        resource_group: &str,
-        account_name: &str,
-    ) -> Result<String, ClientError> {
-        let url = format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}/listKeys?api-version=2023-05-01",
-            ARM_BASE_URL, subscription_id, resource_group, account_name
-        );
-        debug!("Getting storage account keys: {}", url);
-
-        let response = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Content-Length", "0")
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await?;
-            return Err(ClientError::from_response(status.as_u16(), &body));
-        }
-
-        let key_list: StorageKeyList = response.json().await?;
-        key_list
-            .keys
-            .into_iter()
-            .next()
-            .map(|k| k.value)
-            .ok_or_else(|| ClientError::Api {
-                status: 0,
-                message: "No keys found for storage account".to_string(),
-            })
-    }
-
     /// List model deployments for an AI Services account.
     pub async fn list_model_deployments(
         &self,
@@ -996,9 +1012,12 @@ impl ArmClient {
             message: format!("Could not parse resource group from ARM ID: {}", account.id),
         })?;
 
-        let url = format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}/deployments?api-version=2024-10-01",
-            ARM_BASE_URL, subscription_id, resource_group, account.name
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.CognitiveServices/accounts/{}/deployments",
+                account.name
+            ),
+            Provider::CognitiveServicesArm,
         );
         debug!("Listing model deployments: {}", url);
 
@@ -1033,9 +1052,12 @@ impl ArmClient {
             message: format!("Could not parse resource group from ARM ID: {}", account.id),
         })?;
 
-        let url = format!(
-            "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}/deployments/{}?api-version=2024-10-01",
-            ARM_BASE_URL, subscription_id, resource_group, account.name, deployment_name
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.CognitiveServices/accounts/{}/deployments/{deployment_name}",
+                account.name
+            ),
+            Provider::CognitiveServicesArm,
         );
         debug!("Creating model deployment: {}", url);
 
@@ -1068,23 +1090,6 @@ impl ArmClient {
         }
 
         Ok(())
-    }
-
-    /// Build a full connection string for a storage account.
-    pub async fn get_storage_connection_string(
-        &self,
-        subscription_id: &str,
-        resource_group: &str,
-        account_name: &str,
-    ) -> Result<String, ClientError> {
-        let key = self
-            .get_storage_account_key(subscription_id, resource_group, account_name)
-            .await?;
-
-        Ok(format!(
-            "DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net",
-            account_name, key
-        ))
     }
 }
 
@@ -1227,6 +1232,31 @@ mod tests {
         };
         assert_eq!(project.display_name(), "proj-default");
         assert_eq!(format!("{}", project), "proj-default (swedencentral)");
+    }
+}
+
+#[cfg(test)]
+mod provider_table_tests {
+    use super::*;
+
+    #[test]
+    fn arm_urls_come_from_the_provider_table() {
+        use rigg_core::registry::{Provider, provider};
+        let c = ArmClient::with_token("t".to_string());
+        assert_eq!(
+            c.url(
+                "/subscriptions/s/providers/Microsoft.Search/searchServices",
+                Provider::SearchArm
+            ),
+            format!(
+                "https://management.azure.com/subscriptions/s/providers/Microsoft.Search/searchServices?api-version={}",
+                provider(Provider::SearchArm).stable
+            )
+        );
+        assert!(
+            c.url("/subscriptions", Provider::ResourcesArm)
+                .ends_with("?api-version=2022-12-01")
+        );
     }
 }
 

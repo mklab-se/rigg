@@ -7,11 +7,9 @@ use colored::Colorize;
 use rigg_client::arm::ArmClient;
 use rigg_client::arm_resources::resolve_account_scope;
 use rigg_core::identity::{EdgeKind, IdentityEdge, Principal, identity_edges};
+use rigg_core::registry::Provider;
 
 use crate::commands::{GlobalContext, load_workspace, resolve_env};
-
-const SEARCH_ARM_API: &str = "2023-11-01";
-const COGNITIVE_ARM_API: &str = rigg_core::registry::ARM_COGNITIVE_API_VERSION;
 
 pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
     let ws = load_workspace()?;
@@ -42,7 +40,7 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
     let mut search_service_id = None;
     if let Some(conn) = search_conn {
         let id = arm.find_search_service_id(&conn.service).await?;
-        search_identity = arm.get_resource_identity(&id, SEARCH_ARM_API).await?;
+        search_identity = arm.get_resource_identity(&id, Provider::SearchArm).await?;
         search_service_id = Some(id);
     }
     let mut foundry_identity = None;
@@ -56,7 +54,7 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
         );
         let project_id = format!("{account_id}/projects/{}", conn.project);
         foundry_identity = arm
-            .get_resource_identity(&project_id, COGNITIVE_ARM_API)
+            .get_resource_identity(&project_id, Provider::CognitiveServicesArm)
             .await
             .ok()
             .flatten();
@@ -76,7 +74,7 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
                     .map(|c| format!("search service '{}'", c.service))
                     .unwrap_or_else(|| "search service (no connection configured)".into()),
                 search_service_id.clone(),
-                SEARCH_ARM_API,
+                Provider::SearchArm,
             ),
             Principal::FoundryProject => (
                 foundry_identity.as_ref(),
@@ -84,7 +82,7 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
                     .map(|c| format!("foundry project '{}/{}'", c.account, c.project))
                     .unwrap_or_else(|| "foundry project (no connection configured)".into()),
                 foundry_project_id.clone(),
-                COGNITIVE_ARM_API,
+                Provider::CognitiveServicesArm,
             ),
         };
         let mut scope = edge.scope.clone().or_else(|| {

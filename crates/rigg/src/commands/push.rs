@@ -859,8 +859,6 @@ struct RbacDiagnosis {
     missing: Vec<MissingRole>,
 }
 
-const SEARCH_ARM_API: &str = "2023-11-01";
-
 /// Which search-service roles `body` requires but the identity lacks —
 /// resolved live through ARM. `Ok(None)` when the document has no
 /// RBAC-verifiable edges (nothing to diagnose).
@@ -880,7 +878,7 @@ async fn diagnose_rbac(
     let arm = rigg_client::arm::ArmClient::new()?;
     let service_id = arm.find_search_service_id(search_service).await?;
     let identity = arm
-        .get_resource_identity(&service_id, SEARCH_ARM_API)
+        .get_resource_identity(&service_id, registry::Provider::SearchArm)
         .await?;
     let principals: Vec<String> = identity
         .map(|i| i.principal_ids().iter().map(|s| s.to_string()).collect())
