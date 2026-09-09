@@ -1,24 +1,26 @@
 //! Question protocol: the shared shape guided flows use to ask for input,
-//! either interactively (Task 2's `interactive` wrappers) or scripted via
-//! `--answer` / `--answers-file` (this task).
+//! either interactively ([`InteractiveAsker`], backed by the `interactive`
+//! wrappers) or scripted via `--answer` / `--answers-file`
+//! ([`ScriptedAsker`]).
 //!
 //! A command that needs input builds one or more [`Question`]s and asks an
 //! [`Asker`] for answers. In a script/agent context, [`ScriptedAsker`]
 //! answers from a pre-supplied map and, when something is missing, returns
 //! [`NeedsInput`] — a structured error the CLI turns into a `needs-input`
 //! JSON document on stdout and exit code 6, so a caller can answer the
-//! missing questions and re-run.
+//! missing questions and re-run. Interactively, [`InteractiveAsker`] prefers
+//! the same pre-supplied answers and only prompts for what's left.
 //!
-//! This module lays the primitives down; the interactive `Asker` and the
-//! guided flows that build `Question`s live in follow-up tasks, so several
-//! items here have no caller yet outside tests.
-#![allow(dead_code)]
+//! The guided flows that build `Question`s beyond the protected-environment
+//! gate live in follow-up tasks.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
+
+use super::interactive;
 
 /// Id prefixes every `--answer <id>=<value>` is validated against at
 /// startup. Later tasks and workstreams append their own prefixes
@@ -27,8 +29,11 @@ pub const KNOWN_ID_PREFIXES: &[&str] = &["confirm.protected."];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionKind {
+    #[allow(dead_code)] // wired into choice questions by guided flows in follow-up tasks
     Choice,
+    #[allow(dead_code)] // wired into text questions by guided flows in follow-up tasks
     Text,
+    #[allow(dead_code)] // wired into confirm questions by guided flows in follow-up tasks
     Confirm,
     ConfirmEnv,
 }
@@ -61,6 +66,7 @@ pub struct Question {
 }
 
 impl Question {
+    #[allow(dead_code)] // wired into choice-question guided flows in follow-up tasks
     pub fn choice(
         id: impl Into<String>,
         prompt: impl Into<String>,
@@ -76,6 +82,7 @@ impl Question {
         }
     }
 
+    #[allow(dead_code)] // wired into text-question guided flows in follow-up tasks
     pub fn text(id: impl Into<String>, prompt: impl Into<String>) -> Self {
         Question {
             id: id.into(),
@@ -87,6 +94,7 @@ impl Question {
         }
     }
 
+    #[allow(dead_code)] // wired into confirm-question guided flows in follow-up tasks
     pub fn confirm(id: impl Into<String>, prompt: impl Into<String>, default_yes: bool) -> Self {
         Question {
             id: id.into(),
@@ -113,11 +121,13 @@ impl Question {
         }
     }
 
+    #[allow(dead_code)] // wired into guided flows that offer a defaulted text answer in follow-up tasks
     pub fn with_default(mut self, d: impl Into<String>) -> Self {
         self.default = Some(d.into());
         self
     }
 
+    #[allow(dead_code)] // wired into guided flows that offer a free-form choice in follow-up tasks
     pub fn allow_other(mut self) -> Self {
         self.allow_other = true;
         self
@@ -160,6 +170,7 @@ pub enum Answer {
 }
 
 impl Answer {
+    #[allow(dead_code)] // read by choice/text-question guided flows in follow-up tasks
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Answer::Choice(s) | Answer::Text(s) => Some(s.as_str()),
@@ -177,6 +188,7 @@ impl Answer {
 
 pub trait Asker {
     fn ask(&mut self, q: &Question) -> Result<Answer>;
+    #[allow(dead_code)] // batch asking for multi-question guided flows in follow-up tasks; confirm_protected_env asks one question at a time
     fn ask_all(&mut self, qs: &[Question]) -> Result<Vec<Answer>>;
 }
 
@@ -233,6 +245,83 @@ impl Asker for ScriptedAsker {
             return Err(self.needs_input(missing));
         }
         Ok(answers)
+    }
+}
+
+/// Answers [`Question`]s interactively via the `inquire`-backed wrappers in
+/// [`super::interactive`], preferring any pre-supplied answer (`--answer` /
+/// `--answers-file`, or `confirm_protected_env`'s `--confirm-env` sugar) so
+/// a caller never gets prompted for something it already told us.
+pub struct InteractiveAsker {
+    answers: BTreeMap<String, String>,
+    plain: bool,
+}
+
+impl InteractiveAsker {
+    pub fn new(answers: BTreeMap<String, String>, plain: bool) -> Self {
+        InteractiveAsker { answers, plain }
+    }
+}
+
+/// Row appended to a `Choice` question's options when it `allow_other`s a
+/// free-form value; picking it falls through to a text prompt.
+const ENTER_ANOTHER_VALUE: &str = "enter another value";
+
+impl Asker for InteractiveAsker {
+    fn ask(&mut self, q: &Question) -> Result<Answer> {
+        if let Some(raw) = self.answers.get(&q.id) {
+            return coerce(q, raw);
+        }
+        match q.kind {
+            QuestionKind::Choice => {
+                let mut labels: Vec<String> =
+                    q.candidates.iter().map(|c| c.label.clone()).collect();
+                if q.allow_other {
+                    labels.push(ENTER_ANOTHER_VALUE.to_string());
+                }
+                let picked = interactive::select(&q.prompt, labels, self.plain)?;
+                if q.allow_other && picked == ENTER_ANOTHER_VALUE {
+                    Ok(Answer::Choice(interactive::text(&q.prompt, self.plain)?))
+                } else {
+                    let value = q
+                        .candidates
+                        .iter()
+                        .find(|c| c.label == picked)
+                        .map(|c| c.value.clone())
+                        .unwrap_or(picked);
+                    Ok(Answer::Choice(value))
+                }
+            }
+            QuestionKind::Text => {
+                let raw = match &q.default {
+                    Some(default) => {
+                        interactive::text_with_default(&q.prompt, default, self.plain)?
+                    }
+                    None => interactive::text(&q.prompt, self.plain)?,
+                };
+                Ok(Answer::Text(raw))
+            }
+            QuestionKind::Confirm => {
+                let default_yes = q.default.as_deref() == Some("yes");
+                let answered = if default_yes {
+                    interactive::confirm_default_yes(&q.prompt, self.plain)?
+                } else {
+                    interactive::confirm_default_no(&q.prompt, self.plain)?
+                };
+                Ok(Answer::Confirm(answered))
+            }
+            QuestionKind::ConfirmEnv => {
+                let env =
+                    q.id.strip_prefix("confirm.protected.")
+                        .unwrap_or(q.id.as_str());
+                let raw = interactive::text(&q.prompt, self.plain)?;
+                Ok(Answer::Confirm(raw.trim() == env))
+            }
+        }
+    }
+
+    fn ask_all(&mut self, qs: &[Question]) -> Result<Vec<Answer>> {
+        qs.iter().map(|q| self.ask(q)).collect()
     }
 }
 
@@ -399,6 +488,20 @@ mod tests {
         assert_eq!(e.id, "confirm.protected.prod");
         assert!(coerce(&e, "prd").is_err());
         assert_eq!(coerce(&e, "prod").unwrap().as_bool(), Some(true));
+    }
+
+    #[test]
+    fn interactive_asker_uses_presupplied_answers_without_prompting() {
+        // No TTY in tests: a prompt would fail. A pre-supplied answer must
+        // short-circuit before any `interactive::*` call is made.
+        let mut a = InteractiveAsker::new(
+            [("confirm.protected.prod".to_string(), "prod".to_string())]
+                .into_iter()
+                .collect(),
+            true,
+        );
+        let q = Question::confirm_env("prod", "push");
+        assert_eq!(a.ask(&q).unwrap().as_bool(), Some(true));
     }
 
     #[test]

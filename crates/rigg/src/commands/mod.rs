@@ -183,9 +183,23 @@ impl GlobalContext {
 
     /// A `ScriptedAsker` pre-loaded with this invocation's `--answer` /
     /// `--answers-file` answers, for a command that needs to ask questions.
-    #[allow(dead_code)] // wired into individual commands in follow-up tasks
     pub fn scripted_asker(&self, command: &str, context: serde_json::Value) -> ask::ScriptedAsker {
         ask::ScriptedAsker::new(self.answers.clone(), command, context)
+    }
+
+    /// The `Asker` a command should use to ask `Question`s: interactive when
+    /// this invocation may prompt ([`Self::interactive`]), otherwise scripted
+    /// from `--answer` / `--answers-file`, returning `NeedsInput` (exit 6)
+    /// for anything still missing.
+    pub fn asker(&self, command: &str, context: serde_json::Value) -> Box<dyn ask::Asker> {
+        if self.interactive() {
+            Box::new(ask::InteractiveAsker::new(
+                self.answers.clone(),
+                self.no_color,
+            ))
+        } else {
+            Box::new(self.scripted_asker(command, context))
+        }
     }
 }
 
@@ -302,29 +316,36 @@ pub fn resolve_env_or_choose(
 }
 
 /// Gate a cloud-mutating operation (`push` apply/`--prune`, `delete
-/// --remote`) against an environment's `policy.protected` flag.
+/// --remote`) against an environment's `policy.protected` flag, speaking the
+/// question protocol: the gate is an `ask::Question::confirm_env` put to
+/// `ctx.asker()`, so it composes with `--answer` / `--answers-file` and
+/// `--yes` like any other question.
 ///
 /// Returns `Ok(true)` when the operation may proceed, `Ok(false)` when the
-/// user declined (interactive typed-name mismatch) — callers should print
-/// "Aborted." and return `Ok(())`, matching every other decline in the CLI
-/// (e.g. answering `n` to "Apply N change(s)?"). Only a genuine usage
-/// problem (missing `--confirm-env` non-interactively) is an `Err`, since
-/// that is a caller mistake rather than a considered "no".
+/// user declined (interactive typed-name mismatch, or a mismatched answer)
+/// — callers should print "Aborted." and return `Ok(())`, matching every
+/// other decline in the CLI (e.g. answering `n` to "Apply N change(s)?").
 ///
 /// No-op (`Ok(true)`) when the environment is unprotected. Otherwise:
-/// - `--confirm-env <name>` matching the environment name exactly → `Ok(true)`.
+/// - `--confirm-env <name>` is pre-supplied to the asker as the answer to
+///   `confirm.protected.<env>`, so it matches the environment name exactly
+///   the same way a typed confirmation or `--answer` would.
 /// - Interactive session → prompts the user to type the environment name;
 ///   a mismatch → `Ok(false)`.
-/// - Non-interactive session → `Err(CommandError::Usage)` (exit 2) naming
-///   the required `--confirm-env` flag.
+/// - Non-interactive session (incl. `--yes`) with no answer → the scripted
+///   asker returns `NeedsInput`, which propagates as `Err` and maps to exit
+///   code 6 — the caller answers with `--confirm-env` / `--answer` and
+///   re-runs.
 ///
 /// `ctx.yes` (`--yes`) is deliberately **not** consulted: `--yes` exists to
 /// skip the routine "apply N changes?" prompt, and scripts/agents reach for
 /// it reflexively. If it also satisfied this gate, a protected environment
 /// would be no safer than an unprotected one the moment someone habitually
 /// pipes `-y` into their commands. Protection must be opted into explicitly,
-/// per invocation, via a typed name (interactive) or `--confirm-env`
-/// (non-interactive) — never implied by a blanket "yes to everything" flag.
+/// per invocation, via a typed name (interactive) or `--confirm-env` /
+/// `--answer` (non-interactive) — never implied by a blanket "yes to
+/// everything" flag. `--yes` makes the session non-interactive
+/// ([`GlobalContext::interactive`]), so the scripted asker runs regardless.
 pub fn confirm_protected_env(
     ctx: &GlobalContext,
     env: &ResolvedEnv,
@@ -334,23 +355,13 @@ pub fn confirm_protected_env(
     if !env.protected() {
         return Ok(true);
     }
-    if confirm_env == Some(env.name.as_str()) {
-        return Ok(true);
+    let question = ask::Question::confirm_env(&env.name, operation);
+    let mut scoped = ctx.clone();
+    if let Some(name) = confirm_env {
+        scoped.answers.insert(question.id.clone(), name.to_string());
     }
-    if ctx.non_interactive {
-        return Err(anyhow!(CommandError::Usage(format!(
-            "environment '{}' is protected: pass --confirm-env {} to proceed",
-            env.name, env.name
-        ))));
-    }
-    let answer = interactive::text(
-        &format!(
-            "Environment '{}' is protected. Type its name to confirm {}:",
-            env.name, operation
-        ),
-        ctx.no_color,
-    )?;
-    Ok(answer.trim() == env.name)
+    let mut asker = scoped.asker(operation, serde_json::json!({"env": env.name}));
+    Ok(asker.ask(&question)?.as_bool().unwrap_or(false))
 }
 
 #[cfg(test)]

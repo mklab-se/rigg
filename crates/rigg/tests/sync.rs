@@ -1001,8 +1001,8 @@ async fn protected_env_push_blocks_non_interactive_without_confirm_env() {
     rigg(ws.path())
         .args(["push", "demo", "-e", "prod", "--yes"])
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains("--confirm-env prod"));
+        .code(6)
+        .stderr(predicate::str::contains("confirm.protected.prod"));
 
     let puts = server
         .received_requests()
@@ -1015,6 +1015,69 @@ async fn protected_env_push_blocks_non_interactive_without_confirm_env() {
         puts, 0,
         "protected env must not be mutated without confirmation"
     );
+}
+
+#[tokio::test]
+async fn protected_env_push_non_interactive_emits_needs_input_with_exit_6() {
+    let server = MockServer::start().await;
+    mount_empty_lists_except(&server, "").await;
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": []}),
+    );
+    let out = rigg(ws.path())
+        .args(["push", "demo", "-e", "prod", "--yes", "--output", "json"])
+        .assert()
+        .code(6);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["status"], "needs-input");
+    assert_eq!(doc["questions"][0]["id"], "confirm.protected.prod");
+    assert_eq!(doc["questions"][0]["kind"], "confirm-env");
+}
+
+#[tokio::test]
+async fn protected_env_push_accepts_answer_flag() {
+    let server = MockServer::start().await;
+    mount_empty_lists_except(&server, "").await;
+    Mock::given(method("PUT"))
+        .and(path("/indexes/idx"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(json!({"name": "idx", "fields": []})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"name": "idx", "fields": []})),
+        )
+        .mount(&server)
+        .await;
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": []}),
+    );
+    rigg(ws.path())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "prod",
+            "--yes",
+            "--answer",
+            "confirm.protected.prod=prod",
+        ])
+        .assert()
+        .success();
 }
 
 #[tokio::test]
@@ -1133,8 +1196,8 @@ async fn protected_env_delete_blocks_non_interactive_without_confirm_env() {
     rigg(ws.path())
         .args(["delete", "demo", "--remote", "-e", "prod", "--yes"])
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains("--confirm-env prod"));
+        .code(6)
+        .stderr(predicate::str::contains("confirm.protected.prod"));
 
     let deletes = server
         .received_requests()

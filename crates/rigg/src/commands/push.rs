@@ -76,6 +76,18 @@ async fn push_project(
     project: &Project,
     args: &PushArgs,
 ) -> Result<bool> {
+    // Protected-env gate: fires before anything else — no plan display, no
+    // local credential-fixing writes, no remote call — so a scripted caller
+    // in `--output json` mode gets nothing on stdout but the `needs-input`
+    // document, and a rejected/missing typed confirmation never leaves
+    // side effects behind. Dry runs are exempt: they mutate nothing either
+    // way, and previewing a protected env's plan without confirming is the
+    // whole point of `--dry-run`.
+    if !args.dry_run && !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
+        println!("Aborted.");
+        return Ok(false);
+    }
+
     let store = Store::new(project, &env.name);
     let remote = Remote::for_project(env, project);
     ensure_any_connection(&remote, project)?;
@@ -577,15 +589,6 @@ async fn push_project(
                 "!".yellow()
             );
         }
-    }
-
-    // Protected-env gate: fires before any mutating call (creates/updates
-    // below, and the --prune deletion path), and before the routine apply
-    // confirmation so a rejected/missing typed confirmation short-circuits
-    // everything that follows.
-    if !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
-        println!("Aborted.");
-        return Ok(false);
     }
 
     if !conflicts.is_empty() && !ctx.interactive() {
