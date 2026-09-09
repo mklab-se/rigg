@@ -17,6 +17,11 @@ pub struct SchemaFixture {
 impl SchemaFixture {
     fn parse(provider: &'static str, version: &'static str, text: &str) -> Self {
         let v: Value = serde_json::from_str(text).expect("fixture is valid JSON");
+        assert_eq!(
+            v["version"].as_str(),
+            Some(version),
+            "schema fixture for {provider} is stale: regenerate with `rigg dev api-fixture`"
+        );
         let definitions = v["definitions"]
             .as_object()
             .expect("definitions")
@@ -79,7 +84,22 @@ pub fn fixture_for(kind: ResourceKind) -> &'static SchemaFixture {
 
 /// Top-level keys of `doc` that the pinned schema does not declare for
 /// `kind`. Empty for kinds without a fixture definition (agents).
+///
+/// This canary is Search-only for now: the `schema_definition` values kept
+/// for the Foundry ARM kinds (`Deployment`, `Connection`, `Guardrail`) name
+/// sub-objects of the ARM resource envelope (e.g. `Deployment`'s OpenAPI
+/// definition describes the resource body under `properties`, not the
+/// envelope itself), and one-level `allOf` resolution never reaches the
+/// shared `common-types` definitions that actually contribute `id`, `name`,
+/// `type`, and `systemData` (plus `properties` for connections). Comparing
+/// those envelopes against the sub-object fixture would always flag them as
+/// unknown, so this function is a no-op outside `Domain::Search` — the
+/// `schema_definition` values for the Foundry kinds are kept only because
+/// `api-diff` still uses them.
 pub fn unknown_top_level_fields(kind: ResourceKind, doc: &Value) -> Vec<String> {
+    if registry::meta(kind).domain != registry::Domain::Search {
+        return Vec::new();
+    }
     let name = registry::meta(kind).schema_definition;
     if name.is_empty() {
         return Vec::new();
@@ -265,6 +285,22 @@ mod tests {
             json!({"name": "kb", "knowledgeSources": [], "retrievalMode": "x", "@odata.etag": "e"});
         let unknown = unknown_top_level_fields(ResourceKind::KnowledgeBase, &doc);
         assert_eq!(unknown, vec!["retrievalMode"]);
+    }
+
+    #[test]
+    fn unknown_fields_is_search_only_and_never_flags_foundry_arm_envelope_fields() {
+        for kind in [
+            ResourceKind::Deployment,
+            ResourceKind::Connection,
+            ResourceKind::Guardrail,
+        ] {
+            let doc = crate::scaffold::scaffold(kind, "d", None).unwrap();
+            assert_eq!(
+                unknown_top_level_fields(kind, &doc),
+                Vec::<String>::new(),
+                "{kind:?}: canary must be a no-op outside Search"
+            );
+        }
     }
 
     #[test]
