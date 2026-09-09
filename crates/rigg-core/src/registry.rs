@@ -223,10 +223,9 @@ static PROVIDERS: &[ProviderMeta] = &[
         stable: ARM_RESOURCES_API_VERSION,
         preview: None,
         audience: "https://management.azure.com",
-        // No spec-currency check and no ArmRegistration: this is the
-        // registration API itself (`provider_api_versions` calls through
-        // it), so there is nothing else to compare it against.
-        spec_path: None,
+        spec_path: Some(
+            "specification/resources/resource-manager/Microsoft.Resources/subscriptions/stable",
+        ),
         preview_spec_path: None,
         route_versioned: false,
         arm: None,
@@ -1650,6 +1649,10 @@ mod tests {
     fn every_arm_provider_declares_its_registration() {
         for m in providers() {
             if m.audience == "https://management.azure.com" && m.spec_path.is_some() {
+                // Microsoft.Resources is the provider-registration API itself and has no resource type to look up.
+                if m.provider == Provider::ResourcesArm {
+                    continue;
+                }
                 assert!(m.arm.is_some(), "{} lacks ArmRegistration", m.label);
             }
         }
