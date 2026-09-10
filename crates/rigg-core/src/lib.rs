@@ -6,6 +6,7 @@
 //! - JSON normalization
 //! - Constraint validation
 
+pub mod binding;
 pub mod graph;
 pub mod identity;
 pub mod migrate;
