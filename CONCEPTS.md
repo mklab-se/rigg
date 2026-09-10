@@ -79,20 +79,33 @@ knowledge source; Azure manages what it generates.
 
 ## Environments
 
-An **environment** is a named Azure target — which Azure AI Search service,
-which Microsoft Foundry account/project — plus an optional **policy**.
-Environments are declared under `environments:` in `rigg.yaml`:
+An **environment** is **targets + dependencies + policy**: which Azure AI
+Search service and Microsoft Foundry account/project it points at, which
+other pieces of Azure infrastructure its resources are allowed to reference,
+and how carefully rigg must treat mutations against it. Environments are
+declared under `environments:` in `rigg.yaml`:
 
 ```yaml
 environments:
   dev:
     default: true
-    search: { service: my-search-dev }
+    tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47        # optional: az login's default tenant
+    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a  # optional: discovery scope
+    search:  { service: my-search-dev }
     foundry: { account: my-foundry, project: my-project-dev }
+    policy:  { protected: false }
+    dependencies:
+      docs-storage: { storage: my-storage-dev }
+      enrich-fn:    { function-app: my-enrich-fn-dev }
   prod:
-    policy: { protected: true }
-    search: { service: my-search-prod }
+    tenant: 9a3c…                                       # a different tenant is allowed
+    subscription: 0b1d…
+    search:  { service: my-search-prod }
     foundry: { account: my-foundry, project: my-project-prod }
+    policy:  { protected: true }
+    dependencies:
+      docs-storage: { storage: my-storage-prod }
+      enrich-fn:    { function-app: my-enrich-fn }        # same name in both ⇒ shared
 ```
 
 Every project keeps a **separate resource tree per environment**, rooted at
@@ -101,6 +114,16 @@ genuinely diverge — different field mappings while you're testing, different
 agent instructions before a rollout — and a full tree, rather than a shared
 file with overlay patches, makes that divergence something you can see and
 diff instead of logic hidden behind a merge step.
+
+- **Targets** — exactly one `search` and one `foundry` per environment
+  (either may be absent when a project only uses one service). Two Search
+  services means two environments, not a list.
+- **Tenant / subscription** — optional. When present, ARM discovery and
+  token acquisition are scoped to them; when absent, rigg uses the Azure CLI
+  default tenant and searches every subscription visible in it. Environments
+  in different subscriptions or tenants are fully supported.
+- **Policy** — `protected` (see [below](#protected-environments)) and
+  `strict-bindings` (see [Validation classes](#validation-classes)).
 
 ### Logical identity vs. physical name
 
@@ -114,6 +137,80 @@ don't have to — `envs/dev/search/indexes/docs-index.json` can have
 path, has `"name": "docs-index"`. rigg correlates the two files by path, not
 by name, so renaming a resource in one environment never breaks its link to
 the same resource in another.
+
+### Dependencies and bindings
+
+Resource files reference infrastructure outside Search and Foundry — a
+storage account in a data source's connection string, a Key Vault in an
+encryption key, a function app in a custom skill's URL. A **binding** gives
+that infrastructure a name in `dependencies:`, mapping a *binding name* to
+`{ <type>: <value> }`. The recognized types are `storage`, `ai-services`,
+`function-app`, `identity`, `key-vault`, and `api` (an external REST base
+URL, matched by prefix — no ARM lookup). A name is resolved through ARM
+(account/site/vault/identity name, or you can write the full ARM id
+directly) in the environment's subscription, and the resolved id is cached
+in `.rigg/<env>/bindings.json` (gitignored).
+
+Binding names correlate across environments exactly as file paths correlate
+resources: the same name in `dev` and `prod` is the same *role*, possibly
+played by a different physical resource. **Shared** is simply the same
+physical value bound under the same name in two environments — explicit,
+never inferred; **different** just means the values differ, as `docs-storage`
+does above.
+
+Every environment also has two **implicit bindings** for free: `search` (its
+own Search service) and `foundry` (its own Foundry account), usable wherever
+a binding of type `ai-services` or the Search endpoint is expected. Most
+workspaces need no separate `ai-services` binding at all — the Foundry
+account that hosts the project usually also hosts the models.
+
+**Declare or learn — both are first-class.** Write `dependencies:` by hand
+(or let an AI write it) and rigg resolves and validates against it on first
+use — configuration first. Or run `rigg env bind <env> --learn`, which scans
+that environment's files, extracts every infrastructure reference, groups it
+by (type, physical resource), proposes a binding name per group (the
+resource's name, lower-kebab-cased — rename any of them before confirming),
+and writes the result to `rigg.yaml` — discovery first. `adopt` and `pull`
+run the same scan after writing files and offer the learn step when new
+unbound references appear.
+
+```bash
+rigg env bind dev docs-storage storage:my-storage-dev   # declare one binding
+rigg env bind dev --learn                                # propose bindings from the files
+rigg env bind dev --learn --yes                          # accept the proposal non-interactively
+rigg env unbind dev docs-storage                          # remove a binding
+rigg env show dev                                         # targets, policy, every binding + resolved id
+rigg env show dev --refresh                               # re-resolve every binding against Azure
+rigg env add prod --like dev                              # walk dev's bindings: same, pick another, or skip
+```
+
+`rigg env add <name> --like <env>` is the fastest way to stand up a new
+environment: it asks, per binding in the model environment, whether the new
+environment shares the same physical resource, points at a different one
+(ARM pick-list), or should skip that binding entirely (`--same`/`--skip` on
+the command line answer the same questions non-interactively). `rigg
+describe` also prints an infrastructure section per environment.
+
+### Validation classes
+
+`rigg validate` classifies every infrastructure reference it finds in every
+file:
+
+| Class | Meaning | Severity |
+|---|---|---|
+| Bound | matches a binding of this environment (or the implicit `search`/`foundry`) | ok |
+| Shared | bound here and also in another environment with the same value | ok (listed with `--show-bindings`) |
+| Leak | bound in **another** environment, not this one | **error** — the file points at another environment's infrastructure |
+| Unbound | matches no binding anywhere | warning; **error** when `policy.strict-bindings: true` |
+| External | an `api`-form reference with no matching `api` binding | warning (same strictness as Unbound) |
+
+`strict-bindings` defaults to the value of `protected`, so a protected
+environment is strict by default; set it explicitly to change that. An
+error names the file, the path, the physical value, and (for a leak) the
+environment that owns it, plus the fix: `rigg env bind <env> --learn` or
+`rigg env bind <env> <name> <type>:<value>`. `push` runs the same
+classification on its plan as a preflight and refuses on error before any
+mutation.
 
 ### Promoting between environments
 
@@ -146,6 +243,11 @@ rigg lists the visible function apps (ARM) or asks for the URL. A skill's
 `x-rigg-auth` annotation never crosses environments; authorize the new env's
 function on the next `rigg push`, which gates on it. Non-interactive
 promotes copy the URL as-is and flag it for review.
+
+A planned extension to promotion translates infrastructure references by
+binding name, so a promoted file resolves each dependency against the
+*target* environment's bindings instead of copying the source's value
+verbatim.
 
 ### Protected environments
 

@@ -60,13 +60,19 @@ rigg new index docs-index -p docs-rag
 rigg new indexer docs-indexer -p docs-rag
 ```
 
-Either way, you now edit the generated files:
+First, tell `dev` about the storage account you'll point at — this is a **binding**: a name (`docs`) that resolves to a physical resource, so `rigg validate` can check every file against it and `rigg env add prod --like dev` can ask whether prod shares it or uses a different one:
+
+```bash
+rigg env bind dev docs storage:<your-storage-account>
+```
+
+Now edit the generated files:
 
 1. **`envs/dev/search/data-sources/docs-ds.json`** — point it at your storage account. Scaffolds are identity-first: fill in the `ResourceId=` connection string and container name. Never put keys in files — `rigg validate` will reject them.
 2. **`envs/dev/search/indexes/docs-index.json`** — shape the fields to your documents.
 3. **`envs/dev/search/indexers/docs-indexer.json`** — the pipeline scaffold wires `dataSourceName` and `targetIndexName` for you (fill them in yourself if you scaffolded piece by piece); adjust field mappings and the schedule. Remove the skillset reference (and its file) if you don't need enrichment.
 
-Validate as you go:
+Validate as you go — with the `docs` binding in place, `rigg validate` now checks the data source's connection string against it (and warns if you point at a storage account you haven't bound):
 
 ```bash
 rigg validate docs-rag

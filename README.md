@@ -295,11 +295,12 @@ The [`samples/`](samples/) directory is a complete working workspace with two pr
 
 ### Deployment Environments
 
-Each environment is a named Azure target with its own resource tree (`envs/<env>/` — see [Workspace Layout](#workspace-layout)), so dev and prod never share a JSON file. Add one interactively (ARM discovery, same pick-lists as `rigg init`) or non-interactively with flags:
+Each environment is **targets + dependencies + policy**: a named Azure AI Search service and Foundry account/project, its own resource tree (`envs/<env>/` — see [Workspace Layout](#workspace-layout)), and a set of infrastructure **bindings** (storage accounts, function apps, Key Vaults, other AI Services accounts, external APIs) that resource files are allowed to reference. Add an environment interactively (ARM discovery, same pick-lists as `rigg init`) or non-interactively with flags, optionally modeling it on an existing one:
 
 ```bash
 rigg env add test                          # interactive wizard
 rigg env add test --search-service my-search-test
+rigg env add prod --like dev               # per binding: same, pick another (ARM), or skip
 rigg env list
 rigg env set-default prod
 ```
@@ -310,13 +311,36 @@ The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all co
 environments:
   dev:
     default: true
-    search: { service: my-search-dev }
+    tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47        # optional
+    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a  # optional
+    search:  { service: my-search-dev }
     foundry: { account: my-foundry, project: my-project-dev }
+    policy:  { protected: false }
+    dependencies:
+      docs-storage: { storage: my-storage-dev }
+      enrich-fn:    { function-app: my-enrich-fn-dev }
   prod:
-    policy: { protected: true }
-    search: { service: my-search-prod }
+    policy:  { protected: true }
+    search:  { service: my-search-prod }
     foundry: { account: my-foundry, project: my-project-prod }
+    dependencies:
+      docs-storage: { storage: my-storage-prod }
+      enrich-fn:    { function-app: my-enrich-fn }        # same value in both ⇒ shared
 ```
+
+#### Infrastructure bindings
+
+`dependencies:` names the infrastructure a project's files reference — declare it by hand, or let rigg discover it:
+
+```bash
+rigg env bind dev docs-storage storage:my-storage-dev   # declare one binding
+rigg env bind dev --learn                                # propose bindings from the files, confirm interactively
+rigg env bind dev --learn --yes                          # accept the proposal as-is
+rigg env unbind dev docs-storage                          # remove a binding
+rigg env show dev --refresh                               # targets, policy, every binding, resolved ARM id, sharing
+```
+
+Every environment also has two bindings for free — `search` and `foundry`, its own service and account — so most workspaces never need a separate `ai-services` binding. `rigg validate` classifies every infrastructure reference it finds: **Bound** (matches a binding here) and **Shared** (also bound in another environment with the same value) are fine; **Leak** (bound in *another* environment, not this one) is always an error; **Unbound** (matches no binding anywhere) and **External** (an `api`-typed URL with no matching binding) are warnings that become errors under `policy.strict-bindings: true` (which defaults to the value of `protected`). See [CONCEPTS.md](CONCEPTS.md#validation-classes) for the full table.
 
 `rigg promote` copies one environment's project tree into another, locally — preserving the target's pinned fields (`name`, secrets/write-only fields, env-specific URLs like an agent's MCP server or a Web API skill's function endpoint, `x-rigg-pin`-annotated paths) instead of overwriting them. New-in-target skillsets get their function URLs resolved interactively (ARM-discovered candidates or manual entry) so a promoted pipeline never silently calls the source environment's function:
 

@@ -37,20 +37,36 @@ projects/<name>/
 
 ## Environments
 
-Each project keeps a **separate resource tree per environment** under
-`envs/<env>/` — dev and prod genuinely diverge (field mappings, agent
-instructions), so each gets its own full file tree rather than overlay
-patches. A resource's *logical* identity is its file path (kind dir + stem,
-e.g. `indexes/docs-index`); the `name` field inside the file is its
-*physical* Azure name and may differ per environment. Target an environment
-with `-e/--env <name>` (or `RIGG_ENV`, or the `default: true` env). Copy one
-environment's tree into another — locally, without touching Azure — with
-`rigg promote <project> --from <env> --to <env>` (pinned fields like `name`
-and secrets are preserved on the target, not overwritten). Environments can
-be marked `policy: { protected: true }` in `rigg.yaml`; mutating pushes and
-remote deletes against a protected environment then require an explicit
-`--confirm-env <name>` (or an interactive type-to-confirm) — `--yes` alone
-never satisfies this gate.
+An environment is **targets + dependencies + policy**: one Search service,
+one Foundry account/project, a `dependencies:` map of infrastructure
+**bindings** (`name: { storage|ai-services|function-app|identity|key-vault|api: value }`),
+and `policy: { protected, strict-bindings }`. Every environment also has
+implicit `search`/`foundry` bindings for free. Each project keeps a
+**separate resource tree per environment** under `envs/<env>/` — dev and
+prod genuinely diverge (field mappings, agent instructions), so each gets
+its own full file tree rather than overlay patches. A resource's *logical*
+identity is its file path (kind dir + stem, e.g. `indexes/docs-index`); the
+`name` field inside the file is its *physical* Azure name and may differ per
+environment. Target an environment with `-e/--env <name>` (or `RIGG_ENV`, or
+the `default: true` env). Copy one environment's tree into another —
+locally, without touching Azure — with `rigg promote <project> --from <env>
+--to <env>` (pinned fields like `name` and secrets are preserved on the
+target, not overwritten). Environments can be marked `policy: { protected:
+true }` in `rigg.yaml`; mutating pushes and remote deletes against a
+protected environment then require an explicit `--confirm-env <name>` (or an
+interactive type-to-confirm) — `--yes` alone never satisfies this gate.
+
+**Bindings**: `rigg env bind <env> <name> <type>:<value>` declares one;
+`rigg env bind <env> --learn [--yes]` scans the environment's files and
+proposes bindings from the infrastructure references it finds (`adopt`/
+`pull` offer this automatically when new unbound references appear); `rigg
+env unbind <env> <name>` removes one; `rigg env show <env> [--refresh]`
+prints resolved ARM ids and cross-environment sharing; `rigg env add <name>
+--like <env>` walks the model environment's bindings asking same/different/
+skip. `rigg validate` classifies every infrastructure reference: Bound/
+Shared are fine, Leak (bound in another environment) is always an error,
+Unbound/External are warnings that become errors under
+`strict-bindings: true` (defaults to `protected`).
 
 ## Key workflows
 

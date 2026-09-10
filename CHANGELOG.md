@@ -40,9 +40,52 @@ around that. No compatibility with 1.x workspaces.
 - **New environment variable `RIGG_NON_INTERACTIVE`** — set it to `1` (any
   non-empty value other than `0`/`false`) to force non-interactive behaviour
   on a terminal, equivalent to `--non-interactive`.
+- **One Search service and one Foundry account/project per environment.**
+  The 1.x multi-connection lists (`ConnectionList`) are removed; two Search
+  services are now two environments, not one environment with a list.
+- **`project.yaml` no longer pins connections.** The `search-connection`/
+  `foundry-connection` fields are gone — a project's environment is chosen by
+  `-e/--env`, not recorded per project.
+- **`defaults.identity` is removed from `rigg.yaml`**, replaced by `identity`
+  bindings in an environment's `dependencies:`.
+- **`rigg.yaml` environments gain `tenant`, `subscription`, `dependencies`,
+  and `policy.strict-bindings`.** `tenant`/`subscription` scope ARM discovery
+  and token acquisition (optional; default is the Azure CLI's tenant and
+  every subscription visible in it); `strict-bindings` defaults to the value
+  of `protected`.
 
 ### Added
 
+- **Infrastructure bindings**: `dependencies:` in `rigg.yaml` names the
+  storage accounts, AI Services accounts, function apps, managed identities,
+  Key Vaults and external APIs a project's files may reference, keyed by a
+  binding name that correlates across environments (the same name in `dev`
+  and `prod` may resolve to the same or a different physical resource — the
+  latter case is "shared"). Every environment also gets implicit `search`/
+  `foundry` bindings for free. `rigg env bind <env> <name> <type>:<value>`
+  declares one; `rigg env bind <env> --learn [--yes]` scans an environment's
+  files, extracts every infrastructure reference, and proposes bindings
+  grouped by physical resource; `rigg env unbind <env> <name>` removes one.
+  `adopt` and `pull` offer the learn step when new unbound references
+  appear.
+- `rigg env show [<env>] [--refresh]` prints an environment's targets,
+  policy, and every binding with its resolved ARM id, region, and which
+  other environments share the same physical resource.
+- `rigg env add <name> --like <env>` models a new environment on an existing
+  one, walking its bindings and asking, per binding, whether to reuse the
+  same physical resource, pick a different one (ARM list), or skip it
+  (`--same <name>` / `--skip <name>` answer the same questions
+  non-interactively); `--tenant`/`--subscription`/`--bind
+  <name=type:value>` (repeatable) round out the flag form.
+- `rigg validate [--show-bindings]` classifies every infrastructure
+  reference as Bound, Shared, Leak, Unbound, or External — Leak (a
+  reference bound in another environment, not this one) is always an error;
+  Unbound and External are warnings that become errors under
+  `policy.strict-bindings: true`. `push` runs the same classification as a
+  preflight and refuses to mutate on error.
+- `rigg init --tenant`/`--subscription` record the initial environment's
+  tenant and subscription; `rigg describe` gains an infrastructure section
+  per environment.
 - `rigg dev api-check` covers every provider; `rigg dev api-diff <provider>`
   shows added/removed properties and enum values between two versions;
   `rigg dev api-fixture` refreshes the pinned schema fixtures.

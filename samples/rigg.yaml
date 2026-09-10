@@ -5,3 +5,6 @@ environments:
     default: true
     search: { service: your-search-service }
     foundry: { account: your-foundry-account, project: your-foundry-project }
+    dependencies:
+      docs-storage: { storage: your-storage-account }
+      enrich-fn:    { function-app: your-function-app }
