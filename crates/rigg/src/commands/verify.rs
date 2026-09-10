@@ -37,12 +37,15 @@ pub async fn run(ctx: &GlobalContext, args: VerifyArgs) -> Result<()> {
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
     // Verification triggers real indexer runs (ingestion, skill and embedding
     // costs), so a protected environment asks first — the same gate
-    // `rigg az indexer run` applies. `push --verify` does not come through
-    // here: the push's own gate already covered this environment.
+    // `rigg az indexer run` applies, answerable the same way (`--confirm-env`,
+    // or `--answer confirm.protected.<env>=<env>`) so a non-interactive
+    // caller has a way through instead of a `needs-input` it cannot satisfy.
+    // `push --verify` does not come through here: the push's own gate
+    // already covered this environment.
     if !confirm_protected_env(
         ctx,
         &env,
-        None,
+        args.confirm_env.as_deref(),
         "verify (runs every indexer)",
         "verify",
         json!({"env": env.name}),

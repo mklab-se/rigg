@@ -99,12 +99,24 @@ async fn mount_graph_sp_lookup(
 /// already publishes. Priority 1, so it wins over [`mount_graph`]'s default
 /// (an application with no roles) regardless of mount order.
 pub async fn mount_graph_application_roles(server: &MockServer, app_roles: serde_json::Value) {
+    mount_graph_application(server, app_roles, json!([])).await;
+}
+
+/// Like [`mount_graph_application_roles`], but the application also already
+/// publishes `identifier_uris` — the audiences its existing callers ask
+/// tokens for, which a PATCH must not drop.
+pub async fn mount_graph_application(
+    server: &MockServer,
+    app_roles: serde_json::Value,
+    identifier_uris: serde_json::Value,
+) {
     Mock::given(method("GET"))
         .and(path_regex(r"^/applications/[^/]+$"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": FAKE_APP_OBJECT_ID,
             "appId": FAKE_APP_ID,
             "displayName": "rigg-app",
+            "identifierUris": identifier_uris,
             "appRoles": app_roles
         })))
         .with_priority(1)

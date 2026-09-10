@@ -194,9 +194,18 @@ pub struct VerifyParams {
     /// Project name (omit when the workspace has exactly one project)
     #[schemars(default)]
     pub project: Option<String>,
+    /// Verify every project in the workspace
+    #[schemars(default)]
+    pub all: Option<bool>,
     /// Environment name (uses the default environment if omitted)
     #[schemars(default)]
     pub env: Option<String>,
+    /// Required consent for protected environments: must equal the environment's name.
+    #[schemars(default)]
+    pub confirm_env: Option<String>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -546,14 +555,25 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Prove a pushed project actually works against the live services: every indexer is RUN and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. NOT read-only — it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. Failures that look like an authorization problem are attributed to the identity edge that would explain them. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed."
+        description = "Prove a pushed project actually works against the live services: every indexer is RUN and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. NOT read-only — it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry) — the runs cost money. all=true verifies every project. Failures that look like an authorization problem are attributed to the identity edge that would explain them. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed."
     )]
     async fn rigg_verify(&self, Parameters(params): Parameters<VerifyParams>) -> String {
         let mut args = vec!["verify"];
         if let Some(p) = &params.project {
             args.push(p);
         }
-        rigg_cli(&with_common(args, &params.env, false))
+        if params.all.unwrap_or(false) {
+            args.push("--all");
+        }
+        if let Some(confirm_env) = &params.confirm_env {
+            args.extend(["--confirm-env", confirm_env]);
+        }
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            false,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(

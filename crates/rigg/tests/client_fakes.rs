@@ -16,8 +16,9 @@ use arm_fake::{
     mount_storage_account, search_service_id,
 };
 use graph_fake::{
-    FAKE_APP_ID, FAKE_APP_OBJECT_ID, FAKE_SP_OBJECT_ID, mount_graph, mount_graph_application_roles,
-    mount_graph_existing_sp, mount_graph_failure, mount_keyvault_secret,
+    FAKE_APP_ID, FAKE_APP_OBJECT_ID, FAKE_SP_OBJECT_ID, mount_graph, mount_graph_application,
+    mount_graph_application_roles, mount_graph_existing_sp, mount_graph_failure,
+    mount_keyvault_secret,
 };
 use rigg_client::arm::ArmClient;
 use rigg_client::auth::{SpCredential, mint_service_principal_token};
@@ -751,6 +752,56 @@ async fn set_identifier_uri_and_role_keeps_the_roles_the_app_already_has() {
         .find(|r| r["value"] == "Caller")
         .expect("the Caller role is there");
     assert_eq!(caller["id"], role_id.as_str());
+}
+
+#[tokio::test]
+async fn set_identifier_uri_and_role_keeps_the_identifier_uris_the_app_already_has() {
+    let server = MockServer::start().await;
+    mount_graph(&server).await;
+    // An application that already publishes an audience of its own, and
+    // rigg's — the second run must add nothing and drop nothing.
+    let existing = "api://contoso-search";
+    let uri = format!("api://{FAKE_APP_ID}");
+    mount_graph_application(&server, json!([]), json!([existing, uri])).await;
+    let graph = GraphClient::with_token_and_base("t".into(), server.uri());
+    graph
+        .set_identifier_uri_and_role(FAKE_APP_OBJECT_ID, &uri)
+        .await
+        .unwrap();
+    let patch = bodies(&server, "PATCH", "/applications/")
+        .await
+        .pop()
+        .expect("a PATCH was sent");
+    let uris: Vec<&str> = patch["identifierUris"]
+        .as_array()
+        .expect("identifierUris were sent")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    // PATCHing `identifierUris` replaces the collection: an audience rigg
+    // did not add must be re-sent, or the tokens naming it stop working.
+    assert_eq!(uris, vec![existing, uri.as_str()], "{uris:?}");
+}
+
+#[tokio::test]
+async fn set_identifier_uri_and_role_adds_its_uri_to_the_ones_already_there() {
+    let server = MockServer::start().await;
+    mount_graph(&server).await;
+    let existing = "api://contoso-search";
+    mount_graph_application(&server, json!([]), json!([existing])).await;
+    let graph = GraphClient::with_token_and_base("t".into(), server.uri());
+    let uri = format!("api://{FAKE_APP_ID}");
+    graph
+        .set_identifier_uri_and_role(FAKE_APP_OBJECT_ID, &uri)
+        .await
+        .unwrap();
+    let patch = bodies(&server, "PATCH", "/applications/")
+        .await
+        .pop()
+        .expect("a PATCH was sent");
+    assert_eq!(patch["identifierUris"][0], existing);
+    assert_eq!(patch["identifierUris"][1], uri.as_str());
+    assert_eq!(patch["identifierUris"].as_array().map(Vec::len), Some(2));
 }
 
 #[tokio::test]

@@ -395,6 +395,10 @@ pub struct VerifyArgs {
     /// Verify all projects
     #[arg(long)]
     pub all: bool,
+
+    /// Typed confirmation for protected environments (must equal the env name)
+    #[arg(long, value_name = "ENV")]
+    pub confirm_env: Option<String>,
 }
 
 #[derive(Args)]

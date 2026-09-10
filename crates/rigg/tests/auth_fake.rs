@@ -160,8 +160,41 @@ fn workspace_with_foundry(endpoint: &str) -> tempfile::TempDir {
     tmp
 }
 
+/// A single-environment workspace whose only env is **protected** — the
+/// shape the protected-gate ordering is asserted against.
+fn workspace_protected(endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "name: acme\n\
+             environments:\n\
+             \x20 prod:\n\
+             \x20   default: true\n\
+             \x20   tenant: tenant-1\n\
+             \x20   policy: {{ protected: true }}\n\
+             \x20   search: {{ service: {SEARCH}, endpoint: \"{endpoint}\" }}\n\
+             \x20   dependencies:\n\
+             \x20     docs: {{ storage: acct }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
 fn write_resource(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
-    let d = ws.join("projects/demo/envs/dev/search").join(dir);
+    write_resource_in(ws, "dev", dir, name, body);
+}
+
+fn write_resource_in(ws: &std::path::Path, env: &str, dir: &str, name: &str, body: &Value) {
+    let d = ws
+        .join("projects/demo/envs")
+        .join(env)
+        .join("search")
+        .join(dir);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(
         d.join(format!("{name}.json")),
@@ -1616,6 +1649,235 @@ async fn push_grants_the_missing_role_waits_for_it_then_pushes() {
         .position(|p| p == "/datasources/docs")
         .expect("the push proceeds after the grant");
     assert!(role < resource, "grant must precede the write: {puts:?}");
+}
+
+/// Every role-assignment PUT the server saw.
+async fn role_assignment_puts(server: &MockServer) -> Vec<String> {
+    data_plane_puts(server)
+        .await
+        .into_iter()
+        .filter(|p| p.contains("roleAssignments"))
+        .collect()
+}
+
+/// The preflight *verifies* before the protected-environment gate, but must
+/// not *change* anything before it: `--yes` alone never satisfies that gate,
+/// so the push stops there (exit 6) — and not one role assignment was
+/// created for a push that never happened.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_to_a_protected_env_grants_nothing_before_the_gate() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // The operator can do the push and can grant at the storage scope, so
+    // the missing Storage Blob Data Reader is a fix rigg would apply itself
+    // — exactly the case that must NOT be applied before the gate.
+    mount_assignments_for(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        OPERATOR_OID,
+        &[SEARCH_SERVICE_CONTRIBUTOR],
+        "prod",
+    )
+    .await;
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+    mount_no_assignments(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace_protected(&server.uri());
+    write_resource_in(
+        ws.path(),
+        "prod",
+        "data-sources",
+        "docs",
+        &blob_data_source(None),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .env("RIGG_RBAC_RETRY_SECS", "0")
+        .env("RIGG_RBAC_MAX_RETRIES", "1")
+        .args(["push", "demo", "-e", "prod", "--yes"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains("confirm.protected.prod"));
+
+    assert!(
+        role_assignment_puts(&server).await.is_empty(),
+        "the protected gate must come before every grant: {:?}",
+        data_plane_puts(&server).await
+    );
+    assert!(
+        data_plane_puts(&server).await.is_empty(),
+        "nothing at all may be written before the gate"
+    );
+}
+
+/// A preview reports the whole remediation — the `az` lines only a human can
+/// run *and* what rigg would fix itself — and does neither: no refusal, no
+/// grant, no write.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_dry_run_reports_auth_problems_without_refusing_or_granting() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // Nobody holds anything: the service identity's missing role is a fix
+    // rigg could apply, the operator's own rights are not.
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+    mount_no_assignments(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .args(["push", "demo", "-e", "dev", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auth preflight"))
+        .stdout(predicate::str::contains("az role assignment create"))
+        .stdout(predicate::str::contains("rigg can fix:"))
+        .stdout(predicate::str::contains("dry run — nothing granted"));
+
+    assert!(
+        data_plane_puts(&server).await.is_empty(),
+        "a preview writes nothing — neither resources nor grants"
+    );
+}
+
+/// When the PUT-time diagnosis finds requirements rigg may not grant (the
+/// operator's own), the retry loop is pointless: rigg says so, prints the
+/// `az` line, and stops — instead of re-PUTting for five minutes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_requirement_rigg_may_not_grant_stops_the_retry_loop() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // The service identity is fully wired — so the diagnosis has no fix to
+    // offer — while the operator holds nothing.
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/docs"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/datasources/docs"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": {
+            "code": "InvalidRequestParameter",
+            "message": "Cannot access the storage account: the managed identity does not have permission."
+        }})))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    // The preflight would refuse first, so skip it: this is the PUT-time
+    // diagnosis, the safety net behind it.
+    rigg(ws.path(), &server.uri())
+        .env("RIGG_RBAC_RETRY_SECS", "0")
+        .env("RIGG_RBAC_MAX_RETRIES", "3")
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "dev",
+            "--yes",
+            "--skip-auth-preflight",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("az role assignment create"))
+        .stderr(predicate::str::contains("waiting will not help"));
+
+    let attempts = data_plane_puts(&server)
+        .await
+        .into_iter()
+        .filter(|p| p == "/datasources/docs")
+        .count();
+    assert_eq!(
+        attempts, 1,
+        "no retry loop for a problem propagation cannot solve"
+    );
 }
 
 // --------------------------------------------------------- rigg verify ----

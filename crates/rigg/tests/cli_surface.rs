@@ -48,6 +48,28 @@ fn answer_flags_are_global() {
         .stdout(predicate::str::contains("--answers-file"));
 }
 
+/// `rigg verify` triggers real indexer runs, so its surface matters: a
+/// project or `--all`, and the same typed confirmation every other costly
+/// command takes. An unknown project name fails before any network call.
+#[test]
+fn verify_surface_and_unknown_project() {
+    rigg()
+        .args(["verify", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[PROJECT]"))
+        .stdout(predicate::str::contains("--all"))
+        .stdout(predicate::str::contains("--confirm-env <ENV>"));
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .env("RIGG_NON_INTERACTIVE", "1")
+        .args(["verify", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nope"));
+}
+
 #[test]
 fn removed_flags_are_gone() {
     rigg()

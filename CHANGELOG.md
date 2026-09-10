@@ -177,28 +177,36 @@ around that. No compatibility with 1.x workspaces.
 - **`rigg push` verifies the identity graph before it writes anything.** The
   plan-scoped auth preflight runs after the binding preflight and before the
   protected gate: it is `auth doctor --plan` on exactly the bodies this push
-  would send. Missing role assignments rigg may grant are offered as one
-  confirmation (`auth.fix.all`, `--yes` non-interactively), applied, and then
-  **waited out** — rigg polls `atScope()` until each granted role is visible
-  before continuing (`RIGG_RBAC_RETRY_SECS`, default 10 s ×
-  `RIGG_RBAC_MAX_RETRIES`, default 18). Anything only a human may grant (the
-  operator's own rights) refuses with exit 4 and the exact `az` line;
-  `--dry-run` reports every finding and refuses nothing; unresolved items
-  never refuse. `--skip-auth-preflight` opts out. The existing PUT-retry loop
-  remains the safety net, and now diagnoses through the same binding-aware
-  engine instead of its own ARM walk.
+  would send. Anything only a human may grant (the operator's own rights)
+  refuses right there, with exit 4 and the exact `az` line. Missing role
+  assignments rigg may grant are reported there too, but applied only once
+  every gate has been cleared — the protected-environment confirmation, the
+  replace gate, the apply confirmation — so a push that is never confirmed
+  changes nothing at all. They are then offered as one confirmation
+  (`auth.fix.all`, `--yes` non-interactively), applied, and **waited out**:
+  rigg polls `atScope()` until each granted role is visible before continuing
+  (`RIGG_RBAC_RETRY_SECS`, default 10 s × `RIGG_RBAC_MAX_RETRIES`, default
+  18). `--dry-run` reports the whole remediation — the `az` lines and what
+  rigg would fix itself — and refuses nothing; unresolved items never refuse.
+  `--skip-auth-preflight` opts out. The existing PUT-retry loop remains the
+  safety net, and now diagnoses through the same binding-aware engine instead
+  of its own ARM walk: a requirement rigg may not grant ends the push with
+  the command to run instead of retrying for five minutes.
 - **`rigg push --verify` and `rigg verify <project> [-e env]`** prove the
   stack actually works: every indexer is run and watched to completion, every
   knowledge base gets a retrieve, every agent a one-turn question. Failures
   that look like an authorization problem are attributed to the identity edge
-  that would explain them (`→ likely <edge>`); exit 1 on any failure. New MCP
-  tool `rigg_verify` (`project?`, `env?`) and new `rigg_push` parameters
-  `verify` / `skip_auth_preflight` bring the MCP surface to 14 tools.
+  that would explain them (`→ likely <edge>`); exit 1 on any failure. A
+  protected environment is gated (`--confirm-env`) — the runs cost money. New
+  MCP tool `rigg_verify` (`project?`, `all?`, `env?`, `confirm_env?`,
+  `answers?`) and new `rigg_push` parameters `verify` / `skip_auth_preflight`
+  bring the MCP surface to 14 tools.
 - **`rigg auth easy-auth <function-app binding> [--client-id <id>]`** wires
   Microsoft Entra authentication onto a bound function app end to end: it
   registers (or reuses) an application with `api://<app-id>` and a `Caller`
-  app role, creates the enterprise application, and PUTs a **merged**
-  `authsettingsV2` — every other identity provider and unrelated setting is
+  app role — merged into what the application already publishes, so neither
+  an existing app role nor an existing identifier URI is dropped — creates
+  the enterprise application, and PUTs a **merged** `authsettingsV2` — every other identity provider and unrelated setting is
   kept, `allowedAudiences` and `allowedApplications` are unioned, never
   replaced. The caller it admits is the search service's system-assigned
   identity, or the user-assigned identity a skillset declares in

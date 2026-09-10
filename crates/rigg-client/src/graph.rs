@@ -154,12 +154,14 @@ impl GraphClient {
     /// skill will ask tokens for) and define the `Caller` app role that
     /// gated enterprise applications require. Returns the app role's id.
     ///
-    /// The application is read first and its `appRoles` merged: PATCHing
-    /// `appRoles` replaces the collection, so sending only rigg's role would
-    /// delete every role the application already publishes (and revoke the
-    /// assignments that reference them). A `Caller` role that is already
-    /// there is reused — id included, since the assignments in the directory
-    /// name it — rather than re-created under a new id.
+    /// The application is read first and both collections merged: PATCHing
+    /// `appRoles` or `identifierUris` replaces the collection, so sending
+    /// only rigg's entry would delete every role the application already
+    /// publishes (and revoke the assignments that reference them) and every
+    /// audience its existing callers ask tokens for. A `Caller` role that is
+    /// already there is reused — id included, since the assignments in the
+    /// directory name it — rather than re-created under a new id, and a
+    /// `uri` the application already lists is not added twice.
     pub async fn set_identifier_uri_and_role(
         &self,
         app_object_id: &str,
@@ -198,8 +200,20 @@ impl GraphClient {
                 role_id
             }
         };
+        let mut uris = application
+            .get("identifierUris")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if !uris
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|u| u.eq_ignore_ascii_case(uri))
+        {
+            uris.push(Value::String(uri.to_string()));
+        }
         let body = json!({
-            "identifierUris": [uri],
+            "identifierUris": uris,
             "api": {"requestedAccessTokenVersion": 2},
             "appRoles": roles
         });

@@ -461,10 +461,13 @@ async fn push_project(
     binding_preflight(ctx, ws, env, preflight_bodies, args.dry_run)?;
 
     // Auth preflight: verify the identity graph THIS plan implies before a
-    // single resource is written, and offer to repair it (spec §4.2). Placed
-    // after the binding preflight (a wrong-environment push must be caught
-    // first — there is no point granting roles for a plan that will be
-    // refused) and before the credential preflights and the protected gate.
+    // single resource is written (spec §4.2). Placed after the binding
+    // preflight (a wrong-environment push must be caught first — there is no
+    // point granting roles for a plan that will be refused) and before the
+    // credential preflights and the protected gate, so a refusal is the
+    // first thing a push that cannot work hits. The *repair* it proposes is
+    // applied later, past every gate that can still abort — see
+    // `apply_auth_repair` below.
     let mut plan_docs: Vec<(ResourceKind, String, Value)> = to_push
         .iter()
         .map(|p| (p.r.kind, p.r.name.clone(), p.body.clone()))
@@ -482,7 +485,7 @@ async fn push_project(
                 .map(|(r, body)| (r.kind, r.name.clone(), body.clone())),
         );
     }
-    auth_preflight(ctx, ws, env, plan_docs, args).await?;
+    let auth_repair = auth_preflight(ctx, ws, env, plan_docs, args).await?;
 
     if args.dry_run {
         say!(ctx, "  (dry run — nothing pushed)");
@@ -741,6 +744,19 @@ async fn push_project(
         )));
     }
 
+    // Apply what the auth preflight found — with consent, and then waited
+    // out. Deliberately *after* every gate that can still abort (the
+    // protected-environment gate, the replace gate, the apply confirmation):
+    // the preflight's refusal has to come before them so a doomed push is
+    // stopped early, but its *writes* must not. A role assignment or a
+    // storage network rule is a change to the environment, and a push the
+    // operator never confirmed has to leave it exactly as it found it. Still
+    // before the first `put_with_rbac_help`, so every write below sees the
+    // access the plan needs.
+    if let Some(repair) = auth_repair {
+        apply_auth_repair(ctx, env, repair).await?;
+    }
+
     // Interactive conflict handling: choose local/remote/skip per conflict.
     for r in &conflicts {
         let local = store.read(r)?;
@@ -991,24 +1007,33 @@ fn binding_preflight<'a>(
     ))))
 }
 
+/// A repair the auth preflight found and the push must perform before it
+/// writes anything: the fixes to apply, and the missing requirements to name
+/// if consent for them is refused.
+struct AuthRepair {
+    fixes: Vec<Fix>,
+    missing: Vec<ReportItem>,
+}
+
 /// Plan-scoped auth preflight (spec §4.2): verify the identity graph the
 /// bodies this push would write imply — service-identity role assignments,
 /// the settings and network rules they depend on, and the operator's own
 /// rights — before a single resource is written.
 ///
-/// Missing things rigg can repair are offered as one confirmation
-/// (`auth.fix.all`), applied, and then **waited out**: a fresh role
-/// assignment is not visible to the data plane the instant ARM accepts it,
-/// so rigg polls `atScope()` until each granted role shows up before letting
-/// the push proceed ([`put_with_rbac_help`] remains the safety net for the
-/// data plane's own propagation lag).
+/// This is the **check** half only. Anything rigg may not repair — the
+/// operator's own rights, which rigg never grants itself — refuses here,
+/// with exit 4 and the `az` line to run, so the refusal lands before the
+/// protected-environment gate and before anything else is asked. What rigg
+/// *can* repair is reported and handed back as an [`AuthRepair`] for
+/// [`apply_auth_repair`] to consent to and apply once every gate has been
+/// cleared: a preflight must never change an environment the operator has
+/// not yet confirmed the push to.
 ///
-/// Anything rigg may not repair — the operator's own rights, which rigg
-/// never grants itself — refuses with exit 4 and the `az` line to run.
-/// `--dry-run` reports every finding and refuses nothing (the binding
-/// preflight's rule: a preview must not show a clean plan for a push that
-/// would fail, but must not fail either). `--skip-auth-preflight` skips the
-/// whole thing, for a caller who cannot read ARM but knows the wiring holds.
+/// `--dry-run` reports every finding — what rigg would fix and what only a
+/// human can — and refuses nothing (the binding preflight's rule: a preview
+/// must not show a clean plan for a push that would fail, but must not fail
+/// either). `--skip-auth-preflight` skips the whole thing, for a caller who
+/// cannot read ARM but knows the wiring holds.
 ///
 /// Unresolved items never refuse: "rigg could not check this" is not
 /// "this is wrong", and an environment whose ARM is unreachable must still
@@ -1019,9 +1044,9 @@ async fn auth_preflight(
     env: &ResolvedEnv,
     docs: Vec<(ResourceKind, String, Value)>,
     args: &PushArgs,
-) -> Result<()> {
+) -> Result<Option<AuthRepair>> {
     if args.skip_auth_preflight || docs.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let report = auth_engine::verify(
         ctx,
@@ -1045,7 +1070,7 @@ async fn auth_preflight(
         .filter(|i| i.status == Status::Missing)
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     say!(ctx);
@@ -1068,38 +1093,64 @@ async fn auth_preflight(
     let fixes = report.fixes();
     let unfixable = report.unfixable();
 
-    if args.dry_run {
-        for item in &unfixable {
-            if let Some(fix) = &item.fix {
-                say!(ctx, "      {}", fix.command());
-            }
+    // The `az` lines for what only a human may grant, then what rigg would
+    // repair itself. Both are printed on every path, `--dry-run` included,
+    // so a preview shows the whole remediation up front instead of half of
+    // it.
+    for item in &unfixable {
+        if let Some(fix) = &item.fix {
+            say!(ctx, "      {}", fix.command());
         }
-        say!(ctx, "  (dry run — nothing granted, nothing pushed)");
-        return Ok(());
+    }
+    if !fixes.is_empty() {
+        say!(ctx);
+        say!(ctx, "  rigg can fix:");
+        for fix in &fixes {
+            say!(ctx, "    - {}", fix.describe());
+        }
+    }
+
+    if args.dry_run {
+        say!(ctx, "  (dry run — nothing granted)");
+        return Ok(None);
     }
 
     // Operator rights are never granted by rigg (that would let anyone who
     // can run a push escalate their own access), so they always refuse.
     if !unfixable.is_empty() {
-        for item in &unfixable {
-            if let Some(fix) = &item.fix {
-                say!(ctx, "      {}", fix.command());
-            }
-        }
         return Err(refusal(env, &unfixable));
     }
     if fixes.is_empty() {
         return Err(refusal(env, &missing));
     }
+    Ok(Some(AuthRepair {
+        fixes,
+        missing: missing.into_iter().cloned().collect(),
+    }))
+}
 
-    say!(ctx);
-    say!(ctx, "  rigg can fix:");
-    for fix in &fixes {
-        say!(ctx, "    - {}", fix.describe());
-    }
+/// Consent to, apply and wait out the repairs [`auth_preflight`] found.
+///
+/// Called once every gate that can still abort the push has been cleared and
+/// immediately before the first write, so an environment is only ever
+/// changed for a push that is actually going ahead.
+///
+/// A fresh role assignment is not visible to the data plane the instant ARM
+/// accepts it, so each granted role is polled at its scope until it shows up
+/// ([`put_with_rbac_help`] remains the safety net for the data plane's own
+/// propagation lag).
+async fn apply_auth_repair(
+    ctx: &GlobalContext,
+    env: &ResolvedEnv,
+    repair: AuthRepair,
+) -> Result<()> {
+    let AuthRepair { fixes, missing } = repair;
+    let missing: Vec<&ReportItem> = missing.iter().collect();
     // `--yes` is consent for the whole push, grants included. Otherwise ask
     // `auth.fix.all` — the same question `auth doctor --fix` asks, so a
-    // scripted caller can pre-answer it. An unanswerable question here is
+    // scripted caller can pre-answer it. Asked through `ask_all` (not `ask`)
+    // so a malformed `--answer auth.fix.all=maybe` is the usage error
+    // (exit 2) every other flow produces. An unanswerable question here is
     // NOT `needs-input` (exit 6): a push that cannot be made to work is an
     // auth refusal (exit 4), with the list and the escape hatch.
     let approved = ctx.yes
@@ -1108,12 +1159,12 @@ async fn auth_preflight(
                 "push (auth preflight)",
                 json!({"env": env.name, "fixes": fixes.len()}),
             )
-            .ask(&Question::confirm(
+            .ask_all(&[Question::confirm(
                 "auth.fix.all",
                 format!("Grant/apply {} fix(es) now?", fixes.len()),
                 true,
-            )) {
-            Ok(answer) => answer.as_bool() == Some(true),
+            )]) {
+            Ok(answers) => answers.first().and_then(|a| a.as_bool()) == Some(true),
             Err(e)
                 if e.downcast_ref::<crate::commands::ask::NeedsInput>()
                     .is_some() =>
@@ -1149,7 +1200,7 @@ async fn auth_preflight(
 /// escape hatch.
 fn refusal(env: &ResolvedEnv, items: &[&ReportItem]) -> anyhow::Error {
     anyhow!(CommandError::AuthDenied(format!(
-        "{} auth requirement(s) missing for this plan; nothing was pushed to '{}': {} —          run `rigg auth doctor -e {} --fix`, or push with --skip-auth-preflight to try anyway",
+        "{} auth requirement(s) missing for this plan; nothing was pushed to '{}': {} — run `rigg auth doctor -e {} --fix`, or push with --skip-auth-preflight to try anyway",
         items.len(),
         env.name,
         items
@@ -1197,11 +1248,14 @@ async fn wait_for_grants(
         return;
     }
     let (delay, attempts) = rbac_wait_tuning();
+    // The budget is per role and the polls run one role after another, so
+    // the worst case is N × (delay × attempts), not one role's worth.
+    let budget = delay * attempts as u64 * granted.len() as u64;
     say!(
         ctx,
         "  waiting for {} role assignment(s) to become visible (up to ~{} min)",
         granted.len(),
-        (delay * attempts as u64).div_ceil(60).max(1)
+        budget.div_ceil(60).max(1)
     );
     for fix in granted {
         let Fix::RoleAssignment {
@@ -1375,6 +1429,25 @@ async fn put_with_rbac_help(
                 }
             }
             wait_for_grants(ctx, &arm, &results).await;
+        }
+        // Missing, but nothing rigg may repair: the operator's own rights,
+        // or a requirement with no fix at all. Waiting cannot help here, so
+        // say so and stop instead of burning five minutes in the retry loop
+        // below over a problem that will still be there afterwards.
+        Some(report) if !report.unfixable().is_empty() => {
+            let unfixable = report.unfixable();
+            for item in &unfixable {
+                say!(ctx, "  {} missing: {}", "✗".red(), item.headline());
+                say!(ctx, "      {}", item.detail);
+                if let Some(fix) = &item.fix {
+                    say!(ctx, "      {}", fix.command());
+                }
+            }
+            return Err(first.context(format!(
+                "{r} needs {} access requirement(s) rigg may not grant itself — waiting will not help; run the command(s) above (or `rigg auth doctor -e {} --fix`), then push again",
+                unfixable.len(),
+                env.name
+            )));
         }
         Some(_) => say!(
             ctx,

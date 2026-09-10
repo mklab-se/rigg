@@ -52,7 +52,7 @@ The server exposes 14 tools: 9 project-scoped configuration tools (including `ri
 
 Mutating tools (`rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 
-`rigg_push`, `rigg_delete` and `rigg_indexer_run` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation does not just happen — with no confirmation the tool returns a `needs-input` document asking `confirm.protected.<env>` (see below), and the answer must equal the environment's name exactly. An AI agent can't push, delete or re-index a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly. `confirm_env` remains the shorthand: passing it answers that question up front.
+`rigg_push`, `rigg_delete`, `rigg_indexer_run` and `rigg_verify` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation does not just happen — with no confirmation the tool returns a `needs-input` document asking `confirm.protected.<env>` (see below), and the answer must equal the environment's name exactly. An AI agent can't push, delete, re-index or verify a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly. `confirm_env` remains the shorthand: passing it answers that question up front.
 
 ### The needs-input loop
 
@@ -144,7 +144,11 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `force` | bool? | Without force: returns the push plan (dry run). With `force: true`: executes |
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 | `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
+| `verify` | bool? | After the push, prove the stack works (the `rigg_verify` checks). Ignored unless `force: true` |
+| `skip_auth_preflight` | bool? | Skip the identity/RBAC preflight that runs before anything is written |
 | `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
+
+An identity/RBAC preflight runs before the first write: requirements rigg may grant itself are listed and — once every confirmation has been given — applied and waited out; anything only a human may grant fails with exit 4 and the exact `az role assignment create` line. A refusal happens before the protected-environment gate, the grants after it, so a push that is never confirmed changes nothing at all.
 
 ### rigg_promote
 
@@ -209,6 +213,18 @@ Prompt a live knowledge base (agentic retrieval: grounding + references) or Foun
 Together these close the loop for AI agents: `rigg_push` → `rigg_indexer_run` → `rigg_indexer_status` → `rigg_query` → `rigg_ask` — a self-verified deployment with no human in the portal.
 
 Run `rigg_validate` first — the tool description tells the AI to, and well-behaved agents will.
+
+### rigg_verify
+
+Prove a pushed project actually works against the live services: every indexer is run and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. **Not read-only** — it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. A failure whose message looks like an authorization problem is attributed to the identity edge that would explain it. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string? | Project name (omit when the workspace has exactly one project) |
+| `all` | bool? | Verify every project in the workspace |
+| `env` | string? | Environment name |
+| `confirm_env` | string? | Required when `env` is a protected environment: must equal its name (the runs cost money) |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_delete
 
