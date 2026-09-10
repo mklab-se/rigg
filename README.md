@@ -304,7 +304,7 @@ rigg env list
 rigg env set-default prod
 ```
 
-The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands. When omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
+The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands; `RIGG_NON_INTERACTIVE=1` (like `--non-interactive`) is the other environment variable worth knowing — it tells rigg never to prompt, so questions come back as a `needs-input` document and exit 6 instead (see [protected environments](#environments) below and [CONCEPTS.md](CONCEPTS.md#exit-codes)). When `--env` is omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
 
 ```yaml
 environments:
@@ -330,9 +330,11 @@ rigg diff my-rag -e test --compare-env prod          # or just compare, env vs e
 Marking an environment `policy: { protected: true }` (as `prod` is above) requires an explicit, typed confirmation before rigg mutates it — `--yes` alone is never enough, since it only skips the routine "apply N changes?" prompt:
 
 ```bash
-rigg push my-rag --env prod --yes                       # blocked: prod is protected
+rigg push my-rag --env prod --yes                       # exits 6: prod is protected, asks for confirmation
 rigg push my-rag --env prod --yes --confirm-env prod    # proceeds
 ```
+
+Without a terminal to prompt on, rigg prints a `needs-input` JSON document listing what it needs and exits 6; answer with `--confirm-env`, `--answer <id>=<value>` or `--answers-file <path>` and re-run (see [CONCEPTS.md](CONCEPTS.md#exit-codes)). Set `RIGG_NON_INTERACTIVE=1` to force that behaviour on a terminal too — `--output json` and `--yes` already imply it — so a script never blocks on a prompt.
 
 ### Authentication
 

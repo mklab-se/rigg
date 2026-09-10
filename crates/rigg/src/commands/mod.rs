@@ -87,28 +87,26 @@ pub enum CommandError {
     DriftOrConflict(String),
     #[error("{0}")]
     Usage(String),
-    #[error("{0}")]
-    NeedsInput(ask::NeedsInput),
 }
 
 /// Map a command result to the process exit code, printing errors to
-/// stderr. `CommandError::NeedsInput` (or a bare `ask::NeedsInput`,
-/// produced directly by a `ScriptedAsker`) is special-cased: the
-/// `needs-input` protocol document goes to **stdout** so a scripted caller
-/// can parse it, and the human-readable summary goes to stderr only in text
-/// mode.
+/// stderr. `ask::NeedsInput` — the canonical "I need an answer" error,
+/// produced by a `ScriptedAsker` — is special-cased: the `needs-input`
+/// protocol document goes to **stdout** so a scripted caller can parse it,
+/// and the human-readable summary goes to stderr only in text mode.
 pub fn exit_code_for(result: Result<()>, output: OutputFormat) -> ExitCode {
     match result {
         Ok(()) => ExitCode::Success,
         Err(err) => {
-            let needs_input = match err.downcast_ref::<CommandError>() {
-                Some(CommandError::NeedsInput(ni)) => Some(ni),
-                _ => err.downcast_ref::<ask::NeedsInput>(),
-            };
-            if let Some(ni) = needs_input {
+            if let Some(ni) = err.downcast_ref::<ask::NeedsInput>() {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&ni.to_json()).unwrap_or_default()
+                    serde_json::to_string_pretty(&ni.to_json()).unwrap_or_else(|_| {
+                        // Never emit an empty document: a caller keying on
+                        // `status` must still see what happened.
+                        r#"{"status":"needs-input","error":"the questions could not be serialized"}"#
+                            .to_string()
+                    })
                 );
                 if output == OutputFormat::Text {
                     eprintln!(
@@ -122,7 +120,6 @@ pub fn exit_code_for(result: Result<()>, output: OutputFormat) -> ExitCode {
                 Some(CommandError::AuthDenied(_)) => ExitCode::AuthDenied,
                 Some(CommandError::DriftOrConflict(_)) => ExitCode::DriftOrConflict,
                 Some(CommandError::Usage(_)) => ExitCode::Usage,
-                Some(CommandError::NeedsInput(_)) => ExitCode::NeedsInput,
                 None => match err.downcast_ref::<rigg_client::error::ClientError>() {
                     Some(ce) if is_auth_error(ce) => ExitCode::AuthDenied,
                     _ => ExitCode::Error,
@@ -143,6 +140,18 @@ pub fn is_auth_error(err: &rigg_client::error::ClientError) -> bool {
         } | rigg_client::error::ClientError::Auth(_)
             | rigg_client::error::ClientError::Forbidden { .. }
     )
+}
+
+/// Is `RIGG_NON_INTERACTIVE` set to something that means "yes"? Documented
+/// as "set it to 1", but an empty value — what `FOO=` and many CI templates
+/// produce — and the explicit off-switches `0` / `false` must not silently
+/// disable prompting.
+fn non_interactive_env() -> bool {
+    std::env::var("RIGG_NON_INTERACTIVE").is_ok_and(|v| non_interactive_value(&v))
+}
+
+fn non_interactive_value(v: &str) -> bool {
+    !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
 }
 
 /// Global flags resolved once per invocation.
@@ -178,7 +187,7 @@ impl GlobalContext {
             output: cli.output,
             yes: cli.yes,
             non_interactive: cli.non_interactive
-                || std::env::var("RIGG_NON_INTERACTIVE").is_ok()
+                || non_interactive_env()
                 || !std::io::stdin().is_terminal()
                 || !std::io::stdout().is_terminal(),
             no_color: cli.no_color,
@@ -331,11 +340,41 @@ pub fn resolve_env_or_choose(
     }
 }
 
+/// The protected-environment question for `env`, or `None` when the
+/// environment is unprotected and the gate is a no-op.
+///
+/// Split out of [`confirm_protected_env`] so a guided flow that has several
+/// questions to ask can push this one into its own `ask_all` batch — a
+/// caller then gets the protected-env confirmation and its other missing
+/// answers in a single `needs-input` document instead of one per round-trip.
+/// Pair it with [`confirm_env_answer`] to honour a `--confirm-env` flag.
+pub fn protected_env_question(env: &ResolvedEnv, operation: &str) -> Option<ask::Question> {
+    env.protected()
+        .then(|| ask::Question::confirm_env(&env.name, operation))
+}
+
+/// The `(question id, value)` pair a `--confirm-env <name>` flag stands for:
+/// `confirm.protected.<env>` = `<name>`. `None` when the flag was not given.
+/// Insert it into the answers map handed to an `Asker` and the flag behaves
+/// exactly like `--answer confirm.protected.<env>=<name>`.
+pub fn confirm_env_answer(env_name: &str, confirm_env: Option<&str>) -> Option<(String, String)> {
+    confirm_env.map(|value| (format!("confirm.protected.{env_name}"), value.to_string()))
+}
+
 /// Gate a cloud-mutating operation (`push` apply/`--prune`, `delete
-/// --remote`) against an environment's `policy.protected` flag, speaking the
-/// question protocol: the gate is an `ask::Question::confirm_env` put to
-/// `ctx.asker()`, so it composes with `--answer` / `--answers-file` and
-/// `--yes` like any other question.
+/// --remote`, `az indexer run`/`reset`) against an environment's
+/// `policy.protected` flag, speaking the question protocol: the gate is
+/// [`protected_env_question`] put to `ctx.asker()`, so it composes with
+/// `--answer` / `--answers-file` and `--yes` like any other question. This
+/// is the one-shot wrapper — a flow with more to ask should batch
+/// [`protected_env_question`] into its own `ask_all` instead.
+///
+/// `operation` names the mutation in the prompt ("… to confirm push:");
+/// `command` is what a caller re-runs once it has the answer (`"push"`,
+/// `"delete"`, `"az indexer run"`, …) and `context` is what it needs to
+/// re-run it (`project`, `indexer`, …) — both are echoed in the
+/// `needs-input` document. `env` is added to `context` when the caller left
+/// it out.
 ///
 /// Returns `Ok(true)` when the operation may proceed, `Ok(false)` when the
 /// user declined via an interactive typed-name mismatch — callers should
@@ -369,16 +408,22 @@ pub fn confirm_protected_env(
     env: &ResolvedEnv,
     confirm_env: Option<&str>,
     operation: &str,
+    command: &str,
+    context: serde_json::Value,
 ) -> Result<bool> {
-    if !env.protected() {
+    let Some(question) = protected_env_question(env, operation) else {
         return Ok(true);
-    }
-    let question = ask::Question::confirm_env(&env.name, operation);
+    };
     let mut scoped = ctx.clone();
-    if let Some(name) = confirm_env {
-        scoped.answers.insert(question.id.clone(), name.to_string());
+    if let Some((id, value)) = confirm_env_answer(&env.name, confirm_env) {
+        scoped.answers.insert(id, value);
     }
-    let mut asker = scoped.asker(operation, serde_json::json!({"env": env.name}));
+    let mut context = context;
+    if let Some(obj) = context.as_object_mut() {
+        obj.entry("env")
+            .or_insert_with(|| serde_json::json!(env.name));
+    }
+    let mut asker = scoped.asker(command, context);
     match asker.ask(&question) {
         Ok(answer) => Ok(answer.as_bool().unwrap_or(false)),
         // A pre-supplied `--confirm-env` that fails coercion (wrong name) is
@@ -429,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn needs_input_maps_to_exit_6_bare_or_wrapped() {
+    fn needs_input_maps_to_exit_6() {
         let bare: Result<()> = Err(anyhow!(ask::NeedsInput {
             command: "promote".into(),
             context: serde_json::json!({}),
@@ -439,15 +484,38 @@ mod tests {
             exit_code_for(bare, OutputFormat::Text),
             ExitCode::NeedsInput
         );
+    }
 
-        let wrapped: Result<()> = Err(anyhow!(CommandError::NeedsInput(ask::NeedsInput {
-            command: "promote".into(),
-            context: serde_json::json!({}),
-            questions: vec![ask::Question::text("x", "?")],
-        })));
-        assert_eq!(
-            exit_code_for(wrapped, OutputFormat::Text),
-            ExitCode::NeedsInput
+    #[test]
+    fn non_interactive_env_ignores_empty_and_off_values() {
+        assert!(non_interactive_value("1"));
+        assert!(non_interactive_value("yes"));
+        assert!(!non_interactive_value(""));
+        assert!(!non_interactive_value("0"));
+        assert!(!non_interactive_value("false"));
+        assert!(!non_interactive_value("FALSE"));
+    }
+
+    #[test]
+    fn protected_env_question_and_confirm_env_answer_line_up() {
+        let mut env = ResolvedEnv {
+            name: "prod".to_string(),
+            env: rigg_core::workspace::Environment::default(),
+        };
+        assert!(
+            protected_env_question(&env, "push").is_none(),
+            "unprotected environments ask nothing"
         );
+        env.env.policy.protected = true;
+        let q = protected_env_question(&env, "push").expect("protected env asks");
+        assert_eq!(q.id, "confirm.protected.prod");
+
+        assert_eq!(confirm_env_answer("prod", None), None);
+        // The `--confirm-env` sugar must key the question's own id exactly,
+        // or it would never satisfy the gate.
+        let (id, value) = confirm_env_answer("prod", Some("prod")).expect("flag given");
+        assert_eq!(id, q.id);
+        assert_eq!(value, "prod");
+        assert_eq!(ask::coerce(&q, &value).unwrap().as_bool(), Some(true));
     }
 }

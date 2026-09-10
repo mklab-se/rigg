@@ -14,6 +14,7 @@ use rigg_core::workspace::{ResolvedEnv, Workspace};
 use crate::cli::AzCommands;
 use crate::commands::remote::Remote;
 use crate::commands::{GlobalContext, load_workspace, resolve_env};
+use crate::say;
 
 pub async fn run(ctx: &GlobalContext, command: AzCommands) -> Result<()> {
     match command {
@@ -58,8 +59,11 @@ pub(crate) fn connect(ctx: &GlobalContext) -> Result<(Workspace, ResolvedEnv, Re
             env.name
         );
     };
-    if !ctx.json() {
-        remote.print_targets();
+    // The banner names the environment, service and URL every `az` command
+    // is about to act on — it belongs in every mode, so `--output json`
+    // gets it on stderr (via `say!`) rather than not at all.
+    for line in remote.target_lines() {
+        say!(ctx, "{line}");
     }
     Ok((ws, env, remote))
 }

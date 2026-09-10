@@ -619,7 +619,14 @@ async fn push_project(
     // follows. Dry runs never reach here — they return above, before this
     // point, so previewing a protected env's plan without confirming is
     // still the whole point of `--dry-run`.
-    if !confirm_protected_env(ctx, env, args.confirm_env.as_deref(), "push")? {
+    if !confirm_protected_env(
+        ctx,
+        env,
+        args.confirm_env.as_deref(),
+        "push",
+        "push",
+        serde_json::json!({"project": project.name, "env": env.name}),
+    )? {
         say!(ctx, "Aborted.");
         return Ok(false);
     }

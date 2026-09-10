@@ -154,7 +154,7 @@ per-invocation confirmation before rigg mutates it: `push` (create/update or
 `--prune`) and `delete --remote`.
 
 ```bash
-rigg push my-rag --env prod --yes                        # blocked: prod is protected
+rigg push my-rag --env prod --yes                        # exits 6: prod is protected, asks to be named
 rigg push my-rag --env prod --yes --confirm-env prod     # proceeds
 ```
 
@@ -183,6 +183,16 @@ and exits 6. Re-run with `--answer <id>=<value>` (repeatable) or
 `--answers-file <path>`; answered questions are never asked again. A
 protected environment's typed confirmation is such a question
 (`confirm.protected.<env>`); `--confirm-env <env>` remains as shorthand.
+
+rigg treats a session as non-interactive when stdin or stdout is not a
+terminal, with `--non-interactive`, `--yes` or `--output json`, or when
+`RIGG_NON_INTERACTIVE=1` is set — the environment variable is the way to
+force script behaviour while still sitting at a terminal. Answers supplied
+up front are always used, in either mode: a value that is *wrong* (a
+`--confirm-env` that doesn't equal the environment's name, an `--answer`
+outside a question's candidates) is a usage error (exit 2) naming what was
+expected — on a terminal too, where rigg deliberately does not fall back to
+prompting for a value you already tried to give.
 
 ## See also
 

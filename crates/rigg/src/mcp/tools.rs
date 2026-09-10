@@ -70,6 +70,13 @@ pub struct IndexerRunParams {
     /// rigg_indexer_status).
     #[schemars(default)]
     pub force: Option<bool>,
+    /// Required consent for protected environments: must equal the environment's name.
+    /// Ignored unless force=true.
+    #[schemars(default)]
+    pub confirm_env: Option<String>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -236,8 +243,11 @@ fn rigg_cli<S: AsRef<str>>(args: &[S]) -> String {
                 0 => stdout,
                 // needs-input: the JSON document on stdout IS the tool
                 // result (not an error) — a caller answers the listed
-                // questions (`answers`, id → value) and calls again.
-                6 => stdout,
+                // questions (`answers`, id → value) and calls again. The
+                // mutating tools run the CLI in text mode (push prints no
+                // JSON on success), so the plan narration precedes the
+                // document on stdout: isolate it.
+                6 => isolate_needs_input(&stdout),
                 3 => format!("VALIDATION FAILED (exit 3)\n{stdout}\n{stderr}"),
                 4 => format!("AUTH/PERMISSION DENIED (exit 4)\n{stdout}\n{stderr}"),
                 5 => format!("DRIFT/CONFLICT DETECTED (exit 5)\n{stdout}\n{stderr}"),
@@ -245,6 +255,28 @@ fn rigg_cli<S: AsRef<str>>(args: &[S]) -> String {
             }
         }
         Err(e) => format!("Error: failed to run rigg: {e}"),
+    }
+}
+
+/// Isolate the `needs-input` protocol document from an exit-6 run's stdout.
+///
+/// In text mode the document is preceded by the command's own prose (the
+/// push plan, the delete list). The document is always the trailing
+/// pretty-printed JSON object, so scan back to the last line that is
+/// exactly `{` and try to parse from there; return that document alone when
+/// it really is one, and the untouched stdout when it is not (so nothing is
+/// ever silently dropped).
+fn isolate_needs_input(stdout: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().collect();
+    let Some(start) = lines.iter().rposition(|l| l.trim_end() == "{") else {
+        return stdout.to_string();
+    };
+    let tail = lines[start..].join("\n");
+    match serde_json::from_str::<serde_json::Value>(&tail) {
+        Ok(doc) if doc.get("status").and_then(|s| s.as_str()) == Some("needs-input") => {
+            serde_json::to_string_pretty(&doc).unwrap_or(tail)
+        }
+        _ => stdout.to_string(),
     }
 }
 
@@ -454,7 +486,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Trigger a live indexer run. Without force: returns the current status as a preview. With force=true: triggers the run (fire-and-forget) — poll rigg_indexer_status until the run completes. Part of the post-push verification flow: rigg_push → rigg_indexer_run → rigg_indexer_status → rigg_query → rigg_ask."
+        description = "Trigger a live indexer run. Without force: returns the current status as a preview. With force=true: triggers the run (fire-and-forget) — poll rigg_indexer_status until the run completes. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry). Part of the post-push verification flow: rigg_push → rigg_indexer_run → rigg_indexer_status → rigg_query → rigg_ask."
     )]
     async fn rigg_indexer_run(&self, Parameters(params): Parameters<IndexerRunParams>) -> String {
         if !params.force.unwrap_or(false) {
@@ -464,8 +496,16 @@ impl RiggMcpServer {
                 "PREVIEW (no run triggered) — current status:\n{preview}\nRun again with force=true to trigger a run."
             );
         }
-        let args = vec!["az", "indexer", "run", &params.indexer, "--yes"];
-        rigg_cli(&with_common(args, &params.env, false))
+        let mut args = vec!["az", "indexer", "run", &params.indexer, "--yes"];
+        if let Some(confirm_env) = &params.confirm_env {
+            args.extend(["--confirm-env", confirm_env]);
+        }
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            false,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(
@@ -563,6 +603,33 @@ mod tests {
         let args = with_common_answers(vec!["push"], &None, true, Some(&answers));
         assert!(args.windows(2).any(|w| w == ["--answer", "a=1"]));
         assert!(args.windows(2).any(|w| w == ["--answer", "b=2"]));
+    }
+
+    #[test]
+    fn isolate_needs_input_returns_the_document_alone() {
+        let stdout = "Push project 'demo' (env: prod, protected)\n  \
+                      search: mock (https://example.invalid)\n  \
+                      + indexes/idx\n{\n  \"status\": \"needs-input\",\n  \
+                      \"command\": \"push\",\n  \"context\": {\n    \"env\": \"prod\"\n  },\n  \
+                      \"questions\": []\n}\n";
+        let isolated = isolate_needs_input(stdout);
+        assert!(
+            !isolated.contains("Push project"),
+            "prose must be stripped: {isolated}"
+        );
+        let doc: serde_json::Value = serde_json::from_str(&isolated).expect("pure JSON");
+        assert_eq!(doc["status"], "needs-input");
+        assert_eq!(doc["command"], "push");
+    }
+
+    #[test]
+    fn isolate_needs_input_passes_through_anything_else() {
+        let plain = "Push project 'demo'\n  + indexes/idx\nAborted.\n";
+        assert_eq!(isolate_needs_input(plain), plain);
+        // A trailing JSON object that is NOT a needs-input document is left
+        // where it is, prose and all.
+        let other = "note\n{\n  \"status\": \"ok\"\n}\n";
+        assert_eq!(isolate_needs_input(other), other);
     }
 
     #[test]

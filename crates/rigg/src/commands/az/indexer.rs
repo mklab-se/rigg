@@ -44,7 +44,14 @@ fn confirm_reset(ctx: &GlobalContext, name: &str) -> Result<bool> {
 
 async fn run_indexer(ctx: &GlobalContext, args: AzIndexerRunArgs) -> Result<()> {
     let (_ws, env, remote) = super::connect(ctx)?;
-    if !confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "indexer run")? {
+    if !confirm_protected_env(
+        ctx,
+        &env,
+        args.confirm_env.as_deref(),
+        "indexer run",
+        "az indexer run",
+        serde_json::json!({"indexer": args.name, "env": env.name}),
+    )? {
         println!("Aborted.");
         return Ok(());
     }
@@ -107,7 +114,14 @@ async fn run_indexer(ctx: &GlobalContext, args: AzIndexerRunArgs) -> Result<()> 
 
 async fn reset_indexer(ctx: &GlobalContext, args: AzIndexerResetArgs) -> Result<()> {
     let (_ws, env, remote) = super::connect(ctx)?;
-    if !confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "indexer reset")? {
+    if !confirm_protected_env(
+        ctx,
+        &env,
+        args.confirm_env.as_deref(),
+        "indexer reset",
+        "az indexer reset",
+        serde_json::json!({"indexer": args.name, "env": env.name}),
+    )? {
         println!("Aborted.");
         return Ok(());
     }

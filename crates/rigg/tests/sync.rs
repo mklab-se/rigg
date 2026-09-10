@@ -1089,6 +1089,58 @@ async fn protected_env_push_accepts_answer_flag() {
 }
 
 #[tokio::test]
+async fn protected_env_push_accepts_answers_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/indexes/idx"))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            ResponseTemplate::new(201).set_body_json(body)
+        })
+        .mount(&server)
+        .await;
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+    // The whole point of --answers-file: an agent writes the answers to the
+    // questions a previous exit-6 run listed, then re-runs unchanged.
+    let answers = ws.path().join("answers.json");
+    std::fs::write(&answers, r#"{"confirm.protected.prod": "prod"}"#).unwrap();
+
+    rigg(ws.path())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "prod",
+            "--yes",
+            "--answers-file",
+            answers.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(puts, 1);
+}
+
+#[tokio::test]
 async fn protected_env_push_wrong_confirm_env_exits_usage_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -1118,7 +1170,9 @@ async fn protected_env_push_wrong_confirm_env_exits_usage_error() {
         ])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("prod"));
+        .stderr(predicate::str::contains(
+            "--confirm-env must equal the environment name 'prod' exactly",
+        ));
 
     let puts = server
         .received_requests()
@@ -1262,6 +1316,87 @@ async fn protected_env_delete_blocks_non_interactive_without_confirm_env() {
     assert_eq!(
         deletes, 0,
         "protected env must not be deleted without confirmation"
+    );
+}
+
+#[tokio::test]
+async fn protected_env_delete_json_emits_needs_input_and_answer_flag_proceeds() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"name": "idx", "fields": []})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": []}),
+    );
+
+    // --output json: stdout is the needs-input document and nothing else
+    // (the deletion list narrates on stderr), exit 6.
+    let out = rigg(ws.path())
+        .args([
+            "delete", "demo", "--remote", "-e", "prod", "--yes", "--output", "json",
+        ])
+        .assert()
+        .code(6);
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["status"], "needs-input");
+    assert_eq!(doc["command"], "delete");
+    assert_eq!(doc["context"]["project"], "demo");
+    assert_eq!(doc["context"]["env"], "prod");
+    assert_eq!(doc["questions"][0]["id"], "confirm.protected.prod");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "DELETE")
+            .count(),
+        0,
+        "the gate must run before any deletion"
+    );
+
+    // Answering the very question the document listed lets the same command
+    // through.
+    rigg(ws.path())
+        .args([
+            "delete",
+            "demo",
+            "--remote",
+            "-e",
+            "prod",
+            "--yes",
+            "--output",
+            "json",
+            "--answer",
+            "confirm.protected.prod=prod",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "DELETE")
+            .count(),
+        1
     );
 }
 

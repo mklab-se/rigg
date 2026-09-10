@@ -24,6 +24,22 @@ around that. No compatibility with 1.x workspaces.
   written in the documented `knowledgebases/<kb>/mcp?api-version=2026-08-01-preview`
   form.
 - Storage account `listKeys` is no longer called anywhere.
+- **The protected-environment gate now exits 6, not 2.** A mutation against
+  `policy: { protected: true }` with no confirmation prints a `needs-input`
+  document naming the `confirm.protected.<env>` question instead of failing
+  as a usage error. `--confirm-env <env>` still works (it answers that
+  question); a *wrong* `--confirm-env` value remains a usage error (exit 2).
+- **`--output json` implies non-interactive**, and interactive mode now
+  additionally requires stdin to be a TTY (stdout alone is not enough).
+  Either way an unanswered question becomes a `needs-input` document plus
+  exit 6 rather than a prompt nobody can see.
+- **`push` and `delete` prose goes to stderr under `--output json`** (the
+  plan, the target banner, progress), so stdout carries only JSON documents.
+  `rigg az` commands print their target banner in every output mode — on
+  stderr in json mode — where json mode previously suppressed it.
+- **New environment variable `RIGG_NON_INTERACTIVE`** — set it to `1` (any
+  non-empty value other than `0`/`false`) to force non-interactive behaviour
+  on a terminal, equivalent to `--non-interactive`.
 
 ### Added
 

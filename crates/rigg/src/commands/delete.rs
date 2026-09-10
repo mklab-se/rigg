@@ -74,7 +74,14 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     // Protected-env gate: separate from, and comes before, the typed
     // project-name confirmation below (which guards against deleting the
     // wrong project, not against mutating a protected environment).
-    if !confirm_protected_env(ctx, &env, args.confirm_env.as_deref(), "delete")? {
+    if !confirm_protected_env(
+        ctx,
+        &env,
+        args.confirm_env.as_deref(),
+        "delete",
+        "delete",
+        serde_json::json!({"project": project.name, "env": env.name}),
+    )? {
         say!(ctx, "Aborted.");
         return Ok(());
     }

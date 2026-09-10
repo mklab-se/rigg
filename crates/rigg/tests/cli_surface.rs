@@ -153,6 +153,50 @@ fn adopt_without_project_non_interactive_is_usage_error() {
         .stderr(predicate::str::contains("interactive").or(predicate::str::contains("project")));
 }
 
+/// Workspace with two environments, so a command that must not guess which
+/// one to act on has to either ask (interactive) or fail (non-interactive).
+fn workspace_two_envs() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: unit-test-svc }\n  \
+         prod:\n    policy: { protected: true }\n    search: { service: unit-test-svc-prod }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+/// `rigg adopt` with several environments and no `--env` is the cheapest
+/// probe for the interactive/non-interactive decision: interactively it
+/// offers a pick-list, non-interactively it is a usage error naming the
+/// candidates — and it never touches the network either way.
+#[test]
+fn rigg_non_interactive_env_var_selects_script_mode() {
+    let ws = workspace_two_envs();
+    rigg()
+        .current_dir(ws.path())
+        .env("RIGG_NON_INTERACTIVE", "1")
+        .args(["adopt", "demo", "all"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("multiple environments configured"))
+        .stderr(predicate::str::contains("--env"));
+}
+
+#[test]
+fn output_json_alone_selects_script_mode() {
+    let ws = workspace_two_envs();
+    rigg()
+        .current_dir(ws.path())
+        .args(["adopt", "demo", "all", "--output", "json"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("multiple environments configured"));
+}
+
 #[test]
 fn validate_rejects_secrets_exit_3() {
     let ws = workspace();

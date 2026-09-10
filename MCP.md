@@ -52,7 +52,28 @@ The server exposes 12 tools: 8 project-scoped configuration tools and 4 runtime-
 
 Mutating tools (`rigg_pull`, `rigg_push`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 
-`rigg_push` and `rigg_delete` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation is refused unless `confirm_env` matches the environment's name exactly — an AI agent can't push or delete against a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly.
+`rigg_push`, `rigg_delete` and `rigg_indexer_run` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation does not just happen — with no confirmation the tool returns a `needs-input` document asking `confirm.protected.<env>` (see below), and the answer must equal the environment's name exactly. An AI agent can't push, delete or re-index a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly. `confirm_env` remains the shorthand: passing it answers that question up front.
+
+### The needs-input loop
+
+Guided flows ask questions. When a tool call needs an answer the caller hasn't given, the underlying CLI exits 6 and the tool returns the `needs-input` JSON document instead of its usual result — **that document is the result, not an error**:
+
+```json
+{
+  "status": "needs-input",
+  "command": "push",
+  "context": { "project": "docs-rag", "env": "prod" },
+  "questions": [
+    {
+      "id": "confirm.protected.prod",
+      "kind": "confirm-env",
+      "prompt": "Environment 'prod' is protected. Type its name to confirm push:"
+    }
+  ]
+}
+```
+
+Answer by calling the **same tool again** with `answers` filled in — a map of question id → value, here `{"confirm.protected.prod": "prod"}`. Answered questions are never asked again. Every tool that can reach a question accepts `answers` (see the per-tool tables below).
 
 ### rigg_status
 
@@ -62,6 +83,7 @@ Sync status per project: which resources are in sync, local-ahead, remote-ahead,
 |---|---|---|
 | `project` | string? | Project name (omit when the workspace has exactly one project) |
 | `env` | string? | Environment name (omit for all environments) |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_describe
 
@@ -71,6 +93,7 @@ Full workspace description: projects, all resources with definitions and file pa
 |---|---|---|
 | `project` | string? | Project name |
 | `env` | string? | Environment name |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_env_list
 
@@ -95,6 +118,7 @@ Semantic diff of local project files vs live Azure (or one environment vs anothe
 | `env` | string? | Environment name |
 | `only` | string? | Restrict to one resource: `<kind-dir>/<name>` (e.g. `indexes/my-index`) |
 | `compare_env` | string? | Compare `env` against this environment instead of local files |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_pull
 
@@ -106,6 +130,7 @@ Pull remote resource definitions into the project's files.
 | `env` | string? | Environment name |
 | `adopt` | bool? | Adopt unmanaged remote resources into the project (requires an explicit `project`) |
 | `force` | bool? | Without force: returns the local-vs-remote diff as a preview. With `force: true`: executes the pull |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_push
 
@@ -119,6 +144,7 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `force` | bool? | Without force: returns the push plan (dry run). With `force: true`: executes |
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 | `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_indexer_status
 
@@ -138,6 +164,8 @@ Trigger a live indexer run. Without `force`: returns the current status (preview
 | `indexer` | string | Indexer name |
 | `env` | string? | Environment name |
 | `force` | bool? | Preview without, trigger with `true` |
+| `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ### rigg_query
 
@@ -177,6 +205,7 @@ Delete ALL of a project's resources from Azure. Local files are kept, so pushing
 | `env` | string? | Environment name |
 | `force` | bool? | Without force: returns a preview of what would be removed. With `force: true`: executes |
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
 ## Example Workflows
 
@@ -223,7 +252,9 @@ into the file, or push to overwrite it.
 
 ## How It Works
 
-Every MCP tool shells out to the rigg CLI itself (`rigg … --output json`), so tool behavior is *exactly* CLI behavior — same validation, same normalization, same exit codes. Non-zero exit codes are surfaced to the AI with their meaning (exit 3 = validation failed, 4 = auth denied, 5 = drift/conflict), so it can react appropriately.
+Every MCP tool shells out to the rigg CLI itself (`rigg … --output json`), so tool behavior is *exactly* CLI behavior — same validation, same normalization, same exit codes. Non-zero exit codes are surfaced to the AI with their meaning (exit 2 = usage error, 3 = validation failed, 4 = auth denied, 5 = drift/conflict, 6 = needs input), so it can react appropriately.
+
+Exit 6 is the one that isn't a failure: the CLI printed a `needs-input` document, and the tool returns that document on its own (any prose the command printed first is stripped). Call the tool again with `answers` to continue — see [the needs-input loop](#the-needs-input-loop).
 
 ## See Also
 

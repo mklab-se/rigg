@@ -17,10 +17,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::interactive;
+use super::{CommandError, interactive};
 
 /// Id prefixes every `--answer <id>=<value>` is validated against at
 /// startup. Later tasks and workstreams append their own prefixes
@@ -195,7 +195,10 @@ pub trait Asker {
 /// Answers a fixed set of [`Question`]s from a pre-supplied map
 /// (`--answer id=value` / `--answers-file`). Anything missing is collected
 /// into a single [`NeedsInput`] error rather than failing on the first gap,
-/// so a caller sees every outstanding question in one round-trip.
+/// so a caller sees every outstanding question in one round-trip. A
+/// malformed *supplied* answer is collected the same way and reported
+/// together with the rest — see [`ScriptedAsker::ask_all`] for the
+/// precedence between the two.
 pub struct ScriptedAsker {
     answers: BTreeMap<String, String>,
     command: String,
@@ -232,14 +235,35 @@ impl Asker for ScriptedAsker {
         }
     }
 
+    /// Answers every question it can and accumulates the rest, so one
+    /// round-trip reports everything that is wrong at once: questions with
+    /// no supplied answer become [`NeedsInput`], answers that fail
+    /// [`coerce`] become a usage error.
+    ///
+    /// Precedence when both happen: the **bad answers win**. A caller that
+    /// supplied a wrong value gets `CommandError::Usage` (exit 2) naming
+    /// every invalid answer — re-running with the missing answers alone
+    /// would fail again on the same bad value, so the usage error is the
+    /// actionable one. Only when every supplied answer coerces cleanly and
+    /// something is still missing does this return `NeedsInput` (exit 6).
     fn ask_all(&mut self, qs: &[Question]) -> Result<Vec<Answer>> {
         let mut answers = Vec::with_capacity(qs.len());
         let mut missing = Vec::new();
+        let mut invalid = Vec::new();
         for q in qs {
             match self.answers.get(&q.id) {
-                Some(raw) => answers.push(coerce(q, raw)?),
+                Some(raw) => match coerce(q, raw) {
+                    Ok(answer) => answers.push(answer),
+                    Err(e) => invalid.push(format!("{e:#}")),
+                },
                 None => missing.push(q.clone()),
             }
+        }
+        if !invalid.is_empty() {
+            return Err(anyhow!(CommandError::Usage(format!(
+                "invalid answer(s): {}",
+                invalid.join("; ")
+            ))));
         }
         if !missing.is_empty() {
             return Err(self.needs_input(missing));
@@ -464,6 +488,31 @@ mod tests {
             doc["questions"][0].get("candidates").is_none(),
             "omitted when empty"
         );
+    }
+
+    #[test]
+    fn scripted_ask_all_reports_bad_answers_before_missing_ones() {
+        let mut asker = ScriptedAsker::new(
+            [("confirm.protected.prod".to_string(), "prd".to_string())]
+                .into_iter()
+                .collect(),
+            "push",
+            json!({"env": "prod"}),
+        );
+        let bad = Question::confirm_env("prod", "push");
+        let missing = Question::text("binding.prod.enrich-fn", "Function app for prod?");
+        let err = asker.ask_all(&[bad, missing]).unwrap_err();
+        assert!(
+            err.downcast_ref::<NeedsInput>().is_none(),
+            "a bad answer outranks the missing question"
+        );
+        match err.downcast_ref::<CommandError>() {
+            Some(CommandError::Usage(msg)) => {
+                assert!(msg.starts_with("invalid answer(s): "), "got: {msg}");
+                assert!(msg.contains("confirm.protected.prod"), "got: {msg}");
+            }
+            other => panic!("expected a usage error, got {other:?}"),
+        }
     }
 
     #[test]
