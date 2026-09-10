@@ -20,6 +20,7 @@ pub mod diff;
 pub mod discovery;
 pub mod doctor;
 pub mod env;
+pub mod infra_report;
 pub mod init;
 pub mod interactive;
 pub mod mcp_cmd;
@@ -38,7 +39,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
+use rigg_core::workspace::{Project, ResolvedEnv, WORKSPACE_FILE, Workspace, WorkspaceError};
 
 use crate::cli::{Cli, OutputFormat};
 
@@ -235,9 +236,34 @@ pub fn load_workspace() -> Result<Workspace> {
 }
 
 pub fn load_workspace_from(start: &Path) -> Result<Workspace> {
-    Workspace::discover(start).context(
-        "not inside a rigg workspace (run `rigg init` to create one, or cd into a workspace)",
-    )
+    match Workspace::discover(start) {
+        Ok(ws) => Ok(ws),
+        // A rigg.yaml that exists but cannot be read or parsed is a
+        // different problem from having no workspace at all — saying "run
+        // `rigg init`" would send the user to overwrite the very file that
+        // needs fixing, and would bury the parser's line/column.
+        Err(e) => match workspace_file_detail(&e) {
+            Some(path) => Err(anyhow!(
+                "{} found at {path} but could not be read: {e}",
+                WORKSPACE_FILE
+            )),
+            None => Err(e).context(
+                "not inside a rigg workspace (run `rigg init` to create one, or cd into a workspace)",
+            ),
+        },
+    }
+}
+
+/// The `rigg.yaml` path an unreadable/unparsable workspace error names, or
+/// `None` for anything else (a missing workspace, an unreachable `start`).
+fn workspace_file_detail(e: &WorkspaceError) -> Option<String> {
+    let path = match e {
+        WorkspaceError::Parse { path, .. } | WorkspaceError::Io { path, .. } => path,
+        _ => return None,
+    };
+    path.file_name()
+        .is_some_and(|f| f == WORKSPACE_FILE)
+        .then(|| path.display().to_string())
 }
 
 /// Text-mode hint printed when the workspace has no projects yet.

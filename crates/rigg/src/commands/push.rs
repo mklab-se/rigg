@@ -14,6 +14,8 @@ use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use serde_json::{Value, json};
 
+use rigg_core::binding::{BindingCache, EnvBindings};
+use rigg_core::infra;
 use rigg_core::normalize::normalize_for_push;
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
@@ -22,6 +24,7 @@ use rigg_core::{graph, migrate, registry};
 
 use crate::cli::PushArgs;
 use crate::commands::credentials;
+use crate::commands::infra_report::{self, Level};
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
     CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
@@ -413,6 +416,14 @@ async fn push_project(
         say!(ctx, "  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
     }
+
+    // Binding preflight: classify every infrastructure reference in every
+    // body this push would write, exactly as `rigg validate` does, and
+    // refuse before a single mutation when one of them belongs to another
+    // environment (a leak) — or, in a strict-bindings environment, is bound
+    // nowhere at all. Runs before the protected gate so the refusal is the
+    // first thing a wrong-environment push hits.
+    binding_preflight(ctx, ws, env, &to_push, &replaces)?;
 
     // Resolve missing connections before any gate: interactively, discover
     // the storage account by container via ARM (the user is logged in with
@@ -860,6 +871,77 @@ async fn push_project(
 
     state.save(ws, &env.name, &project.name)?;
     Ok(false)
+}
+
+/// Classify every infrastructure reference in the bodies this push would
+/// write against `env`'s bindings (and every other environment's, for
+/// leak/share detection) — the same machinery `rigg validate` runs, with the
+/// same message texts ([`infra_report`]).
+///
+/// A leak is always an error; unbound/external references are errors in a
+/// strict-bindings environment (the default for protected ones) and warnings
+/// otherwise. Called before any mutating call, so an error means nothing was
+/// written to Azure.
+fn binding_preflight(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    env: &ResolvedEnv,
+    to_push: &[PlanItem],
+    replaces: &[ReplaceBundle],
+) -> Result<()> {
+    let mut env_bindings: BTreeMap<String, EnvBindings> = BTreeMap::new();
+    for (name, e) in &ws.config.environments {
+        let cache = BindingCache::load(ws, name);
+        env_bindings.insert(name.clone(), EnvBindings::of_env(name, e, Some(&cache)));
+    }
+    let Some(this) = env_bindings.get(&env.name) else {
+        return Ok(());
+    };
+    let others: Vec<EnvBindings> = env_bindings
+        .iter()
+        .filter(|(name, _)| name.as_str() != env.name.as_str())
+        .map(|(_, eb)| eb.clone())
+        .collect();
+    let strict = env.strict_bindings();
+
+    // Every document that would leave the machine: plain pushes, each
+    // replace's new knowledge source, and the sub-resources a replace
+    // re-creates inside its bundle.
+    let mut bodies: Vec<(&ResourceRef, &Value)> = to_push.iter().map(|p| (&p.r, &p.body)).collect();
+    for bundle in replaces {
+        bodies.push((&bundle.ks, &bundle.new_body));
+        bodies.extend(bundle.sub.iter().map(|(r, body)| (r, body)));
+    }
+
+    let mut problems: Vec<String> = Vec::new();
+    for (r, body) in bodies {
+        let display = r.to_string();
+        let refs = infra::extract(r.kind, body);
+        if refs.is_empty() {
+            continue;
+        }
+        for c in infra::classify(this, &others, refs) {
+            let Some((level, message)) =
+                infra_report::classified_finding(&c, &env.name, &display, strict)
+            else {
+                continue;
+            };
+            match level {
+                Level::Error => problems.push(message),
+                Level::Warning => say!(ctx, "  {} {message}", "!".yellow()),
+            }
+        }
+    }
+
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(CommandError::Validation(format!(
+        "{} infrastructure binding problem(s) in the push plan for '{}'; nothing was pushed:\n  {}",
+        problems.len(),
+        env.name,
+        problems.join("\n  ")
+    ))))
 }
 
 fn parse_key(key: &str) -> Option<ResourceRef> {

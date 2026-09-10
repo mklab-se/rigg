@@ -38,7 +38,7 @@ mkdir my-rag && cd my-rag
 rigg init .
 ```
 
-rigg discovers your Azure AI Search services and Foundry projects via ARM and writes `rigg.yaml` — environments and service connections. Resources live in projects, one resource tree per environment (`projects/<name>/envs/<env>/...` — see [CONCEPTS.md](CONCEPTS.md#environments)):
+rigg discovers your Azure AI Search services and Foundry projects via ARM and writes `rigg.yaml` — environments with their targets, dependencies and policy. Resources live in projects, one resource tree per environment (`projects/<name>/envs/<env>/...` — see [CONCEPTS.md](CONCEPTS.md#environments)):
 
 ```bash
 rigg new project docs-rag

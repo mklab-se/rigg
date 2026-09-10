@@ -17,6 +17,7 @@ use rigg_core::store::{Store, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, Workspace};
 
 use crate::cli::ValidateArgs;
+use crate::commands::infra_report::{self, Level};
 use crate::commands::{CommandError, GlobalContext, load_workspace};
 
 /// One bound/shared infrastructure reference, surfaced with `--show-bindings`.
@@ -60,7 +61,6 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
         let cache = BindingCache::load(&ws, name);
         env_bindings.insert(name.clone(), EnvBindings::of_env(name, env, Some(&cache)));
     }
-    let default_env = ws.default_env_name().unwrap_or("dev").to_string();
 
     // Validate every environment any project participates in. A project
     // with no env dirs yet reports nothing (empty project).
@@ -115,7 +115,6 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
                 this_bindings,
                 &other_bindings,
                 strict_bindings,
-                &default_env,
             );
             problems.extend(
                 outcome
@@ -186,90 +185,44 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
 }
 
 /// Classify one found infrastructure reference and record the result as a
-/// problem, a warning, or a (verbose-only) bound/shared row.
-#[allow(clippy::too_many_arguments)]
+/// problem, a warning, or a (verbose-only) bound/shared row. The messages
+/// come from [`infra_report`], shared with `push`'s binding preflight.
 fn record_classified(
     c: infra::Classified,
     env: &str,
     display: &str,
-    default_env: &str,
     strict_bindings: bool,
     problems: &mut Vec<String>,
     warnings: &mut Vec<String>,
     bindings: &mut Vec<BindingRow>,
 ) {
+    if let Some((level, message)) =
+        infra_report::classified_finding(&c, env, display, strict_bindings)
+    {
+        match level {
+            Level::Error => problems.push(message),
+            Level::Warning => warnings.push(message),
+        }
+        return;
+    }
+
     let path = c.found.path.clone();
-    let target = c.found.physical.target;
+    let target = c.found.physical.target.to_string();
     let physical = c.found.physical.physical.clone();
-
-    match c.class {
-        Class::Bound(name) => {
-            bindings.push(BindingRow {
-                file: display.to_string(),
-                path,
-                class: "bound".to_string(),
-                binding: Some(name),
-                target: target.to_string(),
-                physical,
-                shared_with: Vec::new(),
-            });
-        }
-        Class::Shared(name, envs) => {
-            bindings.push(BindingRow {
-                file: display.to_string(),
-                path,
-                class: "shared".to_string(),
-                binding: Some(name),
-                target: target.to_string(),
-                physical,
-                shared_with: envs,
-            });
-        }
-        Class::Leak { binding, envs } => {
-            let other_env = envs.first().map(String::as_str).unwrap_or("?");
-            problems.push(format!(
-                "[{display}] {path} references {target} '{physical}', which is bound in \
-                 environment '{other_env}' as '{binding}' but not in '{env}' — bind it \
-                 (rigg env bind {env} {binding} {target}:{physical}) or fix the file"
-            ));
-        }
-        Class::Unbound => {
-            let msg = format!(
-                "[{display}] {path} references {target} '{physical}', which no environment \
-                 binds — run `rigg env bind {default_env} --learn` to record it"
-            );
-            if strict_bindings {
-                problems.push(msg);
-            } else {
-                warnings.push(msg);
-            }
-        }
-        Class::External => {
-            let raw = c.found.physical.original.as_str().unwrap_or(&physical);
-            let origin = url_origin(raw);
-            let msg = format!(
-                "[{display}] {path} calls external API '{origin}' — bind it as an api \
-                 dependency to track it across environments"
-            );
-            if strict_bindings {
-                problems.push(msg);
-            } else {
-                warnings.push(msg);
-            }
-        }
-    }
-}
-
-/// The scheme + host of a URL, dropping any path/query — `https://host` from
-/// `https://host/path?query`.
-fn url_origin(url: &str) -> String {
-    match url.split_once("://") {
-        Some((scheme, rest)) => {
-            let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-            format!("{scheme}://{host}")
-        }
-        None => url.to_string(),
-    }
+    let (class, binding, shared_with) = match c.class {
+        Class::Bound(name) => ("bound", name, Vec::new()),
+        Class::Shared(name, envs) => ("shared", name, envs),
+        _ => unreachable!("every other class produced a finding above"),
+    };
+    bindings.push(BindingRow {
+        file: display.to_string(),
+        path,
+        class: class.to_string(),
+        binding: Some(binding),
+        target,
+        physical,
+        shared_with,
+    });
 }
 
 fn select_projects_lenient<'w>(
@@ -295,7 +248,6 @@ fn validate_project(
     this_bindings: Option<&EnvBindings>,
     other_bindings: &[EnvBindings],
     strict_bindings: bool,
-    default_env: &str,
 ) -> ProjectValidation {
     let mut problems: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -418,7 +370,6 @@ fn validate_project(
                         c,
                         env,
                         &display,
-                        default_env,
                         strict_bindings,
                         &mut problems,
                         &mut warnings,

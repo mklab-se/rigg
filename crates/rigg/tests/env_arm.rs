@@ -38,7 +38,10 @@ async fn env_show_refresh_resolves_bindings_against_arm() {
     mount_arm_fake(
         &server,
         &["sub-a"],
-        &[("storageAccounts", "devacct", "rg", "swedencentral")],
+        &[
+            ("storageAccounts", "devacct", "rg", "swedencentral"),
+            ("searchServices", "unit-test-svc", "rg", "swedencentral"),
+        ],
     )
     .await;
     let ws = workspace();
@@ -53,7 +56,18 @@ async fn env_show_refresh_resolves_bindings_against_arm() {
         .stdout(predicate::str::contains(
             "/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/devacct",
         ));
-    assert!(ws.path().join(".rigg/dev/bindings.json").exists());
+    // The implicit `search` target is resolved and cached too — it is a
+    // binding like any other, and every classification leans on it.
+    let cache: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ws.path().join(".rigg/dev/bindings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cache["bindings"]["search"]["kind"], "search");
+    assert_eq!(
+        cache["bindings"]["search"]["arm_id"],
+        "/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.Search/searchServices/unit-test-svc"
+    );
+    assert_eq!(cache["bindings"]["docs"]["name"], "docs");
 
     // the cached id is shown on later runs without --refresh
     rigg(ws.path(), &server.uri())
@@ -78,5 +92,9 @@ async fn env_show_refresh_marks_an_unresolvable_binding_and_still_succeeds() {
         .args(["env", "show", "dev", "--refresh"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("ghost").and(predicate::str::contains("?")));
+        .stdout(
+            predicate::str::contains("ghost").and(predicate::str::contains(
+                "Resource not found: storage 'missingacct'",
+            )),
+        );
 }

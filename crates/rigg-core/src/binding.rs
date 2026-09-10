@@ -120,7 +120,73 @@ impl<'de> Deserialize<'de> for BindingType {
 
 /// Reserved dependency binding names — these name the `search`/`foundry`
 /// targets, not `dependencies` entries.
-const RESERVED_BINDING_NAMES: [&str; 2] = ["search", "foundry"];
+pub const RESERVED_BINDING_NAMES: [&str; 2] = ["search", "foundry"];
+
+/// What a [`ResolvedBinding`] resolved against Azure: a declared
+/// `dependencies` entry's [`BindingType`], or one of an environment's
+/// implicit targets (its `search` service / `foundry` account), which are
+/// not dependency types and so deliberately stay out of [`BindingType`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    /// A declared `dependencies` binding of this type.
+    Binding(BindingType),
+    /// The environment's `search` target (`Microsoft.Search/searchServices`).
+    Search,
+    /// The environment's `foundry` account
+    /// (`Microsoft.CognitiveServices/accounts`).
+    Foundry,
+}
+
+impl TargetKind {
+    /// The declared binding type, for the `Binding` case only.
+    pub fn binding_type(&self) -> Option<BindingType> {
+        match self {
+            TargetKind::Binding(t) => Some(*t),
+            _ => None,
+        }
+    }
+}
+
+impl From<BindingType> for TargetKind {
+    fn from(t: BindingType) -> Self {
+        TargetKind::Binding(t)
+    }
+}
+
+impl std::fmt::Display for TargetKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TargetKind::Binding(t) => write!(f, "{t}"),
+            TargetKind::Search => write!(f, "search"),
+            TargetKind::Foundry => write!(f, "foundry"),
+        }
+    }
+}
+
+impl std::str::FromStr for TargetKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "search" => Ok(TargetKind::Search),
+            "foundry" => Ok(TargetKind::Foundry),
+            other => other.parse::<BindingType>().map(TargetKind::Binding),
+        }
+    }
+}
+
+impl Serialize for TargetKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TargetKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
 
 /// Validate a `dependencies` binding name: lowercase kebab-case, not
 /// reserved, not empty.
@@ -228,8 +294,12 @@ fn arm_segment<'a>(id: &'a str, key: &str) -> Option<&'a str> {
 /// anything that needs a physical name, ARM id, or endpoint for a binding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedBinding {
+    /// The binding's name in its environment. ARM resolution has no way to
+    /// know it, so `ArmClient::resolve_binding`/`resolve_target` fill this
+    /// with the *ARM resource* name; the caller that knows which binding it
+    /// asked about overwrites it with the binding name before caching.
     pub name: String,
-    pub kind: BindingType,
+    pub kind: TargetKind,
     pub physical_name: String,
     pub arm_id: Option<String>,
     pub subscription: Option<String>,
@@ -320,6 +390,17 @@ pub enum Wanted {
 }
 
 impl Wanted {
+    /// What a declared binding of `kind` competes for — the same mapping
+    /// [`crate::infra::classify`] uses, so "shared" means exactly one thing
+    /// everywhere: an `ai-services` binding and the implicit `foundry`
+    /// target are both model hosts and can therefore share a value.
+    pub fn for_binding(kind: BindingType) -> Wanted {
+        match kind {
+            BindingType::AiServices => Wanted::ModelHost,
+            other => Wanted::Type(other),
+        }
+    }
+
     fn matches(&self, kind: BindingKind) -> bool {
         match (self, kind) {
             (Wanted::Type(t), BindingKind::Declared(k)) => *t == k,
@@ -391,15 +472,9 @@ impl EnvBindings {
         }
     }
 
-    /// Like [`EnvBindings::of_env`], for callers that have a [`Workspace`]
-    /// in hand. Loads nothing itself — pass an already-loaded
-    /// [`BindingCache`] as `cache`.
-    pub fn of(
-        _ws: &Workspace,
-        env_name: &str,
-        env: &Environment,
-        cache: Option<&BindingCache>,
-    ) -> EnvBindings {
+    /// Alias for [`EnvBindings::of_env`]. Loads nothing itself — pass an
+    /// already-loaded [`BindingCache`] as `cache`.
+    pub fn of(env_name: &str, env: &Environment, cache: Option<&BindingCache>) -> EnvBindings {
         Self::of_env(env_name, env, cache)
     }
 
@@ -499,6 +574,40 @@ mod tests {
     }
 
     #[test]
+    fn target_kind_serializes_as_a_plain_keyword_and_reads_old_caches() {
+        for (kind, word) in [
+            (TargetKind::Binding(BindingType::Storage), "storage"),
+            (TargetKind::Binding(BindingType::AiServices), "ai-services"),
+            (TargetKind::Search, "search"),
+            (TargetKind::Foundry, "foundry"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::json!(word));
+            assert_eq!(
+                serde_json::from_value::<TargetKind>(serde_json::json!(word)).unwrap(),
+                kind
+            );
+        }
+        assert_eq!(
+            TargetKind::Binding(BindingType::KeyVault).binding_type(),
+            Some(BindingType::KeyVault)
+        );
+        assert_eq!(TargetKind::Search.binding_type(), None);
+        assert!(serde_json::from_value::<TargetKind>(serde_json::json!("cosmos")).is_err());
+    }
+
+    #[test]
+    fn wanted_for_binding_matches_classify_and_lets_ai_services_share_foundry() {
+        assert_eq!(
+            Wanted::for_binding(BindingType::AiServices),
+            Wanted::ModelHost
+        );
+        assert_eq!(
+            Wanted::for_binding(BindingType::Storage),
+            Wanted::Type(BindingType::Storage)
+        );
+    }
+
+    #[test]
     fn cache_round_trips_under_state_dir() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -512,7 +621,7 @@ mod tests {
             "docs".into(),
             ResolvedBinding {
                 name: "docs".into(),
-                kind: BindingType::Storage,
+                kind: TargetKind::Binding(BindingType::Storage),
                 physical_name: "acct".into(),
                 arm_id: Some(
                     "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct"

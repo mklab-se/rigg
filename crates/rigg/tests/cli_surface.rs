@@ -1639,6 +1639,90 @@ fn validate_warns_on_unbound_in_dev_but_errors_in_protected_prod() {
 }
 
 #[test]
+fn validate_leak_hint_uses_a_real_binding_type_keyword() {
+    // A model-host leak must suggest `ai-services:<name>` — `model host` is
+    // the display word for the target, not something `rigg env bind` accepts.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: s-dev }\n    dependencies:\n      enrichment: { ai-services: devaisrvc }\n  prod:\n    search: { service: s-prod }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects/demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    let d = tmp.path().join("projects/demo/envs/prod/search/skillsets");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("enrich.json"),
+        r##"{"name":"enrich","skills":[{"@odata.type":"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill","resourceUri":"https://devaisrvc.openai.azure.com","inputs":[],"outputs":[]}]}"##,
+    )
+    .unwrap();
+
+    rigg()
+        .current_dir(tmp.path())
+        .args(["validate"])
+        .assert()
+        .code(3)
+        .stdout(
+            predicate::str::contains("rigg env bind prod enrichment ai-services:devaisrvc")
+                .and(predicate::str::contains("model host:devaisrvc").not()),
+        );
+}
+
+#[test]
+fn validate_leak_onto_another_environments_foundry_account_suggests_the_target() {
+    // The other environment's match is its implicit `foundry` binding, which
+    // no `rigg env bind` can declare — the fix is the target or the file.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: s-dev }\n    foundry: { account: devfndr, project: p }\n  prod:\n    search: { service: s-prod }\n    foundry: { account: prodfndr, project: p }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects/demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    let d = tmp.path().join("projects/demo/envs/prod/search/skillsets");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("enrich.json"),
+        r##"{"name":"enrich","skills":[{"@odata.type":"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill","resourceUri":"https://devfndr.openai.azure.com","inputs":[],"outputs":[]}]}"##,
+    )
+    .unwrap();
+
+    rigg()
+        .current_dir(tmp.path())
+        .args(["validate"])
+        .assert()
+        .code(3)
+        .stdout(
+            predicate::str::contains("another environment's Foundry account")
+                .and(predicate::str::contains("env bind").not()),
+        );
+}
+
+#[test]
+fn unreadable_rigg_yaml_is_not_reported_as_a_missing_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "defaults:\n  identity: legacy\nenvironments:\n  dev:\n    default: true\n    search: { service: s }\n",
+    )
+    .unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["status"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("rigg.yaml found at")
+                .and(predicate::str::contains("unknown field `defaults`"))
+                .and(predicate::str::contains("run `rigg init`").not()),
+        );
+}
+
+#[test]
 fn validate_show_bindings_lists_bound_and_shared() {
     let ws = workspace_two_envs_with_bindings();
     write_ds(ws.path(), "dev", "ds", "devacct");
@@ -1749,7 +1833,14 @@ fn env_bind_learn_proposes_from_files_and_writes_with_yes() {
             predicate::str::contains("mklabstorageacc").and(predicate::str::contains("storage")),
         );
     let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
-    assert!(yaml.contains("storage: mklabstorageacc"), "{yaml}");
+    // The file carried a full ARM id, so the learned binding keeps it — no
+    // by-name ARM lookup (and no subscription guess) needed later.
+    assert!(
+        yaml.contains(
+            "storage: /subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/mklabstorageacc"
+        ),
+        "{yaml}"
+    );
 
     // non-interactive without --yes: needs-input with learn.dev.otheracct
     write_ds(ws.path(), "dev", "ds2", "otheracct");
@@ -1774,7 +1865,7 @@ fn env_bind_learn_proposes_from_files_and_writes_with_yes() {
         .success();
     let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
     assert!(
-        yaml.contains("archive:") && yaml.contains("storage: otheracct"),
+        yaml.contains("archive:") && yaml.contains("storageAccounts/otheracct"),
         "{yaml}"
     );
 }

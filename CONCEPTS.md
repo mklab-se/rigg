@@ -6,10 +6,12 @@ split is the key to using rigg well.
 ## Workspace vs project
 
 - A **workspace** (`rigg.yaml`) is the top level. It declares your
-  **environments** (dev, test, prod) and the **service connections** each
-  environment points at — which Azure AI Search service, which Microsoft
-  Foundry account/project — plus shared assets like `apis/`. A workspace holds
-  *no* resource definitions itself.
+  **environments** (dev, test, prod) and, per environment, its **targets,
+  dependencies and policy** — which Azure AI Search service and Microsoft
+  Foundry account/project it points at, the infrastructure its files may
+  reference, and how carefully rigg must treat mutations against it — plus
+  shared assets like `apis/`. A workspace holds *no* resource definitions
+  itself.
 - A **project** (`projects/<name>/`) is a **named group of resource
   definitions you pull, push, diff, review, and deploy as one unit**. Indexes,
   indexers, skillsets, knowledge bases, agents, and model deployments live as
@@ -59,7 +61,7 @@ characters).
 ## Workspace layout
 
 ```
-rigg.yaml                     # workspace: environments + service connections
+rigg.yaml                     # workspace: environments (targets, dependencies, policy)
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
   project.yaml                # metadata only — the directory IS the membership
@@ -96,7 +98,7 @@ environments:
     policy:  { protected: false }
     dependencies:
       docs-storage: { storage: my-storage-dev }
-      enrich-fn:    { function-app: my-enrich-fn-dev }
+      enrich-fn:    { function-app: my-enrich-fn }
   prod:
     tenant: 9a3c…                                       # a different tenant is allowed
     subscription: 0b1d…
@@ -105,7 +107,7 @@ environments:
     policy:  { protected: true }
     dependencies:
       docs-storage: { storage: my-storage-prod }
-      enrich-fn:    { function-app: my-enrich-fn }        # same name in both ⇒ shared
+      enrich-fn:    { function-app: my-enrich-fn }        # same value in both ⇒ shared
 ```
 
 Every project keeps a **separate resource tree per environment**, rooted at
@@ -154,9 +156,11 @@ in `.rigg/<env>/bindings.json` (gitignored).
 Binding names correlate across environments exactly as file paths correlate
 resources: the same name in `dev` and `prod` is the same *role*, possibly
 played by a different physical resource. **Shared** is simply the same
-physical value bound under the same name in two environments — explicit,
-never inferred; **different** just means the values differ, as `docs-storage`
-does above.
+physical resource bound in two environments — the binding names may differ,
+and an `ai-services` binding counts as sharing another environment's implicit
+`foundry` target when both name the same account. It is explicit, never
+inferred; **different** just means the values differ, as `docs-storage` does
+above.
 
 Every environment also has two **implicit bindings** for free: `search` (its
 own Search service) and `foundry` (its own Foundry account), usable wherever

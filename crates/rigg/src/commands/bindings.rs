@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, anyhow, bail};
 use serde_yaml::Value as Yaml;
 
-use rigg_core::binding::{Binding, BindingCache, BindingType, EnvBindings, validate_binding_name};
+use rigg_core::binding::{
+    Binding, BindingCache, BindingType, EnvBindings, Wanted, validate_binding_name,
+};
 use rigg_core::infra::{self, Class, Target};
 use rigg_core::store::Store;
 use rigg_core::workspace::{ResolvedEnv, WORKSPACE_FILE, Workspace};
@@ -35,16 +37,32 @@ pub struct Proposal {
     pub sources: Vec<(String, String)>,
 }
 
-/// Edit `rigg.yaml` in place. Comments outside the edited block survive;
-/// comments inside `environments:` do not (serde_yaml re-serializes).
+/// Edit `rigg.yaml` in place. The file is re-serialized from the parsed
+/// document, so **no** comment in it survives — the header `rigg init`
+/// writes is regenerated here so at least that one is never lost.
 pub fn edit_workspace_yaml(edit: impl FnOnce(&mut Yaml) -> Result<()>) -> Result<()> {
     let ws = load_workspace()?;
     let path = ws.root.join(WORKSPACE_FILE);
     let text = std::fs::read_to_string(&path)?;
     let mut doc: Yaml = serde_yaml::from_str(&text)?;
     edit(&mut doc)?;
-    std::fs::write(&path, serde_yaml::to_string(&doc)?)?;
+    let body = serde_yaml::to_string(&doc)?;
+    let root = doc.get("root").and_then(Yaml::as_str);
+    std::fs::write(&path, format!("{}{body}", workspace_yaml_header(root)))?;
     Ok(())
+}
+
+/// The header comment `rigg init` puts at the top of `rigg.yaml` (kept in
+/// step with `init.rs`), for `<root>` when the workspace has a `root:`.
+fn workspace_yaml_header(root: Option<&str>) -> String {
+    let where_ = match root {
+        Some(sub) => format!("{sub}/projects/<name>/"),
+        None => "projects/<name>/".to_string(),
+    };
+    format!(
+        "# Rigg workspace configuration.\n\
+         # Resource definitions live in {where_} — see `rigg new project`.\n"
+    )
 }
 
 /// The `environments:` mapping, created when missing.
@@ -164,21 +182,6 @@ pub fn parse_bind_flag(flag: &str) -> Result<(String, Binding)> {
     Ok((name.to_string(), parse_binding(spec)?))
 }
 
-/// The [`BindingType`] a found infrastructure reference would bind to, or
-/// `None` for targets that are not `dependencies` (the search service is the
-/// environment's own implicit target).
-fn binding_type_for(target: Target) -> Option<BindingType> {
-    match target {
-        Target::Storage => Some(BindingType::Storage),
-        Target::Identity => Some(BindingType::Identity),
-        Target::ModelHost | Target::AiServices => Some(BindingType::AiServices),
-        Target::FunctionApp => Some(BindingType::FunctionApp),
-        Target::Api => Some(BindingType::Api),
-        Target::KeyVault => Some(BindingType::KeyVault),
-        Target::SearchService => None,
-    }
-}
-
 /// Lower-kebab a physical name or host: everything outside `[a-z0-9]`
 /// becomes `-`, repeats collapse, leading/trailing `-` are trimmed.
 fn kebab(raw: &str) -> String {
@@ -232,7 +235,7 @@ pub fn learn(ws: &Workspace, env_name: &str, env_bindings: &EnvBindings) -> Resu
                     continue;
                 }
                 let found = classified.found;
-                let Some(kind) = binding_type_for(found.physical.target) else {
+                let Some(kind) = infra::binding_type_for(found.physical.target) else {
                     continue;
                 };
                 let value = proposed_value(kind, &found);
@@ -295,16 +298,42 @@ fn physical_of(proposal: &Proposal) -> String {
     .physical_name()
 }
 
-/// What to record as a proposal's value: a bare ARM id straight from the
-/// file when there is one, an origin for `api`, else the physical name.
+/// What to record as a proposal's value: an origin for `api`, otherwise the
+/// full ARM id when the file carries one — spliced out of a storage
+/// connection string's `ResourceId=` or read from an identity's
+/// `userAssignedIdentity` — and the bare physical name only when it does
+/// not. Keeping the id means the binding needs no ARM by-name lookup (and
+/// no guess about which subscription the resource lives in).
 fn proposed_value(kind: BindingType, found: &infra::FoundRef) -> String {
     if kind == BindingType::Api {
         return origin(found.physical.original.as_str().unwrap_or_default());
     }
-    match found.physical.original.as_str() {
-        Some(s) if s.starts_with("/subscriptions/") => s.to_string(),
-        _ => found.physical.physical.clone(),
-    }
+    let original = &found.physical.original;
+    let arm_id = match found.physical.target {
+        Target::Storage => original.as_str().and_then(storage_resource_id),
+        Target::Identity => original
+            .get("userAssignedIdentity")
+            .and_then(serde_json::Value::as_str)
+            .map(|s| s.trim_end_matches('/').to_string()),
+        _ => original
+            .as_str()
+            .filter(|s| s.starts_with("/subscriptions/"))
+            .map(|s| s.trim_end_matches('/').to_string()),
+    };
+    arm_id
+        .filter(|id| id.starts_with("/subscriptions/"))
+        .unwrap_or_else(|| found.physical.physical.clone())
+}
+
+/// The ARM id inside a storage connection string's `ResourceId=` (located
+/// case-insensitively anywhere, like `infra::parse`), without its trailing
+/// `/` and without any `;`-separated tail.
+fn storage_resource_id(conn: &str) -> Option<String> {
+    let lower = conn.to_ascii_lowercase();
+    let start = lower.find("resourceid=")? + "resourceid=".len();
+    let rest = &conn[start..];
+    let id = rest.split(';').next().unwrap_or(rest).trim_end_matches('/');
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 /// One `learn.<env>.<name>` question per proposal: a text answer naming the
@@ -331,6 +360,14 @@ pub fn answers_to_bindings(
     proposals: &[Proposal],
     answers: &[Answer],
 ) -> Result<Vec<(String, Binding)>> {
+    if proposals.len() != answers.len() {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "got {} answer(s) for {} binding proposal(s) — every proposal needs exactly one \
+             answer (use '{SKIP_ANSWER}' to decline)",
+            answers.len(),
+            proposals.len()
+        ))));
+    }
     let mut out = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (p, answer) in proposals.iter().zip(answers) {
@@ -367,6 +404,34 @@ pub fn resolve_proposals(
     let questions = proposals_to_questions(env, proposals);
     let answers = asker.ask_all(&questions)?;
     answers_to_bindings(proposals, &answers)
+}
+
+/// Every environment except `env_name`, as binding tables — the "shared
+/// with" column's input.
+pub fn other_env_bindings(ws: &Workspace, env_name: &str) -> Vec<EnvBindings> {
+    ws.config
+        .environments
+        .iter()
+        .filter(|(name, _)| name.as_str() != env_name)
+        .map(|(name, env)| EnvBindings::of_env(name, env, None))
+        .collect()
+}
+
+/// The environments that bind the same *physical* resource as `binding`.
+///
+/// Sharing is one thing everywhere: the same physical value competing for the
+/// same [`Wanted`] that `infra::classify` uses — so an `ai-services` binding
+/// and another environment's implicit `foundry` target do count as shared,
+/// while the binding *names* need not match.
+pub fn shared_with(others: &[EnvBindings], binding: &Binding) -> Vec<String> {
+    others
+        .iter()
+        .filter(|o| {
+            o.find_physical(Wanted::for_binding(binding.kind), &binding.physical_name())
+                .is_some()
+        })
+        .map(|o| o.env.clone())
+        .collect()
 }
 
 /// Offer to record any bindings [`learn`] finds newly learnable in `env`,
@@ -458,6 +523,87 @@ mod tests {
         assert_eq!(name, "docs");
         assert_eq!(b.value, "acct");
         assert!(parse_bind_flag("search=storage:acct").is_err());
+    }
+
+    #[test]
+    fn proposed_value_keeps_the_arm_id_a_file_already_carries() {
+        // storage: the id is spliced out of the connection string, whatever
+        // sits before or after it.
+        let conn = serde_json::json!(
+            "AccountName=x;ResourceId=/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/acct/;Database=d"
+        );
+        let found = infra::parse(rigg_core::registry::InfraForm::StorageResourceId, &conn)
+            .map(|physical| infra::FoundRef {
+                path: "credentials.connectionString".into(),
+                form: rigg_core::registry::InfraForm::StorageResourceId,
+                physical,
+            })
+            .unwrap();
+        assert_eq!(
+            proposed_value(BindingType::Storage, &found),
+            "/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/acct"
+        );
+
+        // identity: the id is the object's `userAssignedIdentity`.
+        let id = serde_json::json!({
+            "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+            "userAssignedIdentity": "/subscriptions/S/resourcegroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/rigg-dev"
+        });
+        let found = infra::parse(rigg_core::registry::InfraForm::UserAssignedIdentity, &id)
+            .map(|physical| infra::FoundRef {
+                path: "identity".into(),
+                form: rigg_core::registry::InfraForm::UserAssignedIdentity,
+                physical,
+            })
+            .unwrap();
+        assert_eq!(
+            proposed_value(BindingType::Identity, &found),
+            "/subscriptions/S/resourcegroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/rigg-dev"
+        );
+
+        // no id in the file → the bare physical name, as before.
+        let host = serde_json::json!("https://devaisrvc.openai.azure.com");
+        let found = infra::parse(rigg_core::registry::InfraForm::OpenAiEndpoint, &host)
+            .map(|physical| infra::FoundRef {
+                path: "resourceUri".into(),
+                form: rigg_core::registry::InfraForm::OpenAiEndpoint,
+                physical,
+            })
+            .unwrap();
+        assert_eq!(proposed_value(BindingType::AiServices, &found), "devaisrvc");
+    }
+
+    #[test]
+    fn storage_resource_id_is_located_anywhere_and_trimmed() {
+        assert_eq!(
+            storage_resource_id("resourceid=/subscriptions/s/x/;Database=d").as_deref(),
+            Some("/subscriptions/s/x")
+        );
+        assert_eq!(storage_resource_id("AccountName=x"), None);
+    }
+
+    #[test]
+    fn workspace_yaml_header_matches_init() {
+        assert_eq!(
+            workspace_yaml_header(None),
+            "# Rigg workspace configuration.\n# Resource definitions live in projects/<name>/ — see `rigg new project`.\n"
+        );
+        assert!(
+            workspace_yaml_header(Some("cfg"))
+                .contains("live in cfg/projects/<name>/ — see `rigg new project`.")
+        );
+    }
+
+    #[test]
+    fn answers_must_match_the_proposals_one_for_one() {
+        let proposals = vec![Proposal {
+            name: "acct".into(),
+            kind: BindingType::Storage,
+            value: "acct".into(),
+            sources: vec![],
+        }];
+        let err = answers_to_bindings(&proposals, &[]).unwrap_err();
+        assert!(err.to_string().contains("0 answer(s) for 1"), "{err}");
     }
 
     #[test]

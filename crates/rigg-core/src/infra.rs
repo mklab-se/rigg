@@ -223,16 +223,24 @@ pub fn classify(
         .collect()
 }
 
-fn wanted_for(target: Target) -> Wanted {
+/// The [`BindingType`] a reference to `target` would bind to, or `None` for
+/// the search service (which is an environment target, never a dependency).
+pub fn binding_type_for(target: Target) -> Option<BindingType> {
     match target {
-        Target::Storage => Wanted::Type(BindingType::Storage),
-        Target::Identity => Wanted::Type(BindingType::Identity),
-        Target::ModelHost => Wanted::ModelHost,
-        Target::AiServices => Wanted::ModelHost,
-        Target::FunctionApp => Wanted::Type(BindingType::FunctionApp),
-        Target::Api => Wanted::Type(BindingType::Api),
-        Target::KeyVault => Wanted::Type(BindingType::KeyVault),
-        Target::SearchService => Wanted::SearchService,
+        Target::Storage => Some(BindingType::Storage),
+        Target::Identity => Some(BindingType::Identity),
+        Target::ModelHost | Target::AiServices => Some(BindingType::AiServices),
+        Target::FunctionApp => Some(BindingType::FunctionApp),
+        Target::Api => Some(BindingType::Api),
+        Target::KeyVault => Some(BindingType::KeyVault),
+        Target::SearchService => None,
+    }
+}
+
+fn wanted_for(target: Target) -> Wanted {
+    match binding_type_for(target) {
+        Some(kind) => Wanted::for_binding(kind),
+        None => Wanted::SearchService,
     }
 }
 
@@ -397,15 +405,22 @@ fn render_storage(original: &Value, target: &RenderTarget) -> Result<Value, Stri
     let s = original
         .as_str()
         .ok_or("StorageResourceId render requires a string value")?;
-    let body = s
-        .strip_prefix("ResourceId=")
+    // Symmetric with `parse_storage`: locate `ResourceId=` case-insensitively
+    // anywhere in the connection string and splice the new id in around it,
+    // so both the head (e.g. `AccountName=x;`) and the tail (e.g.
+    // `;Database=x`) survive untouched.
+    let lower = s.to_ascii_lowercase();
+    let key_at = lower
+        .find("resourceid=")
         .ok_or("expected a `ResourceId=` value")?;
-    let tail = body.split_once(';').map(|(_, t)| t);
-    let out = match tail {
-        Some(t) => format!("ResourceId={arm_id};{t}"),
-        None => format!("ResourceId={arm_id}"),
+    let value_at = key_at + "resourceid=".len();
+    let head = &s[..value_at];
+    let rest = &s[value_at..];
+    let tail = match rest.find(';') {
+        Some(i) => &rest[i..], // keeps the `;`
+        None => "",
     };
-    Ok(Value::String(out))
+    Ok(Value::String(format!("{head}{arm_id}{tail}")))
 }
 
 fn render_identity(original: &Value, target: &RenderTarget) -> Result<Value, String> {
@@ -462,7 +477,15 @@ fn render_api_uri(original: &Value, target: &RenderTarget) -> Result<Value, Stri
     if let Some(src) = &target.source_base_url {
         let src_norm = src.trim_end_matches('/').to_ascii_lowercase();
         let url_lower = url.to_ascii_lowercase();
-        if url_lower.starts_with(&src_norm) {
+        // Same URL boundary rule as `find_api_binding`: a prefix match must
+        // end at `/`, `?`, `#` or the end of the URL, so the binding for
+        // `https://api.partner.example` never claims
+        // `https://api.partner.example.evil.test/x`.
+        let at_boundary = matches!(
+            url_lower.as_bytes().get(src_norm.len()),
+            None | Some(b'/') | Some(b'?') | Some(b'#')
+        );
+        if url_lower.starts_with(&src_norm) && at_boundary {
             let remainder = &url[src_norm.len()..];
             return Ok(Value::String(format!(
                 "{}{remainder}",
@@ -1021,6 +1044,147 @@ mod tests {
                 &json!("https://<account>.openai.azure.com")
             )
             .is_none()
+        );
+    }
+
+    fn plain_target(physical: &str) -> RenderTarget {
+        RenderTarget {
+            physical: physical.to_string(),
+            arm_id: None,
+            base_url: None,
+            kb_name: None,
+            source_base_url: None,
+        }
+    }
+
+    #[test]
+    fn render_storage_locates_resourceid_anywhere_like_parse() {
+        // `ResourceId=` is neither first nor lowercase-canonical: the head
+        // before it and the tail after the value must both survive.
+        let v = json!(
+            "AccountName=x;resourceid=/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/devacct/;Database=d"
+        );
+        let out = render(
+            InfraForm::StorageResourceId,
+            &v,
+            &RenderTarget {
+                arm_id: Some(
+                    "/subscriptions/P/resourceGroups/PRG/providers/Microsoft.Storage/storageAccounts/prodacct".into(),
+                ),
+                ..plain_target("prodacct")
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            json!(
+                "AccountName=x;resourceid=/subscriptions/P/resourceGroups/PRG/providers/Microsoft.Storage/storageAccounts/prodacct;Database=d"
+            )
+        );
+        // and the rendered value parses back to the new account
+        assert_eq!(
+            parse(InfraForm::StorageResourceId, &out).unwrap().physical,
+            "prodacct"
+        );
+        assert!(
+            render(
+                InfraForm::StorageResourceId,
+                &json!("AccountName=x"),
+                &RenderTarget {
+                    arm_id: Some("/subscriptions/P/x".into()),
+                    ..plain_target("p")
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn render_api_uri_enforces_the_same_url_boundary_as_matching() {
+        // `https://api.partner.example` must not be spliced out of
+        // `https://api.partner.example.evil.test/x` — the same boundary rule
+        // `find_api_binding` applies when deciding the binding matches.
+        let evil = json!("https://api.partner.example.evil.test/x");
+        assert!(
+            render(
+                InfraForm::ApiUri,
+                &evil,
+                &RenderTarget {
+                    base_url: Some("https://api.partner-prod.example/v2".into()),
+                    source_base_url: Some("https://api.partner.example".into()),
+                    ..plain_target("api.partner-prod.example")
+                },
+            )
+            .is_err()
+        );
+        let ok = json!("https://api.partner.example/v1/enrich");
+        assert_eq!(
+            render(
+                InfraForm::ApiUri,
+                &ok,
+                &RenderTarget {
+                    base_url: Some("https://api.partner-prod.example/v2".into()),
+                    source_base_url: Some("https://api.partner.example/v1".into()),
+                    ..plain_target("api.partner-prod.example")
+                },
+            )
+            .unwrap(),
+            json!("https://api.partner-prod.example/v2/enrich")
+        );
+    }
+
+    #[test]
+    fn render_round_trips_identity_ai_services_and_key_vault() {
+        let id = json!({
+            "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+            "userAssignedIdentity": "/subscriptions/S/resourcegroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/rigg-dev"
+        });
+        let rendered = render(
+            InfraForm::UserAssignedIdentity,
+            &id,
+            &RenderTarget {
+                arm_id: Some(
+                    "/subscriptions/P/resourcegroups/PRG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/rigg-prod".into(),
+                ),
+                ..plain_target("rigg-prod")
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            parse(InfraForm::UserAssignedIdentity, &rendered)
+                .unwrap()
+                .physical,
+            "rigg-prod"
+        );
+        assert_eq!(
+            rendered["@odata.type"],
+            json!("#Microsoft.Azure.Search.DataUserAssignedIdentity"),
+            "everything that isn't the infrastructure part is kept"
+        );
+
+        let sub = json!("https://mklabaisrvc.cognitiveservices.azure.com/vision");
+        let rendered = render(
+            InfraForm::AiServicesSubdomain,
+            &sub,
+            &plain_target("prodaisrvc"),
+        )
+        .unwrap();
+        assert_eq!(
+            rendered,
+            json!("https://prodaisrvc.cognitiveservices.azure.com/vision")
+        );
+        let back = parse(InfraForm::AiServicesSubdomain, &rendered).unwrap();
+        assert_eq!(
+            (back.target, back.physical.as_str()),
+            (Target::AiServices, "prodaisrvc")
+        );
+
+        let kv = json!("https://mklabkv.vault.azure.net/keys/k/1");
+        let rendered = render(InfraForm::KeyVaultUri, &kv, &plain_target("prodkv")).unwrap();
+        assert_eq!(rendered, json!("https://prodkv.vault.azure.net/keys/k/1"));
+        assert_eq!(
+            parse(InfraForm::KeyVaultUri, &rendered).unwrap().physical,
+            "prodkv"
         );
     }
 

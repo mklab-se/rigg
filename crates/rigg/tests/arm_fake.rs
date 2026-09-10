@@ -9,7 +9,7 @@
 
 use serde_json::json;
 use wiremock::matchers::{method, path, path_regex};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 /// Mount an ARM fake on `server`: `/subscriptions`, and per-subscription
 /// provider listings for storage accounts, cognitive services accounts,
@@ -76,15 +76,34 @@ pub async fn mount_arm_fake(
         }
     }
 
+    // Catch-all `GET {resource id}`: answer with the resource actually asked
+    // for (its name is the id's last segment), so a resolution's name and
+    // physical name match what the caller looked up.
     Mock::given(method("GET"))
         .and(path_regex(
             r"^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/.+$",
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "name": "by-id",
-            "location": "swedencentral",
-            "properties": {}
-        })))
+        .respond_with(|req: &Request| {
+            let name = req
+                .url
+                .path()
+                .rsplit('/')
+                .find(|s| !s.is_empty())
+                .unwrap_or("by-id")
+                .to_string();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "name": name,
+                "location": "swedencentral",
+                "properties": {
+                    "endpoint": format!("https://{name}.cognitiveservices.azure.com/"),
+                    "vaultUri": format!("https://{name}.vault.azure.net/"),
+                    "principalId": "00000000-0000-0000-0000-00000000aaaa",
+                    "primaryEndpoints": {
+                        "blob": format!("https://{name}.blob.core.windows.net/")
+                    }
+                }
+            }))
+        })
         .mount(server)
         .await;
 }

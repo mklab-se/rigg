@@ -8,11 +8,11 @@ use serde_json::json;
 use serde_yaml::Value as Yaml;
 
 use rigg_client::arm::ArmClient;
-use rigg_core::binding::{Binding, BindingCache, EnvBindings, Wanted, validate_binding_name};
+use rigg_core::binding::{Binding, BindingCache, EnvBindings, TargetKind, validate_binding_name};
 use rigg_core::workspace::{Environment, Workspace};
 
 use crate::cli::EnvCommands;
-use crate::commands::bindings::{edit_workspace_yaml, envs_mut};
+use crate::commands::bindings::{edit_workspace_yaml, envs_mut, other_env_bindings, shared_with};
 use crate::commands::{CommandError, GlobalContext, bindings, discovery, load_workspace};
 use crate::say;
 
@@ -100,10 +100,11 @@ async fn show(ctx: &GlobalContext, name: Option<&str>, refresh: bool) -> Result<
     Ok(())
 }
 
-/// Re-resolve every declared binding of `env` against ARM and save the
-/// cache. A binding that cannot be resolved is reported (and dropped from
-/// the cache) rather than failing the command — `env show` must still print
-/// everything else it knows.
+/// Re-resolve every binding of `env` against ARM and save the cache — the
+/// declared `dependencies` and the implicit `search`/`foundry` targets,
+/// which are cached under those reserved names. A binding that cannot be
+/// resolved is reported (and dropped from the cache) rather than failing the
+/// command — `env show` must still print everything else it knows.
 async fn refresh_bindings(
     ctx: &GlobalContext,
     ws: &Workspace,
@@ -111,7 +112,32 @@ async fn refresh_bindings(
     env: &Environment,
 ) -> Result<BTreeMap<String, String>> {
     let mut errors = BTreeMap::new();
-    if env.dependencies.is_empty() {
+    // The implicit `search`/`foundry` targets are bindings too (they are
+    // what most references resolve against), so they are refreshed even when
+    // an environment declares no dependencies at all.
+    let mut targets: Vec<(String, TargetKind, String)> = Vec::new();
+    if let Some(search) = &env.search {
+        targets.push((
+            "search".to_string(),
+            TargetKind::Search,
+            search.service.clone(),
+        ));
+    }
+    if let Some(foundry) = &env.foundry {
+        targets.push((
+            "foundry".to_string(),
+            TargetKind::Foundry,
+            foundry.account.clone(),
+        ));
+    }
+    for (name, binding) in &env.dependencies {
+        targets.push((
+            name.clone(),
+            TargetKind::Binding(binding.kind),
+            binding.value.clone(),
+        ));
+    }
+    if targets.is_empty() {
         return Ok(errors);
     }
     let arm = match ArmClient::for_tenant(env.tenant.as_deref()) {
@@ -123,12 +149,13 @@ async fn refresh_bindings(
         }
     };
     let mut cache = BindingCache::load(ws, env_name);
-    for (name, binding) in &env.dependencies {
+    for (name, kind, value) in &targets {
         match arm
-            .resolve_binding(binding.kind, &binding.value, env.subscription.as_deref())
+            .resolve_target(*kind, value, env.subscription.as_deref())
             .await
         {
             Ok(mut resolved) => {
+                // ARM knows the resource's name; the binding name is ours.
                 resolved.name = name.clone();
                 cache.bindings.insert(name.clone(), resolved);
             }
@@ -140,30 +167,6 @@ async fn refresh_bindings(
     }
     cache.save(ws, env_name)?;
     Ok(errors)
-}
-
-/// Environments other than `env_name`, as binding tables — for the
-/// "shared with" column.
-fn other_env_bindings(ws: &Workspace, env_name: &str) -> Vec<EnvBindings> {
-    ws.config
-        .environments
-        .iter()
-        .filter(|(name, _)| name.as_str() != env_name)
-        .map(|(name, env)| EnvBindings::of_env(name, env, None))
-        .collect()
-}
-
-/// The environments that bind the same physical resource under the same
-/// binding type.
-fn shared_with(others: &[EnvBindings], binding: &Binding) -> Vec<String> {
-    others
-        .iter()
-        .filter(|o| {
-            o.find_physical(Wanted::Type(binding.kind), &binding.physical_name())
-                .is_some()
-        })
-        .map(|o| o.env.clone())
-        .collect()
 }
 
 fn print_env(
@@ -180,46 +183,62 @@ fn print_env(
     if let Some(subscription) = &env.subscription {
         println!("{indent}subscription: {subscription}");
     }
+    let cache = BindingCache::load(ws, env_name);
     if let Some(s) = &env.search {
         let label = s.name.as_deref().unwrap_or("search");
         println!(
-            "{indent}{label}: {} → {} (Azure AI Search)",
+            "{indent}{label}: {} → {} (Azure AI Search){}",
             s.service,
-            s.url()
+            s.url(),
+            resolution_suffix(&cache, errors, "search")
         );
     }
     if let Some(f) = &env.foundry {
         let label = f.name.as_deref().unwrap_or("foundry");
         println!(
-            "{indent}{label}: {}/{} → {} (Microsoft Foundry)",
+            "{indent}{label}: {}/{} → {} (Microsoft Foundry){}",
             f.account,
             f.project,
-            f.url()
+            f.url(),
+            resolution_suffix(&cache, errors, "foundry")
         );
     }
     if env.dependencies.is_empty() {
         return;
     }
-    let cache = BindingCache::load(ws, env_name);
     let others = other_env_bindings(ws, env_name);
     println!("{indent}dependencies:");
     for (name, binding) in &env.dependencies {
         let mut row = format!("{indent}  {name}  {}  {}", binding.kind, binding.value);
-        if let Some(err) = errors.get(name) {
-            row.push_str(&format!("  {} {err}", "?".yellow()));
-        } else if let Some(resolved) = cache.get(name) {
-            let id = resolved
-                .arm_id
-                .as_deref()
-                .or(resolved.endpoint.as_deref())
-                .unwrap_or(&resolved.physical_name);
-            row.push_str(&format!(" → {}", id.dimmed()));
-        }
+        row.push_str(&resolution_suffix(&cache, errors, name));
         let shared = shared_with(&others, binding);
         if !shared.is_empty() {
             row.push_str(&format!(" (shared with: {})", shared.join(", ")));
         }
         println!("{row}");
+    }
+}
+
+/// What a binding resolved to (ARM id, endpoint, or physical name), or why it
+/// could not be resolved — empty when it has never been refreshed.
+fn resolution_suffix(
+    cache: &BindingCache,
+    errors: &BTreeMap<String, String>,
+    name: &str,
+) -> String {
+    if let Some(err) = errors.get(name) {
+        return format!("  {} {err}", "?".yellow());
+    }
+    match cache.get(name) {
+        Some(resolved) => {
+            let id = resolved
+                .arm_id
+                .as_deref()
+                .or(resolved.endpoint.as_deref())
+                .unwrap_or(&resolved.physical_name);
+            format!(" → {}", id.dimmed())
+        }
+        None => String::new(),
     }
 }
 
@@ -238,7 +257,9 @@ fn env_json(
         "tenant": env.tenant,
         "subscription": env.subscription,
         "search": env.search.as_ref().map(|s| &s.service),
+        "search_arm_id": cache.get("search").and_then(|r| r.arm_id.clone()),
         "foundry": env.foundry.as_ref().map(|f| format!("{}/{}", f.account, f.project)),
+        "foundry_arm_id": cache.get("foundry").and_then(|r| r.arm_id.clone()),
         "dependencies": env.dependencies.iter().map(|(bname, binding)| json!({
             "name": bname,
             "type": binding.kind.to_string(),

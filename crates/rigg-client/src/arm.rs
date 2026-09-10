@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::debug;
 
-use rigg_core::binding::{Binding, BindingType, BindingValue, ResolvedBinding};
+use rigg_core::binding::{Binding, BindingType, BindingValue, ResolvedBinding, TargetKind};
 use rigg_core::registry::{self, ARM_BASE_URL, Provider};
 
 use crate::auth::AzCliAuth;
@@ -1287,23 +1287,21 @@ impl ArmClient {
     /// used by [`Self::resolve_binding`]'s by-name lookup.
     async fn list_resources_for_kind(
         &self,
-        kind: BindingType,
+        kind: TargetKind,
         subscription_id: &str,
     ) -> Result<Vec<ArmResource>, ClientError> {
         match kind {
-            BindingType::Storage => Ok(self
-                .list_storage_accounts_subscription(subscription_id)
+            TargetKind::Search => Ok(self
+                .list_provider_resources(
+                    subscription_id,
+                    "Microsoft.Search/searchServices",
+                    Provider::SearchArm,
+                )
                 .await?
-                .into_iter()
-                .map(|a| ArmResource {
-                    name: a.name,
-                    id: a.id,
-                    location: a.location,
-                    kind: None,
-                    endpoint: None,
-                })
+                .iter()
+                .map(|v| arm_resource_from_value(v, None))
                 .collect()),
-            BindingType::AiServices => Ok(self
+            TargetKind::Foundry | TargetKind::Binding(BindingType::AiServices) => Ok(self
                 .list_cognitive_accounts(subscription_id)
                 .await?
                 .into_iter()
@@ -1315,23 +1313,43 @@ impl ArmClient {
                     endpoint: a.properties.endpoint,
                 })
                 .collect()),
-            BindingType::FunctionApp => self.list_web_sites_subscription(subscription_id).await,
-            BindingType::Identity => self.list_user_assigned_identities(subscription_id).await,
-            BindingType::KeyVault => self.list_key_vaults(subscription_id).await,
-            BindingType::Api => Ok(Vec::new()),
+            TargetKind::Binding(BindingType::Storage) => Ok(self
+                .list_storage_accounts_subscription(subscription_id)
+                .await?
+                .into_iter()
+                .map(|a| ArmResource {
+                    name: a.name,
+                    id: a.id,
+                    location: a.location,
+                    kind: None,
+                    endpoint: None,
+                })
+                .collect()),
+            TargetKind::Binding(BindingType::FunctionApp) => {
+                self.list_web_sites_subscription(subscription_id).await
+            }
+            TargetKind::Binding(BindingType::Identity) => {
+                self.list_user_assigned_identities(subscription_id).await
+            }
+            TargetKind::Binding(BindingType::KeyVault) => {
+                self.list_key_vaults(subscription_id).await
+            }
+            TargetKind::Binding(BindingType::Api) => Ok(Vec::new()),
         }
     }
 
-    /// The [`Provider`] channel a [`BindingType`]'s ARM id is read back
-    /// through — `None` for `Api` (URL bindings have no ARM resource).
-    fn provider_for_binding(kind: BindingType) -> Option<Provider> {
+    /// The [`Provider`] channel a [`TargetKind`]'s ARM id is read back
+    /// through — `None` for `api` (URL bindings have no ARM resource).
+    fn provider_for_target(kind: TargetKind) -> Option<Provider> {
         match kind {
-            BindingType::Storage => Some(Provider::StorageArm),
-            BindingType::AiServices => Some(Provider::CognitiveServicesArm),
-            BindingType::FunctionApp => Some(Provider::WebArm),
-            BindingType::Identity => Some(Provider::ManagedIdentityArm),
-            BindingType::KeyVault => Some(Provider::KeyVaultArm),
-            BindingType::Api => None,
+            TargetKind::Search => Some(Provider::SearchArm),
+            TargetKind::Foundry => Some(Provider::CognitiveServicesArm),
+            TargetKind::Binding(BindingType::Storage) => Some(Provider::StorageArm),
+            TargetKind::Binding(BindingType::AiServices) => Some(Provider::CognitiveServicesArm),
+            TargetKind::Binding(BindingType::FunctionApp) => Some(Provider::WebArm),
+            TargetKind::Binding(BindingType::Identity) => Some(Provider::ManagedIdentityArm),
+            TargetKind::Binding(BindingType::KeyVault) => Some(Provider::KeyVaultArm),
+            TargetKind::Binding(BindingType::Api) => None,
         }
     }
 
@@ -1340,10 +1358,10 @@ impl ArmClient {
     /// the id itself.
     async fn resolve_arm_id(
         &self,
-        kind: BindingType,
+        kind: TargetKind,
         id: &str,
     ) -> Result<ResolvedBinding, ClientError> {
-        let provider = Self::provider_for_binding(kind).ok_or_else(|| ClientError::Api {
+        let provider = Self::provider_for_target(kind).ok_or_else(|| ClientError::Api {
             status: 400,
             message: format!("{kind} bindings have no ARM resource to resolve"),
         })?;
@@ -1372,22 +1390,25 @@ impl ArmClient {
             .and_then(Value::as_str)
             .map(String::from);
         let endpoint = match kind {
-            BindingType::Storage => body
-                .pointer("/properties/primaryEndpoints/blob")
-                .and_then(Value::as_str)
-                .map(String::from),
-            BindingType::AiServices => body
+            TargetKind::Search => Some(format!("https://{name}.search.windows.net")),
+            TargetKind::Foundry | TargetKind::Binding(BindingType::AiServices) => body
                 .pointer("/properties/endpoint")
                 .and_then(Value::as_str)
                 .map(String::from),
-            BindingType::FunctionApp => Some(format!("https://{name}.azurewebsites.net")),
-            BindingType::KeyVault => body
+            TargetKind::Binding(BindingType::Storage) => body
+                .pointer("/properties/primaryEndpoints/blob")
+                .and_then(Value::as_str)
+                .map(String::from),
+            TargetKind::Binding(BindingType::FunctionApp) => {
+                Some(format!("https://{name}.azurewebsites.net"))
+            }
+            TargetKind::Binding(BindingType::KeyVault) => body
                 .pointer("/properties/vaultUri")
                 .and_then(Value::as_str)
                 .map(String::from),
-            BindingType::Identity | BindingType::Api => None,
+            TargetKind::Binding(BindingType::Identity | BindingType::Api) => None,
         };
-        let principal_id = (kind == BindingType::Identity)
+        let principal_id = (kind == TargetKind::Binding(BindingType::Identity))
             .then(|| {
                 body.pointer("/properties/principalId")
                     .and_then(Value::as_str)
@@ -1409,24 +1430,41 @@ impl ArmClient {
         })
     }
 
-    /// Resolve a binding value (bare name, ARM id, or URL) to a
-    /// [`ResolvedBinding`].
-    ///
-    /// - An ARM id is `GET`'d directly on the type's provider version.
-    /// - A bare name is matched (case-insensitively) against every resource
-    ///   of `kind` in `subscription` (or every enabled subscription, when
-    ///   `None`): zero matches is a [`ClientError::NotFound`], more than one
-    ///   is a `409` [`ClientError::Api`] naming the ambiguous ids.
-    /// - A URL (only meaningful for [`BindingType::Api`]) resolves locally —
-    ///   no ARM call.
+    /// Resolve a declared `dependencies` binding — [`Self::resolve_target`]
+    /// for [`TargetKind::Binding`].
     pub async fn resolve_binding(
         &self,
         kind: BindingType,
         value: &str,
         subscription: Option<&str>,
     ) -> Result<ResolvedBinding, ClientError> {
+        self.resolve_target(TargetKind::Binding(kind), value, subscription)
+            .await
+    }
+
+    /// Resolve a binding value (bare name, ARM id, or URL) to a
+    /// [`ResolvedBinding`] — for a declared dependency type or for one of an
+    /// environment's implicit targets ([`TargetKind::Search`],
+    /// [`TargetKind::Foundry`]).
+    ///
+    /// - An ARM id is `GET`'d directly on the target's provider version.
+    /// - A bare name is matched (case-insensitively) against every resource
+    ///   of `kind` in `subscription` (or every enabled subscription, when
+    ///   `None`): zero matches is a [`ClientError::NotFound`], more than one
+    ///   is a `409` [`ClientError::Api`] naming the ambiguous ids.
+    /// - A URL (only meaningful for [`BindingType::Api`]) resolves locally —
+    ///   no ARM call.
+    ///
+    /// The returned [`ResolvedBinding::name`] is the ARM resource's name;
+    /// callers that know the binding name overwrite it before caching.
+    pub async fn resolve_target(
+        &self,
+        kind: TargetKind,
+        value: &str,
+        subscription: Option<&str>,
+    ) -> Result<ResolvedBinding, ClientError> {
         let probe = Binding {
-            kind,
+            kind: kind.binding_type().unwrap_or(BindingType::AiServices),
             value: value.to_string(),
         };
         match probe.value() {

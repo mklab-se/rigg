@@ -48,6 +48,22 @@ around that. No compatibility with 1.x workspaces.
   `-e/--env`, not recorded per project.
 - **`defaults.identity` is removed from `rigg.yaml`**, replaced by `identity`
   bindings in an environment's `dependencies:`.
+- **Protected environments are strict about bindings by default.**
+  `policy.strict-bindings` defaults to the value of `protected`, so in a
+  protected environment an infrastructure reference that no binding covers
+  (`Unbound`, or an unmatched external `api` URL) fails `validate` *and*
+  `push` with exit 3 instead of warning. Set `strict-bindings: false`
+  explicitly to keep the old warning-only behaviour there.
+- **A leaked infrastructure reference is an error even with no
+  `dependencies` declared.** An environment's `search` service and `foundry`
+  account are bindings in their own right, so a file that points at another
+  environment's service or account is a leak — always an error, in every
+  environment, whether or not anything is declared under `dependencies:`.
+  `push` runs the same classification as a preflight and refuses before any
+  mutation.
+- **`RIGG_ACCESS_TOKEN` is now used for ARM calls too**, not just the Search
+  and Foundry data planes — one static token covers binding resolution,
+  discovery and the `rigg az` commands (intended for CI and tests).
 - **`rigg.yaml` environments gain `tenant`, `subscription`, `dependencies`,
   and `policy.strict-bindings`.** `tenant`/`subscription` scope ARM discovery
   and token acquisition (optional; default is the Azure CLI's tenant and
@@ -61,7 +77,7 @@ around that. No compatibility with 1.x workspaces.
   Key Vaults and external APIs a project's files may reference, keyed by a
   binding name that correlates across environments (the same name in `dev`
   and `prod` may resolve to the same or a different physical resource — the
-  latter case is "shared"). Every environment also gets implicit `search`/
+  former case is "shared"). Every environment also gets implicit `search`/
   `foundry` bindings for free. `rigg env bind <env> <name> <type>:<value>`
   declares one; `rigg env bind <env> --learn [--yes]` scans an environment's
   files, extracts every infrastructure reference, and proposes bindings

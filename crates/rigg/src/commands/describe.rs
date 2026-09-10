@@ -5,13 +5,14 @@ use anyhow::Result;
 use colored::Colorize;
 use serde_json::{Value, json};
 
-use rigg_core::binding::{Binding, EnvBindings, Wanted};
+use rigg_core::binding::Binding;
 use rigg_core::registry::{self, X_RIGG_API};
 use rigg_core::resources::ResourceRef;
 use rigg_core::store::Store;
 use rigg_core::workspace::Workspace;
 
 use crate::cli::DescribeArgs;
+use crate::commands::bindings::{other_env_bindings, shared_with};
 use crate::commands::{GlobalContext, load_workspace, resolve_env};
 
 pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
@@ -137,31 +138,16 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
 }
 
 /// `env`'s declared bindings, each with the other environments that bind the
-/// same physical resource under the same type.
+/// same physical resource — one definition of "shared", shared with
+/// `rigg env show` (see [`shared_with`]).
 fn infrastructure_rows(ws: &Workspace, env_name: &str) -> Vec<(String, Binding, Vec<String>)> {
     let Some(env) = ws.config.environments.get(env_name) else {
         return Vec::new();
     };
-    let others: Vec<EnvBindings> = ws
-        .config
-        .environments
-        .iter()
-        .filter(|(name, _)| name.as_str() != env_name)
-        .map(|(name, e)| EnvBindings::of_env(name, e, None))
-        .collect();
+    let others = other_env_bindings(ws, env_name);
     env.dependencies
         .iter()
-        .map(|(name, binding)| {
-            let shared = others
-                .iter()
-                .filter(|o| {
-                    o.find_physical(Wanted::Type(binding.kind), &binding.physical_name())
-                        .is_some()
-                })
-                .map(|o| o.env.clone())
-                .collect();
-            (name.clone(), binding.clone(), shared)
-        })
+        .map(|(name, binding)| (name.clone(), binding.clone(), shared_with(&others, binding)))
         .collect()
 }
 

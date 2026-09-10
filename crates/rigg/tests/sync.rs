@@ -1170,6 +1170,78 @@ async fn protected_env_push_accepts_answers_file() {
 }
 
 #[tokio::test]
+async fn push_refuses_a_leaked_binding_before_any_mutation() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/docs"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    // `dev` binds the storage account; `prod` (protected, hence strict) does
+    // not — a prod file pointing at it is dev's infrastructure leaking into
+    // a production push.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "environments:\n  dev:\n    default: true\n    search: {{ service: mock, endpoint: \"{e}\" }}\n    dependencies:\n      docs: {{ storage: devacct }}\n  prod:\n    policy: {{ protected: true }}\n    search: {{ service: mock, endpoint: \"{e}\" }}\n",
+            e = server.uri()
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    write_resource_env(
+        tmp.path(),
+        "prod",
+        "data-sources",
+        "docs",
+        &json!({
+            "name": "docs",
+            "type": "azureblob",
+            "credentials": {"connectionString": "ResourceId=/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/devacct;"},
+            "container": {"name": "docs"}
+        }),
+    );
+
+    rigg(tmp.path())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "prod",
+            "--yes",
+            "--confirm-env",
+            "prod",
+        ])
+        .assert()
+        .code(3)
+        .stderr(
+            predicate::str::contains("storage 'devacct'")
+                .and(predicate::str::contains(
+                    "bound in environment 'dev' as 'docs'",
+                ))
+                .and(predicate::str::contains("nothing was pushed")),
+        );
+
+    let mutations: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.method.as_str().to_string())
+        .filter(|m| matches!(m.as_str(), "PUT" | "POST" | "DELETE"))
+        .collect();
+    assert!(
+        mutations.is_empty(),
+        "the binding preflight must refuse before any mutation, saw {mutations:?}"
+    );
+}
+
+#[tokio::test]
 async fn protected_env_push_wrong_confirm_env_exits_usage_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

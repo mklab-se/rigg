@@ -7,10 +7,10 @@ user-invocable: false
 ## rigg overview
 
 rigg manages Azure AI Search and Microsoft Foundry configuration as code. A
-**workspace** (`rigg.yaml`) defines environments and service connections; each
-**project** under `projects/<name>/` owns its resource definitions as JSON
-files. A resource belongs to exactly ONE project, and `pull`/`push`/`diff`
-always operate on whole projects — that is what keeps local and cloud
+**workspace** (`rigg.yaml`) defines environments — their targets, dependencies
+and policy; each **project** under `projects/<name>/` owns its resource
+definitions as JSON files. A resource belongs to exactly ONE project, and
+`pull`/`push`/`diff` always operate on whole projects — that is what keeps local and cloud
 consistent.
 
 ## Getting oriented quickly
@@ -24,7 +24,7 @@ consistent.
 ## Workspace layout
 
 ```
-rigg.yaml                     # environments + service connections (YAML)
+rigg.yaml                     # environments: targets, dependencies, policy (YAML)
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
   project.yaml                # metadata only — the directory IS the membership

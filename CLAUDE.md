@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`rigg` is a configuration-as-code CLI for Azure AI Search and Microsoft Foundry. A **workspace** (`rigg.yaml`) holds environments and service connections; **projects** (`projects/<name>/`) own resource definitions as JSON files — indexes, indexers, data sources, skillsets, synonym maps, aliases, knowledge sources, knowledge bases (Search), agents, model deployments, connections, guardrails (Foundry). Pull/push/diff operate on whole projects, enabling Git-based versioning of the entire Agentic RAG stack.
+`rigg` is a configuration-as-code CLI for Azure AI Search and Microsoft Foundry. A **workspace** (`rigg.yaml`) holds environments — each with its targets, dependencies and policy; **projects** (`projects/<name>/`) own resource definitions as JSON files — indexes, indexers, data sources, skillsets, synonym maps, aliases, knowledge sources, knowledge bases (Search), agents, model deployments, connections, guardrails (Foundry). Pull/push/diff operate on whole projects, enabling Git-based versioning of the entire Agentic RAG stack.
 
 The 1.0 design spec lives at `docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md`. Phases: 0.18 (core re-architecture — done), 0.19 (auth doctor, ci init, api watchdog), 0.20 (OpenAPI spec validation, AI features), 1.0.0 (samples, e2e, docs).
 

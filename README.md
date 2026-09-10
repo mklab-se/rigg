@@ -58,10 +58,10 @@ You can use rigg for **Azure AI Search alone**, **Microsoft Foundry alone**, or 
 
 ## Concepts
 
-rigg has two levels. A **workspace** (`rigg.yaml`) holds your environments and
-service connections; a **project** is a group of resource definitions you pull,
-push, review, and deploy as one unit — and every resource belongs to exactly one
-project. That single rule is what keeps sync unambiguous.
+rigg has two levels. A **workspace** (`rigg.yaml`) holds your environments — each
+with its targets, dependencies and policy; a **project** is a group of resource
+definitions you pull, push, review, and deploy as one unit — and every resource
+belongs to exactly one project. That single rule is what keeps sync unambiguous.
 
 New to the model, or unsure whether to use one project or several? Read
 **[CONCEPTS.md](CONCEPTS.md)** — or run `rigg concepts` for the same guide in
@@ -108,7 +108,7 @@ rigg push my-rag --dry-run
 rigg push my-rag
 ```
 
-A workspace (`rigg.yaml`) defines environments and service connections; each **project** under `projects/` owns its resource definitions exclusively, and `pull`/`push`/`diff` always operate on whole projects — no more half-synced states. During `init`, rigg discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. If you're not logged in to Azure CLI, you can enter service names manually.
+A workspace (`rigg.yaml`) defines environments — their targets, dependencies and policy; each **project** under `projects/` owns its resource definitions exclusively, and `pull`/`push`/`diff` always operate on whole projects — no more half-synced states. During `init`, rigg discovers your Azure AI Search services and Microsoft Foundry projects via ARM APIs and lets you choose which to manage. If you're not logged in to Azure CLI, you can enter service names manually.
 
 For a complete greenfield walkthrough — building an Agentic RAG system from scratch — see **[Getting Started](GETTING_STARTED.md)**.
 
@@ -129,7 +129,7 @@ Now your AI tool can see your entire RAG stack — run `/rigg-status` to try it.
 After scaffolding or pulling, a workspace looks like this:
 
 ```
-rigg.yaml                        # workspace: environments + service connections (YAML)
+rigg.yaml                        # workspace: environments — targets, dependencies, policy (YAML)
 apis/
   doc-enrichment.json            # shared OpenAPI specs for custom Web API skills
 projects/
@@ -318,7 +318,7 @@ environments:
     policy:  { protected: false }
     dependencies:
       docs-storage: { storage: my-storage-dev }
-      enrich-fn:    { function-app: my-enrich-fn-dev }
+      enrich-fn:    { function-app: my-enrich-fn }
   prod:
     policy:  { protected: true }
     search:  { service: my-search-prod }
