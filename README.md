@@ -445,7 +445,7 @@ Knowledge sources are **explicit**: they point at an existing index you define a
 
 Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which search indexes fed by indexers and skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
 
-rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server with 8 project-scoped tools. `rigg describe` returns the full workspace graph — every resource, dependency, agent instruction, and file path — in a single call. Mutating tools are safe by default: they return a preview until called with `force: true`.
+rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server with 9 project-scoped tools (13 total, including 4 runtime-operation tools). `rigg describe` returns the full workspace graph — every resource, dependency, agent instruction, and file path — in a single call. Mutating tools are safe by default: they return a preview until called with `force: true`.
 
 Any MCP-compatible AI tool works: Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI.
 

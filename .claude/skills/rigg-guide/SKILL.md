@@ -55,10 +55,13 @@ id=value]…`: infrastructure references are re-pointed at the target's own
 binding of the same name (shared bindings unchanged), sibling references
 follow renamed physical names, the target's own `name`/`x-rigg-pin`/Web-API
 auth carrier are kept, and anything promote can't decide (an unbound
-reference, a missing target binding, a target env that doesn't exist, a
+reference, a missing target binding, an external API URL with no binding, a
 deployment unavailable or short on quota) becomes a question — non-interactive
-callers answer with `--answer id=value` or get exit 6 (`needs-input`).
-Environments can be marked `policy: { protected:
+callers answer with `--answer id=value` or get exit 6 (`needs-input`). A
+target env that doesn't exist is not a question — it's a usage error (exit
+2) naming the `rigg env add <to> --like <from>` command to run first (or,
+interactively, promote offers to create it inline). Environments can be
+marked `policy: { protected:
 true }` in `rigg.yaml`; mutating pushes and remote deletes against a
 protected environment then require an explicit `--confirm-env <name>` (or an
 interactive type-to-confirm) — `--yes` alone never satisfies this gate.

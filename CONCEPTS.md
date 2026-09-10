@@ -265,14 +265,21 @@ not a fixed "deploy" direction.
 
 **Questions.** Translation stops on anything it cannot decide — a source
 value that matches no binding in `A`, a binding that exists in `A` but not
-`B`, a target environment that doesn't exist yet, a new-in-`B` deployment
-that Azure reports as unavailable or short on quota in `B`'s region, or an
-external `api` URL with no `api` binding. Interactively these are asked
-inline (answers that create bindings are written to `rigg.yaml`
-immediately); non-interactively every pending question comes back as a
-`needs-input` document (exit 6, nothing written) — answer with `--answer
-<id>=<value>` (repeatable) or `--answers-file <path>`. `--yes` applies a plan
-that has no pending questions.
+`B`, an external `api` URL with no `api` binding in either environment, or a
+new-in-`B` deployment that Azure reports as unavailable or short on quota in
+`B`'s region. Interactively these are asked inline (answers that create
+bindings are written to `rigg.yaml` immediately); non-interactively every
+pending question comes back as a `needs-input` document (exit 6, nothing
+written) — answer with `--answer <id>=<value>` (repeatable) or
+`--answers-file <path>`. `--yes` applies a plan that has no pending
+questions.
+
+A target environment `B` that doesn't exist yet is **not** one of these
+questions — it's a usage error (exit 2) up front, before translation runs,
+naming the exact `rigg env add <to> --like <from>` command to create it
+first (filled in with `A`'s own search service / Foundry account and
+project). Interactively, `rigg promote` offers to run that wizard inline
+instead of failing.
 
 **Preview.** Always shown before writing — and the whole output for
 `--dry-run`: the search/Foundry targets, a rewiring table per binding

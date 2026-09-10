@@ -132,16 +132,20 @@ around that. No compatibility with 1.x workspaces.
   (`--dry-run` stops there); `--output json` carries the same shape
   (`targets`, `rewiring[]`, `renamed[]`, `resources{…}`, `checks[]`,
   `questions[]`, `dry_run`). Anything it can't decide — an unbound
-  reference, a binding missing in the target, a target environment that
-  doesn't exist yet, a deployment unavailable or short on quota in the
-  target region — is asked as a question through the same protocol as
-  everything else (`--answer <id>=<value>` non-interactively, exit 6 on
-  anything unanswered). A Web API skill's auth carrier is re-derived from
-  the target function app's Easy Auth state (online) rather than copied
-  from the source. `--offline` skips every Azure lookup and reports
-  unresolved items instead of guessing. New MCP tool `rigg_promote`
-  (`project?`, `from`, `to`, `force?`, `offline?`, `answers?`) follows the
-  same preview/force pattern as `rigg_push`/`rigg_pull`.
+  reference, a binding missing in the target, an external API URL with no
+  binding in either environment, or a deployment unavailable or short on
+  quota in the target region — is asked as a question through the same
+  protocol as everything else (`--answer <id>=<value>` non-interactively,
+  exit 6 on anything unanswered). A target environment that doesn't exist
+  yet is not a question: it's a usage error (exit 2) up front, naming the
+  exact `rigg env add <to> --like <from>` command to run first
+  (interactively, `rigg promote` offers to create it inline). A Web API
+  skill's auth carrier is re-derived from the target function app's Easy
+  Auth state (online) rather than copied from the source. `--offline` skips
+  every Azure lookup and reports unresolved items instead of guessing. New
+  MCP tool `rigg_promote` (`project?`, `from`, `to`, `force?`, `offline?`,
+  `answers?`) follows the same preview/force pattern as
+  `rigg_push`/`rigg_pull`.
 
 ### Removed (library API)
 
