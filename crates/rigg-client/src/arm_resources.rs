@@ -9,7 +9,7 @@ use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 use tracing::debug;
 
-use rigg_core::registry::{self, ARM_BASE_URL, Domain};
+use rigg_core::registry::{self, Domain};
 use rigg_core::resources::ResourceKind;
 
 use crate::arm::ArmClient;
@@ -31,6 +31,7 @@ pub struct ArmScope {
 ///
 /// `name: None` yields the collection URL.
 pub fn arm_url(
+    base_url: &str,
     scope: &ArmScope,
     kind: ResourceKind,
     project: Option<&str>,
@@ -45,7 +46,7 @@ pub fn arm_url(
     }
     let mut path = format!(
         "{}/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
-        ARM_BASE_URL, scope.subscription_id, scope.resource_group, scope.account
+        base_url, scope.subscription_id, scope.resource_group, scope.account
     );
     if kind == ResourceKind::Connection {
         let project = project.ok_or_else(|| ClientError::Api {
@@ -69,6 +70,7 @@ pub fn arm_url(
 pub struct ArmResourceClient {
     http: Client,
     token: String,
+    base_url: String,
     scope: ArmScope,
     project: String,
 }
@@ -81,12 +83,14 @@ impl ArmResourceClient {
         Ok(Self {
             http: Client::builder().timeout(Duration::from_secs(30)).build()?,
             token: arm.token().to_string(),
+            base_url: arm.base_url().to_string(),
             scope,
             project: project.to_string(),
         })
     }
 
     /// Test constructor with explicit scope/token/base handled by arm_url.
+    /// Honours `RIGG_ARM_ENDPOINT` for the base URL, same as [`ArmClient::with_token`].
     pub fn with_token(
         scope: ArmScope,
         project: String,
@@ -95,6 +99,7 @@ impl ArmResourceClient {
         Ok(Self {
             http: Client::builder().timeout(Duration::from_secs(30)).build()?,
             token,
+            base_url: crate::arm::base_url_from(std::env::var("RIGG_ARM_ENDPOINT").ok().as_deref()),
             scope,
             project: project.to_string(),
         })
@@ -148,7 +153,13 @@ impl ArmResourceClient {
     }
 
     pub async fn list(&self, kind: ResourceKind) -> Result<Vec<Value>, ClientError> {
-        let url = arm_url(&self.scope, kind, self.project_for(kind), None)?;
+        let url = arm_url(
+            &self.base_url,
+            &self.scope,
+            kind,
+            self.project_for(kind),
+            None,
+        )?;
         let (_, body) = self.request(Method::GET, &url, None).await?;
         Ok(body
             .and_then(|v| v.get("value").and_then(|a| a.as_array()).cloned())
@@ -156,7 +167,13 @@ impl ArmResourceClient {
     }
 
     pub async fn get(&self, kind: ResourceKind, name: &str) -> Result<Option<Value>, ClientError> {
-        let url = arm_url(&self.scope, kind, self.project_for(kind), Some(name))?;
+        let url = arm_url(
+            &self.base_url,
+            &self.scope,
+            kind,
+            self.project_for(kind),
+            Some(name),
+        )?;
         match self.request(Method::GET, &url, None).await {
             Ok((_, body)) => Ok(body),
             Err(ClientError::NotFound { .. }) => Ok(None),
@@ -171,7 +188,13 @@ impl ArmResourceClient {
         name: &str,
         body: &Value,
     ) -> Result<Value, ClientError> {
-        let url = arm_url(&self.scope, kind, self.project_for(kind), Some(name))?;
+        let url = arm_url(
+            &self.base_url,
+            &self.scope,
+            kind,
+            self.project_for(kind),
+            Some(name),
+        )?;
         let (status, response) = self.request(Method::PUT, &url, Some(body)).await?;
 
         // 200/201 with terminal state → done. 201/202 in-progress → poll GET.
@@ -185,7 +208,13 @@ impl ArmResourceClient {
     }
 
     pub async fn delete(&self, kind: ResourceKind, name: &str) -> Result<(), ClientError> {
-        let url = arm_url(&self.scope, kind, self.project_for(kind), Some(name))?;
+        let url = arm_url(
+            &self.base_url,
+            &self.scope,
+            kind,
+            self.project_for(kind),
+            Some(name),
+        )?;
         match self.request(Method::DELETE, &url, None).await {
             Ok(_) => Ok(()),
             Err(ClientError::NotFound { .. }) => Ok(()),
@@ -276,6 +305,7 @@ pub async fn resolve_account_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rigg_core::registry::ARM_BASE_URL;
 
     fn scope() -> ArmScope {
         ArmScope {
@@ -287,7 +317,14 @@ mod tests {
 
     #[test]
     fn deployment_url() {
-        let url = arm_url(&scope(), ResourceKind::Deployment, None, Some("gpt-5-mini")).unwrap();
+        let url = arm_url(
+            ARM_BASE_URL,
+            &scope(),
+            ResourceKind::Deployment,
+            None,
+            Some("gpt-5-mini"),
+        )
+        .unwrap();
         assert_eq!(
             url,
             format!(
@@ -299,7 +336,7 @@ mod tests {
 
     #[test]
     fn guardrail_url() {
-        let url = arm_url(&scope(), ResourceKind::Guardrail, None, None).unwrap();
+        let url = arm_url(ARM_BASE_URL, &scope(), ResourceKind::Guardrail, None, None).unwrap();
         assert!(url.ends_with(&format!(
             "accounts/mklabaifndr/raiPolicies?api-version={}",
             registry::ARM_COGNITIVE_API_VERSION
@@ -308,9 +345,17 @@ mod tests {
 
     #[test]
     fn connection_url_requires_project() {
-        let err = arm_url(&scope(), ResourceKind::Connection, None, Some("c")).unwrap_err();
+        let err = arm_url(
+            ARM_BASE_URL,
+            &scope(),
+            ResourceKind::Connection,
+            None,
+            Some("c"),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("project"));
         let url = arm_url(
+            ARM_BASE_URL,
             &scope(),
             ResourceKind::Connection,
             Some("proj-default"),
@@ -322,8 +367,21 @@ mod tests {
 
     #[test]
     fn non_arm_kind_rejected() {
-        let err = arm_url(&scope(), ResourceKind::Index, None, None).unwrap_err();
+        let err = arm_url(ARM_BASE_URL, &scope(), ResourceKind::Index, None, None).unwrap_err();
         assert!(err.to_string().contains("not an ARM-managed kind"));
+    }
+
+    #[test]
+    fn arm_url_honours_a_custom_base_url() {
+        let url = arm_url(
+            "http://127.0.0.1:9999",
+            &scope(),
+            ResourceKind::Deployment,
+            None,
+            Some("gpt-5-mini"),
+        )
+        .unwrap();
+        assert!(url.starts_with("http://127.0.0.1:9999/subscriptions/sub-1/"));
     }
 
     #[test]

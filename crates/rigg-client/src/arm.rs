@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::debug;
 
+use rigg_core::binding::{Binding, BindingType, BindingValue, ResolvedBinding};
 use rigg_core::registry::{self, ARM_BASE_URL, Provider};
 
 use crate::auth::AzCliAuth;
@@ -16,6 +17,33 @@ use crate::error::ClientError;
 pub struct ArmClient {
     http: Client,
     token: String,
+    base_url: String,
+}
+
+/// The ARM base URL to use: `RIGG_ARM_ENDPOINT` when set (trimmed of a
+/// trailing `/`), else [`ARM_BASE_URL`]. Pulled out as a pure function so it
+/// can be unit-tested without mutating process env vars.
+pub(crate) fn base_url_from(env: Option<&str>) -> String {
+    match env {
+        Some(v) if !v.is_empty() => v.trim_end_matches('/').to_string(),
+        _ => ARM_BASE_URL.to_string(),
+    }
+}
+
+/// A minimal ARM resource shape shared by list helpers that don't warrant
+/// their own typed struct (managed identities, Key Vaults, ...).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArmResource {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub location: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 /// Azure subscription
@@ -272,34 +300,71 @@ struct ArmListResponse<T> {
 }
 
 impl ArmClient {
-    /// Create a new ARM client using Azure CLI credentials
+    /// Create a new ARM client using the default tenant: `RIGG_ACCESS_TOKEN`
+    /// when set, else Azure CLI credentials.
     pub fn new() -> Result<Self, ClientError> {
-        let token = AzCliAuth::get_arm_token()?;
+        Self::for_tenant(None)
+    }
+
+    /// Create a new ARM client scoped to a specific tenant. `RIGG_ACCESS_TOKEN`
+    /// wins over everything (same static-token path the data-plane clients
+    /// use); otherwise falls back to the Azure CLI, via
+    /// [`AzCliAuth::get_arm_token_for_tenant`].
+    pub fn for_tenant(tenant: Option<&str>) -> Result<Self, ClientError> {
+        let token = match std::env::var("RIGG_ACCESS_TOKEN") {
+            Ok(t) if !t.is_empty() => t,
+            _ => AzCliAuth::get_arm_token_for_tenant(tenant)?,
+        };
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
-        Ok(Self { http, token })
+        Ok(Self {
+            http,
+            token,
+            base_url: base_url_from(std::env::var("RIGG_ARM_ENDPOINT").ok().as_deref()),
+        })
     }
 
     /// Create a new ARM client from an already-obtained bearer token
-    /// (tests, and callers that already hold a token).
+    /// (tests, and callers that already hold a token). Honours
+    /// `RIGG_ARM_ENDPOINT` for the base URL.
     pub fn with_token(token: String) -> Self {
+        Self::with_token_and_base(
+            token,
+            base_url_from(std::env::var("RIGG_ARM_ENDPOINT").ok().as_deref()),
+        )
+    }
+
+    /// Create a new ARM client from an already-obtained bearer token and an
+    /// explicit base URL — for tests, so ARM-fake tests never touch the
+    /// process env var (they run in parallel and would stomp each other).
+    pub fn with_token_and_base(token: String, base_url: String) -> Self {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("reqwest client builds");
-        Self { http, token }
+        Self {
+            http,
+            token,
+            base_url,
+        }
     }
 
     /// ARM URL for `path` (leading `/`) on `provider`'s pinned api-version.
     pub fn url(&self, path: &str, provider: Provider) -> String {
         format!(
             "{}{}?api-version={}",
-            ARM_BASE_URL,
+            self.base_url,
             path,
             registry::provider(provider).stable
         )
+    }
+
+    /// This client's ARM base URL (honours `RIGG_ARM_ENDPOINT`) — for
+    /// callers building their own URLs (e.g. `ArmResourceClient`).
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// `resourceType → apiVersions` as ARM registers them for `namespace` in
@@ -1134,6 +1199,307 @@ impl ArmClient {
 
         Ok(())
     }
+
+    /// List `Microsoft.ManagedIdentity/userAssignedIdentities` in a subscription.
+    pub async fn list_user_assigned_identities(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<ArmResource>, ClientError> {
+        let items = self
+            .list_provider_resources(
+                subscription_id,
+                "Microsoft.ManagedIdentity/userAssignedIdentities",
+                Provider::ManagedIdentityArm,
+            )
+            .await?;
+        Ok(items
+            .iter()
+            .map(|v| arm_resource_from_value(v, None))
+            .collect())
+    }
+
+    /// List `Microsoft.KeyVault/vaults` in a subscription.
+    pub async fn list_key_vaults(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<ArmResource>, ClientError> {
+        let items = self
+            .list_provider_resources(
+                subscription_id,
+                "Microsoft.KeyVault/vaults",
+                Provider::KeyVaultArm,
+            )
+            .await?;
+        Ok(items
+            .iter()
+            .map(|v| arm_resource_from_value(v, Some("vaultUri")))
+            .collect())
+    }
+
+    /// `GET /subscriptions/{sub}/providers/{resource_type_path}` — the raw
+    /// `value` array, shared by the typed list helpers above.
+    async fn list_provider_resources(
+        &self,
+        subscription_id: &str,
+        resource_type_path: &str,
+        provider: Provider,
+    ) -> Result<Vec<Value>, ClientError> {
+        let url = self.url(
+            &format!("/subscriptions/{subscription_id}/providers/{resource_type_path}"),
+            provider,
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let value: Value = response.json().await?;
+        Ok(value
+            .get("value")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// The [`ArmResource`] list for one [`BindingType`] in one subscription —
+    /// used by [`Self::resolve_binding`]'s by-name lookup.
+    async fn list_resources_for_kind(
+        &self,
+        kind: BindingType,
+        subscription_id: &str,
+    ) -> Result<Vec<ArmResource>, ClientError> {
+        match kind {
+            BindingType::Storage => Ok(self
+                .list_storage_accounts_subscription(subscription_id)
+                .await?
+                .into_iter()
+                .map(|a| ArmResource {
+                    name: a.name,
+                    id: a.id,
+                    location: a.location,
+                    kind: None,
+                    endpoint: None,
+                })
+                .collect()),
+            BindingType::AiServices => Ok(self
+                .list_cognitive_accounts(subscription_id)
+                .await?
+                .into_iter()
+                .map(|a| ArmResource {
+                    name: a.name,
+                    id: a.id,
+                    location: a.location,
+                    kind: Some(a.kind),
+                    endpoint: a.properties.endpoint,
+                })
+                .collect()),
+            BindingType::FunctionApp => Ok(self
+                .list_provider_resources(subscription_id, "Microsoft.Web/sites", Provider::WebArm)
+                .await?
+                .iter()
+                .map(|v| arm_resource_from_value(v, None))
+                .collect()),
+            BindingType::Identity => self.list_user_assigned_identities(subscription_id).await,
+            BindingType::KeyVault => self.list_key_vaults(subscription_id).await,
+            BindingType::Api => Ok(Vec::new()),
+        }
+    }
+
+    /// The [`Provider`] channel a [`BindingType`]'s ARM id is read back
+    /// through — `None` for `Api` (URL bindings have no ARM resource).
+    fn provider_for_binding(kind: BindingType) -> Option<Provider> {
+        match kind {
+            BindingType::Storage => Some(Provider::StorageArm),
+            BindingType::AiServices => Some(Provider::CognitiveServicesArm),
+            BindingType::FunctionApp => Some(Provider::WebArm),
+            BindingType::Identity => Some(Provider::ManagedIdentityArm),
+            BindingType::KeyVault => Some(Provider::KeyVaultArm),
+            BindingType::Api => None,
+        }
+    }
+
+    /// `GET {id}` on `kind`'s provider version, filling location/endpoint/
+    /// principal_id from the response and subscription/resource_group from
+    /// the id itself.
+    async fn resolve_arm_id(
+        &self,
+        kind: BindingType,
+        id: &str,
+    ) -> Result<ResolvedBinding, ClientError> {
+        let provider = Self::provider_for_binding(kind).ok_or_else(|| ClientError::Api {
+            status: 400,
+            message: format!("{kind} bindings have no ARM resource to resolve"),
+        })?;
+        let url = self.url(id, provider);
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let body: Value = response.json().await?;
+
+        let name = body
+            .get("name")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .or_else(|| rigg_core::binding::arm_resource_name(id).map(String::from))
+            .unwrap_or_default();
+        let location = body
+            .get("location")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let endpoint = match kind {
+            BindingType::Storage => body
+                .pointer("/properties/primaryEndpoints/blob")
+                .and_then(Value::as_str)
+                .map(String::from),
+            BindingType::AiServices => body
+                .pointer("/properties/endpoint")
+                .and_then(Value::as_str)
+                .map(String::from),
+            BindingType::FunctionApp => Some(format!("https://{name}.azurewebsites.net")),
+            BindingType::KeyVault => body
+                .pointer("/properties/vaultUri")
+                .and_then(Value::as_str)
+                .map(String::from),
+            BindingType::Identity | BindingType::Api => None,
+        };
+        let principal_id = (kind == BindingType::Identity)
+            .then(|| {
+                body.pointer("/properties/principalId")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            })
+            .flatten();
+
+        Ok(ResolvedBinding {
+            physical_name: name.to_lowercase(),
+            name,
+            kind,
+            arm_id: Some(id.to_string()),
+            subscription: rigg_core::binding::arm_subscription(id).map(String::from),
+            resource_group: rigg_core::binding::arm_resource_group(id).map(String::from),
+            location,
+            endpoint,
+            principal_id,
+            resolved_at: chrono::Utc::now().to_rfc3339(),
+        })
+    }
+
+    /// Resolve a binding value (bare name, ARM id, or URL) to a
+    /// [`ResolvedBinding`].
+    ///
+    /// - An ARM id is `GET`'d directly on the type's provider version.
+    /// - A bare name is matched (case-insensitively) against every resource
+    ///   of `kind` in `subscription` (or every enabled subscription, when
+    ///   `None`): zero matches is a [`ClientError::NotFound`], more than one
+    ///   is a `409` [`ClientError::Api`] naming the ambiguous ids.
+    /// - A URL (only meaningful for [`BindingType::Api`]) resolves locally —
+    ///   no ARM call.
+    pub async fn resolve_binding(
+        &self,
+        kind: BindingType,
+        value: &str,
+        subscription: Option<&str>,
+    ) -> Result<ResolvedBinding, ClientError> {
+        let probe = Binding {
+            kind,
+            value: value.to_string(),
+        };
+        match probe.value() {
+            BindingValue::ArmId(id) => self.resolve_arm_id(kind, &id).await,
+            BindingValue::Url(url) => Ok(ResolvedBinding {
+                name: value.to_string(),
+                kind,
+                physical_name: probe.physical_name(),
+                arm_id: None,
+                subscription: None,
+                resource_group: None,
+                location: None,
+                endpoint: Some(url),
+                principal_id: None,
+                resolved_at: chrono::Utc::now().to_rfc3339(),
+            }),
+            BindingValue::Name(name) => {
+                let subs: Vec<String> = match subscription {
+                    Some(s) => vec![s.to_string()],
+                    None => self
+                        .list_subscriptions()
+                        .await?
+                        .into_iter()
+                        .map(|s| s.subscription_id)
+                        .collect(),
+                };
+                let mut matches: Vec<ArmResource> = Vec::new();
+                for sub in &subs {
+                    let items = self.list_resources_for_kind(kind, sub).await?;
+                    matches.extend(
+                        items
+                            .into_iter()
+                            .filter(|r| r.name.eq_ignore_ascii_case(&name)),
+                    );
+                }
+                match matches.len() {
+                    0 => Err(ClientError::NotFound {
+                        kind: kind.to_string(),
+                        name,
+                    }),
+                    1 => self.resolve_arm_id(kind, &matches[0].id).await,
+                    _ => Err(ClientError::Api {
+                        status: 409,
+                        message: format!(
+                            "ambiguous: {} — use the full ARM id",
+                            matches
+                                .iter()
+                                .map(|m| m.id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }),
+                }
+            }
+        }
+    }
+}
+
+/// Build an [`ArmResource`] from a raw ARM list-item `Value`, reading the
+/// endpoint from `properties.<endpoint_field>` when given.
+fn arm_resource_from_value(v: &Value, endpoint_field: Option<&str>) -> ArmResource {
+    ArmResource {
+        name: v
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        id: v
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        location: v
+            .get("location")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        kind: v.get("kind").and_then(Value::as_str).map(String::from),
+        endpoint: endpoint_field.and_then(|field| {
+            v.pointer(&format!("/properties/{field}"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        }),
+    }
 }
 
 /// Parse resource group from an ARM resource ID.
@@ -1281,6 +1647,28 @@ mod tests {
 #[cfg(test)]
 mod provider_table_tests {
     use super::*;
+
+    #[test]
+    fn arm_base_url_can_be_overridden_for_tests() {
+        assert_eq!(
+            base_url_from(Some("http://127.0.0.1:1")),
+            "http://127.0.0.1:1"
+        );
+        // trailing slash is trimmed
+        assert_eq!(
+            base_url_from(Some("http://127.0.0.1:1/")),
+            "http://127.0.0.1:1"
+        );
+        // no override, or an empty one, falls back to the real ARM base URL
+        assert_eq!(base_url_from(None), ARM_BASE_URL);
+        assert_eq!(base_url_from(Some("")), ARM_BASE_URL);
+
+        let c = ArmClient::with_token_and_base("t".into(), "http://127.0.0.1:1".into());
+        assert!(
+            c.url("/subscriptions", Provider::ResourcesArm)
+                .starts_with("http://127.0.0.1:1/subscriptions?api-version=")
+        );
+    }
 
     #[test]
     fn arm_urls_come_from_the_provider_table() {

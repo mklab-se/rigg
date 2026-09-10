@@ -181,6 +181,55 @@ impl AzCliAuth {
         az_token_cache().get_or_fetch("https://management.azure.com", Self::fetch_arm_token)
     }
 
+    /// Get an ARM access token scoped to a specific tenant (`az account
+    /// get-access-token --tenant <t> --resource https://management.azure.com`).
+    /// `tenant: None` behaves exactly like [`Self::get_arm_token`] — same
+    /// cache entry — so existing callers are unaffected.
+    pub fn get_arm_token_for_tenant(tenant: Option<&str>) -> Result<String, AuthError> {
+        match tenant {
+            None => Self::get_arm_token(),
+            Some(t) => {
+                let scope = format!("{t}|https://management.azure.com");
+                az_token_cache().get_or_fetch(&scope, || Self::fetch_arm_token_for_tenant(t))
+            }
+        }
+    }
+
+    fn fetch_arm_token_for_tenant(tenant: &str) -> Result<String, AuthError> {
+        let output = Command::new("az")
+            .args([
+                "account",
+                "get-access-token",
+                "--tenant",
+                tenant,
+                "--resource",
+                "https://management.azure.com",
+                "--query",
+                "accessToken",
+                "--output",
+                "tsv",
+            ])
+            .output()
+            .map_err(|e| AuthError::TokenError(e.to_string()))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AuthError::TokenError(format!(
+                "{}\n  run: az login --tenant {tenant}",
+                token_error_detail(&stderr, output.status)
+            )));
+        }
+
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if token.is_empty() {
+            return Err(AuthError::TokenError(
+                "Empty ARM token received".to_string(),
+            ));
+        }
+
+        Ok(token)
+    }
+
     fn fetch_arm_token() -> Result<String, AuthError> {
         let output = Command::new("az")
             .args([
