@@ -4,8 +4,12 @@
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
+use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
+use rigg_core::binding::{BindingCache, EnvBindings};
+use rigg_core::infra::{self, Class};
 use rigg_core::registry::{self, X_RIGG_API, X_RIGG_REF};
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::{Store, assert_exclusive_ownership};
@@ -14,11 +18,48 @@ use rigg_core::workspace::{Project, Workspace};
 use crate::cli::ValidateArgs;
 use crate::commands::{CommandError, GlobalContext, load_workspace};
 
+/// One bound/shared infrastructure reference, surfaced with `--verbose`.
+/// JSON serializes only `{file, path, class, binding}`; `target`/`physical`/
+/// `shared_with` are kept for the text-mode `✓ bound` / `= shared` lines.
+#[derive(Debug, Clone, Serialize)]
+struct BindingRow {
+    file: String,
+    path: String,
+    class: String,
+    binding: Option<String>,
+    #[serde(skip)]
+    target: String,
+    #[serde(skip)]
+    physical: String,
+    #[serde(skip)]
+    shared_with: Vec<String>,
+}
+
+/// Everything one project/environment's validation pass found.
+#[derive(Default)]
+struct ProjectValidation {
+    problems: Vec<String>,
+    warnings: Vec<String>,
+    bindings: Vec<BindingRow>,
+}
+
 pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
     let ws = load_workspace()?;
     let projects = select_projects_lenient(&ws, args.project.as_deref())?;
 
     let mut problems: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut binding_rows: Vec<BindingRow> = Vec::new();
+
+    // One EnvBindings (declared + implicit search/foundry, enriched from
+    // the resolution cache) per environment in rigg.yaml — built once so
+    // classification can check every other environment for sharing/leaks.
+    let mut env_bindings: BTreeMap<String, EnvBindings> = BTreeMap::new();
+    for (name, env) in &ws.config.environments {
+        let cache = BindingCache::load(&ws, name);
+        env_bindings.insert(name.clone(), EnvBindings::of_env(name, env, Some(&cache)));
+    }
+    let default_env = ws.default_env_name().unwrap_or("dev").to_string();
 
     // Validate every environment any project participates in. A project
     // with no env dirs yet reports nothing (empty project).
@@ -47,32 +88,89 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
             }
         }
 
+        let this_bindings = env_bindings.get(env);
+        let other_bindings: Vec<EnvBindings> = env_bindings
+            .iter()
+            .filter(|(name, _)| name.as_str() != env.as_str())
+            .map(|(_, eb)| eb.clone())
+            .collect();
+        let strict_bindings = ws
+            .config
+            .environments
+            .get(env)
+            .map(|e| e.policy.strict_bindings())
+            .unwrap_or(false);
+
         for project in &projects {
             if !Store::envs_of(project).contains(env) {
                 continue; // this project doesn't participate in this env
             }
-            let proj_problems = validate_project(&ws, project, env, &workspace_refs, args.strict);
+            let outcome = validate_project(
+                &ws,
+                project,
+                env,
+                &workspace_refs,
+                args.strict,
+                this_bindings,
+                &other_bindings,
+                strict_bindings,
+                &default_env,
+            );
             problems.extend(
-                proj_problems
+                outcome
+                    .problems
                     .into_iter()
                     .map(|p| format!("[env {env}] {p}")),
             );
+            warnings.extend(
+                outcome
+                    .warnings
+                    .into_iter()
+                    .map(|w| format!("[env {env}] {w}")),
+            );
+            binding_rows.extend(outcome.bindings);
         }
     }
 
     if ctx.json() {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "valid": problems.is_empty(),
-                "problems": problems,
-            }))?
-        );
-    } else if problems.is_empty() {
-        println!("{} all checks passed", "✓".green().bold());
+        let mut json = serde_json::json!({
+            "valid": problems.is_empty(),
+            "problems": problems,
+            "warnings": warnings,
+        });
+        if args.verbose {
+            json["bindings"] = serde_json::to_value(&binding_rows)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&json)?);
     } else {
-        for p in &problems {
-            println!("{} {p}", "✗".red().bold());
+        if problems.is_empty() && warnings.is_empty() {
+            println!("{} all checks passed", "✓".green().bold());
+        } else {
+            for p in &problems {
+                println!("{} {p}", "✗".red().bold());
+            }
+            for w in &warnings {
+                println!("{} {w}", "!".yellow().bold());
+            }
+        }
+        if args.verbose {
+            for row in &binding_rows {
+                match row.class.as_str() {
+                    "bound" => println!(
+                        "{} bound '{}' ({} {})",
+                        "✓".green().bold(),
+                        row.binding.as_deref().unwrap_or(""),
+                        row.target,
+                        row.physical
+                    ),
+                    "shared" => println!(
+                        "= shared '{}' with {}",
+                        row.binding.as_deref().unwrap_or(""),
+                        row.shared_with.join(", ")
+                    ),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -86,6 +184,93 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
     }
 }
 
+/// Classify one found infrastructure reference and record the result as a
+/// problem, a warning, or a (verbose-only) bound/shared row.
+#[allow(clippy::too_many_arguments)]
+fn record_classified(
+    c: infra::Classified,
+    env: &str,
+    display: &str,
+    default_env: &str,
+    strict_bindings: bool,
+    problems: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+    bindings: &mut Vec<BindingRow>,
+) {
+    let path = c.found.path.clone();
+    let target = c.found.physical.target;
+    let physical = c.found.physical.physical.clone();
+
+    match c.class {
+        Class::Bound(name) => {
+            bindings.push(BindingRow {
+                file: display.to_string(),
+                path,
+                class: "bound".to_string(),
+                binding: Some(name),
+                target: target.to_string(),
+                physical,
+                shared_with: Vec::new(),
+            });
+        }
+        Class::Shared(name, envs) => {
+            bindings.push(BindingRow {
+                file: display.to_string(),
+                path,
+                class: "shared".to_string(),
+                binding: Some(name),
+                target: target.to_string(),
+                physical,
+                shared_with: envs,
+            });
+        }
+        Class::Leak { binding, envs } => {
+            let other_env = envs.first().map(String::as_str).unwrap_or("?");
+            problems.push(format!(
+                "[{display}] {path} references {target} '{physical}', which is bound in \
+                 environment '{other_env}' as '{binding}' but not in '{env}' — bind it \
+                 (rigg env bind {env} {binding} {target}:{physical}) or fix the file"
+            ));
+        }
+        Class::Unbound => {
+            let msg = format!(
+                "[{display}] {path} references {target} '{physical}', which no environment \
+                 binds — run `rigg env bind {default_env} --learn` to record it"
+            );
+            if strict_bindings {
+                problems.push(msg);
+            } else {
+                warnings.push(msg);
+            }
+        }
+        Class::External => {
+            let raw = c.found.physical.original.as_str().unwrap_or(&physical);
+            let origin = url_origin(raw);
+            let msg = format!(
+                "[{display}] {path} calls external API '{origin}' — bind it as an api \
+                 dependency to track it across environments"
+            );
+            if strict_bindings {
+                problems.push(msg);
+            } else {
+                warnings.push(msg);
+            }
+        }
+    }
+}
+
+/// The scheme + host of a URL, dropping any path/query — `https://host` from
+/// `https://host/path?query`.
+fn url_origin(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+            format!("{scheme}://{host}")
+        }
+        None => url.to_string(),
+    }
+}
+
 fn select_projects_lenient<'w>(
     ws: &'w Workspace,
     project: Option<&str>,
@@ -96,22 +281,34 @@ fn select_projects_lenient<'w>(
     }
 }
 
-/// Validate one project's tree in one environment. Returns problems found
-/// (without the `[env <name>]` prefix — the caller adds that uniformly).
+/// Validate one project's tree in one environment. Returns problems,
+/// warnings, and (verbose-only) bound/shared rows found — all without the
+/// `[env <name>]` prefix, which the caller adds uniformly.
+#[allow(clippy::too_many_arguments)]
 fn validate_project(
     ws: &Workspace,
     project: &Project,
     env: &str,
     workspace_refs: &[ResourceRef],
     strict: bool,
-) -> Vec<String> {
+    this_bindings: Option<&EnvBindings>,
+    other_bindings: &[EnvBindings],
+    strict_bindings: bool,
+    default_env: &str,
+) -> ProjectValidation {
     let mut problems: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut bindings: Vec<BindingRow> = Vec::new();
     let store = Store::new(project, env);
     let list = match store.list() {
         Ok(list) => list,
         Err(e) => {
             problems.push(format!("[{}] {e}", project.name));
-            return problems;
+            return ProjectValidation {
+                problems,
+                warnings,
+                bindings,
+            };
         }
     };
 
@@ -207,8 +404,34 @@ fn validate_project(
                 "warning:".yellow()
             );
         }
+
+        // infrastructure references (storage, identity, model host, ...):
+        // classify against this environment's bindings — leaks are always
+        // problems; unbound/external are problems only in strict-bindings
+        // environments (default: protected), warnings otherwise.
+        if let Some(this) = this_bindings {
+            let refs = infra::extract(r.kind, &value);
+            if !refs.is_empty() {
+                for c in infra::classify(this, other_bindings, refs) {
+                    record_classified(
+                        c,
+                        env,
+                        &display,
+                        default_env,
+                        strict_bindings,
+                        &mut problems,
+                        &mut warnings,
+                        &mut bindings,
+                    );
+                }
+            }
+        }
     }
-    problems
+    ProjectValidation {
+        problems,
+        warnings,
+        bindings,
+    }
 }
 
 /// Warn when a data source has no usable connection at all — typical after

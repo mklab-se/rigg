@@ -1558,3 +1558,71 @@ fn unknown_answer_id_is_a_usage_error() {
         .code(2)
         .stderr(predicate::str::contains("unknown answer id 'nope'"));
 }
+
+/// Workspace with two environments, each declaring a `docs` storage
+/// dependency binding pointing at a different physical account — used by
+/// the infra-reference classification tests below.
+fn workspace_two_envs_with_bindings() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("rigg.yaml"), "environments:\n  dev:\n    default: true\n    search: { service: s-dev }\n    dependencies:\n      docs: { storage: devacct }\n  prod:\n    policy: { protected: true }\n    search: { service: s-prod }\n    dependencies:\n      docs: { storage: prodacct }\n").unwrap();
+    let proj = tmp.path().join("projects/demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+/// Write a data source file in `env` referencing storage account `account`
+/// via an identity-based `ResourceId=` connection string.
+fn write_ds(ws: &std::path::Path, env: &str, name: &str, account: &str) {
+    let d = ws.join(format!("projects/demo/envs/{env}/search/data-sources"));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join(format!("{name}.json")), format!(r#"{{"name":"{name}","type":"azureblob","credentials":{{"connectionString":"ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/{account};"}},"container":{{"name":"c"}}}}"#)).unwrap();
+}
+
+#[test]
+fn validate_flags_a_prod_file_pointing_at_dev_storage_as_a_leak() {
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "prod", "ds", "devacct");
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains(
+            "bound in environment 'dev' as 'docs' but not in 'prod'",
+        ));
+}
+
+#[test]
+fn validate_warns_on_unbound_in_dev_but_errors_in_protected_prod() {
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "dev", "ds", "otheracct");
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("no environment binds")
+                .and(predicate::str::contains("rigg env bind dev --learn")),
+        );
+    write_ds(ws.path(), "prod", "ds2", "otheracct");
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "--output", "json"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("\"valid\": false"));
+}
+
+#[test]
+fn validate_verbose_lists_bound_and_shared() {
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "dev", "ds", "devacct");
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "--verbose"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bound 'docs'"));
+}

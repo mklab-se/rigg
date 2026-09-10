@@ -28,6 +28,22 @@ pub enum Target {
     SearchService,
 }
 
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let word = match self {
+            Target::Storage => "storage",
+            Target::Identity => "identity",
+            Target::ModelHost => "model host",
+            Target::AiServices => "ai-services",
+            Target::FunctionApp => "function-app",
+            Target::Api => "api",
+            Target::KeyVault => "key-vault",
+            Target::SearchService => "search",
+        };
+        write!(f, "{word}")
+    }
+}
+
 /// A recognized infrastructure reference: what it points at, and enough of
 /// the original value to rewrite it later.
 #[derive(Debug, Clone, PartialEq)]
