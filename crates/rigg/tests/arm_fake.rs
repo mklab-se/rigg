@@ -7,7 +7,7 @@
 
 #![allow(dead_code)] // included by several test binaries; each uses part of it
 
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -104,6 +104,64 @@ pub async fn mount_arm_fake(
                 }
             }))
         })
+        .mount(server)
+        .await;
+}
+
+/// Mount one site's Easy Auth (`authsettingsV2`) document. ARM serves it as
+/// a POST action on the site's resource id, so this never collides with the
+/// catch-all `GET {resource id}` responder above.
+///
+/// `enabled` drives both the platform switch and the Microsoft identity
+/// provider; `client_id` becomes the app registration's client id and the
+/// single allowed audience (`api://{client_id}`).
+pub async fn mount_easy_auth(server: &MockServer, site: &str, enabled: bool, client_id: &str) {
+    let audiences: Vec<String> = if client_id.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("api://{client_id}")]
+    };
+    let body = json!({
+        "properties": {
+            "platform": {"enabled": enabled},
+            "identityProviders": {
+                "azureActiveDirectory": {
+                    "enabled": enabled,
+                    "registration": {"clientId": client_id},
+                    "validation": {"allowedAudiences": audiences}
+                }
+            }
+        }
+    });
+    Mock::given(method("POST"))
+        .and(path_regex(format!(
+            r"^.*/sites/{site}/config/authsettingsV2/list$"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+/// Mount `Microsoft.CognitiveServices/locations/{location}/models` and
+/// `.../usages` for one subscription — what the deployment availability and
+/// quota checks read.
+pub async fn mount_models(
+    server: &MockServer,
+    sub: &str,
+    location: &str,
+    models: Vec<Value>,
+    usages: Vec<Value>,
+) {
+    let base =
+        format!("/subscriptions/{sub}/providers/Microsoft.CognitiveServices/locations/{location}");
+    Mock::given(method("GET"))
+        .and(path(format!("{base}/models")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": models})))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{base}/usages")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": usages})))
         .mount(server)
         .await;
 }

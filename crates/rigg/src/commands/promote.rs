@@ -41,8 +41,8 @@ use rigg_diff::output::SideLabels;
 use crate::cli::PromoteArgs;
 use crate::commands::ask::{Answer, Candidate, Question};
 use crate::commands::{
-    CommandError, GlobalContext, bindings, discovery, env as env_cmd, interactive, load_workspace,
-    select_one_project,
+    CommandError, GlobalContext, bindings, credentials, discovery, env as env_cmd, interactive,
+    load_workspace, select_one_project,
 };
 use crate::say;
 
@@ -118,21 +118,11 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         answered.apply_to(&mut ws.config);
     };
 
+    let mut plan = plan;
     let project = select_one_project(&ws, args.project.as_deref())?;
     let store_to = Store::new(project, &args.to);
     let targets = Targets::of(&ws, &args);
-    let checks = checks(&plan, &args, &settled);
-
-    let preview = Preview {
-        project: &project_name,
-        args: &args,
-        plan: &plan,
-        checks: &checks,
-        targets: &targets,
-    };
-    if !ctx.json() {
-        preview.print();
-    }
+    let mut checks = checks(&plan, &args, &settled);
 
     let pending_writes = plan
         .items
@@ -140,31 +130,45 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         .filter(|i| i.change() != Change::Unchanged)
         .count();
 
-    if args.dry_run {
-        if ctx.json() {
-            println!("{}", preview.to_json(true));
-        } else {
-            println!();
-            println!("(dry run — nothing written)");
+    // Scoped: the online phase below mutates what the preview borrows.
+    {
+        let preview = Preview {
+            project: &project_name,
+            args: &args,
+            plan: &plan,
+            checks: &checks,
+            targets: &targets,
+        };
+        if !ctx.json() {
+            preview.print();
         }
-        return Ok(());
-    }
 
-    if pending_writes == 0 {
-        // The run reached its end without aborting, so the answers are worth
-        // keeping even though no document changed — otherwise the same
-        // question comes back on every run.
-        answered.persist()?;
-        if ctx.json() {
-            println!("{}", preview.to_json(false));
-        } else {
-            println!();
-            println!(
-                "nothing to promote — '{}' already matches '{}'",
-                args.to, args.from
-            );
+        if args.dry_run {
+            if ctx.json() {
+                println!("{}", preview.to_json(true));
+            } else {
+                println!();
+                println!("(dry run — nothing written)");
+            }
+            return Ok(());
         }
-        return Ok(());
+
+        if pending_writes == 0 {
+            // The run reached its end without aborting, so the answers are
+            // worth keeping even though no document changed — otherwise the
+            // same question comes back on every run.
+            answered.persist()?;
+            if ctx.json() {
+                println!("{}", preview.to_json(false));
+            } else {
+                println!();
+                println!(
+                    "nothing to promote — '{}' already matches '{}'",
+                    args.to, args.from
+                );
+            }
+            return Ok(());
+        }
     }
 
     if ctx.interactive() {
@@ -178,6 +182,20 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         )));
     }
 
+    // Everything that needs the TARGET's Azure to decide, after the go-ahead
+    // and before the first byte is written: a question it raises still leaves
+    // the workspace untouched (exit 6), and its decisions land in the files
+    // this run writes.
+    let online_from = checks.len();
+    if !args.offline {
+        online_phase(ctx, &ws, &args, &project_name, &mut plan, &mut checks).await?;
+        if !ctx.json() && checks.len() > online_from {
+            println!();
+            println!("{}", "Online checks".bold());
+            print_checks(&checks[online_from..]);
+        }
+    }
+
     // The bindings the questions produced belong to the workspace before its
     // files start referring to them.
     answered.persist()?;
@@ -188,6 +206,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     // `credentials.connectionString`) are exactly what promote rewired.
     // Carrying anything over from the file being replaced would silently
     // undo the translation.
+    let mut written = 0usize;
     for item in &plan.items {
         match item.change() {
             Change::Unchanged => {}
@@ -196,24 +215,34 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
                     &ResourceRef::new(item.kind, item.target_name.clone()),
                     &item.merged,
                 )?;
+                written += 1;
             }
             // A new resource lands at the SOURCE's stem: that is the logical
             // id the two trees correlate by.
             Change::New => {
                 store_to.write_at_exact(&item.stem, item.kind, &item.merged)?;
+                written += 1;
             }
         }
     }
 
     if ctx.json() {
+        let preview = Preview {
+            project: &project_name,
+            args: &args,
+            plan: &plan,
+            checks: &checks,
+            targets: &targets,
+        };
         println!("{}", preview.to_json(false));
     }
     say!(ctx);
-    say!(
-        ctx,
-        "Promoted {pending_writes} resource(s) into '{}'.",
-        args.to
-    );
+    if written == 0 {
+        // Everything the preview offered was declined in the online phase.
+        say!(ctx, "Nothing written into '{}'.", args.to);
+        return Ok(());
+    }
+    say!(ctx, "Promoted {written} resource(s) into '{}'.", args.to);
     say!(ctx, "hint: rigg validate {project_name}");
     say!(ctx, "      rigg auth doctor -e {}", args.to);
     say!(
@@ -630,12 +659,544 @@ fn apply_answers(
 }
 
 // ---------------------------------------------------------------------
+// the online phase
+// ---------------------------------------------------------------------
+
+/// Everything that needs the TARGET environment's Azure to decide: a Web API
+/// skill's auth carrier (re-derived from the target function app's Easy Auth
+/// state) and a deployment's model availability and quota in the target
+/// account's region.
+///
+/// It mutates the merged documents in place and appends what it decided to
+/// `checks`, so the run's final Checks — text and JSON alike — say what
+/// happened. **Not reaching Azure is never an error**: promote's product is
+/// files, and every skipped decision is reported and left to `rigg push`.
+/// The one thing that does stop the run is an unanswered question (exit 6),
+/// which by construction happens before anything is written.
+async fn online_phase(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    args: &PromoteArgs,
+    project_name: &str,
+    plan: &mut Plan,
+    checks: &mut Vec<Check>,
+) -> Result<()> {
+    // (item index, `skills[i]` path, the source authenticated with a key)
+    let carriers: Vec<(usize, String, bool)> = plan
+        .items
+        .iter()
+        .enumerate()
+        .flat_map(|(i, item)| {
+            item.auth.iter().filter_map(move |carrier| match carrier {
+                AuthCarrier::Stripped { path, used_key } if !target_kept_carrier(item, path) => {
+                    Some((i, path.clone(), *used_key))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    let deployments: Vec<usize> = plan
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.kind == ResourceKind::Deployment)
+        .filter(|(_, item)| {
+            item.is_new || capacity_of(&item.merged) > item.before.as_ref().and_then(capacity_of)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if carriers.is_empty() && deployments.is_empty() {
+        return Ok(());
+    }
+
+    let env = ws
+        .config
+        .environments
+        .get(&args.to)
+        .cloned()
+        .unwrap_or_default();
+    let arm = match rigg_client::arm::ArmClient::for_tenant(env.tenant.as_deref()) {
+        Ok(arm) => arm,
+        Err(e) => {
+            for (item, path, _) in &carriers {
+                checks.push(Check {
+                    ok: false,
+                    message: format!(
+                        "{} {path}: ARM unavailable ({e}): resolved on push",
+                        plan.items[*item].label()
+                    ),
+                });
+            }
+            for item in &deployments {
+                checks.push(Check {
+                    ok: false,
+                    message: format!(
+                        "{}: ARM unavailable ({e}): availability and quota not checked",
+                        plan.items[*item].label()
+                    ),
+                });
+            }
+            return Ok(());
+        }
+    };
+
+    rederive_auth(&arm, args, plan, checks, &carriers).await;
+    check_deployments(
+        ctx,
+        &arm,
+        ws,
+        args,
+        project_name,
+        plan,
+        checks,
+        &deployments,
+    )
+    .await
+}
+
+/// The target's own carrier for this skill was kept ([`AuthCarrier::Kept`]),
+/// so there is nothing to re-derive — the file already says how the target
+/// authenticates.
+fn target_kept_carrier(item: &Item, path: &str) -> bool {
+    item.auth
+        .iter()
+        .any(|c| matches!(c, AuthCarrier::Kept { path: kept } if kept == path))
+}
+
+/// `skills[3]` → `3`.
+fn skill_index(path: &str) -> Option<usize> {
+    path.strip_prefix("skills[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
+}
+
+/// Give every stripped Web API auth carrier the shape the TARGET's function
+/// app needs: Entra ID when the app has Easy Auth, else the push-time key
+/// annotation when the source used a key, else anonymous.
+async fn rederive_auth(
+    arm: &rigg_client::arm::ArmClient,
+    args: &PromoteArgs,
+    plan: &mut Plan,
+    checks: &mut Vec<Check>,
+    carriers: &[(usize, String, bool)],
+) {
+    for (item, path, used_key) in carriers {
+        let label = plan.items[*item].label();
+        let mut report = |ok: bool, message: String| {
+            checks.push(Check {
+                ok,
+                message: format!("{label} {path}: {message}"),
+            })
+        };
+        let Some(index) = skill_index(path) else {
+            continue;
+        };
+        let pointer = format!("/skills/{index}");
+        let uri = plan.items[*item]
+            .merged
+            .pointer(&format!("{pointer}/uri"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let Some((site, _)) = credentials::parse_function_uri(&uri) else {
+            report(
+                false,
+                format!("auth carrier unresolved — '{uri}' is not an Azure Functions endpoint"),
+            );
+            continue;
+        };
+        let site_id = match arm.find_web_site_id(&site).await {
+            Ok(id) => id,
+            Err(e) => {
+                report(
+                    false,
+                    format!(
+                        "auth carrier unresolved — function app '{site}' ({e}): resolved on push"
+                    ),
+                );
+                continue;
+            }
+        };
+        let audience = credentials::easy_auth_audience(arm, &site_id).await;
+        let Some(skill) = plan.items[*item].merged.pointer_mut(&pointer) else {
+            continue;
+        };
+        match audience {
+            Some(audience) => {
+                skill["authResourceId"] = Value::String(audience.clone());
+                skill["uri"] = Value::String(credentials::strip_code_param(&uri));
+                credentials::remove_function_key_header(skill);
+                if let Some(map) = skill.as_object_mut() {
+                    map.remove(credentials::X_RIGG_AUTH);
+                }
+                report(true, format!("Entra ID ({audience}) on '{site}'"));
+            }
+            // No Entra auth on the target app: keep the shape the source
+            // authorized with, so push (or `--refresh-credentials`) can
+            // inject the TARGET app's key. The file only ever holds the
+            // placeholder.
+            None if *used_key => {
+                skill[credentials::X_RIGG_AUTH] =
+                    Value::String(credentials::X_RIGG_AUTH_FUNCTION_KEY.to_string());
+                skill["uri"] = Value::String(credentials::set_code_param(&uri, "<redacted>"));
+                report(
+                    false,
+                    format!("function key resolved at push time ('{site}' has no Entra auth)"),
+                );
+            }
+            None => report(
+                false,
+                format!(
+                    "anonymous ('{site}' has no Entra auth and '{}' used no key)",
+                    args.from
+                ),
+            ),
+        }
+    }
+}
+
+/// One deployment question, and the item it decides.
+struct DeploymentAsk {
+    item: usize,
+    reason: String,
+    question: Question,
+}
+
+/// The answer that promotes a deployment despite the check.
+const CONTINUE: &str = "continue";
+/// Answer prefix that overrides the deployment's capacity: `capacity:20`.
+const CAPACITY: &str = "capacity:";
+
+/// Check every new (or capacity-raising) deployment against what the TARGET
+/// account's region actually offers, and ask about the ones that do not fit.
+#[allow(clippy::too_many_arguments)] // one online step, one signature
+async fn check_deployments(
+    ctx: &GlobalContext,
+    arm: &rigg_client::arm::ArmClient,
+    ws: &Workspace,
+    args: &PromoteArgs,
+    project_name: &str,
+    plan: &mut Plan,
+    checks: &mut Vec<Check>,
+    deployments: &[usize],
+) -> Result<()> {
+    if deployments.is_empty() {
+        return Ok(());
+    }
+    let skip_all = |checks: &mut Vec<Check>, why: String| {
+        for item in deployments {
+            checks.push(Check {
+                ok: false,
+                message: format!("{}: {why}", plan.items[*item].label()),
+            });
+        }
+    };
+
+    let env = ws
+        .config
+        .environments
+        .get(&args.to)
+        .cloned()
+        .unwrap_or_default();
+    let Some(foundry) = env.foundry.as_ref() else {
+        skip_all(
+            checks,
+            format!(
+                "'{}' has no Foundry account — availability not checked",
+                args.to
+            ),
+        );
+        return Ok(());
+    };
+    // The resolved binding cache knows the account's region without a
+    // round-trip; ARM answers when it does not.
+    let cached = BindingCache::load(ws, &args.to);
+    let cached = cached
+        .get("foundry")
+        .and_then(|b| b.location.clone().map(|l| (l, b.subscription.clone())));
+    let (location, subscription) = match cached {
+        Some(found) => found,
+        None => match arm.find_cognitive_account(&foundry.account).await {
+            Ok(account) => (account.location.clone(), subscription_of(&account.id)),
+            Err(e) => {
+                skip_all(
+                    checks,
+                    format!(
+                        "Foundry account '{}' not resolved ({e}) — availability not checked",
+                        foundry.account
+                    ),
+                );
+                return Ok(());
+            }
+        },
+    };
+    let Some(subscription) = subscription.or_else(|| env.subscription.clone()) else {
+        skip_all(
+            checks,
+            format!(
+                "subscription of '{}' unknown — run `rigg env show {} --refresh`",
+                foundry.account, args.to
+            ),
+        );
+        return Ok(());
+    };
+    let models = match arm.list_location_models(&subscription, &location).await {
+        Ok(models) => models,
+        Err(e) => {
+            skip_all(
+                checks,
+                format!("models of {location} not listed ({e}) — availability not checked"),
+            );
+            return Ok(());
+        }
+    };
+    let usages = match arm.list_location_usages(&subscription, &location).await {
+        Ok(usages) => usages,
+        Err(e) => {
+            checks.push(Check {
+                ok: false,
+                message: format!("quota in {location} not read ({e}) — capacity not checked"),
+            });
+            Vec::new()
+        }
+    };
+
+    let mut asks: Vec<DeploymentAsk> = Vec::new();
+    for item in deployments {
+        let deployment = &plan.items[*item];
+        match verdict(&deployment.merged, &models, &usages, &location) {
+            Ok(message) => checks.push(Check {
+                ok: true,
+                message: format!("{}: {message}", deployment.label()),
+            }),
+            Err(reason) => asks.push(DeploymentAsk {
+                item: *item,
+                reason: reason.clone(),
+                question: Question::choice(
+                    format!("promote.deployment.{}", deployment.stem),
+                    format!(
+                        "{}: {reason}. Promote it anyway, skip it, or set a capacity \
+                         ('{CAPACITY}<n>'):",
+                        deployment.label()
+                    ),
+                    vec![
+                        Candidate {
+                            value: CONTINUE.to_string(),
+                            label: "continue — promote it as it is".to_string(),
+                        },
+                        Candidate {
+                            value: SKIP.to_string(),
+                            label: format!(
+                                "skip — leave it out of this promote into '{}'",
+                                args.to
+                            ),
+                        },
+                    ],
+                )
+                .allow_other(),
+            }),
+        }
+    }
+    if asks.is_empty() {
+        return Ok(());
+    }
+
+    let questions: Vec<Question> = asks.iter().map(|a| a.question.clone()).collect();
+    let mut asker = ctx.asker(
+        "promote",
+        json!({"project": project_name, "from": args.from, "to": args.to}),
+    );
+    // Unanswered, this leaves as `NeedsInput` (exit 6) — before `persist`
+    // and before the first file write, so the workspace is untouched.
+    let answers = asker.ask_all(&questions)?;
+
+    let mut skipped: Vec<usize> = Vec::new();
+    for (ask, answer) in asks.iter().zip(answers) {
+        let raw = answer.as_str().unwrap_or_default().trim().to_string();
+        let label = plan.items[ask.item].label();
+        let reason = &ask.reason;
+        if raw.eq_ignore_ascii_case(SKIP) {
+            skipped.push(ask.item);
+            checks.push(Check {
+                ok: false,
+                message: format!("{label}: skipped ({reason})"),
+            });
+        } else if raw.eq_ignore_ascii_case(CONTINUE) {
+            checks.push(Check {
+                ok: false,
+                message: format!("{label}: promoted anyway ({reason})"),
+            });
+        } else if let Some(rest) = raw.strip_prefix(CAPACITY) {
+            let capacity: i64 = rest.trim().parse().map_err(|_| {
+                anyhow!(CommandError::Usage(format!(
+                    "invalid answer for 'promote.deployment.{}': '{raw}' — expected \
+                     '{CAPACITY}<number>'",
+                    plan.items[ask.item].stem
+                )))
+            })?;
+            set_capacity(&mut plan.items[ask.item].merged, capacity);
+            checks.push(Check {
+                ok: true,
+                message: format!("{label}: capacity set to {capacity} ({reason})"),
+            });
+        } else {
+            return Err(anyhow!(CommandError::Usage(format!(
+                "invalid answer for 'promote.deployment.{}': '{raw}' — expected \
+                 '{CONTINUE}', '{SKIP}' or '{CAPACITY}<number>'",
+                plan.items[ask.item].stem
+            ))));
+        }
+    }
+    // A skipped deployment leaves the write set entirely: it is not promoted,
+    // and the JSON preview must not claim it was.
+    skipped.sort_unstable();
+    skipped.dedup();
+    for item in skipped.into_iter().rev() {
+        plan.items.remove(item);
+    }
+    Ok(())
+}
+
+/// `/subscriptions/<id>/resourceGroups/...` → `<id>`.
+fn subscription_of(arm_id: &str) -> Option<String> {
+    let mut parts = arm_id.split('/');
+    parts.find(|p| p.eq_ignore_ascii_case("subscriptions"))?;
+    parts.next().filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+fn capacity_of(doc: &Value) -> Option<f64> {
+    doc.pointer("/sku/capacity").and_then(Value::as_f64)
+}
+
+fn set_capacity(doc: &mut Value, capacity: i64) {
+    match doc.get_mut("sku").and_then(Value::as_object_mut) {
+        Some(sku) => {
+            sku.insert("capacity".to_string(), json!(capacity));
+        }
+        None => {
+            if let Some(map) = doc.as_object_mut() {
+                map.insert("sku".to_string(), json!({ "capacity": capacity }));
+            }
+        }
+    }
+}
+
+/// What the target region says about one deployment: `Ok` is a line for the
+/// Checks section, `Err` is the reason to ask about it.
+fn verdict(
+    doc: &Value,
+    models: &[Value],
+    usages: &[Value],
+    location: &str,
+) -> Result<String, String> {
+    let model = doc
+        .pointer("/properties/model/name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if model.is_empty() {
+        return Ok(format!("no model named — nothing to check in {location}"));
+    }
+    let version = doc
+        .pointer("/properties/model/version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let named = if version.is_empty() {
+        format!("model '{model}'")
+    } else {
+        format!("model '{model}' version {version}")
+    };
+    let Some(offered) = models.iter().find(|m| model_matches(m, model, version)) else {
+        return Err(format!("{named} is not available in {location}"));
+    };
+    let sku = doc
+        .pointer("/sku/name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (Some(usage_name), Some(capacity)) = (usage_name_of(offered, sku), capacity_of(doc)) else {
+        return Ok(format!(
+            "{named} available in {location} (no quota to check)"
+        ));
+    };
+    let Some(usage) = usages
+        .iter()
+        .find(|u| u.pointer("/name/value").and_then(Value::as_str) == Some(usage_name.as_str()))
+    else {
+        return Ok(format!(
+            "{named} available in {location} (quota '{usage_name}' not reported)"
+        ));
+    };
+    let limit = usage
+        .get("limit")
+        .and_then(Value::as_f64)
+        .unwrap_or_default();
+    let free = limit
+        - usage
+            .get("currentValue")
+            .and_then(Value::as_f64)
+            .unwrap_or_default();
+    if free >= capacity {
+        Ok(format!(
+            "{named} available in {location}, quota ok ({free} of {limit} free, asks for {capacity})"
+        ))
+    } else {
+        Err(format!(
+            "quota '{usage_name}' in {location} has {free} of {limit} free and the deployment asks \
+             for {capacity}"
+        ))
+    }
+}
+
+/// One `locations/{l}/models` entry offers this model. The version matches
+/// when both name it the same, or when either side does not say.
+fn model_matches(offered: &Value, name: &str, version: &str) -> bool {
+    let model = offered.get("model").unwrap_or(offered);
+    let named = model
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|n| n.eq_ignore_ascii_case(name));
+    let offered_version = model
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    named && (version.is_empty() || offered_version.is_empty() || version == offered_version)
+}
+
+/// The quota (`usageName`) the model's `sku` counts against.
+fn usage_name_of(offered: &Value, sku: &str) -> Option<String> {
+    offered
+        .pointer("/model/skus")
+        .or_else(|| offered.get("skus"))?
+        .as_array()?
+        .iter()
+        .find(|s| {
+            s.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| n.eq_ignore_ascii_case(sku))
+        })?
+        .get("usageName")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+// ---------------------------------------------------------------------
 // checks
 // ---------------------------------------------------------------------
 
 struct Check {
     ok: bool,
     message: String,
+}
+
+fn print_checks(checks: &[Check]) {
+    for check in checks {
+        let mark = if check.ok {
+            "✓".green()
+        } else {
+            "!".yellow()
+        };
+        println!("  {mark} {}", check.message);
+    }
 }
 
 /// Everything worth saying about the plan that is neither a rewiring, a
@@ -646,18 +1207,30 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
 
     for item in &plan.items {
         for carrier in &item.auth {
-            if let AuthCarrier::Stripped { path, .. } = carrier {
-                out.push(Check {
-                    ok: false,
-                    message: format!(
-                        "{} {path}: Web API auth carrier not carried over (it authorizes '{}') \
-                         — resolved against '{}' on push",
-                        item.label(),
-                        args.from,
-                        args.to
-                    ),
-                });
+            // A carrier the target already had is kept, not re-derived —
+            // the file itself says how '{to}' authenticates.
+            let AuthCarrier::Stripped { path, .. } = carrier else {
+                continue;
+            };
+            if target_kept_carrier(item, path) {
+                continue;
             }
+            let what = if args.offline {
+                format!(
+                    "auth carrier unresolved (it authorizes '{}') — resolved against '{}' on push",
+                    args.from, args.to
+                )
+            } else {
+                format!(
+                    "auth carrier not carried over (it authorizes '{}') — re-derived from '{}' \
+                     below",
+                    args.from, args.to
+                )
+            };
+            out.push(Check {
+                ok: false,
+                message: format!("{} {path}: Web API {what}", item.label()),
+            });
         }
     }
 
@@ -931,14 +1504,7 @@ impl Preview<'_> {
         if !self.checks.is_empty() {
             println!();
             println!("{}", "Checks".bold());
-            for check in self.checks {
-                let mark = if check.ok {
-                    "✓".green()
-                } else {
-                    "!".yellow()
-                };
-                println!("  {mark} {}", check.message);
-            }
+            print_checks(self.checks);
         }
     }
 
@@ -1003,6 +1569,139 @@ impl Preview<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One `locations/{l}/models` entry, in the shape ARM returns.
+    fn offered(name: &str, version: &str, usage: &str) -> Value {
+        json!({
+            "kind": "OpenAI",
+            "model": {
+                "format": "OpenAI",
+                "name": name,
+                "version": version,
+                "skus": [{"name": "GlobalStandard", "usageName": usage}]
+            }
+        })
+    }
+
+    fn deployment(model: &str, version: &str, capacity: i64) -> Value {
+        json!({
+            "name": model,
+            "sku": {"name": "GlobalStandard", "capacity": capacity},
+            "properties": {"model": {"format": "OpenAI", "name": model, "version": version}}
+        })
+    }
+
+    fn usage(name: &str, current: f64, limit: f64) -> Value {
+        json!({"name": {"value": name}, "currentValue": current, "limit": limit})
+    }
+
+    #[test]
+    fn skill_index_and_subscription_are_parsed_from_their_paths() {
+        assert_eq!(skill_index("skills[3]"), Some(3));
+        assert_eq!(skill_index("skills[]"), None);
+        assert_eq!(skill_index("skills.3"), None);
+        assert_eq!(
+            subscription_of(
+                "/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/a"
+            )
+            .as_deref(),
+            Some("sub-a")
+        );
+        assert_eq!(subscription_of("/resourceGroups/rg"), None);
+    }
+
+    #[test]
+    fn a_model_the_region_does_not_offer_is_a_question() {
+        let models = vec![offered(
+            "gpt-5-mini",
+            "2026-01-01",
+            "OpenAI.GlobalStandard.gpt-5-mini",
+        )];
+        let reason = verdict(
+            &deployment("gpt-5-nano", "2026-01-01", 10),
+            &models,
+            &[],
+            "swedencentral",
+        )
+        .unwrap_err();
+        assert!(
+            reason.contains("not available in swedencentral"),
+            "{reason}"
+        );
+
+        // Same model, a version the region does not have.
+        let reason = verdict(
+            &deployment("gpt-5-mini", "2025-01-01", 10),
+            &models,
+            &[],
+            "swedencentral",
+        )
+        .unwrap_err();
+        assert!(reason.contains("version 2025-01-01"), "{reason}");
+
+        // A deployment that does not pin a version takes what is offered.
+        assert!(
+            verdict(
+                &deployment("gpt-5-mini", "", 10),
+                &models,
+                &[],
+                "swedencentral"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn quota_is_short_when_the_free_headroom_is_below_the_capacity() {
+        let models = vec![offered(
+            "gpt-5-mini",
+            "1",
+            "OpenAI.GlobalStandard.gpt-5-mini",
+        )];
+        let usages = vec![usage("OpenAI.GlobalStandard.gpt-5-mini", 90.0, 100.0)];
+        let reason =
+            verdict(&deployment("gpt-5-mini", "1", 50), &models, &usages, "swe").unwrap_err();
+        assert!(
+            reason.contains("10 of 100 free") && reason.contains("asks for 50"),
+            "{reason}"
+        );
+        // Exactly the headroom fits.
+        let ok = verdict(&deployment("gpt-5-mini", "1", 10), &models, &usages, "swe").unwrap();
+        assert!(ok.contains("quota ok"), "{ok}");
+        // A quota the region does not report is not a question.
+        let ok = verdict(&deployment("gpt-5-mini", "1", 10), &models, &[], "swe").unwrap();
+        assert!(ok.contains("not reported"), "{ok}");
+    }
+
+    #[test]
+    fn the_usage_name_comes_from_the_sku_the_deployment_asks_for() {
+        let offered = json!({
+            "model": {
+                "name": "m",
+                "version": "1",
+                "skus": [
+                    {"name": "Standard", "usageName": "OpenAI.Standard.m"},
+                    {"name": "GlobalStandard", "usageName": "OpenAI.GlobalStandard.m"}
+                ]
+            }
+        });
+        assert_eq!(
+            usage_name_of(&offered, "globalstandard").as_deref(),
+            Some("OpenAI.GlobalStandard.m")
+        );
+        assert_eq!(usage_name_of(&offered, "ProvisionedManaged"), None);
+    }
+
+    #[test]
+    fn a_capacity_answer_replaces_the_deployments_own() {
+        let mut doc = deployment("m", "1", 50);
+        set_capacity(&mut doc, 5);
+        assert_eq!(doc["sku"]["capacity"], 5);
+        assert_eq!(doc["sku"]["name"], "GlobalStandard", "the sku itself stays");
+        let mut without = json!({"name": "m"});
+        set_capacity(&mut without, 5);
+        assert_eq!(without["sku"]["capacity"], 5);
+    }
 
     fn args(from: &str, to: &str) -> PromoteArgs {
         PromoteArgs {

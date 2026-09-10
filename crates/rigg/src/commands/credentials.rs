@@ -412,6 +412,44 @@ pub fn strip_code_param(uri: &str) -> String {
     }
 }
 
+/// The Entra ID audience a function app's Easy Auth grants, read from its
+/// `authsettingsV2` document: the first allowed audience, else
+/// `api://<clientId>`. `None` when the platform switch or the Microsoft
+/// identity provider is off — i.e. when the app has no Entra auth at all.
+pub fn easy_auth_audience_of(settings: &Value) -> Option<String> {
+    let enabled = settings
+        .pointer("/properties/platform/enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && settings
+            .pointer("/properties/identityProviders/azureActiveDirectory/enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    settings
+        .pointer("/properties/identityProviders/azureActiveDirectory/validation/allowedAudiences/0")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            settings
+                .pointer("/properties/identityProviders/azureActiveDirectory/registration/clientId")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty())
+                .map(|c| format!("api://{c}"))
+        })
+}
+
+/// [`easy_auth_audience_of`] for the site at `site_id` (a Microsoft.Web
+/// site's ARM resource id, from [`ArmClient::find_web_site_id`]). An ARM
+/// failure is indistinguishable from "no Entra auth" here on purpose: every
+/// caller treats both as "cannot use `authResourceId`", and the caller that
+/// needs to tell the app apart from its auth state looks the site up itself.
+pub async fn easy_auth_audience(arm: &ArmClient, site_id: &str) -> Option<String> {
+    easy_auth_audience_of(&arm.site_auth_settings(site_id).await.ok()?)
+}
+
 /// How one Web API skill's authorization got resolved.
 pub enum WebApiAuthOutcome {
     /// `authResourceId` written — durable, keyless (Entra ID).
@@ -447,29 +485,7 @@ pub async fn resolve_webapi_auth(
     if let (Some(arm), Some((site, _))) = (&arm, &parsed)
         && let Ok(id) = arm.find_web_site_id(site).await
     {
-        if let Ok(auth) = arm.site_auth_settings(&id).await {
-            let enabled = auth
-                .pointer("/properties/platform/enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                && auth
-                    .pointer("/properties/identityProviders/azureActiveDirectory/enabled")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-            if enabled {
-                entra_audience = auth
-                        .pointer(
-                            "/properties/identityProviders/azureActiveDirectory/validation/allowedAudiences/0",
-                        )
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| {
-                            auth.pointer("/properties/identityProviders/azureActiveDirectory/registration/clientId")
-                                .and_then(Value::as_str)
-                                .map(|c| format!("api://{c}"))
-                        });
-            }
-        }
+        entra_audience = easy_auth_audience(arm, &id).await;
         site_id = Some(id);
     }
 
@@ -594,6 +610,46 @@ pub async fn inject_function_keys(body: &mut Value) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn auth_settings(platform: bool, aad: bool, audiences: Value, client_id: &str) -> Value {
+        json!({"properties": {
+            "platform": {"enabled": platform},
+            "identityProviders": {"azureActiveDirectory": {
+                "enabled": aad,
+                "registration": {"clientId": client_id},
+                "validation": {"allowedAudiences": audiences}
+            }}
+        }})
+    }
+
+    #[test]
+    fn easy_auth_audience_prefers_the_allowed_audience_over_the_client_id() {
+        assert_eq!(
+            easy_auth_audience_of(&auth_settings(
+                true,
+                true,
+                json!(["api://audience-1"]),
+                "client-1"
+            ))
+            .as_deref(),
+            Some("api://audience-1")
+        );
+        // No audience listed: the app registration's own id is the audience.
+        assert_eq!(
+            easy_auth_audience_of(&auth_settings(true, true, json!([]), "client-1")).as_deref(),
+            Some("api://client-1")
+        );
+        // Either switch off means the app has no Entra auth to use.
+        assert!(
+            easy_auth_audience_of(&auth_settings(false, true, json!(["api://a"]), "c")).is_none()
+        );
+        assert!(
+            easy_auth_audience_of(&auth_settings(true, false, json!(["api://a"]), "c")).is_none()
+        );
+        // Enabled but unconfigured: nothing to authenticate with.
+        assert!(easy_auth_audience_of(&auth_settings(true, true, json!([]), "")).is_none());
+        assert!(easy_auth_audience_of(&json!({})).is_none());
+    }
 
     fn webapi_skillset(uri: &str, extra: Value) -> Value {
         let mut skill = json!({

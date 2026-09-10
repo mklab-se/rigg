@@ -910,6 +910,10 @@ impl ArmClient {
     }
 
     /// The site's Easy Auth (authSettingsV2) configuration.
+    ///
+    /// `config/authsettingsV2/list` is an ARM *action*, so it is a POST (the
+    /// same shape as [`Self::function_key`]'s `listkeys`); a GET on it is
+    /// rejected.
     pub async fn site_auth_settings(&self, site_id: &str) -> Result<Value, ClientError> {
         let url = self.url(
             &format!("{site_id}/config/authsettingsV2/list"),
@@ -917,8 +921,9 @@ impl ArmClient {
         );
         let response = self
             .http
-            .get(&url)
+            .post(&url)
             .header("Authorization", format!("Bearer {}", self.token))
+            .header("Content-Length", "0")
             .send()
             .await?;
         let status = response.status();
@@ -1123,6 +1128,62 @@ impl ArmClient {
             }
         }
         Ok(matches)
+    }
+
+    /// The models Azure offers in one region
+    /// (`Microsoft.CognitiveServices/locations/{location}/models`), verbatim:
+    /// each entry carries `model.name`, `model.version`, `model.format` and
+    /// the `skus[]` a deployment may ask for. Read by promote's availability
+    /// check, which matches on those fields rather than on a typed shape
+    /// that would have to track every new model property.
+    pub async fn list_location_models(
+        &self,
+        subscription_id: &str,
+        location: &str,
+    ) -> Result<Vec<Value>, ClientError> {
+        self.list_location(subscription_id, location, "models")
+            .await
+    }
+
+    /// The quota usages of one region
+    /// (`Microsoft.CognitiveServices/locations/{location}/usages`): each
+    /// entry has `name.value` (the SKU's `usageName`), `currentValue` and
+    /// `limit`.
+    pub async fn list_location_usages(
+        &self,
+        subscription_id: &str,
+        location: &str,
+    ) -> Result<Vec<Value>, ClientError> {
+        self.list_location(subscription_id, location, "usages")
+            .await
+    }
+
+    async fn list_location(
+        &self,
+        subscription_id: &str,
+        location: &str,
+        collection: &str,
+    ) -> Result<Vec<Value>, ClientError> {
+        let url = self.url(
+            &format!(
+                "/subscriptions/{subscription_id}/providers/Microsoft.CognitiveServices/locations/{location}/{collection}"
+            ),
+            Provider::CognitiveServicesArm,
+        );
+        debug!("Listing {collection} in {location}: {url}");
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            return Err(ClientError::from_response(status.as_u16(), &body));
+        }
+        let result: ArmListResponse<Value> = response.json().await?;
+        Ok(result.value)
     }
 
     /// List model deployments for an AI Services account.
