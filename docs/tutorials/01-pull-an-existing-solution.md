@@ -13,10 +13,12 @@ back with one command.
 
 **New Azure cost:** small, but not zero. Adopting, committing and describing
 create nothing. Step 8 creates one throwaway synonym map (free) and deletes it
-again. Step 10 runs `rigg verify`, which triggers a full run of every indexer
-in the project and asks every agent one question — that is real ingestion,
-embedding and token spend on the stack you already have. Skip step 10 if you
-would rather not pay for it; nothing later depends on it.
+again. Step 10 runs `rigg verify`, which triggers a run of every indexer in
+the project and asks every agent one question — real ingestion, embedding and
+token spend on the stack you already have. An indexer whose corpus has not
+changed re-reads nothing, so the usual bill is a handful of tokens; an indexer
+you have just reset is a full re-ingestion. Skip step 10 if you would rather
+not pay for it at all; nothing later depends on it.
 
 ## Prerequisites
 
@@ -56,25 +58,30 @@ directory is exactly what your teammates will clone.
 rigg init .
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Discovering Azure services (via Azure CLI credentials)...
-Azure AI Search service:
+? Azure AI Search service:
 > contoso-search
-  contoso-search-test
   (skip — none)
-Microsoft Foundry project:
+[↑↓ to move, enter to select, type to filter]
+> Azure AI Search service: contoso-search
+
+? Microsoft Foundry project:
 > contoso-ai/rag
   (skip — none)
+[↑↓ to move, enter to select, type to filter]
+> Microsoft Foundry project: contoso-ai/rag
 
 Identity guidance
   For stacks spanning services (search + storage + foundry), a USER-ASSIGNED managed
   identity is recommended: one identity for the whole pipeline, role assignments
-  survive service re-creation, and it works across environments.
+  survive service re-creation, and it works across environments. Use system-assigned
+  for simple single-service setups. `rigg auth doctor` verifies the wiring; `rigg new
+  <kind> <name> --identity <binding>` writes the identity into new resources.
 
 ✓ rigg workspace initialized
-  config:   /Users/you/contoso-rag/rigg.yaml
+  config:   ./rigg.yaml
   search:   contoso-search
   foundry:  contoso-ai/rag
   environment: dev (default) — rigg commands target it unless -e/RIGG_ENV say otherwise; add more with `rigg env add`
@@ -105,7 +112,6 @@ Have a look at what it wrote — every key is documented in
 cat rigg.yaml
 ```
 
-<!-- verify-live -->
 ```text
 # output
 # Rigg workspace configuration.
@@ -125,7 +131,6 @@ environments:
 rigg new project docs-rag
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Created project 'docs-rag' at /Users/you/contoso-rag/projects/docs-rag
@@ -145,10 +150,9 @@ after the thing it owns; `rigg concepts` explains when to use several.
 rigg adopt docs-rag all
 ```
 
-<!-- verify-live -->
 ```text
 # output
-Would adopt 7 resource(s) into 'docs-rag':
+Would adopt 8 resource(s) into 'docs-rag':
   data-sources/docs-ds
   indexes/docs-index
   skillsets/docs-skills
@@ -156,7 +160,8 @@ Would adopt 7 resource(s) into 'docs-rag':
   knowledge-sources/docs-ks
   knowledge-bases/docs-kb
   agents/docs-agent
-Adopt these? (Y/n) y
+  deployments/gpt-4.1-mini
+? Adopt these? (Y/n) y
   + adopted data-sources/docs-ds
   + adopted indexes/docs-index
   + adopted skillsets/docs-skills
@@ -164,11 +169,12 @@ Adopt these? (Y/n) y
   + adopted knowledge-sources/docs-ks
   + adopted knowledge-bases/docs-kb
   + adopted agents/docs-agent
+  + adopted deployments/gpt-4.1-mini
 
 Infrastructure references not yet bound in 'dev':
   name                 type         value
-  contosodocs          storage      /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Storage/storageAccounts/contosodocs  (from data-sources/docs-ds.json:credentials.connectionString)
-Record these bindings in rigg.yaml? (Y/n) y
+  docs-enrich          function-app docs-enrich  (from projects/docs-rag/envs/dev/search/skillsets/docs-skills.json:skills[1].uri)
+? Record these bindings in rigg.yaml? (Y/n) y
 ```
 
 `adopt` claims *unmanaged* remote resources into a project: it downloads each
@@ -179,6 +185,19 @@ can also name a kind (`indexes`) or one resource
 dependencies along with it. Run it without a selector on a terminal for a
 pick-list wizard.
 
+> **Note:** `all` really does mean all — on the Foundry side that includes
+> every model deployment, connection and guardrail in the project, not just
+> the ones your RAG stack uses. On an account you share with other teams,
+> name what you want instead (`rigg adopt docs-rag indexes`,
+> `rigg adopt docs-rag agents/docs-agent --with-deps`). Adoption itself only
+> writes local files, but a project that owns a resource is a project that
+> can later delete it.
+
+Adoption is also where rigg tells you it may be behind Azure. A field the
+pinned schema does not know prints as a note —
+`field 'subtype' is not in rigg's 2026-04-01 schema — Azure may have shipped
+a newer API; run 'rigg dev api-check'` — and the field is kept, not dropped.
+
 ## 5. Record the infrastructure bindings
 
 Answer `y` to the prompt above, or run the learn step explicitly:
@@ -187,21 +206,29 @@ Answer `y` to the prompt above, or run the learn step explicitly:
 rigg env bind dev --learn
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Found 1 unbound infrastructure reference(s) in 'dev':
-  contosodocs  storage  contosodocs  (1 reference(s), e.g. data-sources/docs-ds.json:credentials.connectionString)
-Name for the storage 'contosodocs' (or 'skip'): [contosodocs]
-Bound 'contosodocs' in environment 'dev': storage contosodocs
+  docs-enrich  function-app  docs-enrich  (1 reference(s), e.g. projects/docs-rag/envs/dev/search/skillsets/docs-skills.json:skills[1].uri)
+? Name for the function-app 'docs-enrich' (or 'skip'): (docs-enrich)
+Bound 'docs-enrich' in environment 'dev': function-app docs-enrich
 ```
 
-Your data source's connection string names a storage account; your skillset
-may name a function app. Those are **bindings**: rigg gives each one a name in
-`rigg.yaml`, so the same file can later be translated to a staging or prod
-environment that uses a different account. `--learn` scans the environment's
-files, groups every infrastructure reference by physical resource, and
-proposes a name per group — rename any of them before confirming.
+Your skillset names a function app; your data source's connection string
+names a storage account; a Foundry connection names whatever it targets.
+Those are **bindings**: rigg gives each one a name in `rigg.yaml`, so the same
+file can later be translated to a staging or prod environment that uses a
+different account. `--learn` scans the environment's files, groups every
+infrastructure reference by physical resource, and proposes a name per group —
+rename any of them before confirming. It proposes one per group, so a real
+stack usually yields several lines rather than the single one above.
+
+Note what the skillset file does *not* contain. Azure redacts a Web API
+skill's function key on every GET, so what landed on disk is
+`...?code=<redacted>` — a URL you can read, without the secret. That is why
+`rigg validate` can promise no key material on disk, and why
+`rigg push --refresh-credentials` exists for the day the key needs
+re-supplying.
 
 Check what it recorded:
 
@@ -209,7 +236,6 @@ Check what it recorded:
 rigg env show dev
 ```
 
-<!-- verify-live -->
 ```text
 # output
 dev
@@ -217,9 +243,9 @@ dev
   tenant: <tenant-id>
   subscription: <subscription-id>
   search: contoso-search → https://contoso-search.search.windows.net (Azure AI Search)
-  foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag (Microsoft Foundry)
+  foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com (Microsoft Foundry)
   dependencies:
-    contosodocs  storage  contosodocs
+    docs-enrich  function-app  docs-enrich
 ```
 
 ## 6. Look at the state, then commit it
@@ -228,7 +254,6 @@ dev
 rigg status
 ```
 
-<!-- verify-live -->
 ```text
 # output
 env: dev (default)
@@ -240,6 +265,7 @@ env: dev (default)
     knowledge-sources/docs-ks                          in sync
     knowledge-bases/docs-kb                            in sync
     agents/docs-agent                                  in sync
+    deployments/gpt-4.1-mini                           in sync
 ```
 
 `in sync` means all three of local file, live Azure document and the recorded
@@ -264,29 +290,28 @@ that is enforced, not a convention: `rigg validate` rejects key material.
 rigg describe docs-rag
 ```
 
-<!-- verify-live -->
 ```text
 # output
 docs-rag (env: dev)
   data-sources/docs-ds
   indexes/docs-index
-  skillsets/docs-skills -> apis/doc-enrichment
+  skillsets/docs-skills -> indexes/docs-index
   indexers/docs-indexer -> data-sources/docs-ds, indexes/docs-index, skillsets/docs-skills
   knowledge-sources/docs-ks -> indexes/docs-index
   knowledge-bases/docs-kb -> knowledge-sources/docs-ks
-  agents/docs-agent -> knowledge-bases/docs-kb
-
-  APIs to implement (specs in apis/):
-    doc-enrichment (used by skillsets/docs-skills)
+  agents/docs-agent -> knowledge-bases/docs-kb, deployments/gpt-4.1-mini
+  deployments/gpt-4.1-mini -> guardrails/Microsoft.DefaultV2
 
   Infrastructure:
-    contosodocs  storage  contosodocs
+    docs-enrich  function-app  docs-enrich
 ```
 
 This is the picture that used to be spread over half a dozen portal blades.
 It is also what an AI coding tool gets in a single call through
-[the MCP server](../../MCP.md) — the dependency graph, every file path, and
-the OpenAPI specs a custom skill expects you to implement.
+[the MCP server](../../MCP.md) — the dependency graph and every file path.
+A skillset that implements one of the OpenAPI specs in `apis/` adds an
+`APIs to implement` section here; an adopted skillset that calls a function
+app directly, like this one, shows up under `Infrastructure` instead.
 
 ## 8. Prove the round trip
 
@@ -310,7 +335,6 @@ Scaffold the throwaway resource:
 rigg new synonym-map roundtrip-demo -p docs-rag
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Created /Users/you/contoso-rag/projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
@@ -325,15 +349,14 @@ git add projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
 git commit -m "Add a throwaway synonym map"
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Push project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   create synonym-maps/roundtrip-demo
-
-Apply 1 change(s)? (y/N) y
+  note: skillsets/docs-skills has a server-redacted Web API key (normal on Azure GETs, says nothing about the stored key) — if enrichment is failing, run `rigg push --refresh-credentials` to re-authorize
+? Apply 1 change(s)? (y/N) y
   ✓ synonym-maps/roundtrip-demo
 ```
 
@@ -346,12 +369,11 @@ rm projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
 rigg push docs-rag --prune --dry-run
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Push project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   delete synonym-maps/roundtrip-demo
   (dry run — nothing pushed)
 ```
@@ -363,12 +385,11 @@ the whole blast radius. Apply it:
 rigg push docs-rag --prune --yes
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Push project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   delete synonym-maps/roundtrip-demo
   ✓ deleted synonym-maps/roundtrip-demo
 ```
@@ -387,15 +408,13 @@ git checkout -- projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.js
 rigg push docs-rag
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Push project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   create synonym-maps/roundtrip-demo
-
-Apply 1 change(s)? (y/N) y
+? Apply 1 change(s)? (y/N) y
   ✓ synonym-maps/roundtrip-demo
 ```
 
@@ -426,16 +445,14 @@ want today.
 rigg verify docs-rag
 ```
 
-<!-- verify-live -->
 ```text
 # output
 Verify project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   ✓ triggered a run of 'docs-indexer'
-  … inProgress
   … success
-  ✓ indexer 'docs-indexer' — 128 processed, 0 failed
+  ✓ indexer 'docs-indexer' — 0 processed, 0 failed
   ✓ knowledge base 'docs-kb' retrieved
   ✓ agent 'docs-agent' replied
 ✓ 3 check(s) passed
@@ -446,6 +463,17 @@ runs every indexer to completion, retrieves from every knowledge base and asks
 every agent one question. A failure that smells like authorization is
 attributed to the identity edge that would explain it, so you get "the search
 identity cannot read `contosodocs`" instead of a raw 403.
+
+`0 processed` above is the expected answer for a corpus that has not changed:
+a blob indexer tracks a high-water mark, so a re-run over the same documents
+re-reads nothing and costs nothing. What it proves is that the run *reached*
+the storage account and finished — which is the thing an expired role
+assignment breaks. Ask for the whole corpus back with
+`rigg az indexer reset <name>`, which makes the next run reprocess everything.
+
+Verify is also honest about a stack that is only mostly working: an agent
+with no model deployment fails here with `API error (400)` while everything
+around it passes, and the command exits 1 naming exactly which check failed.
 
 ## What you have now
 
