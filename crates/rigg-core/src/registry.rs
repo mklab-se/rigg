@@ -443,7 +443,11 @@ static KINDS: &[KindMeta] = &[
         domain: Domain::Search,
         collection_path: "indexers",
         dir_name: "indexers",
-        channel: Channel::Stable,
+        // `cache` (the indexer's incremental-enrichment cache, storage +
+        // identity) does not exist in the stable api-version — a stable GET
+        // silently omits it and a stable PUT cannot set it. Same reasoning
+        // as KnowledgeBase's preview channel below.
+        channel: Channel::Preview,
         volatile_fields: COMMON_VOLATILE,
         // GET /indexers('name') never returns status/lastResult/
         // executionHistory/limits — those live on the separate
@@ -696,6 +700,243 @@ pub fn meta(kind: ResourceKind) -> &'static KindMeta {
         .iter()
         .find(|m| m.kind == kind)
         .expect("registry entry exists for every ResourceKind")
+}
+
+/// The shape an [`InfraRef`] value takes — how to recognize the physical
+/// Azure resource it names, and how to rewrite it for a different
+/// environment. See `infra::parse`/`infra::render` for the per-form rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfraForm {
+    /// `ResourceId=/subscriptions/…/storageAccounts/X;…` → storage.
+    StorageResourceId,
+    /// `{ "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+    ///    "userAssignedIdentity": "/subscriptions/…/userAssignedIdentities/X" }`
+    /// → identity (null means system-assigned).
+    UserAssignedIdentity,
+    /// `https://X.openai.azure.com`, `https://X.cognitiveservices.azure.com`,
+    /// `https://X.services.ai.azure.com` → a model host (ai-services, or the
+    /// implicit `foundry` target).
+    OpenAiEndpoint,
+    /// Same hosts as [`InfraForm::OpenAiEndpoint`], but always ai-services
+    /// (used by `KnowledgeSource.azureBlobParameters.ingestionParameters.aiServices.uri`).
+    AiServicesSubdomain,
+    /// `https://X.azurewebsites.net/…` → function-app; any other
+    /// `http(s)://HOST/…` → an external `api` binding (prefix match).
+    ApiUri,
+    /// `https://X.vault.azure.net/…` → key-vault.
+    KeyVaultUri,
+    /// `https://X.search.windows.net/knowledgebases/<kb>/mcp?…` → the
+    /// implicit `search` target, plus a sibling reference to
+    /// `knowledge-bases/<kb>`.
+    SearchKbMcpUrl,
+}
+
+/// An infrastructure-reference field: `path` (registry path syntax, `a.b[].c`)
+/// addresses a value that names supporting Azure infrastructure rather than
+/// another rigg-managed resource. `only_odata_type`, when set, restricts the
+/// rule to array elements whose `@odata.type` ends with the given string's
+/// last dot-segment (e.g. `"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"`
+/// matches any `...AzureOpenAIEmbeddingSkill` namespace).
+#[derive(Debug, Clone, Copy)]
+pub struct InfraRef {
+    pub path: &'static str,
+    pub form: InfraForm,
+    pub only_odata_type: Option<&'static str>,
+}
+
+static DATA_SOURCE_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "credentials.connectionString",
+        form: InfraForm::StorageResourceId,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static INDEX_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri",
+        form: InfraForm::OpenAiEndpoint,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "vectorSearch.vectorizers[].azureOpenAIParameters.authIdentity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static SKILLSET_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "skills[].resourceUri",
+        form: InfraForm::OpenAiEndpoint,
+        only_odata_type: Some("#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"),
+    },
+    InfraRef {
+        path: "skills[].authIdentity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: Some("#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"),
+    },
+    InfraRef {
+        path: "skills[].uri",
+        form: InfraForm::ApiUri,
+        only_odata_type: Some("#Microsoft.Skills.Custom.WebApiSkill"),
+    },
+    InfraRef {
+        path: "cognitiveServices.subdomainUrl",
+        form: InfraForm::AiServicesSubdomain,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "cognitiveServices.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "knowledgeStore.storageConnectionString",
+        form: InfraForm::StorageResourceId,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "knowledgeStore.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static INDEXER_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "cache.storageConnectionString",
+        form: InfraForm::StorageResourceId,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "cache.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static KNOWLEDGE_SOURCE_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "azureBlobParameters.connectionString",
+        form: InfraForm::StorageResourceId,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.resourceUri",
+        form: InfraForm::OpenAiEndpoint,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.authIdentity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.resourceUri",
+        form: InfraForm::OpenAiEndpoint,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.authIdentity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.aiServices.uri",
+        form: InfraForm::AiServicesSubdomain,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "azureBlobParameters.ingestionParameters.assetStore.connectionString",
+        form: InfraForm::StorageResourceId,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static KNOWLEDGE_BASE_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "models[].azureOpenAIParameters.resourceUri",
+        form: InfraForm::OpenAiEndpoint,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "models[].azureOpenAIParameters.authIdentity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+];
+
+static AGENT_INFRA: &[InfraRef] = &[InfraRef {
+    path: "tools[].server_url",
+    form: InfraForm::SearchKbMcpUrl,
+    only_odata_type: None,
+}];
+
+static CONNECTION_INFRA: &[InfraRef] = &[InfraRef {
+    path: "properties.target",
+    form: InfraForm::SearchKbMcpUrl,
+    only_odata_type: None,
+}];
+
+/// Infrastructure-reference fields for `kind`, per spec §2.3. Empty for
+/// kinds with no infrastructure references (Deployment, Guardrail,
+/// SynonymMap, Alias).
+pub fn infra_refs(kind: ResourceKind) -> &'static [InfraRef] {
+    match kind {
+        ResourceKind::DataSource => DATA_SOURCE_INFRA,
+        ResourceKind::Index => INDEX_INFRA,
+        ResourceKind::Skillset => SKILLSET_INFRA,
+        ResourceKind::Indexer => INDEXER_INFRA,
+        ResourceKind::SynonymMap => &[],
+        ResourceKind::Alias => &[],
+        ResourceKind::KnowledgeSource => KNOWLEDGE_SOURCE_INFRA,
+        ResourceKind::KnowledgeBase => KNOWLEDGE_BASE_INFRA,
+        ResourceKind::Agent => AGENT_INFRA,
+        ResourceKind::Deployment => &[],
+        ResourceKind::Connection => CONNECTION_INFRA,
+        ResourceKind::Guardrail => &[],
+    }
 }
 
 /// Valid `type` strings for Azure AI Search data sources per channel.
@@ -1124,6 +1365,7 @@ mod tests {
             let props = f
                 .definition(m.schema_definition)
                 .expect(m.schema_definition);
+            let infra: Vec<&'static str> = infra_refs(kind).iter().map(|r| r.path).collect();
             for path in m
                 .volatile_fields
                 .iter()
@@ -1132,6 +1374,7 @@ mod tests {
                 .chain(m.write_only_fields)
                 .chain(m.immutable_fields)
                 .chain(m.reference_fields.iter().map(|r| &r.path))
+                .chain(infra.iter())
             {
                 let head = path.split('.').next().unwrap().trim_end_matches("[]");
                 if head.starts_with("@odata") || head == "etag" || head == "e_tag" {
@@ -1145,6 +1388,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn infra_ref_table_matches_the_spec() {
+        let ks: Vec<&str> = infra_refs(ResourceKind::KnowledgeSource)
+            .iter()
+            .map(|r| r.path)
+            .collect();
+        for p in [
+            "azureBlobParameters.connectionString",
+            "azureBlobParameters.ingestionParameters.identity",
+            "azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.resourceUri",
+            "azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.resourceUri",
+            "azureBlobParameters.ingestionParameters.aiServices.uri",
+            "azureBlobParameters.ingestionParameters.assetStore.connectionString",
+            "encryptionKey.keyVaultUri",
+        ] {
+            assert!(ks.contains(&p), "missing {p}");
+        }
+        assert!(infra_refs(ResourceKind::Deployment).is_empty());
+        assert_eq!(
+            infra_refs(ResourceKind::Agent)[0].path,
+            "tools[].server_url"
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@
 pub mod binding;
 pub mod graph;
 pub mod identity;
+pub mod infra;
 pub mod migrate;
 pub mod normalize;
 pub mod openapi;
