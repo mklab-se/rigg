@@ -195,6 +195,15 @@ around that. No compatibility with 1.x workspaces.
   when everything is in place, 4 when anything is missing or could not be
   judged, 6 when a fix needs an answer non-interactively. `--output json`
   carries `{env, edges[], checks[], operator[], summary}`.
+- **Your own role requirements count your effective permissions**, not just
+  exact role assignments: a subscription Owner or Contributor now satisfies
+  the operator's control-plane roles (Search Service Contributor, Azure AI
+  Project Manager, Azure AI Account Owner) because ARM reports actions that
+  cover those role definitions — so doctor stops reporting them missing and
+  push's preflight stops refusing the person who owns the subscription.
+  Data-plane roles (Azure AI User, Search Index Data Reader) are unaffected:
+  they live in `dataActions`, which Owner does not carry. No role name is
+  special-cased, and managed-identity edges still require the exact role.
 - **Role assignments rigg creates are tagged** with
   `description: "rigg:<workspace>:<env>:<reason>"` and an explicit
   `principalType`, so **`rigg auth roles list|remove`** can find and undo

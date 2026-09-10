@@ -11,8 +11,9 @@ mod arm_fake;
 mod graph_fake;
 
 use arm_fake::{
-    last_auth_settings_put, mount_arm_fake, mount_easy_auth, mount_easy_auth_write,
-    mount_permissions, mount_search_service, mount_storage_account, search_service_id,
+    OWNER_PERMISSIONS, last_auth_settings_put, mount_arm_fake, mount_easy_auth,
+    mount_easy_auth_write, mount_no_role_definitions, mount_permission_sets, mount_permissions,
+    mount_role_definition, mount_search_service, mount_storage_account, search_service_id,
 };
 use assert_cmd::Command;
 use graph_fake::{
@@ -894,6 +895,25 @@ async fn principal_checks_operator_rights_for_someone_else() {
     )
     .await;
     mount_no_assignments(&server).await;
+    // The *caller* is a subscription Owner. `Microsoft.Authorization/
+    // permissions` answers only for the calling principal, so those rights
+    // must not be lent to `--principal <someone else>`: the effective-
+    // permissions path is reserved for the caller's own edges.
+    mount_permission_sets(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        &[OWNER_PERMISSIONS],
+    )
+    .await;
+    mount_role_definition(
+        &server,
+        SUB,
+        SEARCH_SERVICE_CONTRIBUTOR,
+        "Search Service Contributor",
+        &["Microsoft.Search/searchServices/*"],
+        &[],
+    )
+    .await;
 
     let ws = workspace(&server.uri());
     write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
@@ -903,7 +923,9 @@ async fn principal_checks_operator_rights_for_someone_else() {
         .assert()
         .code(4)
         .stdout(predicate::str::contains(format!("principal:{OTHER_OID}")))
-        .stdout(predicate::str::contains("Search Service Contributor"));
+        .stdout(predicate::str::contains(
+            "✗ principal:00000000-0000-0000-0000-0000000000zz → Search Service Contributor",
+        ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2660,4 +2682,388 @@ async fn every_identity_scaffold_passes_validate() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("data-source, skillset"));
+}
+
+// ------------------------ operator roles via effective permissions ---------
+//
+// An operator RBAC edge is satisfied either by an assignment of the exact
+// role GUID *or* by the caller's effective permissions at the scope covering
+// the role definition. That second path is what makes a subscription Owner
+// stop reading as "missing Search Service Contributor" — and, because Owner
+// carries no `dataActions`, what correctly leaves Azure AI User and Search
+// Index Data Reader missing. No role name is special-cased.
+
+const FOUNDRY_PROJECT_MANAGER: &str = "eadc314b-1a2d-4efa-be10-5d325db5065e";
+const FOUNDRY_ACCOUNT_OWNER: &str = "e47c6f54-e4a2-4754-9501-8e0985b135e1";
+const SEARCH_INDEX_DATA_READER: &str = "1407120a-92aa-4202-b7e9-c0e197c71c8f";
+const SEARCH_INDEX_DATA_CONTRIBUTOR: &str = "8ebe5a00-799e-43f5-93ac-243d3dce84a7";
+
+/// Write one Foundry resource into `dev`.
+fn write_foundry(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
+    let d = ws.join("projects/demo/envs/dev/foundry").join(dir);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join(format!("{name}.json")),
+        serde_json::to_string_pretty(body).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The four operator control-plane role definitions, plus the two data-plane
+/// ones, as ARM serves them — trimmed to the entries the coverage rule reads.
+///
+/// Azure AI User and the Search Index Data roles are `dataActions`-only,
+/// which is exactly why an Owner-shaped caller does not cover them.
+async fn mount_operator_role_definitions(server: &MockServer) {
+    mount_role_definition(
+        server,
+        SUB,
+        SEARCH_SERVICE_CONTRIBUTOR,
+        "Search Service Contributor",
+        &["Microsoft.Search/searchServices/*", "Microsoft.Insights/*"],
+        &[],
+    )
+    .await;
+    mount_role_definition(
+        server,
+        SUB,
+        FOUNDRY_PROJECT_MANAGER,
+        "Azure AI Project Manager",
+        &["Microsoft.CognitiveServices/accounts/projects/*"],
+        &[],
+    )
+    .await;
+    mount_role_definition(
+        server,
+        SUB,
+        FOUNDRY_ACCOUNT_OWNER,
+        "Azure AI Account Owner",
+        &["Microsoft.CognitiveServices/accounts/*"],
+        &[],
+    )
+    .await;
+    mount_role_definition(
+        server,
+        SUB,
+        FOUNDRY_USER,
+        "Azure AI User",
+        &[],
+        &["Microsoft.CognitiveServices/accounts/*/action"],
+    )
+    .await;
+    mount_role_definition(
+        server,
+        SUB,
+        SEARCH_INDEX_DATA_READER,
+        "Search Index Data Reader",
+        &[],
+        &["Microsoft.Search/searchServices/indexes/documents/read"],
+    )
+    .await;
+    mount_role_definition(
+        server,
+        SUB,
+        SEARCH_INDEX_DATA_CONTRIBUTOR,
+        "Search Index Data Contributor",
+        &[],
+        &["Microsoft.Search/searchServices/indexes/documents/*"],
+    )
+    .await;
+    mount_no_role_definitions(server).await;
+}
+
+/// Owner at every scope the operator edges of these scenarios point at.
+async fn mount_owner_everywhere(server: &MockServer) {
+    for scope in [
+        search_service_id(SUB, RG, SEARCH),
+        foundry_account_id(),
+        foundry_project_id(),
+    ] {
+        mount_permission_sets(server, &scope, &[OWNER_PERMISSIONS]).await;
+    }
+}
+
+/// A `dev` tree that puts all four operator control-plane/data-plane edges in
+/// the graph: a search index, an agent, a connection and a deployment.
+fn write_operator_edge_tree(ws: &std::path::Path) {
+    write_resource(
+        ws,
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+    write_agent(ws, "assistant");
+    write_foundry(
+        ws,
+        "connections",
+        "aoai",
+        &json!({"name": "aoai", "properties": {"category": "AzureOpenAI"}}),
+    );
+    write_foundry(
+        ws,
+        "deployments",
+        "gpt",
+        &json!({"name": "gpt", "properties": {"model": {"name": "gpt-4o-mini"}}}),
+    );
+}
+
+/// Scenario 1 — subscription Owner, no exact role GUID assigned anywhere.
+///
+/// The three control-plane operator roles go green through the effective
+/// permissions path; Azure AI User stays missing, because Owner has no
+/// `dataActions`. Exit 4, and Azure AI User is the only edge listed.
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_covers_the_operators_control_plane_roles_but_not_azure_ai_user() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("accounts", FOUNDRY, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    // Nobody holds any role by GUID — the exact-GUID path fails everywhere.
+    mount_no_assignments(&server).await;
+    mount_owner_everywhere(&server).await;
+    mount_operator_role_definitions(&server).await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_operator_edge_tree(ws.path());
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains(
+            "✓ operator → Search Service Contributor",
+        ))
+        .stdout(predicate::str::contains(
+            "✓ operator → Azure AI Project Manager",
+        ))
+        .stdout(predicate::str::contains(
+            "✓ operator → Azure AI Account Owner",
+        ))
+        .stdout(predicate::str::contains(
+            "covered by your effective permissions at",
+        ))
+        .stdout(predicate::str::contains("✗ operator → Azure AI User"))
+        .stdout(predicate::str::contains("1 missing, 0 unresolved"));
+}
+
+/// Scenario 2 — the same Owner, plus the one role Owner cannot cover, held
+/// explicitly. Everything is green and doctor exits 0 (`--verify` roles off,
+/// so Search Index Data Reader is not part of this graph).
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_plus_an_explicit_azure_ai_user_assignment_is_green() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("accounts", FOUNDRY, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_assignments_for(
+        &server,
+        &foundry_project_id(),
+        OPERATOR_OID,
+        &[FOUNDRY_USER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_owner_everywhere(&server).await;
+    mount_operator_role_definitions(&server).await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_operator_edge_tree(ws.path());
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ operator → Azure AI User"))
+        .stdout(predicate::str::contains("0 missing, 0 unresolved"));
+}
+
+/// Scenario 3 — push's preflight no longer refuses the person who owns the
+/// subscription: Owner covers Search Service Contributor, the service
+/// identity holds its own role, and the push writes.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_preflight_accepts_an_owner_with_the_data_roles() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    // The operator holds the data-plane role by GUID; every control-plane
+    // role they need comes from being Owner.
+    mount_assignments_for(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        OPERATOR_OID,
+        &[SEARCH_INDEX_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permission_sets(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        &[OWNER_PERMISSIONS],
+    )
+    .await;
+    mount_operator_role_definitions(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .args(["push", "demo", "-e", "dev", "--verify", "--yes"])
+        .assert()
+        .success();
+
+    assert!(
+        data_plane_puts(&server)
+            .await
+            .contains(&"/datasources/docs".to_string()),
+        "the preflight must not refuse a subscription Owner who holds the data role"
+    );
+}
+
+/// The other half of scenario 3: strip the explicit data-plane assignment and
+/// the same Owner is refused — `dataActions` are not covered by `actions: *`,
+/// so `push --verify` still names Search Index Data Reader and writes
+/// nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_preflight_still_refuses_an_owner_without_the_data_role() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permission_sets(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        &[OWNER_PERMISSIONS],
+    )
+    .await;
+    mount_operator_role_definitions(&server).await;
+    mount_datasource_push(&server).await;
+
+    rigg(
+        workspace_with_datasource(&server.uri()).path(),
+        &server.uri(),
+    )
+    .args(["push", "demo", "-e", "dev", "--verify", "--yes"])
+    .assert()
+    .code(4)
+    // Exactly one row, and it is the data-plane one: Search Service
+    // Contributor is no longer among the missing requirements, because
+    // Owner covers it.
+    .stdout(predicate::str::contains("1 requirement(s) missing"))
+    .stdout(predicate::str::contains(
+        "✗ operator → Search Index Data Reader",
+    ))
+    .stdout(predicate::str::contains("Search Service Contributor").not());
+
+    assert!(
+        data_plane_puts(&server).await.is_empty(),
+        "nothing may be written when the preflight refuses"
+    );
+}
+
+/// [`workspace`] plus the one data source these push scenarios plan.
+fn workspace_with_datasource(endpoint: &str) -> tempfile::TempDir {
+    let ws = workspace(endpoint);
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+    ws
 }

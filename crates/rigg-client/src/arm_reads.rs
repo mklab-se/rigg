@@ -120,6 +120,28 @@ impl RoleAssignmentInfo {
     }
 }
 
+/// A role definition's permission lists, unioned across its `permissions[]`
+/// entries — what an "are my effective permissions at least this role?"
+/// comparison needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleDefinition {
+    /// `properties.roleName`, for reporting.
+    pub name: String,
+    pub actions: Vec<String>,
+    pub not_actions: Vec<String>,
+    pub data_actions: Vec<String>,
+    pub not_data_actions: Vec<String>,
+}
+
+impl RoleDefinition {
+    /// A definition rigg cannot compare against — no permission of any kind.
+    /// Vacuous coverage ("every one of zero actions is granted") would say
+    /// *yes* to everything, so this is checked first.
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty() && self.data_actions.is_empty()
+    }
+}
+
 /// Who the operator's token says they are.
 #[derive(Debug, Clone)]
 pub struct CallerIdentity {
@@ -431,6 +453,20 @@ impl ArmClient {
     /// `actions` matches `roleAssignments/write` and its `notActions` does
     /// not take it back.
     pub async fn can_write_role_assignments(&self, scope: &str) -> Result<bool, ClientError> {
+        Ok(self
+            .effective_permissions(scope)
+            .await?
+            .iter()
+            .any(|s| permission_grants(s, ROLE_ASSIGNMENT_WRITE)))
+    }
+
+    /// The caller's effective permission sets at `scope`, verbatim.
+    ///
+    /// `Microsoft.Authorization/permissions` answers for the **calling**
+    /// principal only — there is no way to ask it about somebody else — so
+    /// every consumer must already know the principal in question is the
+    /// caller.
+    pub async fn effective_permissions(&self, scope: &str) -> Result<Vec<Value>, ClientError> {
         let url = self.url(
             &format!("{scope}/providers/Microsoft.Authorization/permissions"),
             Provider::AuthorizationArm,
@@ -439,10 +475,31 @@ impl ArmClient {
         Ok(value
             .get("value")
             .and_then(Value::as_array)
-            .is_some_and(|sets| {
-                sets.iter()
-                    .any(|s| permission_grants(s, ROLE_ASSIGNMENT_WRITE))
-            }))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// One built-in (or custom) role definition by GUID.
+    ///
+    /// `scope_or_sub` supplies the subscription the definition is read
+    /// under — an ARM scope (any depth) or a bare subscription id.
+    pub async fn role_definition(
+        &self,
+        scope_or_sub: &str,
+        guid: &str,
+    ) -> Result<RoleDefinition, ClientError> {
+        let sub = subscription_of(scope_or_sub).ok_or_else(|| {
+            ClientError::InvalidResponse(format!(
+                "cannot read role definition '{guid}': '{scope_or_sub}' names no subscription"
+            ))
+        })?;
+        let url = self.url(
+            &format!(
+                "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{guid}"
+            ),
+            Provider::AuthorizationArm,
+        );
+        Ok(role_definition_from(&self.get_json(&url).await?))
     }
 
     /// Every role assignment that applies to one principal **at** `scope` —
@@ -696,8 +753,86 @@ fn role_assignments_from(value: &Value) -> Vec<RoleAssignmentInfo> {
         .unwrap_or_default()
 }
 
-/// Whether one `Microsoft.Authorization/permissions` entry grants `action`.
+/// The subscription id an ARM scope (or a bare subscription id) names.
+fn subscription_of(scope_or_sub: &str) -> Option<&str> {
+    if let Some(rest) = scope_or_sub.strip_prefix("/subscriptions/") {
+        return rest.split('/').next().filter(|s| !s.is_empty());
+    }
+    // A bare subscription id; anything else is not a scope rigg can read a
+    // role definition under.
+    (!scope_or_sub.is_empty() && !scope_or_sub.contains('/')).then_some(scope_or_sub)
+}
+
+/// Parse a role-definition document, unioning its `permissions[]` entries.
+fn role_definition_from(value: &Value) -> RoleDefinition {
+    let mut def = RoleDefinition {
+        name: str_at(value, "/properties/roleName").unwrap_or_default(),
+        ..RoleDefinition::default()
+    };
+    let Some(permissions) = value
+        .pointer("/properties/permissions")
+        .and_then(Value::as_array)
+    else {
+        return def;
+    };
+    let strings = |p: &Value, field: &str| -> Vec<String> {
+        p.get(field)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for p in permissions {
+        def.actions.extend(strings(p, "actions"));
+        def.not_actions.extend(strings(p, "notActions"));
+        def.data_actions.extend(strings(p, "dataActions"));
+        def.not_data_actions.extend(strings(p, "notDataActions"));
+    }
+    def
+}
+
+/// Whether a caller's effective permission `sets` cover everything `role`
+/// grants: every `actions` entry matched by some set's `actions` minus its
+/// `notActions`, and every `dataActions` entry likewise against
+/// `dataActions` minus `notDataActions`.
+///
+/// This is what makes a subscription **Owner** (`actions: ["*"]`) satisfy a
+/// pure control-plane role such as Search Service Contributor while still
+/// *failing* a data-plane one such as Search Index Data Reader — Owner
+/// carries no `dataActions` at all. No role name is ever special-cased.
+///
+/// The role's own entries may themselves be patterns (`Microsoft.Search/*`);
+/// they are compared with the same matcher, which is exact enough for the
+/// wildcard-vs-wildcard cases that decide Owner and Contributor.
+pub fn permissions_cover_role(sets: &[Value], role: &RoleDefinition) -> bool {
+    if role.is_empty() {
+        return false;
+    }
+    let covered = |needed: &[String], allow: &str, deny: &str| {
+        needed.iter().all(|action| {
+            sets.iter()
+                .any(|s| permission_grants_in(s, action, allow, deny))
+        })
+    };
+    covered(&role.actions, "actions", "notActions")
+        && covered(&role.data_actions, "dataActions", "notDataActions")
+}
+
+/// Whether one `Microsoft.Authorization/permissions` entry grants `action`
+/// on the control plane.
 fn permission_grants(set: &Value, action: &str) -> bool {
+    permission_grants_in(set, action, "actions", "notActions")
+}
+
+/// Whether one permission entry grants `action` through the `allow` list
+/// without `deny` taking it back. The field pair is what separates the
+/// control plane (`actions`/`notActions`) from the data plane
+/// (`dataActions`/`notDataActions`) — the matching rules are identical.
+fn permission_grants_in(set: &Value, action: &str, allow: &str, deny: &str) -> bool {
     let matches_any = |field: &str| {
         set.get(field)
             .and_then(Value::as_array)
@@ -708,7 +843,7 @@ fn permission_grants(set: &Value, action: &str) -> bool {
                     .any(|p| action_matches(p, action))
             })
     };
-    matches_any("actions") && !matches_any("notActions")
+    matches_any(allow) && !matches_any(deny)
 }
 
 /// ARM action-pattern matching, case-insensitive: `*` matches any run of
@@ -905,6 +1040,116 @@ mod tests {
             "notActions": []
         });
         assert!(permission_grants(&uaa, ROLE_ASSIGNMENT_WRITE));
+    }
+
+    /// The whole point of the data-action split: an Owner-shaped caller
+    /// covers pure control-plane roles and nothing on the data plane, and a
+    /// `notDataActions` entry takes a wildcard data grant back.
+    #[test]
+    fn effective_permissions_cover_control_plane_roles_but_not_data_roles() {
+        // What ARM returns for a subscription Owner: `*` on the control
+        // plane, nothing at all on the data plane.
+        let owner = vec![json!({
+            "actions": ["*"], "notActions": [],
+            "dataActions": [], "notDataActions": []
+        })];
+
+        let search_service_contributor = RoleDefinition {
+            name: "Search Service Contributor".into(),
+            actions: vec![
+                "Microsoft.Search/searchServices/*".into(),
+                "Microsoft.Resources/deployments/*".into(),
+            ],
+            ..RoleDefinition::default()
+        };
+        assert!(permissions_cover_role(&owner, &search_service_contributor));
+
+        // Search Index Data Reader is dataActions-only — Owner has none.
+        let index_data_reader = RoleDefinition {
+            name: "Search Index Data Reader".into(),
+            data_actions: vec!["Microsoft.Search/searchServices/indexes/documents/read".into()],
+            ..RoleDefinition::default()
+        };
+        assert!(!permissions_cover_role(&owner, &index_data_reader));
+
+        // A caller who *does* hold the data action is covered …
+        let data_holder = vec![json!({
+            "actions": [], "notActions": [],
+            "dataActions": ["Microsoft.Search/searchServices/indexes/documents/*"],
+            "notDataActions": []
+        })];
+        assert!(permissions_cover_role(&data_holder, &index_data_reader));
+
+        // … unless `notDataActions` takes exactly that read back.
+        let revoked = vec![json!({
+            "actions": [], "notActions": [],
+            "dataActions": ["Microsoft.Search/*"],
+            "notDataActions": ["Microsoft.Search/searchServices/indexes/documents/read"]
+        })];
+        assert!(!permissions_cover_role(&revoked, &index_data_reader));
+
+        // Contributor: `*` minus the Microsoft.Authorization writes. It
+        // still covers a pure Microsoft.Search control-plane role, but not
+        // one that needs to write role assignments.
+        let contributor = vec![json!({
+            "actions": ["*"],
+            "notActions": ["Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"],
+            "dataActions": [], "notDataActions": []
+        })];
+        assert!(permissions_cover_role(
+            &contributor,
+            &search_service_contributor
+        ));
+        let uaa = RoleDefinition {
+            name: "User Access Administrator".into(),
+            actions: vec![ROLE_ASSIGNMENT_WRITE.into()],
+            ..RoleDefinition::default()
+        };
+        assert!(!permissions_cover_role(&contributor, &uaa));
+
+        // A definition rigg could not read grants nothing — never vacuously
+        // "covered".
+        assert!(!permissions_cover_role(&owner, &RoleDefinition::default()));
+        // A mixed role needs both halves: Owner fails on the data half.
+        let mixed = RoleDefinition {
+            name: "Azure AI User".into(),
+            actions: vec!["Microsoft.CognitiveServices/accounts/read".into()],
+            data_actions: vec!["Microsoft.CognitiveServices/accounts/OpenAI/*/read".into()],
+            ..RoleDefinition::default()
+        };
+        assert!(!permissions_cover_role(&owner, &mixed));
+    }
+
+    #[test]
+    fn role_definition_unions_its_permission_entries() {
+        let def = role_definition_from(&json!({
+            "properties": {
+                "roleName": "Custom",
+                "permissions": [
+                    {"actions": ["a/read"], "notActions": ["a/secret/read"]},
+                    {"dataActions": ["d/read"], "notDataActions": ["d/secret/read"]}
+                ]
+            }
+        }));
+        assert_eq!(def.name, "Custom");
+        assert_eq!(def.actions, ["a/read"]);
+        assert_eq!(def.not_actions, ["a/secret/read"]);
+        assert_eq!(def.data_actions, ["d/read"]);
+        assert_eq!(def.not_data_actions, ["d/secret/read"]);
+        assert!(!def.is_empty());
+        assert!(role_definition_from(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn subscription_of_scopes_and_bare_ids() {
+        assert_eq!(subscription_of("/subscriptions/s"), Some("s"));
+        assert_eq!(
+            subscription_of("/subscriptions/s/resourceGroups/rg/providers/X/y/z"),
+            Some("s")
+        );
+        assert_eq!(subscription_of("s"), Some("s"));
+        assert_eq!(subscription_of("/providers/Microsoft.Foo"), None);
+        assert_eq!(subscription_of(""), None);
     }
 
     #[test]

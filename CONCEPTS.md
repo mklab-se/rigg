@@ -405,6 +405,14 @@ grant, whether you can create a role assignment at that scope at all. A push
 that will also read the data plane (`push --verify`) adds Search Index Data
 Reader to its own preflight.
 
+An operator edge is satisfied either by an assignment of that exact role or
+by your *effective* permissions at the scope covering everything the role
+definition grants, so a subscription Owner or Contributor already counts for
+the control-plane requirements above — but never for a data-plane role such
+as Azure AI User or Search Index Data Reader, which live in `dataActions`
+that Owner does not carry. (Managed-identity edges keep to the exact role:
+ARM will only report effective permissions for the caller.)
+
 ### Where the graph is used
 
 The same graph runs in three places, so the answer never depends on which

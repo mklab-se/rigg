@@ -426,6 +426,90 @@ pub async fn mount_permissions(server: &MockServer, scope: &str, can_write_role_
         .await;
 }
 
+/// Mount `{scope}/providers/Microsoft.Authorization/permissions` with an
+/// explicit set of the caller's effective permission entries — what the
+/// operator edges' "covered by your effective permissions" path reads.
+///
+/// Each entry is `(actions, notActions, dataActions, notDataActions)`.
+pub async fn mount_permission_sets(server: &MockServer, scope: &str, sets: &[PermissionSet<'_>]) {
+    let value: Vec<Value> = sets
+        .iter()
+        .map(|(a, na, da, nda)| {
+            json!({
+                "actions": a, "notActions": na,
+                "dataActions": da, "notDataActions": nda
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{scope}/providers/Microsoft.Authorization/permissions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": value})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// One entry of a `Microsoft.Authorization/permissions` response:
+/// `(actions, notActions, dataActions, notDataActions)`.
+pub type PermissionSet<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+
+/// The caller's effective permissions of a subscription **Owner**: `*` on
+/// the control plane and nothing at all on the data plane.
+pub const OWNER_PERMISSIONS: PermissionSet<'static> = (&["*"], &[], &[], &[]);
+
+/// Mount `/subscriptions/{sub}/…/roleDefinitions/{guid}` for one role.
+///
+/// `actions` / `data_actions` are the definition's permission lists — the
+/// halves that decide whether an Owner-shaped caller covers the role.
+pub async fn mount_role_definition(
+    server: &MockServer,
+    sub: &str,
+    guid: &str,
+    name: &str,
+    actions: &[&str],
+    data_actions: &[&str],
+) {
+    let id =
+        format!("/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{guid}");
+    Mock::given(method("GET"))
+        .and(path(id.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": id,
+            "name": guid,
+            "properties": {
+                "roleName": name,
+                "type": "BuiltInRole",
+                "permissions": [{
+                    "actions": actions,
+                    "notActions": [],
+                    "dataActions": data_actions,
+                    "notDataActions": []
+                }]
+            }
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// A 404 for every role definition not explicitly mounted, so an unmounted
+/// GUID reads as "rigg could not fetch it" rather than hanging on the
+/// catch-all.
+pub async fn mount_no_role_definitions(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path_regex(
+            r"^.*/providers/Microsoft\.Authorization/roleDefinitions/[^/]+$",
+        ))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "error": {"code": "RoleDefinitionDoesNotExist", "message": "not found"}
+        })))
+        .with_priority(4)
+        .mount(server)
+        .await;
+}
+
 /// Mount `{scope}/providers/Microsoft.Authorization/roleAssignments`:
 /// a GET listing (`role_ids` assigned to `principal`, each carrying a
 /// `rigg:` description) and a PUT/DELETE recorder for assignment writes.

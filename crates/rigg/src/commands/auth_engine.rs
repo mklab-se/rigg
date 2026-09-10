@@ -14,7 +14,7 @@ use colored::Colorize;
 use serde_json::{Value, json};
 
 use rigg_client::arm::{ArmClient, ResourceIdentity};
-use rigg_client::arm_reads::StorageAccountInfo;
+use rigg_client::arm_reads::{RoleDefinition, StorageAccountInfo, permissions_cover_role};
 use rigg_client::arm_resources::resolve_account_scope;
 use rigg_core::binding::{BindingCache, BindingType, EnvBindings, TargetKind};
 use rigg_core::identity::{
@@ -516,6 +516,13 @@ pub struct Verifier {
     foundry_project_id: Option<String>,
     principals: BTreeMap<String, std::result::Result<Resolved, String>>,
     storage: BTreeMap<String, std::result::Result<StorageAccountInfo, String>>,
+    /// The caller's effective permission sets per scope, for the operator
+    /// edges' second satisfaction path. `None` is a read that failed —
+    /// cached so a scope rigg cannot read is not asked about once per edge.
+    permissions: BTreeMap<String, Option<Vec<Value>>>,
+    /// Role definitions by GUID, for the same path: one `verify` run asks
+    /// about the same role at several scopes.
+    role_definitions: BTreeMap<String, Option<RoleDefinition>>,
 }
 
 impl Verifier {
@@ -723,6 +730,8 @@ pub async fn verify(
         foundry_project_id: None,
         principals: BTreeMap::new(),
         storage: BTreeMap::new(),
+        permissions: BTreeMap::new(),
+        role_definitions: BTreeMap::new(),
     };
     v.resolve_targets(env, &bindings).await;
 
@@ -1025,36 +1034,137 @@ impl Verifier {
                     .any(|alt| guid.eq_ignore_ascii_case(alt.id))
         });
         if satisfied {
-            ReportItem::new(what, Status::Ok, format!("{} holds it", principal.label))
-        } else {
-            let alternatives = if edge.alternatives.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " (or {})",
-                    edge.alternatives
-                        .iter()
-                        .map(|r| r.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            ReportItem::new(
-                what,
-                Status::Missing,
-                format!(
-                    "{} lacks '{}'{alternatives} here",
-                    principal.label, edge.role.name
-                ),
-            )
-            .with_fix(Fix::RoleAssignment {
-                scope,
-                principal_id: principal.id,
-                principal_type: principal.principal_type,
-                role: edge.role,
-                description: role_description(&self.description_prefix, &edge.reason),
-            })
+            return ReportItem::new(what, Status::Ok, format!("{} holds it", principal.label));
         }
+
+        // Second path, operator edges only: no assignment names the exact
+        // role, but the caller's *effective* permissions at the scope already
+        // cover everything the role definition grants. A subscription Owner
+        // or Contributor genuinely can do what Search Service Contributor
+        // allows; reporting that as missing sends the person who owns the
+        // subscription off to grant themselves a role they do not need — and
+        // makes push's preflight refuse them.
+        if self
+            .edge_is_the_callers_own(&edge.principal, &principal.id)
+            .await
+            && self.effective_permissions_cover(&scope, edge).await
+        {
+            return ReportItem::new(
+                what,
+                Status::Ok,
+                format!("covered by your effective permissions at {scope}"),
+            );
+        }
+
+        let alternatives = if edge.alternatives.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (or {})",
+                edge.alternatives
+                    .iter()
+                    .map(|r| r.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        ReportItem::new(
+            what,
+            Status::Missing,
+            format!(
+                "{} lacks '{}'{alternatives} here",
+                principal.label, edge.role.name
+            ),
+        )
+        .with_fix(Fix::RoleAssignment {
+            scope,
+            principal_id: principal.id,
+            principal_type: principal.principal_type,
+            role: edge.role,
+            description: role_description(&self.description_prefix, &edge.reason),
+        })
+    }
+
+    /// Whether an edge's principal is the identity whose token rigg is
+    /// using.
+    ///
+    /// Only then does `Microsoft.Authorization/permissions` describe them:
+    /// the endpoint answers for the calling principal and takes no principal
+    /// argument, so `--principal <somebody else>` must keep to the
+    /// exact-GUID test rather than borrow the caller's rights.
+    async fn edge_is_the_callers_own(&mut self, principal: &Principal, resolved_id: &str) -> bool {
+        match principal {
+            Principal::Operator => true,
+            Principal::Named { .. } => match self.arm() {
+                Ok(arm) => arm
+                    .caller_object_id()
+                    .await
+                    .is_ok_and(|c| c.object_id.eq_ignore_ascii_case(resolved_id)),
+                Err(_) => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether the caller's effective permissions at `scope` already cover
+    /// `edge`'s role — or any of its alternatives.
+    ///
+    /// Every read here is best-effort: a scope whose permissions rigg may
+    /// not list, or a role definition it cannot fetch, simply does not
+    /// satisfy the edge, and the exact-GUID verdict stands.
+    async fn effective_permissions_cover(&mut self, scope: &str, edge: &Edge) -> bool {
+        let Some(sets) = self.effective_permissions(scope).await else {
+            return false;
+        };
+        if sets.is_empty() {
+            return false;
+        }
+        let roles = std::iter::once(&edge.role).chain(edge.alternatives.iter());
+        for role in roles {
+            if let Some(def) = self.role_definition(scope, role.id).await
+                && permissions_cover_role(&sets, &def)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The caller's effective permission sets at `scope`, cached per scope
+    /// (including the failure).
+    async fn effective_permissions(&mut self, scope: &str) -> Option<Vec<Value>> {
+        if let Some(hit) = self.permissions.get(scope) {
+            return hit.clone();
+        }
+        let got = match self.arm() {
+            Ok(arm) => arm.effective_permissions(scope).await.ok(),
+            Err(_) => None,
+        };
+        self.permissions.insert(scope.to_string(), got.clone());
+        got
+    }
+
+    /// A role definition by GUID, cached for the run (including the
+    /// failure). The subscription comes from `scope`, or from the
+    /// environment when the scope names none.
+    async fn role_definition(&mut self, scope: &str, guid: &str) -> Option<RoleDefinition> {
+        if let Some(hit) = self.role_definitions.get(guid) {
+            return hit.clone();
+        }
+        let under = match scope.starts_with("/subscriptions/") {
+            true => scope.to_string(),
+            false => self.subscription.clone().unwrap_or_default(),
+        };
+        let got = match self.arm() {
+            Ok(arm) => arm
+                .role_definition(&under, guid)
+                .await
+                .ok()
+                .filter(|d| !d.is_empty()),
+            Err(_) => None,
+        };
+        self.role_definitions.insert(guid.to_string(), got.clone());
+        got
     }
 
     /// Verify one check (spec §3.3).
