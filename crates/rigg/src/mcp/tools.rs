@@ -181,6 +181,29 @@ pub struct PushParams {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct PromoteParams {
+    /// Project name (omit when the workspace has exactly one project)
+    #[schemars(default)]
+    pub project: Option<String>,
+    /// Source environment
+    pub from: String,
+    /// Target environment
+    pub to: String,
+    /// Without force (default): returns the rewiring/resources/checks preview
+    /// (--dry-run), writing nothing. With force=true: writes the translated
+    /// files (--yes).
+    #[schemars(default)]
+    pub force: Option<bool>,
+    /// Skip every Azure lookup (candidate lists, Web API auth re-derivation,
+    /// deployment availability); unresolved items are reported instead.
+    #[schemars(default)]
+    pub offline: Option<bool>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct DeleteParams {
     /// Project whose REMOTE resources should be deleted (local files are kept)
     pub project: String,
@@ -295,6 +318,29 @@ fn answer_flags(answers: Option<&BTreeMap<String, String>>) -> Vec<String> {
 
 fn with_common<'a>(args: Vec<&'a str>, env: &'a Option<String>, json: bool) -> Vec<String> {
     with_common_answers(args, env, json, None)
+}
+
+/// `rigg promote` argument building, factored out so it is unit-testable
+/// without going through the async tool call: `--from`/`--to` are always
+/// present, `force` selects `--dry-run` vs `--yes`, `offline` adds
+/// `--offline`, and `--output json --quiet` plus any `--answer` flags are
+/// appended via [`with_common_answers`] (promote has no `env` parameter of
+/// its own — `--from`/`--to` name the environments).
+fn promote_args(params: &PromoteParams) -> Vec<String> {
+    let mut args = vec!["promote"];
+    if let Some(p) = &params.project {
+        args.push(p);
+    }
+    args.extend(["--from", params.from.as_str(), "--to", params.to.as_str()]);
+    if params.force.unwrap_or(false) {
+        args.push("--yes");
+    } else {
+        args.push("--dry-run");
+    }
+    if params.offline.unwrap_or(false) {
+        args.push("--offline");
+    }
+    with_common_answers(args, &None, true, params.answers.as_ref())
 }
 
 /// Like [`with_common`], additionally appending `--answer <id>=<value>` for
@@ -475,6 +521,13 @@ impl RiggMcpServer {
     }
 
     #[tool(
+        description = "Translate a project's resources from one environment to another (e.g. dev → staging): every infrastructure reference is re-pointed at the target's binding of the same name (shared bindings are reported unchanged), sibling references follow renamed physical names, and the target's own name/x-rigg-pin/Web-API auth carrier are kept. Without force: preview only (--dry-run), writing nothing — shows rewiring, renamed siblings, changed/new/unchanged/kept-only-in-target resources, and checks. With force=true: writes the translated files (--yes). offline=true skips Azure lookups (auth re-derivation, deployment availability/quota) and reports those items as unresolved instead. May return needs-input for an unbound infrastructure reference, a binding missing in the target environment, a missing target environment, or a deployment availability/quota problem — answer by re-calling with `answers` filled in (or run `rigg env add <to> --like <from>` first if the target environment does not exist yet). Follow with rigg_validate, then rigg_push (preview first) on the target environment."
+    )]
+    async fn rigg_promote(&self, Parameters(params): Parameters<PromoteParams>) -> String {
+        rigg_cli(&promote_args(&params))
+    }
+
+    #[tool(
         description = "Execution status of a live indexer: state, last run result, per-document errors and warnings. Use after rigg_push or rigg_indexer_run to verify ingestion. Read-only."
     )]
     async fn rigg_indexer_status(
@@ -577,7 +630,10 @@ impl ServerHandler for RiggMcpServer {
              A workspace contains projects; each project owns its resources exclusively, \
              and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
              understand the workspace, rigg_validate before changes, rigg_diff to inspect \
-             drift, rigg_push (preview first, then force=true). Resource definitions are \
+             drift, rigg_push (preview first, then force=true). rigg_promote translates a \
+             project's resources between environments (e.g. dev → staging), re-pointing \
+             infrastructure references at the target's own bindings rather than copying \
+             source values. Resource definitions are \
              JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
              stored in files — identity-based access only. Guided flows can ask questions: a \
              mutating tool call may come back as a `needs-input` JSON document (the questions, \
@@ -637,5 +693,83 @@ mod tests {
         let a = with_common(vec!["status"], &None, true);
         let b = with_common_answers(vec!["status"], &None, true, None);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn promote_args_without_force_previews_with_dry_run() {
+        let params = PromoteParams {
+            project: Some("regulus".to_string()),
+            from: "dev".to_string(),
+            to: "staging".to_string(),
+            force: None,
+            offline: None,
+            answers: None,
+        };
+        let args = promote_args(&params);
+        assert_eq!(
+            args,
+            vec![
+                "promote",
+                "regulus",
+                "--from",
+                "dev",
+                "--to",
+                "staging",
+                "--dry-run",
+                "--output",
+                "json",
+                "--quiet",
+            ]
+        );
+    }
+
+    #[test]
+    fn promote_args_with_force_writes_with_yes() {
+        let params = PromoteParams {
+            project: None,
+            from: "dev".to_string(),
+            to: "staging".to_string(),
+            force: Some(true),
+            offline: Some(true),
+            answers: None,
+        };
+        let args = promote_args(&params);
+        assert_eq!(
+            args,
+            vec![
+                "promote",
+                "--from",
+                "dev",
+                "--to",
+                "staging",
+                "--yes",
+                "--offline",
+                "--output",
+                "json",
+                "--quiet",
+            ]
+        );
+    }
+
+    #[test]
+    fn promote_args_includes_answer_flags() {
+        let mut answers = BTreeMap::new();
+        answers.insert(
+            "promote.external.example.invalid".to_string(),
+            "keep".to_string(),
+        );
+        let params = PromoteParams {
+            project: None,
+            from: "dev".to_string(),
+            to: "staging".to_string(),
+            force: None,
+            offline: None,
+            answers: Some(answers),
+        };
+        let args = promote_args(&params);
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--answer", "promote.external.example.invalid=keep"])
+        );
     }
 }

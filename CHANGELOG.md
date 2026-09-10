@@ -69,6 +69,12 @@ around that. No compatibility with 1.x workspaces.
   and token acquisition (optional; default is the Azure CLI's tenant and
   every subscription visible in it); `strict-bindings` defaults to the value
   of `protected`.
+- **`rigg promote` no longer pins fields by kind.** The 1.x
+  `registry::env_pinned`/`env_pinned_extra` merge engine is gone; resources
+  new in the target are **translated**, not copied verbatim, using the same
+  infrastructure- and sibling-translation rules as existing resources.
+  `x-rigg-pin` remains the per-file escape hatch for anything that still
+  needs to be kept from the target.
 
 ### Added
 
@@ -114,6 +120,28 @@ around that. No compatibility with 1.x workspaces.
   exits 6 (new exit code) instead of hanging or failing blind. MCP tools
   accept the same answers through an `answers` parameter, and a `needs-input`
   tool result is the raw JSON document, not an error.
+- **Promote v2**: `rigg promote [<project>] --from <A> --to <B>` now
+  **translates** rather than copies — every infrastructure reference is
+  re-pointed at the target environment's binding of the same name (shared
+  bindings are reported unchanged), and every sibling reference (indexer →
+  data source/index/skillset, knowledge base → knowledge sources, agent →
+  deployment/connection, `x-rigg-ref`, the knowledge-base name inside a
+  `SearchKbMcpUrl`) follows that sibling's renamed physical name in the
+  target. Always previews the rewiring, renamed siblings, and a per-resource
+  changed/new/unchanged/kept-only-in-target summary before writing
+  (`--dry-run` stops there); `--output json` carries the same shape
+  (`targets`, `rewiring[]`, `renamed[]`, `resources{…}`, `checks[]`,
+  `questions[]`, `dry_run`). Anything it can't decide — an unbound
+  reference, a binding missing in the target, a target environment that
+  doesn't exist yet, a deployment unavailable or short on quota in the
+  target region — is asked as a question through the same protocol as
+  everything else (`--answer <id>=<value>` non-interactively, exit 6 on
+  anything unanswered). A Web API skill's auth carrier is re-derived from
+  the target function app's Easy Auth state (online) rather than copied
+  from the source. `--offline` skips every Azure lookup and reports
+  unresolved items instead of guessing. New MCP tool `rigg_promote`
+  (`project?`, `from`, `to`, `force?`, `offline?`, `answers?`) follows the
+  same preview/force pattern as `rigg_push`/`rigg_pull`.
 
 ### Removed (library API)
 

@@ -218,9 +218,8 @@ mutation.
 
 ### Promoting between environments
 
-`rigg promote` copies one environment's project tree into another, entirely
-locally — the only optional Azure contact is discovering function apps when
-an interactive run resolves a new Web API skill URL (below):
+`rigg promote` produces, for every logical resource in environment `A`, the
+document it should have in `B` — by **translation**, not by copying:
 
 ```bash
 rigg promote --from dev --to prod --dry-run          # preview only (project optional when there is exactly one)
@@ -228,30 +227,77 @@ rigg promote my-rag --from dev --to prod             # write prod's tree
 rigg push my-rag --env prod                          # then sync it to Azure
 ```
 
-Promotion preserves the target environment's **pinned fields** instead of
-overwriting them: the resource's `name` (always — physical names are never
-promoted), each kind's registry-default env-pinned fields (secrets,
-write-only fields, and genuinely per-environment values like an agent's
-`tools[].server_url` or a Web API skill's function `uri` and auth carrier),
-and anything named in the file's own `x-rigg-pin` annotation. Resources new
-in the source are created verbatim (logical id preserved, physical name
-copied as-is); resources that only exist in the target are left untouched.
-A→B and B→A are the same operation — you choose the sync direction with
-`--from`/`--to`, not a fixed "deploy" direction.
+For each field, translation picks exactly one of:
 
-A skillset that is **new** in the target has no URL to pin: its custom Web
-API skills would silently keep calling the SOURCE environment's function.
-Interactive promotes resolve each such URL — automatically kept when your
-login sees only that one function app (the environments share it), otherwise
-rigg lists the visible function apps (ARM) or asks for the URL. A skill's
-`x-rigg-auth` annotation never crosses environments; authorize the new env's
-function on the next `rigg push`, which gates on it. Non-interactive
-promotes copy the URL as-is and flag it for review.
+1. **Infrastructure translation** — every infrastructure reference (a
+   registry-recognized `InfraRef`: storage, ai-services, function-app,
+   identity, key-vault, api) is parsed to its physical resource, mapped to
+   the binding name it has in `A`, and rendered from `B`'s binding of the
+   same name. The same physical value in both environments is **shared** —
+   no change, but still listed in the preview.
+2. **Sibling translation** — every reference to another resource by physical
+   name (an indexer's data source/index/skillset, a knowledge base's
+   knowledge sources, an agent's deployment/connection, `x-rigg-ref`, and the
+   knowledge-base name inside a `SearchKbMcpUrl`) is rewritten to that
+   sibling's physical name in `B`, correlated by logical id (file stem). If
+   the sibling doesn't exist in `B` yet, it is created in this same promote
+   under `A`'s physical name, so the reference is already correct.
+3. **Kept from the target** — the resource's own `name` (physical identity is
+   never promoted), any path listed in the target file's `x-rigg-pin`
+   annotation (1.x array semantics apply: target-only array elements along a
+   pinned path survive), and the target file's own `x-rigg-pin`.
+4. **Re-derived from the target's infrastructure** — a Web API skill's auth
+   carrier. Once its URI is translated to `B`'s function app: if `B`'s
+   skillset file already carries an auth carrier for that skill
+   (`authResourceId`, `x-rigg-auth`, or an `x-functions-key` header), that
+   carrier is kept; otherwise it is derived from the target function app's
+   Easy Auth state (ARM `authsettingsV2`, online): Easy Auth on →
+   `authResourceId` set, key carrier removed; off → `x-rigg-auth:
+   function-key` when `A` used a key, else anonymous. `A`'s `x-rigg-auth`,
+   `authResourceId` and key header never cross as-is. With `--offline`, the
+   carrier is left unresolved and reported; `push`'s auth gate handles it.
+5. **Everything else** comes from `A` — that is the promotion.
 
-A planned extension to promotion translates infrastructure references by
-binding name, so a promoted file resolves each dependency against the
-*target* environment's bindings instead of copying the source's value
-verbatim.
+Resources that only exist in `B` are never touched, and nothing is deleted.
+Sidecars are promoted as content (inline on read, extract on write). A→B and
+B→A are the same operation — you choose the direction with `--from`/`--to`,
+not a fixed "deploy" direction.
+
+**Questions.** Translation stops on anything it cannot decide — a source
+value that matches no binding in `A`, a binding that exists in `A` but not
+`B`, a target environment that doesn't exist yet, a new-in-`B` deployment
+that Azure reports as unavailable or short on quota in `B`'s region, or an
+external `api` URL with no `api` binding. Interactively these are asked
+inline (answers that create bindings are written to `rigg.yaml`
+immediately); non-interactively every pending question comes back as a
+`needs-input` document (exit 6, nothing written) — answer with `--answer
+<id>=<value>` (repeatable) or `--answers-file <path>`. `--yes` applies a plan
+that has no pending questions.
+
+**Preview.** Always shown before writing — and the whole output for
+`--dry-run`: the search/Foundry targets, a rewiring table per binding
+(shared vs. changed, with reference counts), renamed siblings with the
+number of references rewritten, a resource summary (changed / new /
+unchanged / kept-only-in-target) with per-resource semantic diffs, and
+checks (deployment availability/quota, sidecar content changes). `--dry-run`
+still runs the online checks — pass `--offline` too for a network-free
+preview, which may still ask questions from what's already on disk.
+`--output json` carries the same sections as documented keys: `targets`,
+`rewiring[]`, `renamed[]`,
+`resources{changed,new,unchanged,kept_only_in_to}`, `checks[]`,
+`questions[]`, `dry_run`.
+
+**`--offline`** skips every Azure lookup (candidate lists for binding
+questions, Web API auth re-derivation, deployment availability/quota);
+unresolved items are reported in the preview instead of guessed at.
+
+After a successful (non-dry-run) promote, rigg hints at the next steps in
+order: `rigg validate <project>`, `rigg auth doctor -e <to>`, `rigg push
+<project> -e <to> --dry-run`, `rigg push <project> -e <to>`.
+
+`rigg diff --compare-env` remains a *raw* environment-vs-environment
+comparison — "equal modulo infrastructure" is what `promote --dry-run`
+shows, so there is no separate compare mode for it.
 
 ### Protected environments
 

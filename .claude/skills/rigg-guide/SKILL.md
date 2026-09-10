@@ -48,10 +48,17 @@ its own full file tree rather than overlay patches. A resource's *logical*
 identity is its file path (kind dir + stem, e.g. `indexes/docs-index`); the
 `name` field inside the file is its *physical* Azure name and may differ per
 environment. Target an environment with `-e/--env <name>` (or `RIGG_ENV`, or
-the `default: true` env). Copy one environment's tree into another —
-locally, without touching Azure — with `rigg promote <project> --from <env>
---to <env>` (pinned fields like `name` and secrets are preserved on the
-target, not overwritten). Environments can be marked `policy: { protected:
+the `default: true` env). Translate one environment's tree into another —
+locally, with online checks unless `--offline` — with `rigg promote
+[<project>] --from <A> --to <B> [--dry-run] [--offline] [--yes] [--answer
+id=value]…`: infrastructure references are re-pointed at the target's own
+binding of the same name (shared bindings unchanged), sibling references
+follow renamed physical names, the target's own `name`/`x-rigg-pin`/Web-API
+auth carrier are kept, and anything promote can't decide (an unbound
+reference, a missing target binding, a target env that doesn't exist, a
+deployment unavailable or short on quota) becomes a question — non-interactive
+callers answer with `--answer id=value` or get exit 6 (`needs-input`).
+Environments can be marked `policy: { protected:
 true }` in `rigg.yaml`; mutating pushes and remote deletes against a
 protected environment then require an explicit `--confirm-env <name>` (or an
 interactive type-to-confirm) — `--yes` alone never satisfies this gate.
@@ -77,6 +84,9 @@ Unbound/External are warnings that become errors under
 - **Adopt existing Azure resources**: `rigg adopt <project> <selector>` CLI
   (selectors: `all`, a kind, or `<kind>/<name>`); via MCP, `rigg_pull` with
   `adopt: true` adopts ALL unmanaged resources into the project.
+- **Promote between environments**: `rigg_promote` (preview via `--dry-run` →
+  `force: true` to write); questions come back as `needs-input`, answer via
+  `answers`.
 - **Delete one resource**: delete its file, then push with `prune: true`.
 - **Delete a whole project remotely**: `rigg_delete` (preview → `force: true`).
 - **Identity/RBAC problems**: `rigg auth doctor` (add `--fix` to repair).

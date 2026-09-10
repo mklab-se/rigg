@@ -44,13 +44,13 @@ For other MCP clients, configure them to run `rigg mcp serve` as a stdio server 
 
 ### Verify it's working
 
-In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report sync state per project. In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with 12 tools.
+In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report sync state per project. In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with 13 tools.
 
 ## Available Tools
 
-The server exposes 12 tools: 8 project-scoped configuration tools and 4 runtime-operation tools (`rigg_indexer_*`, `rigg_query`, `rigg_ask`). Every tool that talks to Azure accepts an optional `env` (environment name; the default environment is used if omitted), and tools that operate on a project accept an optional `project` (may be omitted when the workspace has exactly one project).
+The server exposes 13 tools: 9 project-scoped configuration tools (including `rigg_promote`) and 4 runtime-operation tools (`rigg_indexer_*`, `rigg_query`, `rigg_ask`). Every tool that talks to Azure accepts an optional `env` (environment name; the default environment is used if omitted), and tools that operate on a project accept an optional `project` (may be omitted when the workspace has exactly one project). `rigg_promote` is the exception — it names two environments (`from`/`to`) instead of one, so it has no `env` parameter.
 
-Mutating tools (`rigg_pull`, `rigg_push`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
+Mutating tools (`rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 
 `rigg_push`, `rigg_delete` and `rigg_indexer_run` additionally accept `confirm_env`: if the target environment has `policy: { protected: true }` in `rigg.yaml` (see [CONCEPTS.md](CONCEPTS.md#environments)), the mutation does not just happen — with no confirmation the tool returns a `needs-input` document asking `confirm.protected.<env>` (see below), and the answer must equal the environment's name exactly. An AI agent can't push, delete or re-index a protected environment (e.g. prod) just because it decided to; the caller has to name it explicitly. `confirm_env` remains the shorthand: passing it answers that question up front.
 
@@ -145,6 +145,21 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 | `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
 | `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
+
+### rigg_promote
+
+Translate a project's resources from one environment to another (e.g. `dev` → `staging`): every infrastructure reference is re-pointed at the target's own binding of the same name (a binding shared between the two environments is reported unchanged, not skipped), sibling references follow renamed physical names, and the target's own `name`, `x-rigg-pin` paths, and Web API auth carrier are kept. Resources that only exist in the target are never touched, and nothing is deleted. See [CONCEPTS.md](CONCEPTS.md#promoting-between-environments) for the full translation model.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `project` | string? | Project name (omit when the workspace has exactly one project) |
+| `from` | string | Source environment |
+| `to` | string | Target environment |
+| `force` | bool? | Without force: preview only (`--dry-run`), writing nothing — rewiring, renamed siblings, changed/new/unchanged/kept-only-in-target resources, and checks. With `force: true`: writes the translated files (`--yes`) |
+| `offline` | bool? | Skip every Azure lookup (candidate lists, Web API auth re-derivation, deployment availability/quota); unresolved items are reported instead of guessed |
+| `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
+
+Anything the translation cannot decide — an unbound infrastructure reference, a binding the target environment lacks, a missing target environment, a deployment that is unavailable or short on quota in the target region — comes back as a `needs-input` question instead of a guess; answer it the same way as any other tool (`answers`, id → value). If the target environment doesn't exist yet, the preview points at `rigg env add <to> --like <from>` to create it first. After a successful promote, run `rigg_validate`, then `rigg_push` (preview first) against the target environment.
 
 ### rigg_indexer_status
 

@@ -45,7 +45,7 @@ Whether you use both services together for a full RAG stack, or either one indep
 - **Version control** — track who changed what, when, and why via Git history across both your retrieval and agent layers
 - **Code review** — review agent instructions, knowledge base retrieval rules, index schema changes, and skillset updates in pull requests before they go live
 - **Drift detection** — diff local files against live services to catch manual portal changes across both Azure AI Search and Foundry
-- **Environment promotion** — `rigg promote` copies a project's tree from dev to staging to prod, keeping each environment's pinned fields (secrets, per-env values); environment-specific references (like knowledge-base MCP endpoints) are injected at push time; protected environments (e.g. prod) require explicit confirmation before anything is pushed or deleted
+- **Environment promotion** — `rigg promote` translates a project's tree from dev to staging to prod: every infrastructure reference is re-pointed at the target's own bindings (shared bindings are left as they are), sibling resources follow renamed physical names, and the target keeps its own identity, `x-rigg-pin` paths, and Web API auth carrier; protected environments (e.g. prod) require explicit confirmation before anything is pushed or deleted
 - **CI/CD** — validate configuration in pull requests, deploy on merge, detect drift on a schedule — with OIDC federated login and no stored secrets
 
 **For your AI coding tools:**
@@ -342,10 +342,10 @@ rigg env show dev --refresh                               # targets, policy, eve
 
 Every environment also has two bindings for free — `search` and `foundry`, its own service and account — so most workspaces never need a separate `ai-services` binding. `rigg validate` classifies every infrastructure reference it finds: **Bound** (matches a binding here) and **Shared** (also bound in another environment with the same value) are fine; **Leak** (bound in *another* environment, not this one) is always an error; **Unbound** (matches no binding anywhere) and **External** (an `api`-typed URL with no matching binding) are warnings that become errors under `policy.strict-bindings: true` (which defaults to the value of `protected`). See [CONCEPTS.md](CONCEPTS.md#validation-classes) for the full table.
 
-`rigg promote` copies one environment's project tree into another, locally — preserving the target's pinned fields (`name`, secrets/write-only fields, env-specific URLs like an agent's MCP server or a Web API skill's function endpoint, `x-rigg-pin`-annotated paths) instead of overwriting them. New-in-target skillsets get their function URLs resolved interactively (ARM-discovered candidates or manual entry) so a promoted pipeline never silently calls the source environment's function:
+`rigg promote` produces, for every logical resource in the source environment, the document it should have in the target — by **translation**, not by copying: infrastructure references are re-pointed at the target's own binding of the same name (a binding shared between the two environments is reported unchanged, not skipped), sibling references (an indexer's data source/index/skillset, a knowledge base's knowledge sources, an agent's deployment/connection) follow renamed physical names, and the target keeps its own `name`, `x-rigg-pin`-annotated paths, and Web API auth carrier (re-derived from the target function app's Easy Auth state when it doesn't already have one). Anything promote can't decide — an unbound reference, a binding the target lacks, a deployment unavailable or short on quota in the target region — comes back as a question instead of a guess (`--answer <id>=<value>` non-interactively); `--offline` skips every Azure lookup and reports those items unresolved instead:
 
 ```bash
-rigg promote --from dev --to prod --dry-run          # preview (project optional when there is exactly one)
+rigg promote --from dev --to prod --dry-run          # preview: rewiring, renamed siblings, resources, checks (project optional when there is exactly one)
 rigg promote my-rag --from dev --to prod             # write prod's tree
 rigg push my-rag --env prod                          # then sync it to Azure
 rigg diff my-rag -e test --compare-env prod          # or just compare, env vs env
