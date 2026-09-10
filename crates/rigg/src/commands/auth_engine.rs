@@ -185,13 +185,18 @@ pub struct Summary {
     pub ok: usize,
     pub missing: usize,
     pub unresolved: usize,
+    /// `--live` findings: auth-shaped failures observed in Azure that the
+    /// verified graph does not explain. Counted separately because they are
+    /// *evidence*, not a verdict on any one requirement — a live failure
+    /// annotates an item, it never rewrites what rigg verified.
+    pub live: usize,
 }
 
 impl Summary {
-    /// Is anything wrong? (`missing` or `unresolved` — either means rigg
-    /// cannot promise a push will work.)
+    /// Is anything wrong? (`missing`, `unresolved`, or an unexplained live
+    /// failure — each means rigg cannot promise a push will work.)
     pub fn clean(&self) -> bool {
-        self.missing == 0 && self.unresolved == 0
+        self.missing == 0 && self.unresolved == 0 && self.live == 0
     }
 }
 
@@ -267,6 +272,16 @@ pub enum Fix {
         resource_id: String,
         provider: Provider,
     },
+    /// Attach a user-assigned identity a file names to the resource that
+    /// must act as it — the other half of spec §3.3's "a system-assigned
+    /// identity **or the UAMI attached**".
+    AttachUserAssignedIdentity {
+        resource_id: String,
+        provider: Provider,
+        uami_id: String,
+        /// The binding (or bare name) the file named, for the report line.
+        binding: String,
+    },
     EnableRbac {
         search_id: String,
     },
@@ -298,6 +313,11 @@ impl Fix {
                 ..
             } => format!("{kind}|{scope}|{principal_id}|{}", role.id),
             Fix::EnableSystemIdentity { resource_id, .. } => format!("{kind}|{resource_id}"),
+            Fix::AttachUserAssignedIdentity {
+                resource_id,
+                uami_id,
+                ..
+            } => format!("{kind}|{resource_id}|{uami_id}"),
             Fix::EnableRbac { search_id } => format!("{kind}|{search_id}"),
             Fix::BlobSoftDelete { account_id, days } => format!("{kind}|{account_id}|{days}"),
             Fix::StorageBypassAzureServices { account_id } => format!("{kind}|{account_id}"),
@@ -313,6 +333,7 @@ impl Fix {
         match self {
             Fix::RoleAssignment { .. } => "role-assignment",
             Fix::EnableSystemIdentity { .. } => "enable-system-identity",
+            Fix::AttachUserAssignedIdentity { .. } => "attach-user-assigned-identity",
             Fix::EnableRbac { .. } => "enable-rbac",
             Fix::BlobSoftDelete { .. } => "blob-soft-delete",
             Fix::StorageBypassAzureServices { .. } => "storage-bypass-azure-services",
@@ -332,6 +353,11 @@ impl Fix {
             Fix::EnableSystemIdentity { resource_id, .. } => {
                 format!("enable the system-assigned identity on {resource_id}")
             }
+            Fix::AttachUserAssignedIdentity {
+                resource_id,
+                uami_id,
+                ..
+            } => format!("attach the user-assigned identity {uami_id} to {resource_id}"),
             Fix::EnableRbac { search_id } => {
                 format!("accept Entra tokens (authOptions.aadOrApiKey) on {search_id}")
             }
@@ -352,6 +378,13 @@ impl Fix {
     }
 
     /// The equivalent `az` command, for a user who would rather run it.
+    ///
+    /// Role assignments name the role by its **definition GUID**, with the
+    /// display name as a trailing comment: `--role "<name>"` resolves the
+    /// name against the tenant's role definitions, and Microsoft is renaming
+    /// the Foundry roles (Azure AI User → Foundry User, …) — their guidance
+    /// during the rollout is to use the id in code. rigg's own PUTs have
+    /// always used GUIDs; this makes the printed command match.
     pub fn command(&self) -> String {
         match self {
             Fix::RoleAssignment {
@@ -360,11 +393,18 @@ impl Fix {
                 role,
                 ..
             } => format!(
-                "az role assignment create --assignee {principal_id} --role \"{}\" --scope \"{scope}\"",
-                role.name
+                "az role assignment create --assignee {principal_id} --role {} --scope \"{scope}\" # {}",
+                role.id, role.name
             ),
             Fix::EnableSystemIdentity { resource_id, .. } => format!(
                 "az resource update --ids \"{resource_id}\" --set identity.type=SystemAssigned"
+            ),
+            Fix::AttachUserAssignedIdentity {
+                resource_id,
+                uami_id,
+                ..
+            } => format!(
+                "az search service identity assign --ids \"{resource_id}\" --user-identities \"{uami_id}\""
             ),
             Fix::EnableRbac { search_id } => format!(
                 "az search service update --ids \"{search_id}\" --aad-auth-failure-mode http401WithBearerChallenge --auth-options aadOrApiKey"
@@ -403,6 +443,16 @@ impl Fix {
                 obj["description"] = json!(description);
             }
             Fix::EnableSystemIdentity { resource_id, .. } => obj["resource"] = json!(resource_id),
+            Fix::AttachUserAssignedIdentity {
+                resource_id,
+                uami_id,
+                binding,
+                ..
+            } => {
+                obj["resource"] = json!(resource_id);
+                obj["identity"] = json!(uami_id);
+                obj["binding"] = json!(binding);
+            }
             Fix::EnableRbac { search_id } => obj["resource"] = json!(search_id),
             Fix::BlobSoftDelete { account_id, days } => {
                 obj["resource"] = json!(account_id);
@@ -455,6 +505,15 @@ pub async fn apply(
                 provider,
             } => arm
                 .enable_system_identity(resource_id, *provider)
+                .await
+                .map_err(|e| format!("{e}")),
+            Fix::AttachUserAssignedIdentity {
+                resource_id,
+                provider,
+                uami_id,
+                ..
+            } => arm
+                .attach_user_assigned_identity(resource_id, *provider, uami_id)
                 .await
                 .map_err(|e| format!("{e}")),
             Fix::EnableRbac { search_id } => arm
@@ -513,6 +572,9 @@ pub struct Verifier {
     description_prefix: String,
     search_id: Option<String>,
     search: Option<rigg_client::arm_reads::SearchServiceInfo>,
+    /// Whether the documents under verification include a knowledge base —
+    /// the one resource kind with a SKU/hosting-mode floor of its own.
+    has_knowledge_base: bool,
     foundry_project_id: Option<String>,
     principals: BTreeMap<String, std::result::Result<Resolved, String>>,
     storage: BTreeMap<String, std::result::Result<StorageAccountInfo, String>>,
@@ -520,8 +582,8 @@ pub struct Verifier {
     /// edges' second satisfaction path. `None` is a read that failed —
     /// cached so a scope rigg cannot read is not asked about once per edge.
     permissions: BTreeMap<String, Option<Vec<Value>>>,
-    /// Role definitions by GUID, for the same path: one `verify` run asks
-    /// about the same role at several scopes.
+    /// Role definitions by `(subscription, guid)`, for the same path: one
+    /// `verify` run asks about the same role at several scopes.
     role_definitions: BTreeMap<String, Option<RoleDefinition>>,
 }
 
@@ -629,7 +691,7 @@ pub async fn bindings_for(
 }
 
 /// The Foundry project's ARM id, `<account>/projects/<project>` — the scope
-/// the operator's Azure AI User edge lives at, and therefore a scope
+/// the operator's Foundry User edge lives at, and therefore a scope
 /// `auth roles` must look in. The binding table carries the account; only
 /// the connection knows the project segment.
 pub async fn foundry_project_id(
@@ -727,6 +789,7 @@ pub async fn verify(
         description_prefix: description_prefix(ws, &env.name),
         search_id: None,
         search: None,
+        has_knowledge_base: docs.iter().any(|(k, ..)| *k == ResourceKind::KnowledgeBase),
         foundry_project_id: None,
         principals: BTreeMap::new(),
         storage: BTreeMap::new(),
@@ -793,7 +856,8 @@ pub async fn verify(
         Err(e) => format!("unknown ({e})"),
     };
 
-    let summary = summarize(items.iter().chain(operator.iter()));
+    let mut summary = summarize(items.iter().chain(operator.iter()));
+    summary.live = live.len();
     Ok(Report {
         env: env.name.clone(),
         targets: Remote::for_env(env).target_lines(),
@@ -1148,13 +1212,23 @@ impl Verifier {
     /// failure). The subscription comes from `scope`, or from the
     /// environment when the scope names none.
     async fn role_definition(&mut self, scope: &str, guid: &str) -> Option<RoleDefinition> {
-        if let Some(hit) = self.role_definitions.get(guid) {
-            return hit.clone();
-        }
         let under = match scope.starts_with("/subscriptions/") {
             true => scope.to_string(),
             false => self.subscription.clone().unwrap_or_default(),
         };
+        // Keyed by (subscription, guid), not the GUID alone: the fetch is
+        // subscription-scoped, and a *custom* role definition with the same
+        // GUID does not exist in two subscriptions — but a run that touches
+        // two subscriptions must not answer for one with the other's read.
+        let subscription = under
+            .split('/')
+            .nth(2)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let key = format!("{subscription}|{}", guid.to_ascii_lowercase());
+        if let Some(hit) = self.role_definitions.get(&key) {
+            return hit.clone();
+        }
         let got = match self.arm() {
             Ok(arm) => arm
                 .role_definition(&under, guid)
@@ -1163,7 +1237,7 @@ impl Verifier {
                 .filter(|d| !d.is_empty()),
             Err(_) => None,
         };
-        self.role_definitions.insert(guid.to_string(), got.clone());
+        self.role_definitions.insert(key, got.clone());
         got
     }
 
@@ -1178,34 +1252,29 @@ impl Verifier {
                     "the Free SKU has no managed identity and cannot host knowledge bases — \
                      recreate the service at Basic or higher",
                 ),
+                // Standard3 in high-density mode partitions the service into
+                // many small indexes and does not offer knowledge bases
+                // (spec §3.3, "S3 HD: none"). Reported only when the
+                // environment actually has one.
+                Some(info)
+                    if self.has_knowledge_base
+                        && info.hosting_mode.eq_ignore_ascii_case("highDensity") =>
+                {
+                    ReportItem::new(
+                        what,
+                        Status::Missing,
+                        format!(
+                            "SKU '{}' in high-density hosting mode does not host knowledge bases \
+                             — recreate the service in the default hosting mode (or at Basic/\
+                             Standard)",
+                            info.sku
+                        ),
+                    )
+                }
                 Some(info) => ReportItem::new(what, Status::Ok, format!("SKU '{}'", info.sku)),
                 None => ReportItem::new(what, Status::Unresolved, self.no_search()),
             },
-            CheckKind::SearchIdentity => match (&self.search, self.search_id.clone()) {
-                (Some(info), Some(id)) => {
-                    if info.identity.principal_id.is_some() {
-                        ReportItem::new(what, Status::Ok, "system-assigned identity enabled")
-                    } else if !info.identity.user_assigned.is_empty() {
-                        ReportItem::new(
-                            what,
-                            Status::Ok,
-                            "user-assigned identities attached (no system-assigned identity — \
-                             the storage trusted-services exception needs one)",
-                        )
-                    } else {
-                        ReportItem::new(
-                            what,
-                            Status::Missing,
-                            "the search service has no managed identity",
-                        )
-                        .with_fix(Fix::EnableSystemIdentity {
-                            resource_id: id,
-                            provider: Provider::SearchArm,
-                        })
-                    }
-                }
-                _ => ReportItem::new(what, Status::Unresolved, self.no_search()),
-            },
+            CheckKind::SearchIdentity => self.search_identity(what, graph).await,
             CheckKind::SearchRbacEnabled => match (&self.search, self.search_id.clone()) {
                 (Some(info), Some(id)) => {
                     if info.rbac_enabled || info.disable_local_auth {
@@ -1303,6 +1372,144 @@ impl Verifier {
                     Err(e) => ReportItem::new(what, Status::Unresolved, format!("{e}")),
                 }
             }
+        }
+    }
+
+    /// Spec §3.3 "a system-assigned identity exists — **or the UAMI the
+    /// files name is attached**".
+    ///
+    /// The verdict is about the identities *this environment's documents
+    /// actually use*, not about whether the service has any identity at all:
+    /// a service carrying only a user-assigned identity while every file
+    /// asks for the system one is broken, and a file naming a UAMI that is
+    /// not attached to the service is broken too — both used to read green.
+    async fn search_identity(&mut self, what: What, graph: &Graph) -> ReportItem {
+        let (Some(info), Some(id)) = (self.search.clone(), self.search_id.clone()) else {
+            return ReportItem::new(what, Status::Unresolved, self.no_search());
+        };
+        let wants_system = graph
+            .edges
+            .iter()
+            .any(|e| e.principal == Principal::SearchSystem);
+        let wanted_uamis: Vec<String> = graph
+            .edges
+            .iter()
+            .filter_map(|e| match &e.principal {
+                Principal::SearchUser { binding } => Some(binding.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if wants_system && info.identity.principal_id.is_none() {
+            let detail = if info.identity.user_assigned.is_empty() {
+                "the search service has no managed identity".to_string()
+            } else {
+                "the search service has no managed identity of the kind this environment's files \
+                 use: they name no `identity` / `authIdentity`, so they need the system-assigned \
+                 one, and only user-assigned identities are attached"
+                    .to_string()
+            };
+            return ReportItem::new(what, Status::Missing, detail).with_fix(
+                Fix::EnableSystemIdentity {
+                    resource_id: id,
+                    provider: Provider::SearchArm,
+                },
+            );
+        }
+
+        // Every UAMI a file names must be attached to the service — holding
+        // the role is not enough if the service cannot act as it.
+        for binding in &wanted_uamis {
+            let uami_id = match self.uami_arm_id(binding).await {
+                Ok(id) => id,
+                Err(e) => return ReportItem::new(what, Status::Unresolved, e),
+            };
+            let attached = info
+                .identity
+                .user_assigned
+                .iter()
+                .any(|(attached, _)| attached.eq_ignore_ascii_case(&uami_id));
+            if !attached {
+                return ReportItem::new(
+                    what,
+                    Status::Missing,
+                    format!(
+                        "the files name the user-assigned identity '{binding}' but it is not \
+                         attached to the search service"
+                    ),
+                )
+                .with_fix(Fix::AttachUserAssignedIdentity {
+                    resource_id: id,
+                    provider: Provider::SearchArm,
+                    uami_id,
+                    binding: binding.clone(),
+                });
+            }
+        }
+
+        if info.identity.principal_id.is_some() {
+            return ReportItem::new(what, Status::Ok, "system-assigned identity enabled");
+        }
+        if !info.identity.user_assigned.is_empty() {
+            return ReportItem::new(
+                what,
+                Status::Ok,
+                "user-assigned identities attached (no system-assigned identity — the storage \
+                 trusted-services exception needs one)",
+            );
+        }
+        ReportItem::new(
+            what,
+            Status::Missing,
+            "the search service has no managed identity",
+        )
+        .with_fix(Fix::EnableSystemIdentity {
+            resource_id: id,
+            provider: Provider::SearchArm,
+        })
+    }
+
+    /// The ARM id of the user-assigned identity a `search-user:<binding>`
+    /// principal names — the cache's resolution when it has one, else a
+    /// fresh ARM lookup of the binding's declared value (or the bare name
+    /// the file's ARM id ends in, exactly as `uami_principal` does).
+    async fn uami_arm_id(&mut self, binding: &str) -> std::result::Result<String, String> {
+        let entry = self.bindings.get(binding);
+        if let Some(id) = entry
+            .and_then(|e| e.resolved.as_ref())
+            .and_then(|r| r.arm_id.clone())
+        {
+            return Ok(id);
+        }
+        if let Some(id) = entry
+            .and_then(|e| e.declared.as_ref())
+            .and_then(|b| b.arm_id().map(String::from))
+        {
+            return Ok(id);
+        }
+        let value = match entry {
+            Some(e) => e
+                .declared
+                .as_ref()
+                .map(|b| b.value.clone())
+                .unwrap_or_else(|| e.physical_name.clone()),
+            None => binding.to_string(),
+        };
+        let subscription = self.subscription.clone();
+        let env_name = self.env_name.clone();
+        let arm = self.arm().map_err(|e| format!("{e}"))?;
+        match arm
+            .resolve_binding(BindingType::Identity, &value, subscription.as_deref())
+            .await
+        {
+            Ok(r) => r
+                .arm_id
+                .ok_or_else(|| format!("user-assigned identity '{binding}' has no ARM id")),
+            Err(e) => Err(format!(
+                "identity '{binding}' is not bound in '{env_name}' ({e})"
+            )),
         }
     }
 
@@ -1517,35 +1724,86 @@ impl Verifier {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        // Easy Auth always accepts the registration's own client id as an
+        // audience, whether or not it is listed: a v2 token
+        // (`requestedAccessTokenVersion: 2`, which rigg itself sets) carries
+        // `aud = <appId>`, and `api://<appId>` is the identifier URI of that
+        // same registration. A portal-configured app that names the app only
+        // in `registration.clientId` is correctly configured.
+        let registered = settings
+            .pointer("/properties/identityProviders/azureActiveDirectory/registration/clientId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let implicit = !registered.is_empty()
+            && app_id_of(audience).is_some_and(|id| id.eq_ignore_ascii_case(registered));
         if !enabled {
-            ReportItem::new(
+            return ReportItem::new(
                 what,
                 Status::Missing,
                 "Microsoft Entra authentication is not enabled on the function app — run `rigg \
                  auth easy-auth <binding>`",
-            )
-        } else if audiences.contains(&audience) {
-            ReportItem::new(
-                what,
-                Status::Ok,
-                format!("the app accepts the audience '{audience}'"),
-            )
-        } else {
-            ReportItem::new(
+            );
+        }
+        if !audiences.contains(&audience) && !implicit {
+            return ReportItem::new(
                 what,
                 Status::Missing,
                 format!(
-                    "the app's allowed audiences ({}) do not include '{audience}' — run `rigg \
-                     auth easy-auth <binding>`",
+                    "the app's allowed audiences ({}) do not include '{audience}', and its \
+                     registration is for a different client id — run `rigg auth easy-auth \
+                     <binding>`",
                     if audiences.is_empty() {
                         "none".to_string()
                     } else {
                         audiences.join(", ")
                     }
                 ),
-            )
+            );
         }
+        // Audience accepted. The remaining half of the spec's row: an app
+        // that lets unauthenticated callers through does not enforce the
+        // audience it accepts.
+        let require_auth = settings
+            .pointer("/properties/globalValidation/requireAuthentication")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let action = settings
+            .pointer("/properties/globalValidation/unauthenticatedClientAction")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !require_auth || !action.eq_ignore_ascii_case("Return401") {
+            return ReportItem::new(
+                what,
+                Status::Missing,
+                format!(
+                    "the app accepts the audience '{audience}', but unauthenticated callers are \
+                     not rejected (requireAuthentication: {require_auth}, \
+                     unauthenticatedClientAction: '{}') — run `rigg auth easy-auth <binding>`",
+                    if action.is_empty() { "unset" } else { action }
+                ),
+            );
+        }
+        let how = if implicit {
+            format!("as its registered client id ({registered})")
+        } else {
+            "in allowedAudiences".to_string()
+        };
+        ReportItem::new(
+            what,
+            Status::Ok,
+            format!("the app accepts the audience '{audience}' {how}"),
+        )
     }
+}
+
+/// The application (client) id inside an `api://<app-id>` identifier URI, or
+/// the value itself when it is already a bare id.
+fn app_id_of(audience: &str) -> Option<&str> {
+    let id = audience.strip_prefix("api://").unwrap_or(audience);
+    // `api://<tenant>/<app-id>` and other multi-segment forms: the client id
+    // is the last segment.
+    let id = id.rsplit('/').next().unwrap_or(id);
+    (!id.is_empty()).then_some(id)
 }
 
 // ---------------------------------------------------------------------
@@ -1569,10 +1827,44 @@ const AUTH_MARKERS: &[&str] = &[
 /// Does an error message look like an authorization failure rather than a
 /// data problem? Shared with `rigg push --verify` / `rigg verify`, which
 /// attribute a failed smoke test to an identity edge only when it does.
+///
+/// Matching is on **word boundaries**: a bare substring test makes `"403"`
+/// fire on "4031 documents indexed" and `"401"` on a document count, which
+/// turns a data problem into an auth diagnosis.
 pub fn looks_like_auth(message: &str) -> bool {
-    AUTH_MARKERS
-        .iter()
-        .any(|m| message.to_lowercase().contains(&m.to_lowercase()))
+    AUTH_MARKERS.iter().any(|m| contains_word(message, m))
+}
+
+/// Case-insensitive substring match whose ends must not continue the same
+/// character *class*: `403` matches "HTTP 403." and "(403)" but not "4031
+/// documents"; `docs` matches "container 'docs'" but not "docsearch"; and
+/// `AADSTS` still matches "AADSTS700016", because a digit does not continue
+/// a run of letters.
+pub fn contains_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let hay: Vec<char> = haystack.to_lowercase().chars().collect();
+    let ndl: Vec<char> = needle.to_lowercase().chars().collect();
+    if ndl.len() > hay.len() {
+        return false;
+    }
+    // A neighbour breaks the match only when it belongs to the same class as
+    // the edge character it touches (digit next to digit, letter next to
+    // letter). Anything else — punctuation, whitespace, a class change — is
+    // a boundary.
+    let same_class = |a: char, b: char| {
+        (a.is_ascii_digit() && b.is_ascii_digit()) || (a.is_alphabetic() && b.is_alphabetic())
+    };
+    (0..=hay.len() - ndl.len()).any(|i| {
+        hay[i..i + ndl.len()] == ndl[..]
+            && i.checked_sub(1)
+                .and_then(|p| hay.get(p))
+                .is_none_or(|&c| !same_class(c, ndl[0]))
+            && hay
+                .get(i + ndl.len())
+                .is_none_or(|&c| !same_class(c, ndl[ndl.len() - 1]))
+    })
 }
 
 /// Read each indexer's last run and attribute auth-shaped failures to the
@@ -1608,16 +1900,21 @@ async fn live_findings(
             i.what
                 .scope_id()
                 .and_then(|id| id.rsplit('/').next())
-                .is_some_and(|resource| {
-                    !resource.is_empty()
-                        && message.to_lowercase().contains(&resource.to_lowercase())
-                })
+                .is_some_and(|resource| !resource.is_empty() && contains_word(&message, resource))
         }) {
             Some(item) => {
-                if item.status == Status::Ok {
-                    item.status = Status::Missing;
-                }
+                // A live finding annotates; it never overrules a verified
+                // verdict. An item rigg checked and found `Ok` (the role IS
+                // assigned) stays `Ok` — the failure is attached as evidence
+                // and repeated in the unattributed list, rather than
+                // flipping the exit code on a resource-name match.
                 item.detail = format!("{}\n      live: {finding}", item.detail);
+                if item.status == Status::Ok {
+                    unattributed.push(format!(
+                        "{finding} — the requirement rigg checked here is in place; role \
+                         assignments can take minutes to propagate, so re-run the indexer"
+                    ));
+                }
             }
             None => unattributed.push(finding),
         }
@@ -1773,8 +2070,14 @@ pub fn render_text(report: &Report, fix_mode: bool) {
     }
     println!();
     println!(
-        "summary: {} ok, {} missing, {} unresolved",
-        report.summary.ok, report.summary.missing, report.summary.unresolved
+        "summary: {} ok, {} missing, {} unresolved{}",
+        report.summary.ok,
+        report.summary.missing,
+        report.summary.unresolved,
+        match report.summary.live {
+            0 => String::new(),
+            n => format!(", {n} live finding(s)"),
+        }
     );
 }
 
@@ -1826,6 +2129,7 @@ pub fn to_json(report: &Report) -> Value {
             "ok": report.summary.ok,
             "missing": report.summary.missing,
             "unresolved": report.summary.unresolved,
+            "live": report.summary.live,
         },
     });
     if !report.live.is_empty() {
@@ -1845,6 +2149,20 @@ mod tests {
         assert!(looks_like_auth("AADSTS700016: application not found"));
         assert!(looks_like_auth("this request is not authorized"));
         assert!(!looks_like_auth("could not parse document at line 4"));
+    }
+
+    /// M-5: the markers match on class boundaries, so a document count that
+    /// happens to start with `403` is not diagnosed as an authorization
+    /// failure — while `AADSTS<digits>` still is, because a digit does not
+    /// continue a run of letters.
+    #[test]
+    fn auth_markers_match_on_word_boundaries() {
+        assert!(!looks_like_auth("indexed 4031 documents"));
+        assert!(!looks_like_auth("4010 documents failed to parse"));
+        assert!(looks_like_auth("HTTP 403 Forbidden"));
+        assert!(looks_like_auth("AADSTS50076"));
+        assert!(contains_word("container 'docs' is empty", "docs"));
+        assert!(!contains_word("the docsearch index", "docs"));
     }
 
     #[test]
@@ -1870,7 +2188,17 @@ mod tests {
         };
         let cmd = fix.command();
         assert!(cmd.contains("--assignee pid"));
-        assert!(cmd.contains("--role \"Storage Blob Data Reader\""));
+        // I-2: the GUID, never the display name — a name resolves against
+        // the tenant's role definitions, and Microsoft is renaming roles.
+        assert!(
+            cmd.contains(&format!("--role {}", roles::STORAGE_BLOB_DATA_READER.id)),
+            "{cmd}"
+        );
+        assert!(
+            !cmd.contains("--role \"Storage Blob Data Reader\""),
+            "{cmd}"
+        );
+        assert!(cmd.ends_with("# Storage Blob Data Reader"), "{cmd}");
         assert!(cmd.contains("--scope \"/subscriptions/s/rg/acct\""));
     }
 

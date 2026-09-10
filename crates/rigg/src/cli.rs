@@ -799,6 +799,10 @@ pub enum AuthCommands {
         /// Also read each indexer's last run and attribute auth failures
         #[arg(long)]
         live: bool,
+        /// Typed confirmation for protected environments (must equal the env
+        /// name) — required by `--fix`
+        #[arg(long, value_name = "ENV")]
+        confirm_env: Option<String>,
     },
     /// Enable Microsoft Entra authentication on a bound function app
     ///
@@ -816,6 +820,9 @@ pub enum AuthCommands {
         /// Reuse this existing app registration instead of creating one
         #[arg(long, value_name = "CLIENT_ID")]
         client_id: Option<String>,
+        /// Typed confirmation for protected environments (must equal the env name)
+        #[arg(long, value_name = "ENV")]
+        confirm_env: Option<String>,
     },
     /// Manage the role assignments rigg created
     Roles {
@@ -829,7 +836,11 @@ pub enum RolesCommands {
     /// List the role assignments rigg created for this environment
     List,
     /// Remove the role assignments rigg created for this environment
-    Remove,
+    Remove {
+        /// Typed confirmation for protected environments (must equal the env name)
+        #[arg(long, value_name = "ENV")]
+        confirm_env: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

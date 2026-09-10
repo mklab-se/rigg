@@ -128,6 +128,10 @@ pub async fn mount_easy_auth(server: &MockServer, site: &str, enabled: bool, cli
     let body = json!({
         "properties": {
             "platform": {"enabled": enabled},
+            "globalValidation": {
+                "requireAuthentication": enabled,
+                "unauthenticatedClientAction": if enabled { "Return401" } else { "AllowAnonymous" }
+            },
             "identityProviders": {
                 "azureActiveDirectory": {
                     "enabled": enabled,
@@ -269,6 +273,63 @@ pub async fn mount_search_service(
     rbac_enabled: bool,
     public_network: &str,
 ) {
+    mount_search_service_at(
+        server,
+        sub,
+        rg,
+        name,
+        sku,
+        identity_type,
+        principal_id,
+        rbac_enabled,
+        public_network,
+        "default",
+    )
+    .await;
+}
+
+/// [`mount_search_service`] with an explicit `properties.hostingMode` — what
+/// the knowledge-base SKU floor reads (`default` vs `highDensity`). RBAC on,
+/// public network enabled.
+#[allow(clippy::too_many_arguments)]
+pub async fn mount_search_service_hosting(
+    server: &MockServer,
+    sub: &str,
+    rg: &str,
+    name: &str,
+    sku: &str,
+    identity_type: &str,
+    principal_id: &str,
+    hosting_mode: &str,
+) {
+    mount_search_service_at(
+        server,
+        sub,
+        rg,
+        name,
+        sku,
+        identity_type,
+        principal_id,
+        true,
+        "Enabled",
+        hosting_mode,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn mount_search_service_at(
+    server: &MockServer,
+    sub: &str,
+    rg: &str,
+    name: &str,
+    sku: &str,
+    identity_type: &str,
+    principal_id: &str,
+    rbac_enabled: bool,
+    public_network: &str,
+    hosting_mode: &str,
+) {
     let id = search_service_id(sub, rg, name);
     let auth_options = if rbac_enabled {
         json!({"aadOrApiKey": {"aadAuthFailureMode": "http401WithBearerChallenge"}})
@@ -294,6 +355,7 @@ pub async fn mount_search_service(
         "properties": {
             "authOptions": auth_options,
             "disableLocalAuth": false,
+            "hostingMode": hosting_mode,
             "publicNetworkAccess": public_network,
             "networkRuleSet": {"ipRules": []}
         }

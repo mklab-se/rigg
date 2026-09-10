@@ -9,16 +9,20 @@ use rigg_client::arm::ArmClient;
 
 use crate::commands::ask::Question;
 use crate::commands::auth_engine::{self, Status, VerifyOpts, VerifyScope};
-use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
+use crate::commands::{
+    CommandError, GlobalContext, confirm_protected_env, load_workspace, resolve_env,
+};
 use crate::say;
 
-/// `rigg auth doctor [--fix] [--principal <id>] [--plan] [--live]`.
+/// `rigg auth doctor [--fix] [--principal <id>] [--plan] [--live]
+/// [--confirm-env <env>]`.
 pub async fn run(
     ctx: &GlobalContext,
     fix: bool,
     principal: Option<String>,
     plan: bool,
     live: bool,
+    confirm_env: Option<&str>,
 ) -> Result<()> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
@@ -61,6 +65,23 @@ pub async fn run(
         say!(ctx, "{} rigg can fix:", fixes.len());
         for f in &fixes {
             say!(ctx, "  - {}", f.describe());
+        }
+        // Protected-environment gate, before the batch confirmation and
+        // therefore before any write: a role assignment, a search service's
+        // auth options or a storage firewall rule is a change to the
+        // environment, so `--fix` sits behind the same typed confirmation as
+        // `push` — and `--yes` deliberately does not satisfy it. Asked here
+        // rather than after the report so `--output json` still emits at
+        // most one document (the `needs-input` one).
+        if !confirm_protected_env(
+            ctx,
+            &env,
+            confirm_env,
+            "auth doctor --fix",
+            "auth doctor --fix",
+            serde_json::json!({"env": env.name, "fixes": fixes.len()}),
+        )? {
+            return Ok(false);
         }
         if ctx.yes {
             return Ok(true);
@@ -174,7 +195,12 @@ async fn verdict(ctx: &GlobalContext, report: &auth_engine::Report, env: &str) -
         format!("re-run with --fix, or run the printed az commands (env: {env})")
     };
     Err(anyhow!(CommandError::AuthDenied(format!(
-        "{} missing, {} unresolved — {hint}",
-        report.summary.missing, report.summary.unresolved
+        "{} missing, {} unresolved{} — {hint}",
+        report.summary.missing,
+        report.summary.unresolved,
+        match report.summary.live {
+            0 => String::new(),
+            n => format!(", {n} live finding(s)"),
+        }
     ))))
 }

@@ -16,6 +16,7 @@ use rigg_client::arm::ArmClient;
 use rigg_core::binding::{BindingCache, BindingType};
 use rigg_core::workspace::{ResolvedEnv, Workspace};
 
+use crate::commands::ask::Question;
 use crate::commands::interactive;
 
 /// A data source with no usable connection (missing/null/empty
@@ -523,6 +524,9 @@ pub enum WebApiAuthOutcome {
     EntraId,
     /// `x-rigg-auth: function-key` annotated — key injected at push time.
     FunctionKey,
+    /// `x-rigg-auth: key-vault:<secret>@<binding>` annotated — the key is
+    /// read from the vault at push time (spec §6).
+    KeyVault,
     /// User skipped; the skill will fail at enrichment time until fixed.
     Skipped,
 }
@@ -563,6 +567,8 @@ pub async fn resolve_webapi_auth(
         "identity-based (Entra ID) — set it up now (registers the app and enables Easy Auth)";
     const ENTRA_GUIDE: &str = "identity-based (Entra ID) — recommended, but the function app has no Entra auth yet (show what's needed)";
     const KEY: &str = "function key, resolved at push time — key stays in Azure, never on disk";
+    const KEY_VAULT: &str = "function key from a key vault, resolved at push time — you name <secret>@<key-vault \
+         binding>";
     const SKIP: &str = "skip for now (enrichment will fail until authorized)";
     // `rigg auth easy-auth` wires the app end to end, but only when the app
     // is a declared function-app binding — that is where its scope comes from.
@@ -574,9 +580,38 @@ pub async fn resolve_webapi_auth(
     };
     let choice = interactive::select(
         "How should the search service authenticate to this function?",
-        vec![entra_option.to_string(), KEY.to_string(), SKIP.to_string()],
+        vec![
+            entra_option.to_string(),
+            KEY.to_string(),
+            KEY_VAULT.to_string(),
+            SKIP.to_string(),
+        ],
         plain,
     )?;
+
+    // Spec §6's fourth option: the key lives in a key vault this environment
+    // binds, and push fetches it from there. Nothing is verified against
+    // Azure here — the vault read happens at push time, with the same
+    // "never on disk, never printed" handling as the ARM path.
+    if choice == KEY_VAULT {
+        let mut asker = ctx.asker("push", serde_json::json!({"skill": ds_display, "uri": uri}));
+        let answer = asker.ask(
+            &Question::text(
+                "auth.webapi.key-vault",
+                "Which secret holds the function key? (<secret>@<key-vault binding>)",
+            )
+            .allow_other(),
+        )?;
+        let annotation = key_vault_annotation(answer.as_str().unwrap_or_default())?;
+        doc["skills"][idx][X_RIGG_AUTH] = Value::String(annotation.clone());
+        println!(
+            "  {} the skill is annotated `{X_RIGG_AUTH}: {annotation}` — rigg reads the secret \
+             from the vault and injects it whenever the skillset is pushed; the file keeps the \
+             placeholder",
+            "✓".green()
+        );
+        return Ok(WebApiAuthOutcome::KeyVault);
+    }
 
     if choice == ENTRA_SETUP {
         let (ws, env, binding) = wiring.expect("offered only when a binding was found");
@@ -584,7 +619,7 @@ pub async fn resolve_webapi_auth(
         // app). The same edit is applied to the caller's in-memory document
         // below, because the caller writes it back after this returns — so
         // the two must agree rather than one silently undoing the other.
-        let wired = crate::commands::easy_auth::wire(ctx, &ws, &env, &binding, None).await?;
+        let wired = crate::commands::easy_auth::wire(ctx, &ws, &env, &binding, None, None).await?;
         if !wired.applied {
             return Ok(WebApiAuthOutcome::Skipped);
         }
@@ -672,6 +707,24 @@ pub async fn resolve_webapi_auth(
             Ok(WebApiAuthOutcome::Skipped)
         }
     }
+}
+
+/// `<secret>@<binding>` → the `x-rigg-auth` annotation that names it, with
+/// the shape validated here rather than at push time: the answer is the one
+/// thing rigg cannot check against Azure in this flow, and a typo would
+/// otherwise surface as a push failure much later.
+///
+/// The secret's *value* never appears — only its name and the binding.
+fn key_vault_annotation(answer: &str) -> Result<String> {
+    let annotation = format!("{X_RIGG_AUTH_KEY_VAULT_PREFIX}{}", answer.trim());
+    if parse_key_vault_auth(&annotation).is_none() {
+        anyhow::bail!(
+            "'{}' is not a '<secret>@<key-vault binding>' reference — e.g. \
+             `fn-key@secrets`, where `secrets` is a `key-vault` dependency of this environment",
+            answer.trim()
+        );
+    }
+    Ok(annotation)
 }
 
 /// The workspace, environment and `function-app` binding name that
@@ -816,6 +869,27 @@ async fn key_vault_uri(ws: &Workspace, env: &ResolvedEnv, binding: &str) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Spec §6's fourth option: the answer is `<secret>@<binding>`, and it
+    /// becomes the `x-rigg-auth` annotation push resolves against the vault.
+    /// A malformed answer is refused here, not at push time.
+    #[test]
+    fn a_key_vault_answer_becomes_the_annotation_push_understands() {
+        let annotation = key_vault_annotation(" fn-key@secrets ").expect("well formed");
+        assert_eq!(annotation, "key-vault:fn-key@secrets");
+        assert_eq!(
+            parse_key_vault_auth(&annotation),
+            Some(("fn-key", "secrets"))
+        );
+        assert!(is_known_auth_annotation(&annotation));
+
+        for bad in ["fn-key", "@secrets", "fn-key@", ""] {
+            assert!(
+                key_vault_annotation(bad).is_err(),
+                "'{bad}' must be refused"
+            );
+        }
+    }
 
     fn auth_settings(platform: bool, aad: bool, audiences: Value, client_id: &str) -> Value {
         json!({"properties": {

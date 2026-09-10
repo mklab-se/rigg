@@ -13,7 +13,8 @@ mod graph_fake;
 use arm_fake::{
     OWNER_PERMISSIONS, last_auth_settings_put, mount_arm_fake, mount_easy_auth,
     mount_easy_auth_write, mount_no_role_definitions, mount_permission_sets, mount_permissions,
-    mount_role_definition, mount_search_service, mount_storage_account, search_service_id,
+    mount_role_definition, mount_search_service, mount_search_service_hosting,
+    mount_storage_account, search_service_id,
 };
 use assert_cmd::Command;
 use graph_fake::{
@@ -206,7 +207,7 @@ fn write_resource_in(ws: &std::path::Path, env: &str, dir: &str, name: &str, bod
 }
 
 /// One Foundry agent in `dev` — the resource kind that makes the operator's
-/// Azure AI User edge (and therefore the project scope) part of the graph.
+/// Foundry User edge (and therefore the project scope) part of the graph.
 fn write_agent(ws: &std::path::Path, name: &str) {
     let d = ws.join("projects/demo/envs/dev/foundry/agents");
     std::fs::create_dir_all(&d).unwrap();
@@ -1259,7 +1260,7 @@ async fn auth_roles_reaches_the_foundry_project_scope() {
         ],
     )
     .await;
-    // The assignment `auth doctor` creates for the operator's Azure AI User
+    // The assignment `auth doctor` creates for the operator's Foundry User
     // edge lives at `<account>/projects/<project>`, not at the account.
     let project = foundry_project_id();
     mount_assignment_listing(
@@ -2688,12 +2689,14 @@ async fn every_identity_scaffold_passes_validate() {
 //
 // An operator RBAC edge is satisfied either by an assignment of the exact
 // role GUID *or* by the caller's effective permissions at the scope covering
-// the role definition. That second path is what makes a subscription Owner
-// stop reading as "missing Search Service Contributor" — and, because Owner
-// carries no `dataActions`, what correctly leaves Azure AI User and Search
-// Index Data Reader missing. No role name is special-cased.
+// the role definition (`role`, or any of the edge's `alternatives`). That
+// second path is what makes a subscription Owner stop reading as "missing
+// Search Service Contributor" — and, because Owner carries no `dataActions`,
+// what correctly leaves Foundry User and Search Index Data Reader missing.
+// No role name is special-cased.
 
 const FOUNDRY_PROJECT_MANAGER: &str = "eadc314b-1a2d-4efa-be10-5d325db5065e";
+const COGNITIVE_SERVICES_CONTRIBUTOR: &str = "25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68";
 const FOUNDRY_ACCOUNT_OWNER: &str = "e47c6f54-e4a2-4754-9501-8e0985b135e1";
 const SEARCH_INDEX_DATA_READER: &str = "1407120a-92aa-4202-b7e9-c0e197c71c8f";
 const SEARCH_INDEX_DATA_CONTRIBUTOR: &str = "8ebe5a00-799e-43f5-93ac-243d3dce84a7";
@@ -2709,11 +2712,14 @@ fn write_foundry(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
     .unwrap();
 }
 
-/// The four operator control-plane role definitions, plus the two data-plane
-/// ones, as ARM serves them — trimmed to the entries the coverage rule reads.
+/// The operator role definitions, as ARM serves them — trimmed to the
+/// entries the coverage rule reads, and mirroring Azure's real definitions.
 ///
-/// Azure AI User and the Search Index Data roles are `dataActions`-only,
-/// which is exactly why an Owner-shaped caller does not cover them.
+/// Foundry User, Foundry **Project Manager** and the Search Index Data roles
+/// all carry `dataActions`, which is exactly why an Owner-shaped caller
+/// (`actions: ["*"]`, no data plane) does not cover them. Project Manager is
+/// reached instead through its control-plane alternative, Cognitive Services
+/// Contributor.
 async fn mount_operator_role_definitions(server: &MockServer) {
     mount_role_definition(
         server,
@@ -2724,12 +2730,28 @@ async fn mount_operator_role_definitions(server: &MockServer) {
         &[],
     )
     .await;
+    // Azure's own definition: a conditioned `roleAssignments/write` on the
+    // control plane, and — the part an Owner does not have — every data
+    // action on Cognitive Services.
     mount_role_definition(
         server,
         SUB,
         FOUNDRY_PROJECT_MANAGER,
-        "Azure AI Project Manager",
-        &["Microsoft.CognitiveServices/accounts/projects/*"],
+        "Foundry Project Manager",
+        &[
+            "Microsoft.CognitiveServices/accounts/projects/*",
+            "Microsoft.Authorization/roleAssignments/write",
+        ],
+        &["Microsoft.CognitiveServices/*"],
+    )
+    .await;
+    // The control-plane alternative the Connection edge carries.
+    mount_role_definition(
+        server,
+        SUB,
+        COGNITIVE_SERVICES_CONTRIBUTOR,
+        "Cognitive Services Contributor",
+        &["Microsoft.CognitiveServices/*"],
         &[],
     )
     .await;
@@ -2737,7 +2759,7 @@ async fn mount_operator_role_definitions(server: &MockServer) {
         server,
         SUB,
         FOUNDRY_ACCOUNT_OWNER,
-        "Azure AI Account Owner",
+        "Foundry Account Owner",
         &["Microsoft.CognitiveServices/accounts/*"],
         &[],
     )
@@ -2746,7 +2768,7 @@ async fn mount_operator_role_definitions(server: &MockServer) {
         server,
         SUB,
         FOUNDRY_USER,
-        "Azure AI User",
+        "Foundry User",
         &[],
         &["Microsoft.CognitiveServices/accounts/*/action"],
     )
@@ -2810,10 +2832,12 @@ fn write_operator_edge_tree(ws: &std::path::Path) {
 /// Scenario 1 — subscription Owner, no exact role GUID assigned anywhere.
 ///
 /// The three control-plane operator roles go green through the effective
-/// permissions path; Azure AI User stays missing, because Owner has no
-/// `dataActions`. Exit 4, and Azure AI User is the only edge listed.
+/// permissions path — Foundry Project Manager through its Cognitive Services
+/// Contributor alternative, since Azure's Project Manager definition itself
+/// carries `dataActions`. Foundry User stays missing, because Owner has no
+/// `dataActions` at all. Exit 4, and Foundry User is the only edge listed.
 #[tokio::test(flavor = "multi_thread")]
-async fn owner_covers_the_operators_control_plane_roles_but_not_azure_ai_user() {
+async fn owner_covers_the_operators_control_plane_roles_but_not_foundry_user() {
     let server = MockServer::start().await;
     mount_arm_fake(
         &server,
@@ -2852,15 +2876,15 @@ async fn owner_covers_the_operators_control_plane_roles_but_not_azure_ai_user() 
             "✓ operator → Search Service Contributor",
         ))
         .stdout(predicate::str::contains(
-            "✓ operator → Azure AI Project Manager",
+            "✓ operator → Foundry Project Manager",
         ))
         .stdout(predicate::str::contains(
-            "✓ operator → Azure AI Account Owner",
+            "✓ operator → Foundry Account Owner",
         ))
         .stdout(predicate::str::contains(
             "covered by your effective permissions at",
         ))
-        .stdout(predicate::str::contains("✗ operator → Azure AI User"))
+        .stdout(predicate::str::contains("✗ operator → Foundry User"))
         .stdout(predicate::str::contains("1 missing, 0 unresolved"));
 }
 
@@ -2868,7 +2892,7 @@ async fn owner_covers_the_operators_control_plane_roles_but_not_azure_ai_user() 
 /// explicitly. Everything is green and doctor exits 0 (`--verify` roles off,
 /// so Search Index Data Reader is not part of this graph).
 #[tokio::test(flavor = "multi_thread")]
-async fn owner_plus_an_explicit_azure_ai_user_assignment_is_green() {
+async fn owner_plus_an_explicit_foundry_user_assignment_is_green() {
     let server = MockServer::start().await;
     mount_arm_fake(
         &server,
@@ -2910,7 +2934,7 @@ async fn owner_plus_an_explicit_azure_ai_user_assignment_is_green() {
         .args(["auth", "doctor", "-e", "dev"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("✓ operator → Azure AI User"))
+        .stdout(predicate::str::contains("✓ operator → Foundry User"))
         .stdout(predicate::str::contains("0 missing, 0 unresolved"));
 }
 
@@ -3066,4 +3090,760 @@ fn workspace_with_datasource(endpoint: &str) -> tempfile::TempDir {
     let ws = workspace(endpoint);
     write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
     ws
+}
+
+// -------------------- protected environments (I-3) ------------------------
+//
+// A role assignment, a role *removal* and a rewrite of a function app's
+// `authsettingsV2` are all changes to the environment. They therefore sit
+// behind the same typed confirmation `push` uses, and `--yes` never
+// satisfies it: each of the three commands stops at exit 6 with the question
+// id on stdout, and writes nothing at all.
+
+/// `rigg auth doctor --fix` on a protected environment, with `-y`.
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_doctor_fix_on_a_protected_env_is_gated() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // No role anywhere: the missing Storage Blob Data Reader is a fix rigg
+    // would apply itself, and the caller can grant it — the exact case the
+    // gate must stop.
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace_protected(&server.uri());
+    write_resource_in(
+        ws.path(),
+        "prod",
+        "data-sources",
+        "docs",
+        &blob_data_source(None),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "prod", "--fix", "--yes"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains("confirm.protected.prod"));
+
+    assert!(
+        role_assignment_puts(&server).await.is_empty(),
+        "no grant may happen before the protected gate"
+    );
+}
+
+/// `rigg auth roles remove` on a protected environment, with `-y`.
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_roles_remove_on_a_protected_env_is_gated() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    // One rigg-created assignment to remove, so the command reaches its
+    // mutating step rather than short-circuiting on an empty listing.
+    mount_assignment_listing(
+        &server,
+        &storage_id("acct"),
+        vec![assignment(
+            &storage_id("acct"),
+            "ra-1",
+            BLOB_DATA_READER,
+            &storage_id("acct"),
+            "rigg:acme:prod:reads blobs",
+        )],
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace_protected(&server.uri());
+    write_resource_in(
+        ws.path(),
+        "prod",
+        "data-sources",
+        "docs",
+        &blob_data_source(None),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "roles", "remove", "-e", "prod", "--yes"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains("confirm.protected.prod"));
+
+    assert!(
+        deleted_paths(&server).await.is_empty(),
+        "no assignment may be deleted before the protected gate"
+    );
+}
+
+/// `rigg auth easy-auth` on a protected environment, with `-y`.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_on_a_protected_env_is_gated() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("sites", FUNCTION_APP, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_easy_auth(&server, FUNCTION_APP, false, "").await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "name: acme\n\
+             environments:\n\
+             \x20 prod:\n\
+             \x20   default: true\n\
+             \x20   tenant: tenant-1\n\
+             \x20   subscription: {SUB}\n\
+             \x20   policy: {{ protected: true }}\n\
+             \x20   search: {{ service: {SEARCH}, endpoint: \"{}\" }}\n\
+             \x20   dependencies:\n\
+             \x20     enrich-fn: {{ function-app: {FUNCTION_APP} }}\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+
+    rigg(tmp.path(), &server.uri())
+        .args(["auth", "easy-auth", "enrich-fn", "-e", "prod", "--yes"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains("confirm.protected.prod"));
+
+    assert!(
+        last_auth_settings_put(&server).await.is_none(),
+        "authsettingsV2 must not be written before the protected gate"
+    );
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.method == wiremock::http::Method::POST
+                && r.url.path().ends_with("/applications")),
+        "no app registration may be created before the protected gate"
+    );
+}
+
+/// `--confirm-env` answers the gate the same way a typed confirmation
+/// would, on each of the three commands.
+#[tokio::test(flavor = "multi_thread")]
+async fn confirm_env_satisfies_the_gate_for_auth_doctor_fix() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace_protected(&server.uri());
+    write_resource_in(
+        ws.path(),
+        "prod",
+        "data-sources",
+        "docs",
+        &blob_data_source(None),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args([
+            "auth",
+            "doctor",
+            "-e",
+            "prod",
+            "--fix",
+            "--yes",
+            "--confirm-env",
+            "prod",
+        ])
+        .assert()
+        .code(4); // the operator's own rows remain; the grant did happen
+
+    assert!(
+        !role_assignment_puts(&server).await.is_empty(),
+        "a satisfied gate lets the fix through"
+    );
+}
+
+// ---------------- search identity: system vs user-assigned (I-4) ----------
+//
+// Spec §3.3 asks for "a system-assigned identity exists — or the UAMI the
+// files name is attached". Both halves are about the identities *this
+// environment's documents actually use*: a service carrying only a UAMI
+// while every file asks for the system identity is broken, and a file naming
+// a UAMI that is not attached to the service is broken too.
+
+/// A service with only user-assigned identities attached, and files that
+/// name none — so they need the system-assigned identity, which is off.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_uami_only_service_is_missing_the_system_identity_its_files_use() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "UserAssigned",
+        "", // no system-assigned principal
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &search_service_id(SUB, RG, SEARCH), true).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    // Not a green check with unfixable edges any more: the check is Missing
+    // and carries the fix that resolves the unresolved `search-system` edge.
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains("! search identity"))
+        .stdout(predicate::str::contains(
+            "only user-assigned identities are attached",
+        ))
+        .stdout(predicate::str::contains("identity.type=SystemAssigned"));
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev", "--fix", "--yes"])
+        .assert()
+        .code(4); // the search-system edge stays unresolved until it exists
+
+    let patched: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::PATCH
+                && r.url.path() == search_service_id(SUB, RG, SEARCH)
+        })
+        .filter_map(|r| serde_json::from_slice(&r.body).ok())
+        .collect();
+    assert!(
+        patched
+            .iter()
+            .any(|b| b["identity"]["type"] == json!("SystemAssigned")),
+        "--fix enables the system-assigned identity: {patched:?}"
+    );
+}
+
+/// A file naming a user-assigned identity that is NOT attached to the search
+/// service: holding the role is useless if the service cannot act as it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_uami_that_is_not_attached_is_missing_and_fixable() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    // `SystemAssigned, UserAssigned` attaches the fake's own `uami` — not
+    // the `rigg-mi` the data source names.
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned, UserAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "data-sources",
+        "docs",
+        &blob_data_source(Some(&uami_id())),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains("! search identity"))
+        .stdout(predicate::str::contains(
+            "is not attached to the search service",
+        ));
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev", "--fix", "--yes"])
+        .assert()
+        .code(4);
+
+    let patched: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::PATCH
+                && r.url.path() == search_service_id(SUB, RG, SEARCH)
+        })
+        .filter_map(|r| serde_json::from_slice(&r.body).ok())
+        .collect();
+    let attach = patched
+        .iter()
+        .find(|b| b["identity"]["userAssignedIdentities"].is_object())
+        .expect("--fix attaches the identity");
+    let map = attach["identity"]["userAssignedIdentities"]
+        .as_object()
+        .unwrap();
+    assert!(map.contains_key(&uami_id()), "{attach}");
+    assert_eq!(
+        attach["identity"]["type"],
+        json!("SystemAssigned, UserAssigned"),
+        "the system identity already on the service must survive"
+    );
+    // Read-only fields never go back in: every entry is an empty object.
+    for (key, value) in map {
+        assert_eq!(value, &json!({}), "{key} must be sent as an empty object");
+    }
+}
+
+// ---------------- Easy Auth acceptance shapes (M-2) -----------------------
+
+/// A portal-configured app whose registration IS the audience: Easy Auth
+/// accepts the registration's own client id implicitly, and rigg's own v2
+/// tokens carry `aud = <appId>`. `allowedAudiences` may legitimately be
+/// empty, and doctor must not refuse the push over it.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_accepts_the_registrations_own_client_id_as_the_audience() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    Mock::given(method("POST"))
+        .and(path_regex(format!(
+            r"^.*/sites/{FUNCTION_APP}/config/authsettingsV2/list$"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "properties": {
+                "platform": {"enabled": true},
+                "globalValidation": {
+                    "requireAuthentication": true,
+                    "unauthenticatedClientAction": "Return401"
+                },
+                "identityProviders": {"azureActiveDirectory": {
+                    "enabled": true,
+                    "registration": {"clientId": FAKE_APP_ID},
+                    "validation": {"allowedAudiences": []}
+                }}
+            }
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &search_service_id(SUB, RG, SEARCH), true).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset(
+            "webss",
+            json!({"authResourceId": format!("api://{FAKE_APP_ID}")}),
+        ),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .stdout(predicate::str::contains(
+            "✓ function app Entra authentication",
+        ))
+        .stdout(predicate::str::contains("as its registered client id"));
+}
+
+/// The other half of the spec's Easy Auth row: an app that accepts the
+/// audience but lets unauthenticated callers straight through is reported,
+/// not passed.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_reports_an_app_that_does_not_reject_anonymous_callers() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    Mock::given(method("POST"))
+        .and(path_regex(format!(
+            r"^.*/sites/{FUNCTION_APP}/config/authsettingsV2/list$"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "properties": {
+                "platform": {"enabled": true},
+                "globalValidation": {
+                    "requireAuthentication": false,
+                    "unauthenticatedClientAction": "AllowAnonymous"
+                },
+                "identityProviders": {"azureActiveDirectory": {
+                    "enabled": true,
+                    "registration": {"clientId": FAKE_APP_ID},
+                    "validation": {
+                        "allowedAudiences": [format!("api://{FAKE_APP_ID}")]
+                    }
+                }}
+            }
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &search_service_id(SUB, RG, SEARCH), true).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset(
+            "webss",
+            json!({"authResourceId": format!("api://{FAKE_APP_ID}")}),
+        ),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains(
+            "unauthenticated callers are not rejected",
+        ))
+        .stdout(predicate::str::contains("rigg auth easy-auth"));
+}
+
+// ---------------- search SKU floor for knowledge bases (spec §3.3) --------
+
+/// Standard3 in high-density hosting mode partitions the service into many
+/// small indexes and hosts no knowledge bases. Reported only when the
+/// environment actually declares one.
+#[tokio::test(flavor = "multi_thread")]
+async fn standard3_high_density_cannot_host_knowledge_bases() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service_hosting(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard3",
+        "SystemAssigned",
+        SEARCH_PID,
+        "highDensity",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &search_service_id(SUB, RG, SEARCH), true).await;
+
+    let ws = workspace(&server.uri());
+    // No knowledge base yet: the SKU is fine.
+    write_resource(
+        ws.path(),
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+    // (The operator's own rows are beside the point here — only the SKU
+    // check's verdict is asserted.)
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .stdout(predicate::str::contains("✓ search SKU"))
+        .stdout(predicate::str::contains("SKU 'standard3'"));
+
+    // Add one, and the hosting mode becomes a finding.
+    write_resource(
+        ws.path(),
+        "knowledge-bases",
+        "kb",
+        &json!({"name": "kb", "knowledgeSources": [{"name": "ks"}]}),
+    );
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains("! search SKU"))
+        .stdout(predicate::str::contains(
+            "high-density hosting mode does not host knowledge bases",
+        ));
+}
+
+// ---------------- the Foundry project principal (spec §11) ----------------
+
+const FOUNDRY_PROJECT_PID: &str = "00000000-0000-0000-0000-0000000000fp";
+
+/// Mount the Foundry *project* resource with a system-assigned identity —
+/// the one row spec §11 called unverifiable without a live account:
+/// `identity.principalId` on `accounts/{a}/projects/{p}`.
+async fn mount_foundry_project_identity(server: &MockServer, principal_id: &str) {
+    Mock::given(method("GET"))
+        .and(path(foundry_project_id()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": FOUNDRY_PROJECT,
+            "id": foundry_project_id(),
+            "location": "swedencentral",
+            "identity": {"type": "SystemAssigned", "principalId": principal_id}
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// An agent reaching a knowledge base through an MCP connection that
+/// authenticates with the project's managed identity: the edge's principal
+/// is the *project*, resolved through `accounts/{a}/projects/{p}`, and it is
+/// verified against the search service's role assignments.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_foundry_project_identity_edge_resolves_and_verifies_end_to_end() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("accounts", FOUNDRY, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_foundry_project_identity(&server, FOUNDRY_PROJECT_PID).await;
+    // The project's identity holds the data-plane read on the search
+    // service; the operator is Owner everywhere plus the one role Owner
+    // cannot cover.
+    mount_assignments_for(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        FOUNDRY_PROJECT_PID,
+        &[SEARCH_INDEX_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_assignments_for(
+        &server,
+        &foundry_project_id(),
+        OPERATOR_OID,
+        &[FOUNDRY_USER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_owner_everywhere(&server).await;
+    mount_operator_role_definitions(&server).await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_foundry(
+        ws.path(),
+        "agents",
+        "assistant",
+        &json!({
+            "name": "assistant",
+            "model": "gpt-4o-mini",
+            "tools": [{"type": "mcp", "project_connection_id": "kb-mcp"}]
+        }),
+    );
+    write_foundry(
+        ws.path(),
+        "connections",
+        "kb-mcp",
+        &json!({
+            "name": "kb-mcp",
+            "properties": {"category": "CustomKeys", "authType": "ProjectManagedIdentity"}
+        }),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "✓ foundry-project → Search Index Data Reader",
+        ))
+        .stdout(predicate::str::contains(format!(
+            "Foundry project '{}'",
+            foundry_project_id()
+        )))
+        .stdout(predicate::str::contains("0 missing, 0 unresolved"));
+}
+
+/// The same graph without the assignment: the project principal still
+/// resolves (so the row is a verdict, not an "unresolved"), and the fix
+/// names the project's own object id.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_project_identity_role_is_reported_against_the_projects_object_id() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("accounts", FOUNDRY, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_foundry_project_identity(&server, FOUNDRY_PROJECT_PID).await;
+    mount_no_assignments(&server).await;
+    mount_owner_everywhere(&server).await;
+    mount_operator_role_definitions(&server).await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_foundry(
+        ws.path(),
+        "agents",
+        "assistant",
+        &json!({
+            "name": "assistant",
+            "model": "gpt-4o-mini",
+            "tools": [{"type": "mcp", "project_connection_id": "kb-mcp"}]
+        }),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains(
+            "✗ foundry-project → Search Index Data Reader",
+        ))
+        .stdout(predicate::str::contains(FOUNDRY_PROJECT_PID))
+        // I-2: the printed command names the role by GUID.
+        .stdout(predicate::str::contains(format!(
+            "--role {SEARCH_INDEX_DATA_READER}"
+        )));
 }

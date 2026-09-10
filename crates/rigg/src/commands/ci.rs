@@ -35,10 +35,23 @@ pub async fn run(ctx: &GlobalContext, cmd: CiCommands) -> Result<()> {
 /// One line of the printed role list.
 pub struct RoleLine {
     pub role: String,
+    /// The role definition GUID — what `az role assignment create --role`
+    /// must be given. A role *name* resolves against the tenant's role
+    /// definitions, and Microsoft is renaming the Foundry roles, so the id
+    /// is what the printed list leads with.
+    pub role_id: String,
     pub scope: String,
     /// True for a role the CI identity must be able to *grant* to a service
     /// identity, rather than hold itself.
     pub grant: bool,
+}
+
+impl RoleLine {
+    /// `<guid>  # <display name>` — the form a caller can paste into
+    /// `--role`.
+    pub fn display(&self) -> String {
+        format!("{}  # {}", self.role_id, self.role)
+    }
 }
 
 /// How a scope reads in the printed list: the ARM id when the bindings cache
@@ -87,7 +100,7 @@ pub fn role_lines(ws: &Workspace, env: &ResolvedEnv) -> Vec<RoleLine> {
     let kinds = kinds_for(env, &docs);
     let graph = graph_for_docs(&bindings, &docs);
 
-    // Offline sibling of `auth_engine::foundry_project_id`: Azure AI User is
+    // Offline sibling of `auth_engine::foundry_project_id`: Foundry User is
     // scoped at `<account>/projects/<project>`, and the cache carries the
     // account id.
     let project_id = env.env.foundry.as_ref().and_then(|f| {
@@ -111,6 +124,7 @@ pub fn role_lines(ws: &Workspace, env: &ResolvedEnv) -> Vec<RoleLine> {
         .iter()
         .map(|e| RoleLine {
             role: e.role.name.to_string(),
+            role_id: e.role.id.to_string(),
             scope: render_scope(&e.scope, &env.name),
             grant: false,
         })
@@ -118,6 +132,7 @@ pub fn role_lines(ws: &Workspace, env: &ResolvedEnv) -> Vec<RoleLine> {
     for edge in grants {
         let line = RoleLine {
             role: edge.role.name.to_string(),
+            role_id: edge.role.id.to_string(),
             scope: render_scope(&edge.scope, &env.name),
             grant: true,
         };
@@ -200,7 +215,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
                 );
             }
             for line in &held {
-                say!(ctx, "       {}", line.role.bold());
+                say!(ctx, "       {}", line.display().bold());
                 say!(ctx, "         {}", line.scope.dimmed());
             }
             if !granted.is_empty() {
@@ -214,7 +229,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
                 );
                 say!(ctx, "     (with the role rigg would grant there):");
                 for line in &granted {
-                    say!(ctx, "       {}", line.role.bold());
+                    say!(ctx, "       {}", line.display().bold());
                     say!(ctx, "         {}", line.scope.dimmed());
                 }
                 say!(
@@ -228,7 +243,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
             }
             say!(
                 ctx,
-                "     az role assignment create --assignee <AZURE_CLIENT_ID> --role \"<role>\" --scope \"<scope>\""
+                "     az role assignment create --assignee <AZURE_CLIENT_ID> --role <role-guid> --scope \"<scope>\""
             );
             say!(
                 ctx,

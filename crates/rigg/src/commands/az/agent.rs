@@ -17,7 +17,7 @@ async fn ask(ctx: &GlobalContext, name: &str, prompt: &str) -> Result<()> {
     let result = remote
         .agent_ask(name, prompt)
         .await
-        .map_err(|e| super::hint_user_role(e, "Azure AI User"))?;
+        .map_err(|e| super::hint_user_role(e, "Foundry User"))?;
     if ctx.json() {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());

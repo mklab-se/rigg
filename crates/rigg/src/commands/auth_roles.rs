@@ -21,7 +21,9 @@ use rigg_core::workspace::{ResolvedEnv, Workspace};
 
 use crate::commands::ask::Question;
 use crate::commands::auth_engine;
-use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
+use crate::commands::{
+    CommandError, GlobalContext, confirm_protected_env, load_workspace, resolve_env,
+};
 use crate::say;
 
 /// One rigg-created assignment, with where it lives.
@@ -64,7 +66,7 @@ async fn scopes_of(
 async fn find(
     ctx: &GlobalContext,
     remove: bool,
-) -> Result<(Vec<Found>, ArmClient, String, String)> {
+) -> Result<(Vec<Found>, ArmClient, String, ResolvedEnv)> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
     let arm = ArmClient::for_tenant(env.env.tenant.as_deref())
@@ -107,7 +109,7 @@ async fn find(
             Err(e) => say!(ctx, "  {} {scope}: {e}", "?".yellow()),
         }
     }
-    Ok((found, arm, prefix, env.name))
+    Ok((found, arm, prefix, env))
 }
 
 /// `rigg auth roles list`.
@@ -131,25 +133,34 @@ pub async fn list(ctx: &GlobalContext) -> Result<()> {
         return Ok(());
     }
     if found.is_empty() {
-        println!("  (rigg has not created any role assignments here)");
+        say!(ctx, "  (rigg has not created any role assignments here)");
         return Ok(());
     }
     for f in &found {
-        println!("  {} {}", "•".dimmed(), f.assignment.description);
-        println!("      role:  {}", f.assignment.role_guid());
-        println!("      scope: {}", f.scope);
+        say!(ctx, "  {} {}", "•".dimmed(), f.assignment.description);
+        say!(ctx, "      role:  {}", f.assignment.role_guid());
+        say!(ctx, "      scope: {}", f.scope);
     }
-    println!();
-    println!(
+    say!(ctx);
+    say!(
+        ctx,
         "{} assignment(s) — remove them with `rigg auth roles remove`",
         found.len()
     );
     Ok(())
 }
 
-/// `rigg auth roles remove`.
-pub async fn remove(ctx: &GlobalContext) -> Result<()> {
-    let (found, arm, prefix, env) = find(ctx, true).await?;
+/// `rigg auth roles remove [--confirm-env <env>]`.
+pub async fn remove(ctx: &GlobalContext, confirm_env: Option<&str>) -> Result<()> {
+    remove_inner(ctx, confirm_env, true).await
+}
+
+/// `gate` is false only for `rigg env remove --clean-roles`, which has its
+/// own ruling: the flag names the removal, and the environment is going away
+/// anyway.
+async fn remove_inner(ctx: &GlobalContext, confirm_env: Option<&str>, gate: bool) -> Result<()> {
+    let (found, arm, prefix, resolved) = find(ctx, true).await?;
+    let env = resolved.name.clone();
     if found.is_empty() {
         say!(ctx, "no rigg-created role assignments in '{env}'");
         if ctx.json() {
@@ -165,6 +176,22 @@ pub async fn remove(ctx: &GlobalContext) -> Result<()> {
     );
     for f in &found {
         say!(ctx, "  {} @ {}", f.assignment.role_guid(), f.scope);
+    }
+    // Protected-environment gate before the first DELETE: removing a role
+    // assignment is a change to the environment, so it sits behind the same
+    // typed confirmation as `push` — `--yes` does not satisfy it.
+    if gate
+        && !confirm_protected_env(
+            ctx,
+            &resolved,
+            confirm_env,
+            "auth roles remove",
+            "auth roles remove",
+            json!({"env": env, "assignments": found.len()}),
+        )?
+    {
+        say!(ctx, "Aborted.");
+        return Ok(());
     }
     if !ctx.yes {
         let mut asker = ctx.asker(
@@ -195,9 +222,9 @@ pub async fn remove(ctx: &GlobalContext) -> Result<()> {
             serde_json::to_string_pretty(&json!({"removed": removed, "failed": failed}))?
         );
     } else {
-        println!("{} removed, {} failed", removed.len(), failed.len());
+        say!(ctx, "{} removed, {} failed", removed.len(), failed.len());
         for e in &failed {
-            println!("  {} {e}", "✗".red());
+            say!(ctx, "  {} {e}", "✗".red());
         }
     }
     if failed.is_empty() {
@@ -221,7 +248,7 @@ pub async fn clean_for_env(ctx: &GlobalContext, env: &str) -> Result<()> {
     // asking again from inside `env remove` would only strand the caller on
     // exit 6 in a script that already said what it wanted.
     scoped.yes = true;
-    match remove(&scoped).await {
+    match remove_inner(&scoped, None, false).await {
         Ok(()) => Ok(()),
         Err(e) => {
             say!(ctx, "  (could not clean role assignments: {e:#})");

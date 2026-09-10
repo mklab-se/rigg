@@ -25,7 +25,8 @@ use rigg_core::workspace::{ResolvedEnv, Workspace};
 
 use crate::commands::ask::Question;
 use crate::commands::{
-    CommandError, GlobalContext, auth_engine, credentials, load_workspace, resolve_env,
+    CommandError, GlobalContext, auth_engine, confirm_protected_env, credentials, load_workspace,
+    resolve_env,
 };
 use crate::say;
 
@@ -41,11 +42,16 @@ pub struct Wiring {
     pub applied: bool,
 }
 
-/// `rigg auth easy-auth <binding> [--client-id <id>]`.
-pub async fn run(ctx: &GlobalContext, binding: String, client_id: Option<String>) -> Result<()> {
+/// `rigg auth easy-auth <binding> [--client-id <id>] [--confirm-env <env>]`.
+pub async fn run(
+    ctx: &GlobalContext,
+    binding: String,
+    client_id: Option<String>,
+    confirm_env: Option<&str>,
+) -> Result<()> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
-    let wiring = wire(ctx, &ws, &env, &binding, client_id.as_deref()).await?;
+    let wiring = wire(ctx, &ws, &env, &binding, client_id.as_deref(), confirm_env).await?;
     if !wiring.applied {
         say!(ctx, "no changes made");
         return Ok(());
@@ -88,6 +94,7 @@ pub async fn wire(
     env: &ResolvedEnv,
     binding: &str,
     client_id: Option<&str>,
+    confirm_env: Option<&str>,
 ) -> Result<Wiring> {
     // 1. The binding must be a declared function-app dependency: rigg acts on
     //    resolved scopes, never on a name typed at the command line.
@@ -187,7 +194,7 @@ pub async fn wire(
             say!(ctx, "    {}", t.display);
         }
     }
-    if !confirm(ctx, env, &site)? {
+    if !confirm(ctx, env, &site, confirm_env)? {
         return Ok(Wiring {
             site,
             audience: format!("api://{planned_client_id}"),
@@ -273,7 +280,26 @@ pub async fn wire(
 /// the application yet — the one field the diff cannot know in advance.
 const NEW_APP_PLACEHOLDER: &str = "<app registration rigg will create>";
 
-fn confirm(ctx: &GlobalContext, env: &ResolvedEnv, site: &str) -> Result<bool> {
+fn confirm(
+    ctx: &GlobalContext,
+    env: &ResolvedEnv,
+    site: &str,
+    confirm_env: Option<&str>,
+) -> Result<bool> {
+    // Protected-environment gate before the `authsettingsV2` PUT and the
+    // Graph writes: rewriting a function app's authentication is a change to
+    // the environment, so it sits behind the same typed confirmation as
+    // `push`, and `--yes` deliberately does not satisfy it.
+    if !confirm_protected_env(
+        ctx,
+        env,
+        confirm_env,
+        "auth easy-auth",
+        "auth easy-auth",
+        json!({"env": env.name, "site": site}),
+    )? {
+        return Ok(false);
+    }
     if ctx.yes {
         return Ok(true);
     }

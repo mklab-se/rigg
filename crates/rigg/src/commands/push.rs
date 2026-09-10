@@ -673,7 +673,9 @@ async fn push_project(
         if interactive::confirm_default_yes(
             "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
             ctx.no_color,
-        )? && let Err(e) = crate::commands::doctor::run(ctx, true, None, false, false).await
+        )? && let Err(e) =
+            crate::commands::doctor::run(ctx, true, None, false, false, args.confirm_env.as_deref())
+                .await
         {
             say!(
                 ctx,
@@ -881,7 +883,7 @@ async fn push_project(
         let carriers = credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
-        match put_with_rbac_help(&remote, r, &body, ctx, ws, env).await {
+        match put_with_rbac_help(&remote, r, &body, ctx, ws, env, args.verify).await {
             Ok(mut server_doc) => {
                 // The echo may carry the injected key back; the local
                 // placeholders go back in before anything is persisted.
@@ -904,7 +906,16 @@ async fn push_project(
     for bundle in &replaces {
         let prior = pending_relinks.remove(&bundle.ks.name).unwrap_or_default();
         execute_replace(
-            ctx, env, ws, project, &store, &mut state, &remote, bundle, prior,
+            ctx,
+            env,
+            ws,
+            project,
+            &store,
+            &mut state,
+            &remote,
+            bundle,
+            prior,
+            args.verify,
         )
         .await?;
     }
@@ -1348,13 +1359,17 @@ async fn diagnose_rbac(
     env: &ResolvedEnv,
     r: &ResourceRef,
     body: &Value,
+    verify_roles: bool,
 ) -> Result<Option<auth_engine::Report>> {
     let report = auth_engine::verify(
         ctx,
         ws,
         env,
         VerifyScope::Plan(vec![(r.kind, r.name.clone(), body.clone())]),
-        VerifyOpts::default(),
+        VerifyOpts {
+            verify_roles,
+            ..VerifyOpts::default()
+        },
     )
     .await?;
     let anything = report
@@ -1369,6 +1384,7 @@ async fn diagnose_rbac(
 /// (with consent, interactively); then wait out Azure's role-assignment
 /// propagation with periodic retries. Every path either succeeds or ends in
 /// an error that names the exact role, scope, and next command.
+#[allow(clippy::too_many_arguments)]
 async fn put_with_rbac_help(
     remote: &Remote,
     r: &ResourceRef,
@@ -1376,6 +1392,10 @@ async fn put_with_rbac_help(
     ctx: &GlobalContext,
     ws: &Workspace,
     env: &ResolvedEnv,
+    // `push --verify`'s data-plane smoke run needs the read roles too — a
+    // 403 diagnosed without them names every edge but the one that explains
+    // the failure.
+    verify_roles: bool,
 ) -> Result<Value> {
     let first = match remote.put(r, body).await {
         Ok(v) => return Ok(v),
@@ -1388,7 +1408,7 @@ async fn put_with_rbac_help(
         "!".yellow(),
         r
     );
-    let diagnosis = match diagnose_rbac(ctx, ws, env, r, body).await {
+    let diagnosis = match diagnose_rbac(ctx, ws, env, r, body, verify_roles).await {
         Ok(d) => d,
         Err(e) => {
             say!(ctx, "  {} diagnosis unavailable ({e:#})", "!".yellow());
@@ -1637,6 +1657,7 @@ async fn execute_replace(
     remote: &Remote,
     bundle: &ReplaceBundle,
     prior: Vec<Value>,
+    verify_roles: bool,
 ) -> Result<()> {
     let ks = &bundle.ks;
     say!(ctx, "  {} {}", "replace".magenta().bold(), ks);
@@ -1763,7 +1784,7 @@ async fn execute_replace(
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
         let carriers = credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
-        let mut server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env)
+        let mut server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env, verify_roles)
             .await
             .with_context(|| step(&format!("while re-creating {r}")))?;
         credentials::restore_key_carriers(&mut server_doc, &carriers);
@@ -1777,7 +1798,7 @@ async fn execute_replace(
     let mut with_refs = bundle.new_body.clone();
     resolve_cross_service_refs(env.search(), &mut with_refs)?;
     let push_body = normalize_for_push(ks.kind, &with_refs);
-    let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, ws, env)
+    let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, ws, env, verify_roles)
         .await
         .with_context(|| step("while re-creating the knowledge source"))?;
     store.write(ks, &server_doc)?;
