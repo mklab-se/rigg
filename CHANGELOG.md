@@ -375,7 +375,14 @@ around that. No compatibility with 1.x workspaces.
   to the workspace.** Absolute paths wrapped the proposal table past
   readability and put the operator's home directory into every transcript.
 
-<!-- write-only push fix bullet added by controller -->
+- **A change to a data source's connection string alone is pushed.** Write-only
+  fields (`credentials.connectionString`) never come back from Azure, so a
+  local edit that changed nothing else classified as in sync and `push` skipped
+  it — a data source could not be re-pointed at another storage account without
+  delete and recreate. `status`, `diff` and `push` now compare write-only
+  fields against the baseline stored in `.rigg/`; the first run after
+  upgrading classifies every data source as local-ahead once, and one
+  idempotent push settles it.
 
 ### Docs
 
