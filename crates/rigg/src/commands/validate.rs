@@ -298,6 +298,13 @@ fn validate_project(
                 ));
                 continue;
             }
+            // Azure's built-in RAI policies (`Microsoft.Default`,
+            // `Microsoft.DefaultV2`, …) are platform resources: they can
+            // never be workspace files, and every scaffolded deployment
+            // names one. Not a dangling reference.
+            if kind == ResourceKind::Guardrail && name.starts_with("Microsoft.") {
+                continue;
+            }
             let target = ResourceRef::new(kind, name.clone());
             if !workspace_refs.contains(&target) {
                 // The target may legitimately live outside rigg (pre-existing

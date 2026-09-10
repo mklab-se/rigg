@@ -2663,3 +2663,42 @@ fn ci_init_uses_the_selected_environment() {
         std::fs::read_to_string(ws.path().join(".github/workflows/rigg-deploy.yml")).unwrap();
     assert!(deploy.contains("prod"), "deploy workflow targets prod");
 }
+
+/// Every scaffolded model deployment names Azure's built-in RAI policy
+/// (`Microsoft.DefaultV2`). That is a platform resource, never a workspace
+/// file, so `validate --strict` must not treat it as a dangling reference —
+/// otherwise strict mode rejects rigg's own scaffold output.
+#[test]
+fn validate_strict_accepts_builtin_guardrail_references() {
+    let ws = workspace();
+    let dir = ws.path().join("projects/demo/envs/dev/foundry/deployments");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("gpt.json"),
+        r#"{"name": "gpt", "sku": {"name": "GlobalStandard", "capacity": 1},
+            "properties": {"model": {"format": "OpenAI", "name": "gpt", "version": "1"},
+                           "raiPolicyName": "Microsoft.DefaultV2"}}"#,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "--strict"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("all checks passed"));
+
+    // A guardrail that is not one of Azure's built-ins still has to exist.
+    std::fs::write(
+        dir.join("gpt.json"),
+        r#"{"name": "gpt", "sku": {"name": "GlobalStandard", "capacity": 1},
+            "properties": {"model": {"format": "OpenAI", "name": "gpt", "version": "1"},
+                           "raiPolicyName": "house-policy"}}"#,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["validate", "--strict"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("guardrails/house-policy"));
+}
