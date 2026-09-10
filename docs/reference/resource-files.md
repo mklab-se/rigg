@@ -39,6 +39,7 @@ them.
 | `credentials.connectionString` | storage | `StorageResourceId` | — |
 | `identity` | identity | `UserAssignedIdentity` | — |
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### indexes
 
@@ -47,6 +48,7 @@ them.
 | `vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
 | `vectorSearch.vectorizers[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### skillsets
 
@@ -60,12 +62,14 @@ them.
 | `knowledgeStore.storageConnectionString` | storage | `StorageResourceId` | — |
 | `knowledgeStore.identity` | identity | `UserAssignedIdentity` | — |
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### indexers
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### knowledge-sources
 
@@ -80,6 +84,7 @@ them.
 | `azureBlobParameters.ingestionParameters.aiServices.uri` | ai-services | `AiServicesSubdomain` | — |
 | `azureBlobParameters.ingestionParameters.assetStore.connectionString` | storage | `StorageResourceId` | — |
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### knowledge-bases
 
@@ -88,6 +93,7 @@ them.
 | `models[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
 | `models[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
 | `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
 
 ### agents
 
@@ -100,5 +106,4 @@ them.
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
 | `properties.target` | search, ai-services, function-app or api | `Endpoint` | — |
-
 <!-- generated:infra-table:end -->

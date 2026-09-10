@@ -798,6 +798,7 @@ Reports every role, setting and network condition this environment's files requi
 | `--principal` | `<OBJECT_ID>` |  |  | Check operator rights for this object id instead of your own (e.g. the CI service principal) |
 | `--plan` |  |  |  | Only the resources a push would create or update |
 | `--live` |  |  |  | Also read each indexer's last run and attribute auth failures |
+| `--confirm-env` | `<ENV>` |  |  | Typed confirmation for protected environments (must equal the env name) — required by `--fix` |
 
 Also accepts the [global options](#global-options).
 
@@ -825,6 +826,7 @@ call it to be keyless. Nothing is pushed — run `rigg push` after.
 | Option | Value | Default | Env | Description |
 |---|---|---|---|---|
 | `--client-id` | `<CLIENT_ID>` |  |  | Reuse this existing app registration instead of creating one |
+| `--confirm-env` | `<ENV>` |  |  | Typed confirmation for protected environments (must equal the env name) |
 
 Also accepts the [global options](#global-options).
 
@@ -854,6 +856,12 @@ Also accepts the [global options](#global-options).
 Remove the role assignments rigg created for this environment
 
 `Usage: rigg auth roles remove [OPTIONS]`
+
+### Options
+
+| Option | Value | Default | Env | Description |
+|---|---|---|---|---|
+| `--confirm-env` | `<ENV>` |  |  | Typed confirmation for protected environments (must equal the env name) |
 
 Also accepts the [global options](#global-options).
 
