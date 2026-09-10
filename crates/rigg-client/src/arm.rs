@@ -1443,8 +1443,21 @@ impl ArmClient {
                         .collect(),
                 };
                 let mut matches: Vec<ArmResource> = Vec::new();
+                // A subscription we cannot list (no RBAC on it, a disabled
+                // provider) must not sink the whole lookup — the resource
+                // usually lives in one of the others. Remember the first
+                // failure so an all-denied fan-out reports *that* instead of
+                // a misleading "not found".
+                let mut first_error: Option<ClientError> = None;
                 for sub in &subs {
-                    let items = self.list_resources_for_kind(kind, sub).await?;
+                    let items = match self.list_resources_for_kind(kind, sub).await {
+                        Ok(items) => items,
+                        Err(e) => {
+                            debug!("skipping subscription {sub} while resolving {kind}: {e}");
+                            first_error.get_or_insert(e);
+                            continue;
+                        }
+                    };
                     matches.extend(
                         items
                             .into_iter()
@@ -1452,10 +1465,10 @@ impl ArmClient {
                     );
                 }
                 match matches.len() {
-                    0 => Err(ClientError::NotFound {
+                    0 => Err(first_error.unwrap_or(ClientError::NotFound {
                         kind: kind.to_string(),
                         name,
-                    }),
+                    })),
                     1 => self.resolve_arm_id(kind, &matches[0].id).await,
                     _ => Err(ClientError::Api {
                         status: 409,
