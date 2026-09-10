@@ -119,6 +119,17 @@ rigg promote contoso-docs --from dev --to prod --non-interactive
         { "value": "skip", "label": "skip (keep the value 'dev' has)" }
       ],
       "allow_other": true
+    },
+    {
+      "id": "binding.prod.enrich-fn",
+      "kind": "choice",
+      "prompt": "'prod' has no binding 'enrich-fn' (function-app), used by 1 reference(s). Use:",
+      "candidates": [
+        { "value": "same", "label": "same as dev: contoso-enrich-dev (shared)" },
+        { "value": "contoso-enrich-prod", "label": "contoso-enrich-prod" },
+        { "value": "skip", "label": "skip (keep the value 'dev' has)" }
+      ],
+      "allow_other": true
     }
   ]
 }
