@@ -157,6 +157,19 @@ impl ReportItem {
         self
     }
 
+    /// Is this an edge for the caller themselves (or `--principal`)?
+    ///
+    /// rigg never grants a caller their own rights: doing so would let
+    /// anyone who can run `--fix` escalate their own access. Such an item is
+    /// reported, and its `az` line always printed, but never applied.
+    pub fn is_operator_edge(&self) -> bool {
+        matches!(
+            &self.what,
+            What::Edge(e)
+                if matches!(e.principal, Principal::Operator | Principal::Named { .. })
+        )
+    }
+
     /// The one-line headline: principal → role @ scope, or the check's name.
     pub fn headline(&self) -> String {
         match &self.what {
@@ -203,21 +216,29 @@ impl Report {
         self.items.iter().chain(self.operator.iter())
     }
 
-    /// Every distinct fix the report found, in report order.
+    /// Every distinct fix rigg will apply itself, in report order.
+    ///
+    /// Only the service-identity items: the operator's own rights are never
+    /// granted by rigg (see [`ReportItem::is_operator_edge`]), so `--fix`
+    /// cannot be used to escalate the caller's — or `--principal`'s — access.
     pub fn fixes(&self) -> Vec<Fix> {
         let mut seen = BTreeSet::new();
-        self.all()
-            .filter(|i| i.status == Status::Missing)
+        self.items
+            .iter()
+            .filter(|i| i.status == Status::Missing && !i.is_operator_edge())
             .filter_map(|i| i.fix.clone())
             .filter(|f| seen.insert(f.key()))
             .collect()
     }
 
-    /// Missing items rigg has no fix for — what keeps the exit code at 4
-    /// even after `--fix`.
+    /// Missing items [`Report::fixes`] does not cover — no fix at all, or a
+    /// right only a human may grant. These keep the exit code at 4 even
+    /// after `--fix`.
     pub fn unfixable(&self) -> Vec<&ReportItem> {
-        self.all()
-            .filter(|i| i.status == Status::Missing && i.fix.is_none())
+        self.items
+            .iter()
+            .filter(|i| i.status == Status::Missing && (i.fix.is_none() || i.is_operator_edge()))
+            .chain(self.operator.iter().filter(|i| i.status == Status::Missing))
             .collect()
     }
 
@@ -265,8 +286,27 @@ pub enum Fix {
 
 impl Fix {
     /// De-duplication key: two report items may want the very same repair.
+    /// Built from the fields that identify the change (never `Debug`, whose
+    /// output is not a stable contract).
     fn key(&self) -> String {
-        format!("{self:?}")
+        let kind = self.kind();
+        match self {
+            Fix::RoleAssignment {
+                scope,
+                principal_id,
+                role,
+                ..
+            } => format!("{kind}|{scope}|{principal_id}|{}", role.id),
+            Fix::EnableSystemIdentity { resource_id, .. } => format!("{kind}|{resource_id}"),
+            Fix::EnableRbac { search_id } => format!("{kind}|{search_id}"),
+            Fix::BlobSoftDelete { account_id, days } => format!("{kind}|{account_id}|{days}"),
+            Fix::StorageBypassAzureServices { account_id } => format!("{kind}|{account_id}"),
+            Fix::StorageResourceRule {
+                account_id,
+                tenant,
+                search_id,
+            } => format!("{kind}|{account_id}|{tenant}|{search_id}"),
+        }
     }
 
     fn kind(&self) -> &'static str {
@@ -340,7 +380,7 @@ impl Fix {
                 tenant,
                 search_id,
             } => format!(
-                "az storage account network-rule add --account-name {} --resource-id \"{search_id}\" --tenant-id {tenant}  # account: {account_id}",
+                "az storage account network-rule add --account-name {} --resource-id \"{search_id}\" --tenant-id {tenant} # account: {account_id}",
                 account_id.rsplit('/').next().unwrap_or(account_id)
             ),
         }
@@ -581,6 +621,32 @@ pub async fn bindings_for(
     EnvBindings::of_env(&env.name, &env.env, Some(&cache))
 }
 
+/// The Foundry project's ARM id, `<account>/projects/<project>` — the scope
+/// the operator's Azure AI User edge lives at, and therefore a scope
+/// `auth roles` must look in. The binding table carries the account; only
+/// the connection knows the project segment.
+pub async fn foundry_project_id(
+    env: &ResolvedEnv,
+    bindings: &EnvBindings,
+    arm: Option<&ArmClient>,
+) -> Option<String> {
+    let conn = env.foundry()?;
+    let account = match bindings
+        .get("foundry")
+        .and_then(|e| e.resolved.as_ref().and_then(|r| r.arm_id.clone()))
+    {
+        Some(id) => id,
+        None => {
+            let scope = resolve_account_scope(arm?, &conn.account).await.ok()?;
+            format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
+                scope.subscription_id, scope.resource_group, scope.account
+            )
+        }
+    };
+    Some(format!("{account}/projects/{}", conn.project))
+}
+
 /// Every document in the environment's tree.
 pub fn env_documents(ws: &Workspace, env: &str) -> Vec<(ResourceKind, String, Value)> {
     let mut docs = Vec::new();
@@ -710,7 +776,7 @@ pub async fn verify(
     // 4. `--live`: proof beats a green report.
     let mut live = Vec::new();
     if opts.live {
-        live = live_findings(ws, env, &docs, &mut items).await;
+        live = live_findings(env, &docs, &mut items).await;
     }
 
     let operator_label = match v.principal_label(&operator_principal).await {
@@ -763,28 +829,7 @@ impl Verifier {
                 self.search = arm.get_search_service(id).await.ok();
             }
         }
-        if let Some(conn) = env.foundry() {
-            let account = match bindings.get("foundry").and_then(|e| {
-                e.resolved
-                    .as_ref()
-                    .and_then(|r| r.arm_id.clone())
-            }) {
-                Some(id) => Some(id),
-                None => match self.arm.as_ref() {
-                    Some(arm) => resolve_account_scope(arm, &conn.account)
-                        .await
-                        .ok()
-                        .map(|s| {
-                            format!(
-                                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
-                                s.subscription_id, s.resource_group, s.account
-                            )
-                        }),
-                    None => None,
-                },
-            };
-            self.foundry_project_id = account.map(|a| format!("{a}/projects/{}", conn.project));
-        }
+        self.foundry_project_id = foundry_project_id(env, bindings, self.arm.as_ref()).await;
     }
 
     /// Resolve `principal` to a directory object id, caching the answer (and
@@ -1420,13 +1465,11 @@ fn looks_like_auth(message: &str) -> bool {
 /// Read each indexer's last run and attribute auth-shaped failures to the
 /// item whose scope's resource name the message names.
 async fn live_findings(
-    ws: &Workspace,
     env: &ResolvedEnv,
     docs: &[(ResourceKind, String, Value)],
     items: &mut [ReportItem],
 ) -> Vec<String> {
     let mut unattributed = Vec::new();
-    let _ = ws;
     let remote = Remote::for_env(env);
     if !remote.has_search() {
         return unattributed;
@@ -1599,7 +1642,7 @@ pub fn render_text(report: &Report, fix_mode: bool) {
         return;
     }
     for item in &report.items {
-        render_item(item, fix_mode);
+        render_item(item, fix_mode && !item.is_operator_edge());
     }
     if !report.operator.is_empty() {
         println!(
@@ -1607,7 +1650,9 @@ pub fn render_text(report: &Report, fix_mode: bool) {
             format!("operator: {}", report.operator_label).bold()
         );
         for item in &report.operator {
-            render_item(item, fix_mode);
+            // Never `fix_mode`: rigg does not grant the caller their own
+            // rights, so the `az` line is what they leave with.
+            render_item(item, false);
         }
     }
     for line in &report.live {
@@ -1714,6 +1759,45 @@ mod tests {
         assert!(cmd.contains("--assignee pid"));
         assert!(cmd.contains("--role \"Storage Blob Data Reader\""));
         assert!(cmd.contains("--scope \"/subscriptions/s/rg/acct\""));
+    }
+
+    #[test]
+    fn fixes_never_include_the_callers_own_roles() {
+        let item = ReportItem::new(
+            What::Edge(Box::new(Edge {
+                id: "operator|ssc|srch".into(),
+                principal: Principal::Operator,
+                role: roles::SEARCH_SERVICE_CONTRIBUTOR,
+                alternatives: Vec::new(),
+                scope: Scope::Resolved("/subscriptions/s/srch".into()),
+                reason: String::new(),
+                sources: Vec::new(),
+                constraints: Vec::new(),
+                kind: EdgeKind::Rbac,
+            })),
+            Status::Missing,
+            "the caller lacks it",
+        )
+        .with_fix(Fix::RoleAssignment {
+            scope: "/subscriptions/s/srch".into(),
+            principal_id: "operator-oid".into(),
+            principal_type: "User".into(),
+            role: roles::SEARCH_SERVICE_CONTRIBUTOR,
+            description: "rigg:ws:dev:because".into(),
+        });
+        let report = Report {
+            env: "dev".into(),
+            targets: Vec::new(),
+            // Wherever such an edge lands, `--fix` must not apply it.
+            items: vec![item.clone()],
+            operator: vec![item],
+            operator_label: String::new(),
+            live: Vec::new(),
+            summary: Summary::default(),
+        };
+        assert!(report.fixes().is_empty());
+        // …and both are still reported as work only a human may do.
+        assert_eq!(report.unfixable().len(), 2);
     }
 
     #[test]

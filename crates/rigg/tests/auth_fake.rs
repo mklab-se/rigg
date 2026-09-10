@@ -28,6 +28,20 @@ const OTHER_OID: &str = "00000000-0000-0000-0000-0000000000zz";
 
 const BLOB_DATA_READER: &str = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1";
 const SEARCH_SERVICE_CONTRIBUTOR: &str = "7ca78c08-252a-4471-8644-bb5ff32d4ba0";
+const FOUNDRY_USER: &str = "53ca6127-db72-4b80-b1b0-d745d6d5456d";
+
+const FOUNDRY: &str = "fndr";
+const FOUNDRY_PROJECT: &str = "proj";
+
+fn foundry_account_id() -> String {
+    format!(
+        "/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.CognitiveServices/accounts/{FOUNDRY}"
+    )
+}
+
+fn foundry_project_id() -> String {
+    format!("{}/projects/{FOUNDRY_PROJECT}", foundry_account_id())
+}
 
 fn storage_id(name: &str) -> String {
     format!(
@@ -112,12 +126,47 @@ fn workspace(endpoint: &str) -> tempfile::TempDir {
     tmp
 }
 
+/// Like [`workspace`], but `dev` also names a Foundry account and project —
+/// what puts `<account>/projects/<project>` in the identity graph.
+fn workspace_with_foundry(endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "name: acme\n\
+             environments:\n\
+             \x20 dev:\n\
+             \x20   default: true\n\
+             \x20   tenant: tenant-1\n\
+             \x20   search: {{ service: {SEARCH}, endpoint: \"{endpoint}\" }}\n\
+             \x20   foundry: {{ account: {FOUNDRY}, project: {FOUNDRY_PROJECT}, endpoint: \"{endpoint}\" }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
 fn write_resource(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
     let d = ws.join("projects/demo/envs/dev/search").join(dir);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(
         d.join(format!("{name}.json")),
         serde_json::to_string_pretty(body).unwrap(),
+    )
+    .unwrap();
+}
+
+/// One Foundry agent in `dev` — the resource kind that makes the operator's
+/// Azure AI User edge (and therefore the project scope) part of the graph.
+fn write_agent(ws: &std::path::Path, name: &str) {
+    let d = ws.join("projects/demo/envs/dev/foundry/agents");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join(format!("{name}.json")),
+        serde_json::to_string_pretty(&json!({"name": name, "model": "gpt-4o-mini"})).unwrap(),
     )
     .unwrap();
 }
@@ -219,6 +268,49 @@ async fn mount_assignment_writes(server: &MockServer) {
         .with_priority(1)
         .mount(server)
         .await;
+}
+
+/// A literal role-assignment listing at `scope`, for the cases that need to
+/// control each assignment's own id and `properties.scope`.
+async fn mount_assignment_listing(server: &MockServer, scope: &str, value: Vec<Value>) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{scope}/providers/Microsoft.Authorization/roleAssignments"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": value})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// One assignment document. `id_scope` is where its ARM id lives, `at` is
+/// `properties.scope` — the scope it was actually made at, which is what
+/// separates an at-scope grant from an inherited one.
+fn assignment(id_scope: &str, name: &str, role: &str, at: &str, description: &str) -> Value {
+    json!({
+        "id": format!("{id_scope}/providers/Microsoft.Authorization/roleAssignments/{name}"),
+        "name": name,
+        "properties": {
+            "roleDefinitionId": format!(
+                "/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{role}"
+            ),
+            "principalId": SEARCH_PID,
+            "scope": at,
+            "description": description
+        }
+    })
+}
+
+/// Every `DELETE` path the server saw, for the removal assertions.
+async fn deleted_paths(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::DELETE)
+        .map(|r| r.url.path().to_string())
+        .collect()
 }
 
 /// An empty listing at every scope not explicitly mounted, so a scope with
@@ -418,6 +510,79 @@ async fn fix_yes_creates_the_assignment_with_the_rigg_description() {
         description.starts_with("rigg:acme:dev:"),
         "description was {description}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fix_never_grants_the_operator_their_own_roles() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // The service identity is wired; the only gap is the caller's own
+    // Search Service Contributor, which rigg must never grant itself.
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_permissions(&server, &search_service_id(SUB, RG, SEARCH), true).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "doctor", "-e", "dev", "--fix", "--yes"])
+        .assert()
+        .code(4)
+        // The operator's gap is reported with the command a human runs.
+        .stdout(predicate::str::contains(format!(
+            "az role assignment create --assignee {OPERATOR_OID}"
+        )));
+
+    let puts: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::PUT && r.url.path().contains("roleAssignments")
+        })
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert!(
+        !puts
+            .iter()
+            .any(|b| b["properties"]["principalId"] == OPERATOR_OID),
+        "rigg must never grant the caller their own rights: {puts:?}"
+    );
+    assert!(puts.is_empty(), "nothing here was rigg's to fix: {puts:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -930,48 +1095,47 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
         false,
     )
     .await;
-    // One rigg-stamped assignment, a hand-made one, and a rigg-stamped one
-    // *inherited* from the subscription — the last two must both survive.
+    // One rigg-stamped assignment for this env; a hand-made one; a
+    // rigg-stamped one *inherited* from the subscription; and one stamped for
+    // the neighbouring env `dev2`, whose description starts with this env's
+    // prefix but is not this env's. Only the first may be touched.
     let scope = storage_id("acct");
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "{scope}/providers/Microsoft.Authorization/roleAssignments"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [
-            {
-                "id": format!("{scope}/providers/Microsoft.Authorization/roleAssignments/rigg-one"),
-                "name": "rigg-one",
-                "properties": {
-                    "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
-                    "principalId": SEARCH_PID,
-                    "scope": scope,
-                    "description": "rigg:acme:dev:data source 'docs' reads blobs"
-                }
-            },
-            {
-                "id": format!("{scope}/providers/Microsoft.Authorization/roleAssignments/by-hand"),
-                "name": "by-hand",
-                "properties": {
-                    "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
-                    "principalId": SEARCH_PID,
-                    "scope": scope,
-                    "description": "granted by the platform team"
-                }
-            },
-            {
-                "id": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleAssignments/rigg-inherited"),
-                "name": "rigg-inherited",
-                "properties": {
-                    "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
-                    "principalId": SEARCH_PID,
-                    "scope": format!("/subscriptions/{SUB}"),
-                    "description": "rigg:acme:dev:granted subscription-wide"
-                }
-            }
-        ]})))
-        .with_priority(1)
-        .mount(&server)
-        .await;
+    let sub_scope = format!("/subscriptions/{SUB}");
+    mount_assignment_listing(
+        &server,
+        &scope,
+        vec![
+            assignment(
+                &scope,
+                "rigg-one",
+                BLOB_DATA_READER,
+                &scope,
+                "rigg:acme:dev:data source 'docs' reads blobs",
+            ),
+            assignment(
+                &scope,
+                "by-hand",
+                BLOB_DATA_READER,
+                &scope,
+                "granted by the platform team",
+            ),
+            assignment(
+                &sub_scope,
+                "rigg-inherited",
+                BLOB_DATA_READER,
+                &sub_scope,
+                "rigg:acme:dev:granted subscription-wide",
+            ),
+            assignment(
+                &scope,
+                "rigg-dev2",
+                BLOB_DATA_READER,
+                &scope,
+                "rigg:acme:dev2:another environment's grant",
+            ),
+        ],
+    )
+    .await;
     mount_no_assignments(&server).await;
     mount_assignment_writes(&server).await;
 
@@ -985,7 +1149,9 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
         .stdout(predicate::str::contains("rigg:acme:dev:"))
         .stdout(predicate::str::contains("granted by the platform team").not())
         // An ancestor's grant is visible at this scope but was not made here.
-        .stdout(predicate::str::contains("granted subscription-wide").not());
+        .stdout(predicate::str::contains("granted subscription-wide").not())
+        // `rigg:acme:dev` must not match `rigg:acme:dev2:…`.
+        .stdout(predicate::str::contains("another environment's grant").not());
 
     // Removal needs an answer; without one it is exit 6, not a silent delete.
     rigg(ws.path(), &server.uri())
@@ -998,14 +1164,7 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
         .args(["auth", "roles", "remove", "-e", "dev", "--yes"])
         .assert()
         .success();
-    let deleted: Vec<String> = server
-        .received_requests()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|r| r.method == wiremock::http::Method::DELETE)
-        .map(|r| r.url.path().to_string())
-        .collect();
+    let deleted = deleted_paths(&server).await;
     assert!(deleted.iter().any(|p| p.ends_with("rigg-one")));
     assert!(
         !deleted.iter().any(|p| p.ends_with("by-hand")),
@@ -1014,6 +1173,139 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
     assert!(
         !deleted.iter().any(|p| p.ends_with("rigg-inherited")),
         "an assignment inherited from an ancestor scope is never removed: {deleted:?}"
+    );
+    assert!(
+        !deleted.iter().any(|p| p.ends_with("rigg-dev2")),
+        "a neighbouring environment's assignment is never removed: {deleted:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_roles_reaches_the_foundry_project_scope() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("accounts", FOUNDRY, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    // The assignment `auth doctor` creates for the operator's Azure AI User
+    // edge lives at `<account>/projects/<project>`, not at the account.
+    let project = foundry_project_id();
+    mount_assignment_listing(
+        &server,
+        &project,
+        vec![assignment(
+            &project,
+            "rigg-project",
+            FOUNDRY_USER,
+            &project,
+            "rigg:acme:dev:agents live on the project",
+        )],
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_agent(ws.path(), "assistant");
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "roles", "list", "-e", "dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("agents live on the project"))
+        .stdout(predicate::str::contains(&project));
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "roles", "remove", "-e", "dev", "--yes"])
+        .assert()
+        .success();
+    let deleted = deleted_paths(&server).await;
+    assert!(
+        deleted.iter().any(|p| p.ends_with("rigg-project")),
+        "the project-scope assignment must be removable: {deleted:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auth_roles_reports_one_assignment_reachable_from_two_scopes_once() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // The very same assignment id answers at two of the scopes the graph
+    // knows: one row, one DELETE.
+    let storage = storage_id("acct");
+    let search = search_service_id(SUB, RG, SEARCH);
+    let shared = |at: &str| {
+        assignment(
+            &storage,
+            "rigg-shared",
+            BLOB_DATA_READER,
+            at,
+            "rigg:acme:dev:reachable from two scopes",
+        )
+    };
+    mount_assignment_listing(&server, &storage, vec![shared(&storage)]).await;
+    mount_assignment_listing(&server, &search, vec![shared(&search)]).await;
+    mount_no_assignments(&server).await;
+    mount_assignment_writes(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    let out = rigg(ws.path(), &server.uri())
+        .args(["auth", "roles", "list", "-e", "dev"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(
+        out.matches("reachable from two scopes").count(),
+        1,
+        "one assignment, one row: {out}"
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "roles", "remove", "-e", "dev", "--yes"])
+        .assert()
+        .success();
+    let deleted = deleted_paths(&server).await;
+    assert_eq!(
+        deleted
+            .iter()
+            .filter(|p| p.ends_with("rigg-shared"))
+            .count(),
+        1,
+        "one assignment, one DELETE: {deleted:?}"
     );
 }
 

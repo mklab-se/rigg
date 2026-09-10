@@ -31,16 +31,20 @@ struct Found {
 }
 
 /// Every distinct resolved scope the environment's graph mentions — the
-/// places rigg could ever have created an assignment.
-fn scopes_of(
+/// places rigg could ever have created an assignment. The Foundry project
+/// id is resolved exactly as `auth doctor` resolves it, so the assignment
+/// doctor creates at `<account>/projects/<project>` is reachable here.
+async fn scopes_of(
     ws: &Workspace,
     env: &ResolvedEnv,
     bindings: &rigg_core::binding::EnvBindings,
+    arm: &ArmClient,
 ) -> Vec<String> {
     let docs = auth_engine::env_documents(ws, &env.name);
     let graph = graph_for_docs(bindings, &docs);
     let kinds: Vec<ResourceKind> = docs.iter().map(|(k, ..)| *k).collect();
-    let (operator, _) = operator_edges(bindings, &kinds, true, &[], None);
+    let project = auth_engine::foundry_project_id(env, bindings, Some(arm)).await;
+    let (operator, _) = operator_edges(bindings, &kinds, true, &[], project.as_deref());
 
     let mut scopes: BTreeSet<String> = BTreeSet::new();
     let from_scope = |s: &Scope| s.arm_id().map(str::to_string);
@@ -67,8 +71,12 @@ async fn find(
         .map_err(|e| anyhow!(CommandError::AuthDenied(format!("{e}"))))?;
     let bindings = auth_engine::bindings_for(&ws, &env, Some(&arm)).await;
     let prefix = auth_engine::description_prefix(&ws, &env.name);
+    // The trailing colon is load-bearing: `rigg:acme:dev` is a prefix of
+    // `rigg:acme:dev2:…`, and a neighbouring environment's grants are not
+    // this environment's to list — let alone to delete.
+    let filter = auth_engine::role_description(&prefix, "");
 
-    let scopes = scopes_of(&ws, &env, &bindings);
+    let scopes = scopes_of(&ws, &env, &bindings, &arm).await;
     if !remove {
         say!(
             ctx,
@@ -79,12 +87,23 @@ async fn find(
         );
     }
     let mut found = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for scope in scopes {
-        match arm.list_rigg_role_assignments(&scope, &prefix).await {
-            Ok(list) => found.extend(list.into_iter().map(|assignment| Found {
-                scope: scope.clone(),
-                assignment,
-            })),
+        match arm.list_rigg_role_assignments(&scope, &filter).await {
+            Ok(list) => {
+                for assignment in list {
+                    // One assignment can answer at more than one of the
+                    // scopes the graph knows (nested scopes, or the same
+                    // scope reached two ways): one row, one DELETE.
+                    if !seen.insert(assignment.id.to_ascii_lowercase()) {
+                        continue;
+                    }
+                    found.push(Found {
+                        scope: scope.clone(),
+                        assignment,
+                    });
+                }
+            }
             Err(e) => say!(ctx, "  {} {scope}: {e}", "?".yellow()),
         }
     }
