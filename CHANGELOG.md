@@ -374,7 +374,6 @@ around that. No compatibility with 1.x workspaces.
 - **`rigg adopt` and `rigg env bind --learn` name proposal sources relative
   to the workspace.** Absolute paths wrapped the proposal table past
   readability and put the operator's home directory into every transcript.
-
 - **A change to a data source's connection string alone is pushed.** Write-only
   fields (`credentials.connectionString`) never come back from Azure, so a
   local edit that changed nothing else classified as in sync and `push` skipped

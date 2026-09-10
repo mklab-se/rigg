@@ -86,7 +86,7 @@ registry:
 | **Volatile** | yes | yes | yes | Azure rewrites them on every read — `@odata.etag`, `@odata.context`, `etag`, and per-kind equivalents. Keeping them would make every `rigg status` show drift |
 | **Read-only** | yes | yes | yes | Returned by `GET` but rejected by `PUT`. Writing them to disk would guarantee a failed push |
 | **`x-rigg-*`** | no — kept | **yes** | yes | rigg-local [annotations](annotations.md). Yours, never Azure's |
-| **Write-only** | no — kept | no — sent | **yes** | Accepted by `PUT` but redacted on `GET` (a data source's `credentials.connectionString`). Comparing them would show permanent phantom drift |
+| **Write-only** | no — kept | no — sent | **against Azure: yes; against the baseline: no** | Accepted by `PUT` but redacted on `GET` (a data source's `credentials.connectionString`). Comparing them with Azure would show permanent phantom drift, so they are compared with the [baseline](state.md) instead — a local change to only that field is still local-ahead |
 
 Concretely, per kind:
 

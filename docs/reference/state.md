@@ -77,16 +77,21 @@ the workspace file once the preview is confirmed (see
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `baselines` | object | no | `{}` | `<kind-dir>/<physical name>` → the baseline for that resource |
-| `baselines.<key>` | object **or** string | — | — | The compare-normalized document as of the last sync, or (legacy) a frozen checksum of it |
+| `baselines.<key>` | object **or** string | — | — | The push-normalized document as of the last sync (write-only fields included), or (legacy) a frozen checksum of it |
 
 The keys are the same `<kind-dir>/<name>` form used by `x-rigg-ref`,
 `rigg status` and every diagnostic — `indexes/contoso-docs`,
 `agents/contoso-assistant`.
 
 **Why the document and not just a checksum.** A baseline is stored
-compare-normalized: volatile fields (`@odata.etag`, `created_at`, ARM
+push-normalized: volatile fields (`@odata.etag`, `created_at`, ARM
 `provisioningState`, …), read-only fields and `x-rigg-*` annotations already
-removed, object keys sorted, arrays of named objects sorted by name. Keeping
+removed, object keys sorted, arrays of named objects sorted by name. Write-only
+fields are kept: a data source's `ResourceId=…` connection string is recorded
+here so that a local edit changing only that field is seen as local-ahead and
+pushed (Azure never returns it). `.rigg/` therefore holds the same
+identity-based reference your resource file holds — never a key — and stays
+gitignored. Keeping
 the document means the checksum can be *recomputed under today's
 normalization rules*. When a rigg upgrade changes which fields are considered
 volatile, every resource re-classifies correctly on the next run instead of
