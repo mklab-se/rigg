@@ -74,6 +74,17 @@ documentation page).
 | Search kinds' `encryptionKey.keyVaultUri` (identity-based) | search identity | Key Vault Crypto Service Encryption User `e147488a-f6f5-4113-8e2d-b22465e65bf6` | key vault from the binding |
 | Foundry account CMK (reported only; rigg does not manage account settings) | Foundry account identity | Key Vault Crypto User `12338af0-0e69-4776-bea7-57ae8d297424` or Crypto Service Encryption User (either accepted) | key vault |
 
+**Not implemented in 2.0.0:** the Indexer `cache.storageConnectionString`
+row (the incremental-enrichment cache is preview-only, and `cache.*` is
+deliberately absent from the registry's infra-reference table), and the
+Foundry account CMK row (rigg does not manage account settings, and
+`roles::KEY_VAULT_CRYPTO_USER` is defined but unused). Both were ruled out
+of scope; the rest of the table is implemented. The **Easy Auth wiring**
+operator row (Graph directory roles) is not verified either: `rigg auth
+easy-auth` surfaces Microsoft Graph's own error when the caller lacks
+Application Developer / Cloud Application Administrator, rather than
+pre-checking directory role membership.
+
 Operator edges (always, per environment, scoped to what the plan touches):
 
 | Need | Role(s) | Scope |
@@ -92,15 +103,17 @@ Operator edges (always, per environment, scoped to what the plan touches):
 | Check | Rule | Fix |
 |---|---|---|
 | Search SKU | Free has no managed identity; knowledge bases need Basic+ (S3 HD: none) | report |
-| Search identity exists | system-assigned enabled, or the UAMI attached | `--fix`: PATCH identity (ARM Search 2025-05-01) |
+| Search identity exists | system-assigned enabled when the files name no identity, and every UAMI they *do* name attached | `--fix`: PATCH identity (ARM Search 2025-05-01) |
 | Storage network: firewall (`networkAcls.defaultAction: Deny`) | needs `bypass` ⊇ `AzureServices` **and** the connection must use the system-assigned identity (UAMI unsupported for the trusted-service exception); or a resource-instance rule for the search service; IP rules never work same-region | `--fix` (with confirmation): add `AzureServices` bypass or a resource-instance rule; rewrite the file to system identity when it used a UAMI (question) |
+| — 2.0.0 note | Deny + UAMI is reported with a hint and repaired with the **resource-instance rule** only; the "rewrite the file to system identity" question, and the Global Constraint question id `auth.identity.<env>` it reserves, are **not asked in 2.0.0** | — |
 | Storage `publicNetworkAccess: Disabled` | only a shared private link works; needs Basic+ (S1+ when the indexer has a skillset beyond embedding); indexer `executionEnvironment: private` | report existing `sharedPrivateLinkResources` (ARM Search) or print the exact creation command |
+| — 2.0.0 note | the condition is **reported only**; rigg does not list or create shared private links (`list_shared_private_links` exists in the client and has no caller) | — |
 | Blob soft delete | required by `NativeBlobSoftDeleteDeletionDetectionPolicy`; blob **versioning must be off** | `--fix` (confirmation): enable soft delete (7 days default); versioning: report |
 | `allowSharedKeyAccess: false` | fine for blobs with identity | none |
-| AIServicesByIdentity account kind | must be `AIServices` | question: switch `subdomainUrl` to a bound AIServices account |
+| AIServicesByIdentity account kind | must be `AIServices` | question: switch `subdomainUrl` to a bound AIServices account — 2.0.0 **reports** the wrong kind and names the change; the question is not asked |
 | Function app access restrictions | must admit the search service (`AzureCognitiveSearch` service tag or search IP) | report + exact command |
 | Easy Auth on the function app | `authsettingsV2`: AAD provider enabled, `allowedAudiences` contains the skill's `authResourceId`, `unauthenticatedClientAction: Return401`; optionally `allowedApplications` contains the search MI client id | `--fix`: see §5 |
-| Deployment availability | model/version available in the account's region; quota headroom for `sku.capacity` | question (promote) / report (doctor) |
+| Deployment availability | model/version available in the account's region; quota headroom for `sku.capacity` | question (promote) / report (doctor) — in 2.0.0 this is **checked by `push`/`promote`**, where the deployment is written; `doctor` marks the row skipped rather than repeating it |
 
 Cosmos DB and Azure SQL edges are removed with their data-source types.
 
@@ -236,7 +249,7 @@ from 1.6.4). Keys never appear in output; the injected body is never logged.
   (`AIServicesByIdentity` + a `subdomainUrl` placeholder) that the identity
   is only legal alongside. Array-element identities (vectorizers, models,
   individual skills) and the blob forms of a knowledge source come from
-  `rigg env learn` / pull, not from a fresh scaffold.
+  `rigg env bind <env> --learn` / pull, not from a fresh scaffold.
 
 ## 8. Tokens and tenancy
 

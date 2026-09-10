@@ -101,11 +101,6 @@ around that. No compatibility with 1.x workspaces.
   (including after `--fix`, when something remains), **6** when a fix needs a
   confirmation it cannot ask for (a script, `--non-interactive`, or
   `--output json`). 1.x reported problems and exited 0.
-- **`rigg push` refuses on missing auth instead of failing mid-plan.** The
-  plan-scoped preflight runs before the first mutation: an operator right
-  only a human can grant ends the push with exit 4 and the exact `az` line,
-  having written nothing. `--skip-auth-preflight` is the opt-out for a caller
-  who knows the wiring is fine and cannot read ARM.
 
 ### Added
 
@@ -195,15 +190,66 @@ around that. No compatibility with 1.x workspaces.
   when everything is in place, 4 when anything is missing or could not be
   judged, 6 when a fix needs an answer non-interactively. `--output json`
   carries `{env, edges[], checks[], operator[], summary}`.
+- **The search-identity check is about the identities the files actually
+  use.** A service carrying only user-assigned identities while the files
+  name none needs the system-assigned identity, and is reported missing with
+  the fix that enables it (it used to read green while every `search-system`
+  edge stayed unresolved and unfixable). A file that *does* name a
+  user-assigned identity is checked for that identity being **attached** to
+  the search service — holding the role is no use if the service cannot act
+  as it — with a new fix that attaches it, keeping every identity already
+  there.
+- **A customer-managed key's `encryptionKey.identity` is honoured**: the CMK
+  edge (and therefore `--fix`) names the user-assigned identity that fetches
+  the key, instead of always attributing it to the system identity.
+- **The Easy Auth check accepts what Easy Auth accepts**: an app whose
+  registration *is* the audience (`registration.clientId` == the app id in
+  `api://<app-id>`) passes even with an empty `allowedAudiences`, because a
+  v2 token carries `aud = <appId>`. It also reports an app that accepts the
+  audience but lets unauthenticated callers through
+  (`requireAuthentication: false`, `unauthenticatedClientAction` other than
+  `Return401`).
+- **Knowledge bases need more than Basic**: a Standard3 service in
+  high-density hosting mode is reported when the environment declares a
+  knowledge base, alongside the existing Free-SKU rejection.
+- **`--live` findings annotate, they never overrule.** An auth-shaped indexer
+  failure is attached to the item whose scope it names as a `live:` line; an
+  item rigg verified as `Ok` stays `Ok`, and the finding is reported in its
+  own right (the summary gains a live-findings count, and the exit code still
+  reflects it). Marker matching is on word boundaries, so `403` no longer
+  fires on "4031 documents".
+- **A Web API skill without usable auth can be pointed at a key vault**: the
+  push-time question now offers `key-vault` alongside Entra ID, a function
+  key and skip, and asks for `<secret>@<key-vault binding>` (question id
+  `auth.webapi.key-vault`). The secret is read from the vault at push time
+  and never touches disk.
 - **Your own role requirements count your effective permissions**, not just
   exact role assignments: a subscription Owner or Contributor now satisfies
-  the operator's control-plane roles (Search Service Contributor, Azure AI
-  Project Manager, Azure AI Account Owner) because ARM reports actions that
-  cover those role definitions — so doctor stops reporting them missing and
-  push's preflight stops refusing the person who owns the subscription.
-  Data-plane roles (Azure AI User, Search Index Data Reader) are unaffected:
-  they live in `dataActions`, which Owner does not carry. No role name is
+  the operator's control-plane roles (Search Service Contributor, Foundry
+  Account Owner, and — through the Cognitive Services Contributor
+  alternative the edge lists — creating project connections) because ARM
+  reports actions that cover those role definitions, so doctor stops
+  reporting them missing and push's preflight stops refusing the person who
+  owns the subscription. Roles whose permissions live in `dataActions` are
+  unaffected — Foundry User, Search Index Data Reader **and Foundry Project
+  Manager itself**, whose Azure definition carries
+  `dataActions: ["Microsoft.CognitiveServices/*"]`. No role name is
   special-cased, and managed-identity edges still require the exact role.
+- **Printed `az role assignment create` lines name the role by definition
+  GUID**, with the display name as a trailing `# <name>` comment — the same
+  ids rigg's own PUTs use. Microsoft is renaming the Foundry roles (Azure AI
+  User / Project Manager / Account Owner → **Foundry User / Foundry Project
+  Manager / Foundry Account Owner**) and advises using the id rather than the
+  name while the rename rolls out, since `--role "<name>"` resolves against
+  the tenant's role definitions. rigg reports the new names and assigns the
+  unchanged GUIDs. `rigg ci init`'s role list leads with the GUID too.
+- **The protected-environment gate covers every command that changes an
+  environment's authorization**, not just `push`: `rigg auth doctor --fix`,
+  `rigg auth roles remove` and `rigg auth easy-auth` now ask for the typed
+  confirmation before their first write, and each takes `--confirm-env <env>`
+  so a script or MCP caller can answer it. `--yes` alone is deliberately not
+  enough. (`rigg env remove --clean-roles` stays exempt: the flag names the
+  removal, and the environment is going away.)
 - **Role assignments rigg creates are tagged** with
   `description: "rigg:<workspace>:<env>:<reason>"` and an explicit
   `principalType`, so **`rigg auth roles list|remove`** can find and undo
@@ -214,11 +260,12 @@ around that. No compatibility with 1.x workspaces.
   (`identity: ok` / `identity: N missing — rigg auth doctor -e <env>`), from
   the same verification `auth doctor` runs; `--output json` gains an
   `identity` object per environment.
-- **`rigg push` verifies the identity graph before it writes anything.** The
-  plan-scoped auth preflight runs after the binding preflight and before the
-  protected gate: it is `auth doctor --plan` on exactly the bodies this push
-  would send. Anything only a human may grant (the operator's own rights)
-  refuses right there, with exit 4 and the exact `az` line. Missing role
+- **`rigg push` verifies the identity graph before it writes anything, and
+  refuses on missing auth instead of failing mid-plan.** The plan-scoped auth
+  preflight runs after the binding preflight and before the protected gate:
+  it is `auth doctor --plan` on exactly the bodies this push would send.
+  Anything only a human may grant (the operator's own rights) ends the push
+  right there — exit 4, the exact `az` line, and nothing written. Missing role
   assignments rigg may grant are reported there too, but applied only once
   every gate has been cleared — the protected-environment confirmation, the
   replace gate, the apply confirmation — so a push that is never confirmed

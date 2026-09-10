@@ -392,26 +392,31 @@ or `disableLocalAuth`), the storage firewall, blob soft delete when a data
 source uses `NativeBlobSoftDeleteDeletionDetectionPolicy`, whether shared-key
 access is disabled (reported for context — identity-based access works
 either way), the AI Services account kind, a function app's access
-restrictions and its Easy Auth settings, and each model deployment's
-availability and quota.
+restrictions and its Easy Auth settings. (Model deployment availability and
+quota are checked by `push`/`promote`, where the deployment is actually
+written; doctor lists the row as skipped rather than repeating a check whose
+answer only matters at write time.)
 
 The **operator's** own edges come from the plan rather than from a single
 field: Search Service Contributor on the search service for any Search
-resource, Azure AI User on the Foundry *project* for agents (Owner and
-Contributor do not cover it), Azure AI Project Manager on the account for
-connections, and Azure AI Account Owner (or Cognitive Services Contributor)
-for deployments and guardrails — plus, for every edge rigg might have to
-grant, whether you can create a role assignment at that scope at all. A push
-that will also read the data plane (`push --verify`) adds Search Index Data
-Reader to its own preflight.
+resource, Foundry User on the Foundry *project* for agents, Foundry Project
+Manager (or Cognitive Services Contributor) on the account for connections,
+and Foundry Account Owner (or Cognitive Services Contributor) for deployments
+and guardrails — plus, for every edge rigg might have to grant, whether you
+can create a role assignment at that scope at all. A push that will also read
+the data plane (`push --verify`) adds Search Index Data Reader to its own
+preflight.
 
-An operator edge is satisfied either by an assignment of that exact role or
-by your *effective* permissions at the scope covering everything the role
-definition grants, so a subscription Owner or Contributor already counts for
-the control-plane requirements above — but never for a data-plane role such
-as Azure AI User or Search Index Data Reader, which live in `dataActions`
-that Owner does not carry. (Managed-identity edges keep to the exact role:
-ARM will only report effective permissions for the caller.)
+An operator edge is satisfied by an assignment of that exact role, by an
+assignment of one of the alternatives the edge lists, or by your *effective*
+permissions at the scope covering everything one of those role definitions
+grants. A subscription Owner or Contributor therefore already counts for
+Search Service Contributor, Foundry Account Owner and — through the
+Cognitive Services Contributor alternative — project connections. It never
+counts for a role whose permissions live in `dataActions`: Foundry User,
+Search Index Data Reader, and Foundry Project Manager itself all carry data
+actions that `actions: ["*"]` does not cover. (Managed-identity edges keep to
+the exact role: ARM will only report effective permissions for the caller.)
 
 ### Where the graph is used
 
