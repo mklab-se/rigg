@@ -246,6 +246,28 @@ async fn push_project(
     if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() && replaces.is_empty() {
         print_webapi_unknown_notes(&webapi_unknown);
         if !pending_relinks.is_empty() && !args.dry_run {
+            // Same refusal semantics as the main plan's preflight: relink
+            // bodies (restored knowledge-base docs) can carry infrastructure
+            // references too, and they are about to be PUT.
+            let relink_bodies: Vec<(ResourceRef, Value)> = pending_relinks
+                .values()
+                .flatten()
+                .filter_map(|kb| {
+                    kb.get("name").and_then(Value::as_str).map(|name| {
+                        (
+                            ResourceRef::new(ResourceKind::KnowledgeBase, name.to_string()),
+                            kb.clone(),
+                        )
+                    })
+                })
+                .collect();
+            binding_preflight(
+                ctx,
+                ws,
+                env,
+                relink_bodies.iter().map(|(r, b)| (r, b)),
+                false,
+            )?;
             finish_pending_relinks(
                 ctx,
                 &remote,
@@ -412,18 +434,27 @@ async fn push_project(
     }
     print_webapi_unknown_notes(&webapi_unknown);
 
-    if args.dry_run {
-        say!(ctx, "  (dry run — nothing pushed)");
-        return Ok(!conflicts.is_empty());
-    }
-
     // Binding preflight: classify every infrastructure reference in every
     // body this push would write, exactly as `rigg validate` does, and
     // refuse before a single mutation when one of them belongs to another
     // environment (a leak) — or, in a strict-bindings environment, is bound
     // nowhere at all. Runs before the protected gate so the refusal is the
-    // first thing a wrong-environment push hits.
-    binding_preflight(ctx, ws, env, &to_push, &replaces)?;
+    // first thing a wrong-environment push hits, and before the dry-run
+    // early return so a preview reports the same findings (without
+    // refusing) instead of showing a clean plan for a push that would fail
+    // one command later.
+    let mut preflight_bodies: Vec<(&ResourceRef, &Value)> =
+        to_push.iter().map(|p| (&p.r, &p.body)).collect();
+    for bundle in &replaces {
+        preflight_bodies.push((&bundle.ks, &bundle.new_body));
+        preflight_bodies.extend(bundle.sub.iter().map(|(r, body)| (r, body)));
+    }
+    binding_preflight(ctx, ws, env, preflight_bodies, args.dry_run)?;
+
+    if args.dry_run {
+        say!(ctx, "  (dry run — nothing pushed)");
+        return Ok(!conflicts.is_empty());
+    }
 
     // Resolve missing connections before any gate: interactively, discover
     // the storage account by container via ARM (the user is logged in with
@@ -881,13 +912,15 @@ async fn push_project(
 /// A leak is always an error; unbound/external references are errors in a
 /// strict-bindings environment (the default for protected ones) and warnings
 /// otherwise. Called before any mutating call, so an error means nothing was
-/// written to Azure.
-fn binding_preflight(
+/// written to Azure — except on `dry_run`, where a preview never refuses:
+/// every finding (error or warning) is printed instead, so a `--dry-run`
+/// never reports a clean plan for a push that would fail one command later.
+fn binding_preflight<'a>(
     ctx: &GlobalContext,
     ws: &Workspace,
     env: &ResolvedEnv,
-    to_push: &[PlanItem],
-    replaces: &[ReplaceBundle],
+    bodies: impl IntoIterator<Item = (&'a ResourceRef, &'a Value)>,
+    dry_run: bool,
 ) -> Result<()> {
     let mut env_bindings: BTreeMap<String, EnvBindings> = BTreeMap::new();
     for (name, e) in &ws.config.environments {
@@ -903,15 +936,6 @@ fn binding_preflight(
         .map(|(_, eb)| eb.clone())
         .collect();
     let strict = env.strict_bindings();
-
-    // Every document that would leave the machine: plain pushes, each
-    // replace's new knowledge source, and the sub-resources a replace
-    // re-creates inside its bundle.
-    let mut bodies: Vec<(&ResourceRef, &Value)> = to_push.iter().map(|p| (&p.r, &p.body)).collect();
-    for bundle in replaces {
-        bodies.push((&bundle.ks, &bundle.new_body));
-        bodies.extend(bundle.sub.iter().map(|(r, body)| (r, body)));
-    }
 
     let mut problems: Vec<String> = Vec::new();
     for (r, body) in bodies {
@@ -934,6 +958,12 @@ fn binding_preflight(
     }
 
     if problems.is_empty() {
+        return Ok(());
+    }
+    if dry_run {
+        for p in &problems {
+            say!(ctx, "  {} {p}", "✗".red());
+        }
         return Ok(());
     }
     Err(anyhow!(CommandError::Validation(format!(

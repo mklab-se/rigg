@@ -472,6 +472,27 @@ fn delete_requires_remote_flag() {
 }
 
 #[test]
+fn reserved_binding_name_is_a_workspace_file_error_not_a_missing_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: unit-test-svc }\n    dependencies:\n      search: { storage: acct }\n",
+    )
+    .unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["status"])
+        .assert()
+        .code(1)
+        .stderr(
+            predicate::str::contains("rigg.yaml found at")
+                .and(predicate::str::contains("could not be read"))
+                .and(predicate::str::contains("reserved name")),
+        )
+        .stderr(predicate::str::contains("not inside a rigg workspace").not());
+}
+
+#[test]
 fn outside_workspace_errors_cleanly() {
     let tmp = tempfile::tempdir().unwrap();
     rigg()

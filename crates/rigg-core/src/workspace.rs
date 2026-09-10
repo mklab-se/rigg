@@ -46,6 +46,7 @@ pub enum WorkspaceError {
     NoDefaultEnvironment,
     #[error("environment '{env}' has an invalid dependency binding name '{name}': {reason}")]
     InvalidBindingName {
+        path: PathBuf,
         env: String,
         name: String,
         reason: String,
@@ -254,12 +255,16 @@ impl Workspace {
             source,
         })?;
         let config: WorkspaceConfig =
-            serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse { path, source })?;
+            serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse {
+                path: path.clone(),
+                source,
+            })?;
 
         for (env_name, env) in &config.environments {
             for name in env.dependencies.keys() {
                 if let Err(reason) = validate_binding_name(name) {
                     return Err(WorkspaceError::InvalidBindingName {
+                        path: path.clone(),
                         env: env_name.clone(),
                         name: name.clone(),
                         reason,

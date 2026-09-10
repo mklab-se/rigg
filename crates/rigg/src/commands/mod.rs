@@ -258,7 +258,9 @@ pub fn load_workspace_from(start: &Path) -> Result<Workspace> {
 /// `None` for anything else (a missing workspace, an unreachable `start`).
 fn workspace_file_detail(e: &WorkspaceError) -> Option<String> {
     let path = match e {
-        WorkspaceError::Parse { path, .. } | WorkspaceError::Io { path, .. } => path,
+        WorkspaceError::Parse { path, .. }
+        | WorkspaceError::Io { path, .. }
+        | WorkspaceError::InvalidBindingName { path, .. } => path,
         _ => return None,
     };
     path.file_name()
