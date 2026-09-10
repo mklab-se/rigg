@@ -126,6 +126,15 @@ pub enum Commands {
     /// rewiring before writing; `--dry-run` stops there.
     Promote(PromoteArgs),
 
+    /// Prove a pushed project actually works against the live services
+    ///
+    /// Runs every indexer to completion, retrieves from every knowledge
+    /// base and asks every agent a one-turn question. Failures that look
+    /// like an authorization problem are attributed to the identity edge
+    /// that would explain them. Exits 1 when anything fails. This is
+    /// `rigg push --verify` on its own, for a stack that is already pushed.
+    Verify(VerifyArgs),
+
     /// Operate the LIVE Azure resources: run indexers, query indexes,
     /// prompt knowledge bases and agents
     ///
@@ -358,6 +367,29 @@ pub struct PushArgs {
     /// a freshly fetched key. Ordinary pushes leave in-sync resources alone
     #[arg(long)]
     pub refresh_credentials: bool,
+
+    /// After the push, prove the stack works: run every indexer to
+    /// completion, retrieve from every knowledge base, and ask every agent
+    /// (the same checks as `rigg verify`). Exits 1 on any failure
+    #[arg(long)]
+    pub verify: bool,
+
+    /// Skip the plan-scoped auth preflight (the identity/RBAC verification
+    /// that runs before anything is written). The escape hatch for a caller
+    /// who knows the wiring is fine and cannot read ARM
+    #[arg(long)]
+    pub skip_auth_preflight: bool,
+}
+
+#[derive(Args)]
+pub struct VerifyArgs {
+    /// Project to verify (omit with --all, or when the workspace has one)
+    #[arg(add = ArgValueCandidates::new(complete::projects))]
+    pub project: Option<String>,
+
+    /// Verify all projects
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Args)]
@@ -885,6 +917,7 @@ impl Cli {
             Commands::Diff(args) => commands::diff::run(&ctx, args).await,
             Commands::Delete(args) => commands::delete::run(&ctx, args).await,
             Commands::Promote(args) => commands::promote::run(&ctx, args).await,
+            Commands::Verify(args) => commands::verify::run(&ctx, args).await,
             Commands::Az { command } => commands::az::run(&ctx, command).await,
             Commands::Migrate { command } => commands::migrate::run(&ctx, command).await,
             Commands::Status(args) => commands::status::run(&ctx, args).await,

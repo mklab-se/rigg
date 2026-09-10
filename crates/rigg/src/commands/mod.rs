@@ -35,6 +35,7 @@ pub mod remote;
 pub mod skill;
 pub mod status;
 pub mod validate;
+pub mod verify;
 pub mod version;
 
 use std::io::IsTerminal;

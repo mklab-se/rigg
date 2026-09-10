@@ -44,11 +44,11 @@ For other MCP clients, configure them to run `rigg mcp serve` as a stdio server 
 
 ### Verify it's working
 
-In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report sync state per project. In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with 13 tools.
+In Claude Code, type `/rigg-status` — the AI will call the MCP tools and report sync state per project. In VS Code with Copilot, open the MCP panel and check that "rigg" appears as a connected server with 14 tools.
 
 ## Available Tools
 
-The server exposes 13 tools: 9 project-scoped configuration tools (including `rigg_promote`) and 4 runtime-operation tools (`rigg_indexer_*`, `rigg_query`, `rigg_ask`). Every tool that talks to Azure accepts an optional `env` (environment name; the default environment is used if omitted), and tools that operate on a project accept an optional `project` (may be omitted when the workspace has exactly one project). `rigg_promote` is the exception — it names two environments (`from`/`to`) instead of one, so it has no `env` parameter.
+The server exposes 14 tools: 9 project-scoped configuration tools (including `rigg_promote`) and 5 runtime-operation tools (`rigg_indexer_*`, `rigg_query`, `rigg_ask`, `rigg_verify`). Every tool that talks to Azure accepts an optional `env` (environment name; the default environment is used if omitted), and tools that operate on a project accept an optional `project` (may be omitted when the workspace has exactly one project). `rigg_promote` is the exception — it names two environments (`from`/`to`) instead of one, so it has no `env` parameter.
 
 Mutating tools (`rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) follow a **preview/force** pattern: without `force` they return a preview of what would change and change nothing; with `force: true` they execute. The AI always shows you what will happen before doing it.
 

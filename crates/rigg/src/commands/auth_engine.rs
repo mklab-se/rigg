@@ -1456,7 +1456,10 @@ const AUTH_MARKERS: &[&str] = &[
     "AADSTS",
 ];
 
-fn looks_like_auth(message: &str) -> bool {
+/// Does an error message look like an authorization failure rather than a
+/// data problem? Shared with `rigg push --verify` / `rigg verify`, which
+/// attribute a failed smoke test to an identity edge only when it does.
+pub fn looks_like_auth(message: &str) -> bool {
     AUTH_MARKERS
         .iter()
         .any(|m| message.to_lowercase().contains(&m.to_lowercase()))

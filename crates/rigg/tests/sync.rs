@@ -14,6 +14,11 @@ fn rigg(dir: &std::path::Path) -> Command {
     cmd.current_dir(dir);
     cmd.env("RIGG_NO_UPDATE_CHECK", "1");
     cmd.env("RIGG_ACCESS_TOKEN", "test-token");
+    // The push auth preflight reads ARM. These tests are about the sync
+    // engine, not identity: point ARM at a closed port so every lookup fails
+    // instantly and locally (the preflight then reports "unresolved", which
+    // never refuses a push) instead of reaching the real management plane.
+    cmd.env("RIGG_ARM_ENDPOINT", "http://127.0.0.1:9");
     cmd.env_remove("RIGG_ENV");
     cmd
 }
@@ -3554,5 +3559,88 @@ async fn pull_reports_fields_unknown_to_the_pinned_schema() {
         doc["brandNewSetting"],
         json!(true),
         "documents stay pass-through"
+    );
+}
+
+/// `push --verify` proves the stack after the plan lands: the indexer is
+/// triggered and watched to completion, the knowledge base gets a retrieve.
+#[tokio::test]
+async fn push_verify_exercises_the_pushed_resources() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    for p in ["/indexes/idx", "/indexers/idxr", "/knowledgeBases/kb"] {
+        Mock::given(method("GET"))
+            .and(path(p.to_string()))
+            .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(p.to_string()))
+            .respond_with(|req: &Request| {
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::from_slice::<Value>(&req.body).unwrap())
+            })
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/indexers/idxr/run"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexers/idxr/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "running",
+            "lastResult": {"status": "success", "itemsProcessed": 3, "itemsFailed": 0}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/knowledgebases('kb')/retrieve"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response": []})))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+    write_resource(
+        ws.path(),
+        "indexers",
+        "idxr",
+        &json!({"name": "idxr", "targetIndexName": "idx"}),
+    );
+    write_resource(
+        ws.path(),
+        "knowledge-bases",
+        "kb",
+        &json!({"name": "kb", "knowledgeSources": []}),
+    );
+
+    rigg(ws.path())
+        .env("RIGG_WATCH_INTERVAL_SECS", "0")
+        .args(["push", "demo", "--yes", "--verify"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("indexer 'idxr' — 3 processed"))
+        .stdout(predicate::str::contains("knowledge base 'kb' retrieved"))
+        .stdout(predicate::str::contains("2 check(s) passed"));
+
+    let posts: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == "POST")
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert!(
+        posts.contains(&"/indexers/idxr/run".to_string()),
+        "posts: {posts:?}"
     );
 }

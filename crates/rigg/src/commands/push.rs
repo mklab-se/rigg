@@ -23,12 +23,14 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use rigg_core::{graph, migrate, registry};
 
 use crate::cli::PushArgs;
+use crate::commands::ask::Question;
+use crate::commands::auth_engine::{self, Fix, ReportItem, Status, VerifyOpts, VerifyScope};
 use crate::commands::credentials;
 use crate::commands::infra_report::{self, Level};
 use crate::commands::remote::{Remote, ensure_any_connection, resolve_cross_service_refs};
 use crate::commands::{
     CommandError, GlobalContext, confirm_protected_env, interactive, load_workspace, resolve_env,
-    select_projects,
+    select_projects, verify,
 };
 use crate::say;
 
@@ -39,8 +41,15 @@ pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
 
     let mut any_conflict = false;
-    for project in projects {
+    for project in &projects {
         any_conflict |= push_project(ctx, &ws, &env, project, &args).await?;
+    }
+    // `--verify` proves the stack works, so it runs after every project has
+    // landed — and only then: verifying half a plan proves nothing, and a
+    // dry run wrote nothing to verify.
+    if args.verify && !any_conflict && !args.dry_run {
+        say!(ctx);
+        verify::run_for(ctx, &ws, &env, &projects).await?;
     }
     if any_conflict {
         return Err(anyhow!(CommandError::DriftOrConflict(
@@ -451,6 +460,30 @@ async fn push_project(
     }
     binding_preflight(ctx, ws, env, preflight_bodies, args.dry_run)?;
 
+    // Auth preflight: verify the identity graph THIS plan implies before a
+    // single resource is written, and offer to repair it (spec §4.2). Placed
+    // after the binding preflight (a wrong-environment push must be caught
+    // first — there is no point granting roles for a plan that will be
+    // refused) and before the credential preflights and the protected gate.
+    let mut plan_docs: Vec<(ResourceKind, String, Value)> = to_push
+        .iter()
+        .map(|p| (p.r.kind, p.r.name.clone(), p.body.clone()))
+        .collect();
+    for bundle in &replaces {
+        plan_docs.push((
+            bundle.ks.kind,
+            bundle.ks.name.clone(),
+            bundle.new_body.clone(),
+        ));
+        plan_docs.extend(
+            bundle
+                .sub
+                .iter()
+                .map(|(r, body)| (r.kind, r.name.clone(), body.clone())),
+        );
+    }
+    auth_preflight(ctx, ws, env, plan_docs, args).await?;
+
     if args.dry_run {
         say!(ctx, "  (dry run — nothing pushed)");
         return Ok(!conflicts.is_empty());
@@ -821,8 +854,6 @@ async fn push_project(
         }
     }
 
-    let search_service = env.search().map(|c| c.service.clone());
-
     // Execute in order (conflicts resolved to local were appended — reorder).
     let order = graph::push_order(
         &to_push
@@ -839,7 +870,7 @@ async fn push_project(
         credentials::inject_function_keys(&mut with_refs).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
-        match put_with_rbac_help(&remote, r, &body, ctx, search_service.as_deref()).await {
+        match put_with_rbac_help(&remote, r, &body, ctx, ws, env).await {
             Ok(server_doc) => {
                 store.write(r, &server_doc)?;
                 state.set_baseline(r, &server_doc);
@@ -859,16 +890,7 @@ async fn push_project(
     for bundle in &replaces {
         let prior = pending_relinks.remove(&bundle.ks.name).unwrap_or_default();
         execute_replace(
-            ctx,
-            env,
-            ws,
-            project,
-            &store,
-            &mut state,
-            &remote,
-            bundle,
-            prior,
-            search_service.as_deref(),
+            ctx, env, ws, project, &store, &mut state, &remote, bundle, prior,
         )
         .await?;
     }
@@ -974,6 +996,265 @@ fn binding_preflight<'a>(
     ))))
 }
 
+/// Plan-scoped auth preflight (spec §4.2): verify the identity graph the
+/// bodies this push would write imply — service-identity role assignments,
+/// the settings and network rules they depend on, and the operator's own
+/// rights — before a single resource is written.
+///
+/// Missing things rigg can repair are offered as one confirmation
+/// (`auth.fix.all`), applied, and then **waited out**: a fresh role
+/// assignment is not visible to the data plane the instant ARM accepts it,
+/// so rigg polls `atScope()` until each granted role shows up before letting
+/// the push proceed ([`put_with_rbac_help`] remains the safety net for the
+/// data plane's own propagation lag).
+///
+/// Anything rigg may not repair — the operator's own rights, which rigg
+/// never grants itself — refuses with exit 4 and the `az` line to run.
+/// `--dry-run` reports every finding and refuses nothing (the binding
+/// preflight's rule: a preview must not show a clean plan for a push that
+/// would fail, but must not fail either). `--skip-auth-preflight` skips the
+/// whole thing, for a caller who cannot read ARM but knows the wiring holds.
+///
+/// Unresolved items never refuse: "rigg could not check this" is not
+/// "this is wrong", and an environment whose ARM is unreachable must still
+/// be pushable.
+async fn auth_preflight(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    env: &ResolvedEnv,
+    docs: Vec<(ResourceKind, String, Value)>,
+    args: &PushArgs,
+) -> Result<()> {
+    if args.skip_auth_preflight || docs.is_empty() {
+        return Ok(());
+    }
+    let report = auth_engine::verify(
+        ctx,
+        ws,
+        env,
+        VerifyScope::Plan(docs),
+        VerifyOpts {
+            principal: None,
+            // `--verify` exercises the data plane afterwards, so the roles
+            // that reads need become part of what the preflight requires.
+            verify_roles: args.verify,
+            live: false,
+        },
+    )
+    .await?;
+
+    let missing: Vec<&ReportItem> = report
+        .items
+        .iter()
+        .chain(report.operator.iter())
+        .filter(|i| i.status == Status::Missing)
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    say!(ctx);
+    say!(
+        ctx,
+        "  {} auth preflight: {} requirement(s) missing for this plan",
+        "!".yellow(),
+        missing.len()
+    );
+    for item in &missing {
+        say!(
+            ctx,
+            "    {} {} — {}",
+            "✗".red(),
+            item.headline(),
+            item.detail
+        );
+    }
+
+    let fixes = report.fixes();
+    let unfixable = report.unfixable();
+
+    if args.dry_run {
+        for item in &unfixable {
+            if let Some(fix) = &item.fix {
+                say!(ctx, "      {}", fix.command());
+            }
+        }
+        say!(ctx, "  (dry run — nothing granted, nothing pushed)");
+        return Ok(());
+    }
+
+    // Operator rights are never granted by rigg (that would let anyone who
+    // can run a push escalate their own access), so they always refuse.
+    if !unfixable.is_empty() {
+        for item in &unfixable {
+            if let Some(fix) = &item.fix {
+                say!(ctx, "      {}", fix.command());
+            }
+        }
+        return Err(refusal(env, &unfixable));
+    }
+    if fixes.is_empty() {
+        return Err(refusal(env, &missing));
+    }
+
+    say!(ctx);
+    say!(ctx, "  rigg can fix:");
+    for fix in &fixes {
+        say!(ctx, "    - {}", fix.describe());
+    }
+    // `--yes` is consent for the whole push, grants included. Otherwise ask
+    // `auth.fix.all` — the same question `auth doctor --fix` asks, so a
+    // scripted caller can pre-answer it. An unanswerable question here is
+    // NOT `needs-input` (exit 6): a push that cannot be made to work is an
+    // auth refusal (exit 4), with the list and the escape hatch.
+    let approved = ctx.yes
+        || match ctx
+            .asker(
+                "push (auth preflight)",
+                json!({"env": env.name, "fixes": fixes.len()}),
+            )
+            .ask(&Question::confirm(
+                "auth.fix.all",
+                format!("Grant/apply {} fix(es) now?", fixes.len()),
+                true,
+            )) {
+            Ok(answer) => answer.as_bool() == Some(true),
+            Err(e)
+                if e.downcast_ref::<crate::commands::ask::NeedsInput>()
+                    .is_some() =>
+            {
+                false
+            }
+            Err(e) => return Err(e),
+        };
+    if !approved {
+        return Err(refusal(env, &missing));
+    }
+
+    let arm = rigg_client::arm::ArmClient::for_tenant(env.env.tenant.as_deref())
+        .map_err(|e| anyhow!(CommandError::AuthDenied(format!("{e}"))))?;
+    let results = auth_engine::apply(ctx, &arm, &fixes).await?;
+    let failed: Vec<String> = results
+        .iter()
+        .filter_map(|(f, r)| r.as_ref().err().map(|e| format!("{}: {e}", f.describe())))
+        .collect();
+    if !failed.is_empty() {
+        return Err(anyhow!(CommandError::AuthDenied(format!(
+            "{} auth fix(es) failed; nothing was pushed to '{}': {}",
+            failed.len(),
+            env.name,
+            failed.join("; ")
+        ))));
+    }
+    wait_for_grants(ctx, &arm, &results).await;
+    Ok(())
+}
+
+/// The exit-4 refusal a preflight ends in, naming what is missing and the
+/// escape hatch.
+fn refusal(env: &ResolvedEnv, items: &[&ReportItem]) -> anyhow::Error {
+    anyhow!(CommandError::AuthDenied(format!(
+        "{} auth requirement(s) missing for this plan; nothing was pushed to '{}': {} —          run `rigg auth doctor -e {} --fix`, or push with --skip-auth-preflight to try anyway",
+        items.len(),
+        env.name,
+        items
+            .iter()
+            .map(|i| i.headline())
+            .collect::<Vec<_>>()
+            .join("; "),
+        env.name
+    )))
+}
+
+/// Propagation wait after a grant, env-overridable (tests set both to 0).
+///
+/// Shorter and more patient than [`rbac_retry_tuning`]: this polls ARM's own
+/// listing (cheap, and usually consistent within a few seconds), whereas the
+/// PUT-retry loop re-attempts a real write against the data plane.
+fn rbac_wait_tuning() -> (u64, u32) {
+    let secs = std::env::var("RIGG_RBAC_RETRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let attempts = std::env::var("RIGG_RBAC_MAX_RETRIES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(18);
+    (secs, attempts)
+}
+
+/// Poll until every role assignment rigg just created is visible through
+/// `atScope()` for its principal (spec §4.2 step 2). A role that never
+/// appears is a warning, not a refusal — the push proceeds and
+/// [`put_with_rbac_help`] catches it if it really has not landed.
+async fn wait_for_grants(
+    ctx: &GlobalContext,
+    arm: &rigg_client::arm::ArmClient,
+    results: &[(Fix, std::result::Result<(), String>)],
+) {
+    let granted: Vec<&Fix> = results
+        .iter()
+        .filter(|(_, r)| r.is_ok())
+        .map(|(f, _)| f)
+        .filter(|f| matches!(f, Fix::RoleAssignment { .. }))
+        .collect();
+    if granted.is_empty() {
+        return;
+    }
+    let (delay, attempts) = rbac_wait_tuning();
+    say!(
+        ctx,
+        "  waiting for {} role assignment(s) to become visible (up to ~{} min)",
+        granted.len(),
+        (delay * attempts as u64).div_ceil(60).max(1)
+    );
+    for fix in granted {
+        let Fix::RoleAssignment {
+            scope,
+            principal_id,
+            role,
+            ..
+        } = fix
+        else {
+            continue;
+        };
+        let mut visible = false;
+        for attempt in 0..=attempts {
+            match arm.role_assignments_for(scope, principal_id).await {
+                Ok(list) => {
+                    if list
+                        .iter()
+                        .any(|a| a.role_guid().eq_ignore_ascii_case(role.id))
+                    {
+                        visible = true;
+                        break;
+                    }
+                }
+                Err(e) => say!(
+                    ctx,
+                    "      {} could not re-read {scope} ({e})",
+                    "!".yellow()
+                ),
+            }
+            if attempt == attempts {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        }
+        if visible {
+            say!(ctx, "      {} '{}' is visible", "✓".green(), role.name);
+        } else {
+            say!(
+                ctx,
+                "      {} '{}' is not visible yet — pushing anyway (rigg retries the write while \
+                 it propagates)",
+                "!".yellow(),
+                role.name
+            );
+        }
+    }
+}
+
 fn parse_key(key: &str) -> Option<ResourceRef> {
     let (dir, name) = key.split_once('/')?;
     let kind = ResourceKind::from_directory_name(dir)?;
@@ -1002,94 +1283,33 @@ fn rbac_retry_tuning() -> (u64, u32) {
     (secs, attempts)
 }
 
-struct MissingRole {
-    role_name: String,
-    role_id: String,
-    scope: String,
-    reason: String,
-}
-
-struct RbacDiagnosis {
-    /// The search service identity's principal id (first, for grants).
-    principal: String,
-    missing: Vec<MissingRole>,
-}
-
-/// Which search-service roles `body` requires but the identity lacks —
-/// resolved live through ARM. `Ok(None)` when the document has no
-/// RBAC-verifiable edges (nothing to diagnose).
+/// Which roles `body` requires that the service identities do not hold —
+/// the very verification `rigg auth doctor` performs, narrowed to this one
+/// document. Going through the auth engine (rather than the 1.x ad-hoc ARM
+/// walk) means the diagnosis sees the environment's binding table, so an
+/// unresolved scope resolves the same way here as it does everywhere else.
+///
+/// `None` when the document implies nothing rigg can check or repair.
 async fn diagnose_rbac(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    env: &ResolvedEnv,
     r: &ResourceRef,
     body: &Value,
-    search_service: &str,
-) -> Result<Option<RbacDiagnosis>> {
-    use rigg_core::binding::BindingType;
-    use rigg_core::identity::{EdgeKind, Principal, Scope, edges_for};
-    let edges: Vec<_> = edges_for(r.kind, &r.name, body)
-        .into_iter()
-        .filter(|e| e.kind == EdgeKind::Rbac && e.principal == Principal::SearchSystem)
-        .collect();
-    if edges.is_empty() {
-        return Ok(None);
-    }
-    let arm = rigg_client::arm::ArmClient::new()?;
-    let service_id = arm.find_search_service_id(search_service).await?;
-    let identity = arm
-        .get_resource_identity(&service_id, registry::Provider::SearchArm)
-        .await?;
-    let principals: Vec<String> = identity
-        .map(|i| i.principal_ids().iter().map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-    if principals.is_empty() {
-        anyhow::bail!(
-            "search service '{search_service}' has no managed identity — run `rigg auth doctor --fix` to enable one"
-        );
-    }
-    let mut missing = Vec::new();
-    let mut any_resolved = false;
-    for edge in edges {
-        // Without a resolved binding table (this diagnosis sees one document,
-        // not the environment), Cognitive Services scopes are still
-        // resolvable by name through ARM.
-        let scope = match &edge.scope {
-            Scope::Resolved(id) => Some(id.clone()),
-            Scope::Unresolved {
-                kind: Some(BindingType::AiServices),
-                physical,
-                ..
-            } => arm.find_cognitive_account_id(physical).await.ok(),
-            Scope::Unresolved { .. } => None,
-        };
-        let Some(scope) = scope else { continue };
-        any_resolved = true;
-        let mut have = false;
-        for p in &principals {
-            if arm
-                .list_role_assignments(&scope, p)
-                .await?
-                .iter()
-                .any(|rd| rd.ends_with(edge.role.id))
-            {
-                have = true;
-                break;
-            }
-        }
-        if !have {
-            missing.push(MissingRole {
-                role_name: edge.role.name.to_string(),
-                role_id: edge.role.id.to_string(),
-                scope,
-                reason: edge.reason,
-            });
-        }
-    }
-    if !any_resolved {
-        return Ok(None);
-    }
-    Ok(Some(RbacDiagnosis {
-        principal: principals[0].clone(),
-        missing,
-    }))
+) -> Result<Option<auth_engine::Report>> {
+    let report = auth_engine::verify(
+        ctx,
+        ws,
+        env,
+        VerifyScope::Plan(vec![(r.kind, r.name.clone(), body.clone())]),
+        VerifyOpts::default(),
+    )
+    .await?;
+    let anything = report
+        .items
+        .iter()
+        .any(|i| matches!(i.status, Status::Ok | Status::Missing));
+    Ok(anything.then_some(report))
 }
 
 /// PUT that treats RBAC-shaped rejections as a solvable problem instead of
@@ -1102,7 +1322,8 @@ async fn put_with_rbac_help(
     r: &ResourceRef,
     body: &Value,
     ctx: &GlobalContext,
-    search_service: Option<&str>,
+    ws: &Workspace,
+    env: &ResolvedEnv,
 ) -> Result<Value> {
     let first = match remote.put(r, body).await {
         Ok(v) => return Ok(v),
@@ -1115,34 +1336,30 @@ async fn put_with_rbac_help(
         "!".yellow(),
         r
     );
-    let diagnosis = match search_service {
-        Some(svc) => match diagnose_rbac(r, body, svc).await {
-            Ok(d) => d,
-            Err(e) => {
-                say!(ctx, "  {} diagnosis unavailable ({e:#})", "!".yellow());
-                None
-            }
-        },
-        None => None,
+    let diagnosis = match diagnose_rbac(ctx, ws, env, r, body).await {
+        Ok(d) => d,
+        Err(e) => {
+            say!(ctx, "  {} diagnosis unavailable ({e:#})", "!".yellow());
+            None
+        }
     };
     match diagnosis {
-        Some(d) if !d.missing.is_empty() => {
-            for m in &d.missing {
-                say!(
-                    ctx,
-                    "  {} missing role: '{}' on {}",
-                    "✗".red(),
-                    m.role_name,
-                    m.scope
-                );
-                say!(ctx, "      needed because {}", m.reason);
+        Some(report) if !report.fixes().is_empty() => {
+            for item in report
+                .items
+                .iter()
+                .filter(|i| i.status == Status::Missing && !i.is_operator_edge())
+            {
+                say!(ctx, "  {} missing: {}", "✗".red(), item.headline());
+                say!(ctx, "      {}", item.detail);
             }
+            let fixes = report.fixes();
             if !ctx.interactive() {
                 return Err(anyhow!(CommandError::Validation(format!(
-                    "{r} requires role(s) the search identity does not hold: {} — run `rigg auth doctor --fix`",
-                    d.missing
+                    "{r} requires access the service identity does not hold: {} — run `rigg auth doctor --fix`",
+                    fixes
                         .iter()
-                        .map(|m| format!("'{}' on {}", m.role_name, m.scope))
+                        .map(Fix::describe)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))));
@@ -1155,15 +1372,14 @@ async fn put_with_rbac_help(
                     "missing role(s) left ungranted — run `rigg auth doctor --fix`, then push again",
                 ));
             }
-            let arm = rigg_client::arm::ArmClient::new()?;
-            for m in &d.missing {
-                arm.create_role_assignment(&m.scope, &d.principal, &m.role_id)
-                    .await
-                    .with_context(|| {
-                        format!("failed to assign '{}' on {}", m.role_name, m.scope)
-                    })?;
-                say!(ctx, "  {} granted '{}'", "✓".green(), m.role_name);
+            let arm = rigg_client::arm::ArmClient::for_tenant(env.env.tenant.as_deref())?;
+            let results = auth_engine::apply(ctx, &arm, &fixes).await?;
+            for (fix, outcome) in &results {
+                if let Err(e) = outcome {
+                    return Err(anyhow!("failed to {}: {e}", fix.describe()));
+                }
             }
+            wait_for_grants(ctx, &arm, &results).await;
         }
         Some(_) => say!(
             ctx,
@@ -1350,7 +1566,6 @@ async fn execute_replace(
     remote: &Remote,
     bundle: &ReplaceBundle,
     prior: Vec<Value>,
-    search_service: Option<&str>,
 ) -> Result<()> {
     let ks = &bundle.ks;
     say!(ctx, "  {} {}", "replace".magenta().bold(), ks);
@@ -1477,7 +1692,7 @@ async fn execute_replace(
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
         credentials::inject_function_keys(&mut with_refs).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
-        let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, search_service)
+        let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env)
             .await
             .with_context(|| step(&format!("while re-creating {r}")))?;
         store.write(r, &server_doc)?;
@@ -1490,7 +1705,7 @@ async fn execute_replace(
     let mut with_refs = bundle.new_body.clone();
     resolve_cross_service_refs(env.search(), &mut with_refs)?;
     let push_body = normalize_for_push(ks.kind, &with_refs);
-    let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, search_service)
+    let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, ws, env)
         .await
         .with_context(|| step("while re-creating the knowledge source"))?;
     store.write(ks, &server_doc)?;

@@ -174,6 +174,26 @@ around that. No compatibility with 1.x workspaces.
   (`identity: ok` / `identity: N missing — rigg auth doctor -e <env>`), from
   the same verification `auth doctor` runs; `--output json` gains an
   `identity` object per environment.
+- **`rigg push` verifies the identity graph before it writes anything.** The
+  plan-scoped auth preflight runs after the binding preflight and before the
+  protected gate: it is `auth doctor --plan` on exactly the bodies this push
+  would send. Missing role assignments rigg may grant are offered as one
+  confirmation (`auth.fix.all`, `--yes` non-interactively), applied, and then
+  **waited out** — rigg polls `atScope()` until each granted role is visible
+  before continuing (`RIGG_RBAC_RETRY_SECS`, default 10 s ×
+  `RIGG_RBAC_MAX_RETRIES`, default 18). Anything only a human may grant (the
+  operator's own rights) refuses with exit 4 and the exact `az` line;
+  `--dry-run` reports every finding and refuses nothing; unresolved items
+  never refuse. `--skip-auth-preflight` opts out. The existing PUT-retry loop
+  remains the safety net, and now diagnoses through the same binding-aware
+  engine instead of its own ARM walk.
+- **`rigg push --verify` and `rigg verify <project> [-e env]`** prove the
+  stack actually works: every indexer is run and watched to completion, every
+  knowledge base gets a retrieve, every agent a one-turn question. Failures
+  that look like an authorization problem are attributed to the identity edge
+  that would explain them (`→ likely <edge>`); exit 1 on any failure. New MCP
+  tool `rigg_verify` (`project?`, `env?`) and new `rigg_push` parameters
+  `verify` / `skip_auth_preflight` bring the MCP surface to 14 tools.
 
 ### Removed (library API)
 

@@ -5,7 +5,7 @@
 
 mod agent;
 mod index;
-mod indexer;
+pub(crate) mod indexer;
 mod kb;
 
 use anyhow::{Result, bail};

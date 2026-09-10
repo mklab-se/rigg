@@ -1371,3 +1371,355 @@ async fn status_auth_adds_one_identity_line_per_environment() {
         .success()
         .stdout(predicate::str::contains("rigg auth doctor -e dev"));
 }
+
+// ---------------------------------------------------- push preflight ------
+
+/// Data-plane mocks a one-data-source push needs: the resource does not
+/// exist remotely, and the PUT echoes what was sent.
+async fn mount_datasource_push(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/datasources/docs"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/datasources/docs"))
+        .respond_with(|req: &Request| {
+            ResponseTemplate::new(201)
+                .set_body_json(serde_json::from_slice::<Value>(&req.body).unwrap())
+        })
+        .mount(server)
+        .await;
+}
+
+/// Every data-plane PUT path the server saw, in order.
+async fn data_plane_puts(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::PUT)
+        .map(|r| r.url.path().to_string())
+        .collect()
+}
+
+/// The service identity is fully wired, but the *operator* holds nothing:
+/// rigg never grants a caller their own rights, so the preflight refuses
+/// with exit 4 before a single resource is written — even under `--yes`.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_refuses_before_writing_when_the_operator_cannot_do_the_push() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .args(["push", "demo", "-e", "dev", "--yes"])
+        .assert()
+        .code(4)
+        .stdout(predicate::str::contains("auth preflight"))
+        .stdout(predicate::str::contains("az role assignment create"))
+        .stderr(predicate::str::contains("--skip-auth-preflight"));
+
+    assert!(
+        data_plane_puts(&server).await.is_empty(),
+        "nothing may be written when the preflight refuses"
+    );
+}
+
+/// `--skip-auth-preflight` is the escape hatch: same environment, the push
+/// goes through.
+#[tokio::test(flavor = "multi_thread")]
+async fn skip_auth_preflight_pushes_anyway() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "dev",
+            "--yes",
+            "--skip-auth-preflight",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        data_plane_puts(&server)
+            .await
+            .contains(&"/datasources/docs".to_string()),
+        "the push proceeds when the preflight is skipped"
+    );
+}
+
+/// The whole point of the preflight: the missing role is granted, rigg waits
+/// until ARM reports it at the scope, and only then writes the resource.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_grants_the_missing_role_waits_for_it_then_pushes() {
+    let server = MockServer::start().await;
+    mount_base(&server).await;
+    mount_search_service(
+        &server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+    mount_storage_account(
+        &server,
+        &storage_id("acct"),
+        "Allow",
+        "AzureServices",
+        "Enabled",
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
+    // The operator can do the push and can grant at the storage scope.
+    mount_assignments_for(
+        &server,
+        &search_service_id(SUB, RG, SEARCH),
+        OPERATOR_OID,
+        &[SEARCH_SERVICE_CONTRIBUTOR],
+        "dev",
+    )
+    .await;
+    mount_permissions(&server, &storage_id("acct"), true).await;
+    mount_assignment_writes(&server).await;
+    // The storage scope answers "nothing yet" until the grant lands, then
+    // reports it — the propagation the preflight waits out.
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{}/providers/Microsoft.Authorization/roleAssignments",
+            storage_id("acct")
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_assignments_for(
+        &server,
+        &storage_id("acct"),
+        SEARCH_PID,
+        &[BLOB_DATA_READER],
+        "dev",
+    )
+    .await;
+    mount_no_assignments(&server).await;
+    mount_datasource_push(&server).await;
+
+    let ws = workspace(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+
+    rigg(ws.path(), &server.uri())
+        .env("RIGG_RBAC_RETRY_SECS", "0")
+        .env("RIGG_RBAC_MAX_RETRIES", "3")
+        .args(["push", "demo", "-e", "dev", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Storage Blob Data Reader"))
+        .stdout(predicate::str::contains("is visible"));
+
+    let puts = data_plane_puts(&server).await;
+    let role = puts
+        .iter()
+        .position(|p| p.contains("roleAssignments"))
+        .expect("the preflight grants the missing role");
+    let resource = puts
+        .iter()
+        .position(|p| p == "/datasources/docs")
+        .expect("the push proceeds after the grant");
+    assert!(role < resource, "grant must precede the write: {puts:?}");
+}
+
+// --------------------------------------------------------- rigg verify ----
+
+/// The Search + Foundry runtime endpoints `rigg verify` exercises.
+async fn mount_runtime(server: &MockServer, indexer_status: Value) {
+    Mock::given(method("POST"))
+        .and(path("/indexers/docs-indexer/run"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/indexers/docs-indexer/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(indexer_status))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/knowledgebases.*/retrieve$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "response": [{"content": [{"type": "text", "text": "[]"}]}],
+            "activity": [{"knowledgeSourceName": "docs-ks"}],
+            "references": []
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/api/projects/{FOUNDRY_PROJECT}/openai/v1/responses"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"output_text": "OK"})))
+        .mount(server)
+        .await;
+}
+
+fn write_verifiable_tree(ws: &std::path::Path) {
+    write_resource(ws, "data-sources", "docs", &blob_data_source(None));
+    write_resource(
+        ws,
+        "indexers",
+        "docs-indexer",
+        &json!({"name": "docs-indexer", "dataSourceName": "docs", "targetIndexName": "idx"}),
+    );
+    write_resource(
+        ws,
+        "knowledge-bases",
+        "docs-kb",
+        &json!({"name": "docs-kb", "knowledgeSources": [{"name": "docs-ks"}]}),
+    );
+    write_agent(ws, "regulus");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_runs_every_indexer_knowledge_base_and_agent() {
+    let server = MockServer::start().await;
+    mount_runtime(
+        &server,
+        json!({
+            "status": "running",
+            "lastResult": {"status": "success", "itemsProcessed": 7, "itemsFailed": 0}
+        }),
+    )
+    .await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_verifiable_tree(ws.path());
+
+    rigg(ws.path(), &server.uri())
+        .env("RIGG_WATCH_INTERVAL_SECS", "0")
+        .args(["verify", "demo", "-e", "dev"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "indexer 'docs-indexer' — 7 processed",
+        ))
+        .stdout(predicate::str::contains(
+            "knowledge base 'docs-kb' retrieved",
+        ))
+        .stdout(predicate::str::contains("agent 'regulus' replied"))
+        .stdout(predicate::str::contains("3 check(s) passed"));
+}
+
+/// A failed run whose message looks like an authorization problem is
+/// attributed to the identity edge that would explain it, and fails the run.
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_attributes_an_auth_shaped_indexer_failure_and_exits_1() {
+    let server = MockServer::start().await;
+    mount_runtime(
+        &server,
+        json!({
+            "status": "error",
+            "lastResult": {
+                "status": "error",
+                "errorMessage":
+                    "This request is not authorized to perform this operation. \
+                     Storage account 'acct' (403)"
+            }
+        }),
+    )
+    .await;
+
+    let ws = workspace_with_foundry(&server.uri());
+    write_resource(ws.path(), "data-sources", "docs", &blob_data_source(None));
+    write_resource(
+        ws.path(),
+        "indexers",
+        "docs-indexer",
+        &json!({"name": "docs-indexer", "dataSourceName": "docs", "targetIndexName": "idx"}),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .env("RIGG_WATCH_INTERVAL_SECS", "0")
+        .args(["verify", "demo", "-e", "dev"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("✗ indexer 'docs-indexer'"))
+        .stdout(predicate::str::contains("→ likely"))
+        .stderr(predicate::str::contains("1 of 1 verification(s) failed"));
+}

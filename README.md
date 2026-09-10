@@ -192,6 +192,9 @@ rigg pull my-rag --watch        # keep polling for remote changes
 rigg push my-rag --dry-run      # show the dependency-ordered plan, change nothing
 rigg push my-rag                # create/update, in dependency order
 rigg push my-rag --prune        # also delete remote resources whose files were removed
+rigg push my-rag --verify       # ...and then prove it works: run every indexer to completion,
+                                #   retrieve from every knowledge base, ask every agent
+rigg verify my-rag              # the same proof on its own, for a stack already pushed
 
 rigg migrate knowledge-source <name> --in-place       # convert a portal-created (azureBlob, ...)
                                 #   knowledge source to explicit searchIndex form; the next push
@@ -445,7 +448,7 @@ Knowledge sources are **explicit**: they point at an existing index you define a
 
 Your Agentic RAG stack is a graph: agents connect to knowledge bases, which route to knowledge sources, which search indexes fed by indexers and skillsets. Understanding one piece in isolation isn't enough — and that's exactly the limitation AI tools hit when your configuration lives only in Azure portals and REST APIs.
 
-rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server with 9 project-scoped tools (13 total, including 4 runtime-operation tools). `rigg describe` returns the full workspace graph — every resource, dependency, agent instruction, and file path — in a single call. Mutating tools are safe by default: they return a preview until called with `force: true`.
+rigg solves this by making every resource a local file *and* exposing a structured [MCP](https://modelcontextprotocol.io/) server with 9 project-scoped tools (14 total, including 5 runtime-operation tools). `rigg describe` returns the full workspace graph — every resource, dependency, agent instruction, and file path — in a single call. Mutating tools are safe by default: they return a preview until called with `force: true`.
 
 Any MCP-compatible AI tool works: Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI.
 

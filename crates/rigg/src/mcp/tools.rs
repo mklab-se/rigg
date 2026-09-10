@@ -175,9 +175,28 @@ pub struct PushParams {
     /// (time, ingestion cost, downtime). Ignored unless force=true.
     #[schemars(default)]
     pub allow_replace: Option<bool>,
+    /// After the push, prove the stack works: run every indexer to
+    /// completion, retrieve from every knowledge base, ask every agent.
+    /// Takes as long as ingestion takes. Ignored unless force=true.
+    #[schemars(default)]
+    pub verify: Option<bool>,
+    /// Skip the identity/RBAC preflight that runs before anything is
+    /// written. Only for a caller that cannot read Azure Resource Manager.
+    #[schemars(default)]
+    pub skip_auth_preflight: Option<bool>,
     /// Answers to questions a previous call returned as `needs-input` (id → value)
     #[schemars(default)]
     pub answers: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct VerifyParams {
+    /// Project name (omit when the workspace has exactly one project)
+    #[schemars(default)]
+    pub project: Option<String>,
+    /// Environment name (uses the default environment if omitted)
+    #[schemars(default)]
+    pub env: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -491,7 +510,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Plans containing a replace (e.g. a knowledge-source kind change after `rigg migrate`) additionally require allow_replace=true — the replaced index is rebuilt from source data. Always rigg_validate first."
+        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Plans containing a replace (e.g. a knowledge-source kind change after `rigg migrate`) additionally require allow_replace=true — the replaced index is rebuilt from source data. An identity/RBAC preflight runs before anything is written: missing role assignments rigg may grant are applied (with force=true) and waited out, anything only a human may grant fails with exit 4 and the exact az command — skip_auth_preflight=true bypasses it. verify=true additionally proves the pushed stack works (see rigg_verify). Always rigg_validate first."
     )]
     async fn rigg_push(&self, Parameters(params): Parameters<PushParams>) -> String {
         let mut args = vec!["push"];
@@ -509,8 +528,14 @@ impl RiggMcpServer {
             if params.allow_replace.unwrap_or(false) {
                 args.push("--allow-replace");
             }
+            if params.verify.unwrap_or(false) {
+                args.push("--verify");
+            }
         } else {
             args.push("--dry-run");
+        }
+        if params.skip_auth_preflight.unwrap_or(false) {
+            args.push("--skip-auth-preflight");
         }
         rigg_cli(&with_common_answers(
             args,
@@ -518,6 +543,17 @@ impl RiggMcpServer {
             false,
             params.answers.as_ref(),
         ))
+    }
+
+    #[tool(
+        description = "Prove a pushed project actually works against the live services: every indexer is RUN and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. NOT read-only — it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. Failures that look like an authorization problem are attributed to the identity edge that would explain them. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed."
+    )]
+    async fn rigg_verify(&self, Parameters(params): Parameters<VerifyParams>) -> String {
+        let mut args = vec!["verify"];
+        if let Some(p) = &params.project {
+            args.push(p);
+        }
+        rigg_cli(&with_common(args, &params.env, false))
     }
 
     #[tool(
