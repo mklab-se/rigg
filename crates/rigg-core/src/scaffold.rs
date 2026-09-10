@@ -151,6 +151,19 @@ fn scaffold_knowledge_base(name: &str) -> Value {
         "description": "Agentic retrieval over the listed knowledge sources.",
         "knowledgeSources": [
             {"name": "<knowledge-source-name>"}
+        ],
+        // A knowledge base plans its retrieval with a chat model: without
+        // one, Azure rejects every `retrieve` call. The deployment must
+        // already exist on the model host named here.
+        "models": [
+            {
+                "kind": "azureOpenAI",
+                "azureOpenAIParameters": {
+                    "resourceUri": "https://<foundry-account>.openai.azure.com",
+                    "deploymentId": "<deployment-name>",
+                    "modelName": "<model-name>"
+                }
+            }
         ]
     })
 }
@@ -622,5 +635,32 @@ mod tests {
             .map(|(_, _, v)| v)
             .unwrap();
         assert!(indexer["skillsetName"].is_null());
+    }
+
+    /// A knowledge base with no model cannot answer a `retrieve` call at
+    /// all — Azure rejects it — so the scaffold ships the block with
+    /// placeholders rather than leaving the reader to discover the 400.
+    #[test]
+    fn knowledge_base_scaffold_carries_a_model_placeholder() {
+        for kb in [
+            scaffold(ResourceKind::KnowledgeBase, "kb", None).unwrap(),
+            scaffold_pipeline("p", "azureblob", true)
+                .unwrap()
+                .into_iter()
+                .find(|(k, _, _)| *k == ResourceKind::KnowledgeBase)
+                .map(|(_, _, v)| v)
+                .unwrap(),
+        ] {
+            let params = &kb["models"][0]["azureOpenAIParameters"];
+            assert_eq!(kb["models"][0]["kind"], "azureOpenAI");
+            assert!(
+                params["deploymentId"].as_str().unwrap().starts_with('<'),
+                "{params}"
+            );
+            assert!(
+                params["resourceUri"].as_str().unwrap().contains('<'),
+                "{params}"
+            );
+        }
     }
 }
