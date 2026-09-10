@@ -365,6 +365,8 @@ This creates three workflows:
 
 The target environment is baked into the workflows at scaffold time (pass `--env`, or your default environment is used). Finish the setup by creating an Entra app registration with federated credentials and adding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as repository variables — `rigg ci init` prints the exact steps.
 
+Since a CI job can't sit at a prompt, a step that would otherwise ask a question (like a protected environment's confirmation) exits 6 with a `needs-input` JSON document instead of hanging. Pre-answer it in the workflow with `--answer <id>=<value>` (repeatable) or `--answers-file <path>` — e.g. `rigg push --all --yes --answer confirm.protected.prod=prod`.
+
 ### AI Assistance
 
 rigg has opt-in AI features powered by [ailloy](https://crates.io/crates/ailloy) — bring your own provider:
@@ -448,6 +450,9 @@ Standardized for scripting and CI (`--non-interactive` guarantees rigg never blo
 | 3 | Validation failed |
 | 4 | Auth / permission denied |
 | 5 | Drift or conflict detected |
+| 6 | Needs input |
+
+Exit 6 means a guided flow needs an answer it can't prompt for outside a terminal: rigg prints a `needs-input` JSON document (the questions, with ids/prompts/candidates) instead of failing blind. Answer with `--answer <id>=<value>` (repeatable) or `--answers-file <path>` and re-run; answered questions are never asked again.
 
 ## Architecture
 

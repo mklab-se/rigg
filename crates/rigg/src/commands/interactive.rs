@@ -29,6 +29,18 @@ pub fn select(prompt: &str, options: Vec<String>, plain: bool) -> Result<String>
         .map_err(map_err)
 }
 
+/// Like [`select`], but returns the chosen option's index into `options`
+/// instead of its label — the caller resolves it by position, so duplicate
+/// labels (or a candidate literally labelled like the sentinel row) are
+/// never mis-routed.
+pub fn select_index(prompt: &str, options: Vec<String>, plain: bool) -> Result<usize> {
+    Select::new(prompt, options)
+        .with_render_config(config(plain))
+        .raw_prompt()
+        .map(|picked| picked.index)
+        .map_err(map_err)
+}
+
 /// Returns the indices of the chosen options (order of the input list).
 pub fn multi_select(prompt: &str, options: Vec<String>, plain: bool) -> Result<Vec<usize>> {
     let indexed: Vec<String> = options;

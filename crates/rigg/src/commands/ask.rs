@@ -274,22 +274,21 @@ impl Asker for InteractiveAsker {
         }
         match q.kind {
             QuestionKind::Choice => {
+                // Resolve the pick by index, not by matching the label text
+                // back against the candidates: a duplicate label, or a
+                // candidate literally labelled like the sentinel row, must
+                // not be able to mis-route. The sentinel is recognised by
+                // position (always the last row), not by string equality.
                 let mut labels: Vec<String> =
                     q.candidates.iter().map(|c| c.label.clone()).collect();
                 if q.allow_other {
                     labels.push(ENTER_ANOTHER_VALUE.to_string());
                 }
-                let picked = interactive::select(&q.prompt, labels, self.plain)?;
-                if q.allow_other && picked == ENTER_ANOTHER_VALUE {
+                let index = interactive::select_index(&q.prompt, labels, self.plain)?;
+                if q.allow_other && index == q.candidates.len() {
                     Ok(Answer::Choice(interactive::text(&q.prompt, self.plain)?))
                 } else {
-                    let value = q
-                        .candidates
-                        .iter()
-                        .find(|c| c.label == picked)
-                        .map(|c| c.value.clone())
-                        .unwrap_or(picked);
-                    Ok(Answer::Choice(value))
+                    Ok(Answer::Choice(q.candidates[index].value.clone()))
                 }
             }
             QuestionKind::Text => {

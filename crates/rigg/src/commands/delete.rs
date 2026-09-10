@@ -63,11 +63,8 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
             String::new()
         }
     );
-    // `Remote::print_targets` prints straight to stdout (shared with other
-    // commands; see commands/remote.rs) — skip it in json mode so stdout
-    // stays pure for the JSON document, matching the `adopt` convention.
-    if !ctx.json() {
-        remote.print_targets();
+    for line in remote.target_lines() {
+        say!(ctx, "{line}");
     }
     let order = graph::delete_order(&items)?;
     for r in &order {
@@ -83,7 +80,7 @@ pub async fn run(ctx: &GlobalContext, args: DeleteArgs) -> Result<()> {
     }
 
     if ctx.interactive() {
-        say!(ctx,);
+        say!(ctx);
         let answer = interactive::text("Type the project name to confirm:", ctx.no_color)?;
         if answer.trim() != project.name {
             say!(ctx, "aborted");

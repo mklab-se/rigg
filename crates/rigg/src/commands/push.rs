@@ -94,11 +94,8 @@ async fn push_project(
             String::new()
         }
     );
-    // `Remote::print_targets` prints straight to stdout (shared with other
-    // commands; see commands/remote.rs) — skip it in json mode so stdout
-    // stays pure for the JSON document, matching the `adopt` convention.
-    if !ctx.json() {
-        remote.print_targets();
+    for line in remote.target_lines() {
+        say!(ctx, "{line}");
     }
 
     // Collect local resources.
@@ -599,7 +596,7 @@ async fn push_project(
     // not have yet — offer to verify/grant them right here instead of
     // hinting and letting the push run into a predictable 400.
     if fixed_credentials && ctx.interactive() {
-        say!(ctx,);
+        say!(ctx);
         if interactive::confirm_default_yes(
             "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
             ctx.no_color,
@@ -615,8 +612,9 @@ async fn push_project(
 
     // Protected-env gate: fires after the plan is built and displayed (the
     // "explain, then act" rule — show what would happen, then ask), and
-    // before any mutating call (creates/updates below, and the --prune
-    // deletion path), and before the routine apply confirmation so a
+    // before any mutating call to the environment's resources (creates/
+    // updates below, and the --prune deletion path), and before the routine
+    // apply confirmation so a
     // rejected/missing typed confirmation short-circuits everything that
     // follows. Dry runs never reach here — they return above, before this
     // point, so previewing a protected env's plan without confirming is
@@ -670,7 +668,7 @@ async fn push_project(
     for r in &conflicts {
         let local = store.read(r)?;
         let remote_doc = remote.get(r).await?.unwrap_or(Value::Null);
-        say!(ctx,);
+        say!(ctx);
         say!(ctx, "{} {}", "Conflict:".red().bold(), r);
         let diff = rigg_diff::semantic::diff(
             &normalize_for_push(r.kind, &remote_doc),

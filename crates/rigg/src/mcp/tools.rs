@@ -4,6 +4,16 @@
 //! of this process stays clean for JSON-RPC, and tool behavior is exactly the
 //! CLI behavior. Mutating tools follow the preview/execute pattern: without
 //! `force` they return a preview, with `force: true` they execute.
+//!
+//! The needs-input loop: a guided flow (e.g. the protected-environment gate)
+//! that needs an answer it cannot prompt for makes the underlying `rigg`
+//! subprocess exit 6 with a `needs-input` JSON document on stdout; `rigg_cli`
+//! passes that document through unchanged as the tool result (not an error —
+//! see its exit-6 arm). A caller answers by re-calling the same tool with
+//! `answers` (question id → value) filled in, which is threaded through to
+//! `--answer <id>=<value>` on the CLI invocation via `with_common_answers`.
+
+use std::collections::BTreeMap;
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -24,6 +34,9 @@ pub struct ProjectParams {
     /// Environment name (uses the default environment if omitted)
     #[schemars(default)]
     pub env: Option<String>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -108,6 +121,9 @@ pub struct DiffParams {
     /// Compare this environment against another one instead of local files
     #[schemars(default)]
     pub compare_env: Option<String>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -124,6 +140,9 @@ pub struct PullParams {
     /// Without force (default) returns a preview (diff). With force=true, executes the pull.
     #[schemars(default)]
     pub force: Option<bool>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -149,6 +168,9 @@ pub struct PushParams {
     /// (time, ingestion cost, downtime). Ignored unless force=true.
     #[schemars(default)]
     pub allow_replace: Option<bool>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -165,6 +187,9 @@ pub struct DeleteParams {
     /// Ignored unless force=true.
     #[schemars(default)]
     pub confirm_env: Option<String>,
+    /// Answers to questions a previous call returned as `needs-input` (id → value)
+    #[schemars(default)]
+    pub answers: Option<BTreeMap<String, String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -193,13 +218,13 @@ impl Default for RiggMcpServer {
 
 /// Run the rigg CLI as a subprocess and return its stdout (plus a note on
 /// non-zero exits, mapped to rigg's documented exit codes).
-fn rigg_cli(args: &[&str]) -> String {
+fn rigg_cli<S: AsRef<str>>(args: &[S]) -> String {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => return format!("Error: cannot locate rigg executable: {e}"),
     };
     let output = std::process::Command::new(exe)
-        .args(args)
+        .args(args.iter().map(S::as_ref))
         .env("RIGG_NO_UPDATE_CHECK", "1")
         .output();
     match output {
@@ -209,6 +234,10 @@ fn rigg_cli(args: &[&str]) -> String {
             let code = out.status.code().unwrap_or(-1);
             match code {
                 0 => stdout,
+                // needs-input: the JSON document on stdout IS the tool
+                // result (not an error) — a caller answers the listed
+                // questions (`answers`, id → value) and calls again.
+                6 => stdout,
                 3 => format!("VALIDATION FAILED (exit 3)\n{stdout}\n{stderr}"),
                 4 => format!("AUTH/PERMISSION DENIED (exit 4)\n{stdout}\n{stderr}"),
                 5 => format!("DRIFT/CONFLICT DETECTED (exit 5)\n{stdout}\n{stderr}"),
@@ -219,7 +248,33 @@ fn rigg_cli(args: &[&str]) -> String {
     }
 }
 
-fn with_common<'a>(mut args: Vec<&'a str>, env: &'a Option<String>, json: bool) -> Vec<&'a str> {
+/// `--answer <id>=<value>` flags for every pre-supplied answer, sorted by id
+/// (`BTreeMap` iteration order) for deterministic output.
+fn answer_flags(answers: Option<&BTreeMap<String, String>>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(answers) = answers {
+        for (id, value) in answers {
+            out.push("--answer".to_string());
+            out.push(format!("{id}={value}"));
+        }
+    }
+    out
+}
+
+fn with_common<'a>(args: Vec<&'a str>, env: &'a Option<String>, json: bool) -> Vec<String> {
+    with_common_answers(args, env, json, None)
+}
+
+/// Like [`with_common`], additionally appending `--answer <id>=<value>` for
+/// every pre-supplied answer — the MCP counterpart of the CLI's `--answer`
+/// flag, letting a caller resolve a prior `needs-input` result by re-calling
+/// the same tool with `answers` filled in.
+fn with_common_answers<'a>(
+    mut args: Vec<&'a str>,
+    env: &'a Option<String>,
+    json: bool,
+    answers: Option<&BTreeMap<String, String>>,
+) -> Vec<String> {
     if let Some(env) = env {
         args.push("--env");
         args.push(env);
@@ -229,7 +284,9 @@ fn with_common<'a>(mut args: Vec<&'a str>, env: &'a Option<String>, json: bool) 
         args.push("json");
     }
     args.push("--quiet");
-    args
+    let mut out: Vec<String> = args.into_iter().map(String::from).collect();
+    out.extend(answer_flags(answers));
+    out
 }
 
 #[tool_router]
@@ -242,7 +299,12 @@ impl RiggMcpServer {
         if let Some(p) = &params.project {
             args.push(p);
         }
-        rigg_cli(&with_common(args, &params.env, true))
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            true,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(
@@ -253,7 +315,12 @@ impl RiggMcpServer {
         if let Some(p) = &params.project {
             args.push(p);
         }
-        rigg_cli(&with_common(args, &params.env, true))
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            true,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(description = "List all configured deployment environments from rigg.yaml")]
@@ -291,7 +358,12 @@ impl RiggMcpServer {
         if let Some(ce) = &params.compare_env {
             args.extend(["--compare-env", ce]);
         }
-        rigg_cli(&with_common(args, &params.env, false))
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            false,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(
@@ -304,7 +376,12 @@ impl RiggMcpServer {
                 args.push(p);
             }
             args.extend(["--format", "json"]);
-            let preview = rigg_cli(&with_common(args, &params.env, false));
+            let preview = rigg_cli(&with_common_answers(
+                args,
+                &params.env,
+                false,
+                params.answers.as_ref(),
+            ));
             return format!(
                 "PREVIEW (no changes made) — differences between local and remote:\n{preview}\nRun again with force=true to pull."
             );
@@ -315,14 +392,24 @@ impl RiggMcpServer {
                 return "Error: adopt=true requires an explicit project".to_string();
             }
             let args = vec!["adopt", project, "all", "--yes"];
-            return rigg_cli(&with_common(args, &params.env, false));
+            return rigg_cli(&with_common_answers(
+                args,
+                &params.env,
+                false,
+                params.answers.as_ref(),
+            ));
         }
         let mut args = vec!["pull"];
         if let Some(p) = &params.project {
             args.push(p);
         }
         args.push("--yes");
-        rigg_cli(&with_common(args, &params.env, false))
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            false,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(
@@ -347,7 +434,12 @@ impl RiggMcpServer {
         } else {
             args.push("--dry-run");
         }
-        rigg_cli(&with_common(args, &params.env, false))
+        rigg_cli(&with_common_answers(
+            args,
+            &params.env,
+            false,
+            params.answers.as_ref(),
+        ))
     }
 
     #[tool(
@@ -415,6 +507,7 @@ impl RiggMcpServer {
                 .rigg_status(Parameters(ProjectParams {
                     project: Some(params.project.clone()),
                     env: params.env.clone(),
+                    answers: params.answers.clone(),
                 }))
                 .await;
             return format!(
@@ -430,6 +523,8 @@ impl RiggMcpServer {
             args.extend(["--confirm-env", confirm_env]);
         }
         args.push("--quiet");
+        let mut args: Vec<String> = args.into_iter().map(String::from).collect();
+        args.extend(answer_flags(params.answers.as_ref()));
         rigg_cli(&args)
     }
 }
@@ -444,7 +539,36 @@ impl ServerHandler for RiggMcpServer {
              understand the workspace, rigg_validate before changes, rigg_diff to inspect \
              drift, rigg_push (preview first, then force=true). Resource definitions are \
              JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
-             stored in files — identity-based access only.",
+             stored in files — identity-based access only. Guided flows can ask questions: a \
+             mutating tool call may come back as a `needs-input` JSON document (the questions, \
+             with ids/prompts/candidates) instead of its usual result — that document IS the \
+             tool result, not an error. Answer by re-calling the same tool with `answers` \
+             (question id → value) filled in; answered questions are never asked again.",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_common_appends_answer_flags_in_sorted_order() {
+        let answers: BTreeMap<String, String> = [
+            ("b".to_string(), "2".to_string()),
+            ("a".to_string(), "1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let args = with_common_answers(vec!["push"], &None, true, Some(&answers));
+        assert!(args.windows(2).any(|w| w == ["--answer", "a=1"]));
+        assert!(args.windows(2).any(|w| w == ["--answer", "b=2"]));
+    }
+
+    #[test]
+    fn with_common_answers_none_matches_with_common() {
+        let a = with_common(vec!["status"], &None, true);
+        let b = with_common_answers(vec!["status"], &None, true, None);
+        assert_eq!(a, b);
     }
 }

@@ -32,6 +32,13 @@ around that. No compatibility with 1.x workspaces.
   `rigg dev api-fixture` refreshes the pinned schema fixtures.
 - Pull and adopt report fields Azure returns that rigg's pinned schema does
   not know (API-drift canary; documents stay untouched).
+- **Question protocol**: guided flows (starting with the protected-environment
+  gate) ask questions through a shared `Asker` — interactively on a terminal,
+  or via `--answer <id>=<value>` / `--answers-file <path>` in scripts and from
+  AI agents. An unanswered question prints a `needs-input` JSON document and
+  exits 6 (new exit code) instead of hanging or failing blind. MCP tools
+  accept the same answers through an `answers` parameter, and a `needs-input`
+  tool result is the raw JSON document, not an error.
 
 ### Removed (library API)
 

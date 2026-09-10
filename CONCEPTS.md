@@ -164,6 +164,26 @@ the routine "apply N changes?" prompt, and scripts reach for it reflexively;
 if it also cleared this gate, a protected environment would be no safer than
 an ordinary one.
 
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | error |
+| 2 | usage error |
+| 3 | validation failed |
+| 4 | auth / permission denied |
+| 5 | drift or conflict detected |
+| 6 | needs input |
+
+**When rigg needs an answer.** Guided flows ask questions. On a terminal rigg
+prompts. In scripts and from AI agents rigg cannot prompt, so it prints a
+`needs-input` JSON document listing the questions (id, prompt, candidates)
+and exits 6. Re-run with `--answer <id>=<value>` (repeatable) or
+`--answers-file <path>`; answered questions are never asked again. A
+protected environment's typed confirmation is such a question
+(`confirm.protected.<env>`); `--confirm-env <env>` remains as shorthand.
+
 ## See also
 
 - **Getting Started** (`GETTING_STARTED.md`) — build a stack from scratch.

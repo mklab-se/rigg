@@ -40,17 +40,29 @@ impl Remote {
     /// so the user can verify where cloud operations go before anything
     /// happens — the URLs shown are exactly what the clients request against.
     pub fn print_targets(&self) {
+        for line in self.target_lines() {
+            println!("{line}");
+        }
+    }
+
+    /// The same lines [`Self::print_targets`] prints, one per target, for
+    /// callers that route output through `say!` instead of printing straight
+    /// to stdout (so the line still reaches stderr in json mode rather than
+    /// vanishing).
+    pub fn target_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
         if let Some(s) = &self.search_conn {
-            println!("  Search:  {} → {}", s.service.bold(), s.url());
+            lines.push(format!("  Search:  {} → {}", s.service.bold(), s.url()));
         }
         if let Some(f) = &self.foundry_conn {
-            println!(
+            lines.push(format!(
                 "  Foundry: {}/{} → {}",
                 f.account.bold(),
                 f.project,
                 f.url()
-            );
+            ));
         }
+        lines
     }
 
     pub fn has_search(&self) -> bool {

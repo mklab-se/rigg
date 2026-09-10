@@ -49,6 +49,9 @@ use crate::cli::{Cli, OutputFormat};
 /// stderr) as the command runs.
 #[macro_export]
 macro_rules! say {
+    ($ctx:expr) => {
+        if $ctx.json() { eprintln!() } else { println!() }
+    };
     ($ctx:expr, $($arg:tt)*) => {
         if $ctx.json() { eprintln!($($arg)*) } else { println!($($arg)*) }
     };
@@ -335,16 +338,18 @@ pub fn resolve_env_or_choose(
 /// `--yes` like any other question.
 ///
 /// Returns `Ok(true)` when the operation may proceed, `Ok(false)` when the
-/// user declined (interactive typed-name mismatch, or a mismatched answer)
-/// — callers should print "Aborted." and return `Ok(())`, matching every
-/// other decline in the CLI (e.g. answering `n` to "Apply N change(s)?").
+/// user declined via an interactive typed-name mismatch — callers should
+/// print "Aborted." and return `Ok(())`, matching every other decline in the
+/// CLI (e.g. answering `n` to "Apply N change(s)?").
 ///
 /// No-op (`Ok(true)`) when the environment is unprotected. Otherwise:
 /// - `--confirm-env <name>` is pre-supplied to the asker as the answer to
 ///   `confirm.protected.<env>`, so it matches the environment name exactly
-///   the same way a typed confirmation or `--answer` would.
-/// - Interactive session → prompts the user to type the environment name;
-///   a mismatch → `Ok(false)`.
+///   the same way a typed confirmation or `--answer` would; a mismatch here
+///   is a usage error (`Err(CommandError::Usage)`, exit 2) naming the
+///   expected environment, not a silent decline.
+/// - Interactive session (no `--confirm-env`) → prompts the user to type the
+///   environment name; a mismatch → `Ok(false)`.
 /// - Non-interactive session (incl. `--yes`) with no answer → the scripted
 ///   asker returns `NeedsInput`, which propagates as `Err` and maps to exit
 ///   code 6 — the caller answers with `--confirm-env` / `--answer` and
@@ -374,7 +379,19 @@ pub fn confirm_protected_env(
         scoped.answers.insert(question.id.clone(), name.to_string());
     }
     let mut asker = scoped.asker(operation, serde_json::json!({"env": env.name}));
-    Ok(asker.ask(&question)?.as_bool().unwrap_or(false))
+    match asker.ask(&question) {
+        Ok(answer) => Ok(answer.as_bool().unwrap_or(false)),
+        // A pre-supplied `--confirm-env` that fails coercion (wrong name) is
+        // a usage error (exit 2), not a generic failure (exit 1) — it names
+        // the environment `--confirm-env` must match exactly. An answer that
+        // came from an interactive prompt instead (confirm_env is None here)
+        // is left as-is so NeedsInput (exit 6) still propagates untouched.
+        Err(_) if confirm_env.is_some() => Err(anyhow!(CommandError::Usage(format!(
+            "--confirm-env must equal the environment name '{}' exactly",
+            env.name
+        )))),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

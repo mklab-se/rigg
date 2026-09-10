@@ -39,6 +39,16 @@ fn help_shows_project_scoped_surface() {
 }
 
 #[test]
+fn answer_flags_are_global() {
+    rigg()
+        .args(["push", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--answer <ID=VALUE>"))
+        .stdout(predicate::str::contains("--answers-file"));
+}
+
+#[test]
 fn removed_flags_are_gone() {
     rigg()
         .arg("pull")

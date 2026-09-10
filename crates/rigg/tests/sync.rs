@@ -1089,6 +1089,51 @@ async fn protected_env_push_accepts_answer_flag() {
 }
 
 #[tokio::test]
+async fn protected_env_push_wrong_confirm_env_exits_usage_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/indexes/idx"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_protected_prod(&server.uri());
+    write_resource_env(
+        ws.path(),
+        "prod",
+        "indexes",
+        "idx",
+        &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
+    );
+
+    rigg(ws.path())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "prod",
+            "--yes",
+            "--confirm-env",
+            "stag",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("prod"));
+
+    let puts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .count();
+    assert_eq!(
+        puts, 0,
+        "a wrong --confirm-env value must not mutate the protected environment"
+    );
+}
+
+#[tokio::test]
 async fn protected_env_push_succeeds_with_confirm_env() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

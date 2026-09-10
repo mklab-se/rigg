@@ -98,4 +98,14 @@ never satisfies this gate.
   self-verification.
 - Tab completion incl. resource names: `source <(COMPLETE=zsh rigg)` in the
   shell rc (bash/fish equivalents); candidates come from local files.
-- Exit codes: 0 ok · 1 error · 2 usage · 3 validation · 4 auth · 5 drift/conflict.
+- Exit codes: 0 ok · 1 error · 2 usage · 3 validation · 4 auth · 5 drift/conflict
+  · 6 needs input.
+- Guided flows (e.g. the protected-environment gate) ask questions through a
+  shared protocol: interactively on a terminal, or via `--answer
+  <id>=<value>` (repeatable) / `--answers-file <path>` when scripted or run
+  by an AI agent. Unanswered → exits 6 with a `needs-input` JSON document
+  (questions: id, prompt, candidates) instead of hanging; re-run with the
+  missing answers. `--confirm-env <name>` is shorthand for answering a
+  protected environment's `confirm.protected.<env>` question. MCP tools take
+  the same answers via an `answers: {id: value}` parameter; a `needs-input`
+  result IS the tool result, not an error — answer and call again.
