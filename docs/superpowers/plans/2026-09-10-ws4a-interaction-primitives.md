@@ -307,3 +307,18 @@ git commit -m "feat(mcp,docs): answers pass-through for MCP tools; document the 
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
+
+---
+
+## Execution record (2026-09-10)
+
+Executed on branch `rigg-2`, commits 27f5733..5217925. Rulings:
+
+- | T1 unknown-id check vs lazily declared questions | prefix registry KNOWN_ID_PREFIXES (Ruling: prefixes, not exact ids, so later workstreams append; cost if wrong: a typo in an id is not caught at startup) | clean |
+- Task 1: review Approved; Important: module-wide #![allow(dead_code)] in ask.rs. Ruling: carried into Task 2 (which wires the primitives and removes most dead surface) — Task 2 must replace it with item-level allows or remove them. Cost if wrong: none.
+- Task 2: implemented c0b7293 (DONE_WITH_CONCERNS). Concern: protected gate moved BEFORE the plan output to keep stdout pure in json mode — violates explain-then-act. Ruling: fix round before review — restore gate-after-plan; add a `say!`-style helper that writes prose to stdout in text mode and stderr in json mode, apply to push.rs and delete.rs prose; the needs-input document remains the only stdout content in json mode. Cost if wrong: none; keeps the UX rule.
+- Task 2: review Approved. Important 1 (print_targets suppressed instead of redirected in json mode) + Minor 2 (wrong --confirm-env exits 1 not 2) + Minor 3 (choice label→value by index; sentinel shadowing) + Minor 5 (MCP exit-6 label) + Minor 6 (say!(ctx) blank-line arm) — Ruling: carried into Task 3 (touches mcp/tools.rs, docs; the others are 5-line edits in files Task 3 already opens). Minor 4 (gate comment wording) folded in too. Cost if wrong: none.
+- Task 3: review Approved. Important (out of brief scope): rigg_indexer_run MCP tool has no answers/confirm_env param → dead end on protected envs. Ruling: fix in the final fix wave.
+- Final review (opus): mergeable after fixes. Ruling: ONE fix wave covering Critical 1 (MCP isolates the needs-input document from text stdout), Critical 2 (rigg_indexer_run gets answers+confirm_env), Important 3 (az target banner via say!), 4 (MCP.md), 5 (CHANGELOG breaking list + RIGG_NON_INTERACTIVE docs), 6 (mode-detection + answers-file + delete tests), 7 (protected_env_question + confirm_env answer helper; confirm_protected_env becomes the convenience wrapper), 8 (command = re-runnable name, context carries project), 9 (ask_all accumulates coercion errors), 10 (drop CommandError::NeedsInput; ask::NeedsInput canonical), 12 (RIGG_NON_INTERACTIVE=0/"" not truthy — document "set to 1"), 13 (doc line), 14 (assert exact message), 15 (explicit fallback). Finding 11 (routine --yes gates stay usage errors) — Ruling: keep per spec §2; revisit when promote lands. Cost if wrong: agents hit exit 2 after exit 6 on protected pushes without --yes — documented.
+
+Deferred (can wait): az indexer run/reset prose still println! under --output json; ConfirmEnv env derived from id prefix; routine --yes gates remain usage errors (spec §2) until promote lands.
