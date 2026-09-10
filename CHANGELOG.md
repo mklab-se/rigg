@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] — 2.0.0
+## [2.0.0] - 2026-09-10
 
 rigg 2.0 narrows to the Agentic RAG stack it does best — Microsoft Foundry
 agents grounded on Azure AI Search, fed from Azure Blob Storage, enriched by
