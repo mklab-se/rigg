@@ -607,13 +607,8 @@ async fn push_project(
                 let mut resolved_any = false;
                 let mut all_resolved = true;
                 for idx in credentials::webapi_skills_missing_auth(&doc) {
-                    match credentials::resolve_webapi_auth(
-                        &mut doc,
-                        idx,
-                        &r.to_string(),
-                        ctx.no_color,
-                    )
-                    .await?
+                    match credentials::resolve_webapi_auth(ctx, &mut doc, idx, &r.to_string())
+                        .await?
                     {
                         credentials::WebApiAuthOutcome::Skipped => all_resolved = false,
                         _ => resolved_any = true,
@@ -867,7 +862,7 @@ async fn push_project(
         // that drive the resolution.
         let mut with_refs = item.body.clone();
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
-        credentials::inject_function_keys(&mut with_refs).await?;
+        credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
         match put_with_rbac_help(&remote, r, &body, ctx, ws, env).await {
@@ -1690,7 +1685,7 @@ async fn execute_replace(
             .expect("ordered item");
         let mut with_refs = body.clone();
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
-        credentials::inject_function_keys(&mut with_refs).await?;
+        credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
         let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env)
             .await

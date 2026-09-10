@@ -965,6 +965,30 @@ pub const X_RIGG_AUTH: &str = "x-rigg-auth";
 /// The [`X_RIGG_AUTH`] value meaning "a function key is the carrier": the
 /// key itself lives in ARM, never on disk.
 pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
+/// Prefix of the [`X_RIGG_AUTH`] value naming an Azure Key Vault secret as
+/// the key source: `key-vault:<secret-name>@<key-vault binding>` (spec
+/// `2026-09-09-identity-and-auth-design.md` §6). The secret's value is read
+/// at push time and placed in the outgoing body only — never on disk.
+pub const X_RIGG_AUTH_KEY_VAULT_PREFIX: &str = "key-vault:";
+
+/// Split a `key-vault:<secret>@<binding>` [`X_RIGG_AUTH`] value into its
+/// secret name and key-vault binding name. `None` for any other value, or
+/// when either half is empty.
+///
+/// The secret name is everything up to the LAST `@`, so a binding name is
+/// unambiguous even though Key Vault secret names cannot contain `@`.
+pub fn parse_key_vault_auth(value: &str) -> Option<(&str, &str)> {
+    let rest = value.strip_prefix(X_RIGG_AUTH_KEY_VAULT_PREFIX)?;
+    let (secret, binding) = rest.rsplit_once('@')?;
+    let (secret, binding) = (secret.trim(), binding.trim());
+    (!secret.is_empty() && !binding.is_empty()).then_some((secret, binding))
+}
+
+/// Whether an [`X_RIGG_AUTH`] value is a key source rigg knows how to
+/// resolve at push time.
+pub fn is_known_auth_annotation(value: &str) -> bool {
+    value == X_RIGG_AUTH_FUNCTION_KEY || parse_key_vault_auth(value).is_some()
+}
 
 /// Mutable counterpart of [`collect_path`]: visit every value at `path`.
 fn collect_path_mut(v: &mut Value, path: &str, f: &mut dyn FnMut(&mut Value)) {
@@ -1389,6 +1413,29 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn key_vault_auth_annotations_parse_and_are_recognized() {
+        assert_eq!(
+            parse_key_vault_auth("key-vault:fn-key@secrets"),
+            Some(("fn-key", "secrets"))
+        );
+        // The LAST `@` separates the halves, so a secret name that somehow
+        // carries one still resolves to the right binding.
+        assert_eq!(
+            parse_key_vault_auth("key-vault:a@b@vault"),
+            Some(("a@b", "vault"))
+        );
+        assert_eq!(parse_key_vault_auth("key-vault:@vault"), None);
+        assert_eq!(parse_key_vault_auth("key-vault:secret@"), None);
+        assert_eq!(parse_key_vault_auth("key-vault:secret"), None);
+        assert_eq!(parse_key_vault_auth(X_RIGG_AUTH_FUNCTION_KEY), None);
+
+        assert!(is_known_auth_annotation(X_RIGG_AUTH_FUNCTION_KEY));
+        assert!(is_known_auth_annotation("key-vault:fn-key@secrets"));
+        assert!(!is_known_auth_annotation("managed-identity"));
+        assert!(!is_known_auth_annotation(""));
     }
 
     #[test]

@@ -602,6 +602,60 @@ impl ArmClient {
         Ok(crate::arm::arm_resource_from_value(&value, None))
     }
 
+    /// A user-assigned managed identity's `(principalId, clientId)`.
+    ///
+    /// Easy Auth needs both halves and they are not interchangeable: the
+    /// *client* id is what `allowedApplications` names, the *principal*
+    /// (object) id is what an app-role assignment is made for.
+    pub async fn managed_identity_ids(
+        &self,
+        uami_id: &str,
+    ) -> Result<(String, String), ClientError> {
+        let value = self
+            .get_json(&self.url(uami_id, Provider::ManagedIdentityArm))
+            .await?;
+        let principal_id = str_at(&value, "/properties/principalId");
+        let client_id = str_at(&value, "/properties/clientId");
+        match (principal_id, client_id) {
+            (Some(p), Some(c)) => Ok((p, c)),
+            _ => Err(ClientError::InvalidResponse(format!(
+                "user-assigned identity '{uami_id}' reports no principalId/clientId"
+            ))),
+        }
+    }
+
+    // -------------------------------------------------------- easy auth --
+
+    /// Write a site's Easy Auth (`authSettingsV2`) configuration.
+    ///
+    /// Unlike the read ([`crate::arm::ArmClient::site_auth_settings`], an ARM
+    /// *action* and therefore a POST), the write is an ordinary PUT on the
+    /// config sub-resource — and it REPLACES the document, which is why
+    /// every caller must send a merge of the current one.
+    pub async fn put_site_auth_settings(
+        &self,
+        site_id: &str,
+        settings: &Value,
+    ) -> Result<Value, ClientError> {
+        self.put_json(
+            &self.url(
+                &format!("{site_id}/config/authsettingsV2"),
+                Provider::WebArm,
+            ),
+            settings,
+        )
+        .await
+    }
+
+    /// A site's `properties.defaultHostName` — the host a Web API skill's
+    /// `uri` carries when it calls this function app.
+    pub async fn site_default_hostname(&self, site_id: &str) -> Result<String, ClientError> {
+        let value = self.get_json(&self.url(site_id, Provider::WebArm)).await?;
+        str_at(&value, "/properties/defaultHostName").ok_or_else(|| {
+            ClientError::InvalidResponse(format!("site '{site_id}' reports no defaultHostName"))
+        })
+    }
+
     /// Who the bearer token belongs to, decoded from the token itself.
     ///
     /// The JWT payload is read without verifying the signature — the token

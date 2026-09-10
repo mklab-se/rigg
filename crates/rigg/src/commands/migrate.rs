@@ -360,7 +360,7 @@ async fn check_webapi_auth(
     let mut resolved_any = false;
     for idx in missing {
         if !matches!(
-            credentials::resolve_webapi_auth(&mut doc, idx, &r.to_string(), ctx.no_color).await?,
+            credentials::resolve_webapi_auth(ctx, &mut doc, idx, &r.to_string()).await?,
             credentials::WebApiAuthOutcome::Skipped
         ) {
             resolved_any = true;

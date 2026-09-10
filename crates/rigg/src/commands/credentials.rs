@@ -13,6 +13,8 @@ use colored::Colorize;
 use serde_json::Value;
 
 use rigg_client::arm::ArmClient;
+use rigg_core::binding::{BindingCache, BindingType};
+use rigg_core::workspace::{ResolvedEnv, Workspace};
 
 use crate::commands::interactive;
 
@@ -294,7 +296,10 @@ pub fn print_ai_services_rbac_hint(account: &str) {
 /// resolved through ARM at push time (never stored on disk). Kept in the
 /// file, stripped before any PUT like every `x-rigg-*` key. Defined once,
 /// in the registry — the table every `x-rigg-*` key belongs to.
-pub use rigg_core::registry::{X_RIGG_AUTH, X_RIGG_AUTH_FUNCTION_KEY};
+pub use rigg_core::registry::{
+    X_RIGG_AUTH, X_RIGG_AUTH_FUNCTION_KEY, X_RIGG_AUTH_KEY_VAULT_PREFIX, is_known_auth_annotation,
+    parse_key_vault_auth,
+};
 
 /// Indices of Web API skills whose auth was lost to redaction: the URI
 /// carries Azure's `code=<redacted>` placeholder and the skill has neither
@@ -364,7 +369,10 @@ pub fn webapi_skills_missing_auth(doc: &Value) -> Vec<usize> {
                 && s.get("authResourceId")
                     .and_then(Value::as_str)
                     .is_none_or(str::is_empty)
-                && s.get(X_RIGG_AUTH).and_then(Value::as_str) != Some(X_RIGG_AUTH_FUNCTION_KEY)
+                && !s
+                    .get(X_RIGG_AUTH)
+                    .and_then(Value::as_str)
+                    .is_some_and(is_known_auth_annotation)
         })
         .map(|(i, _)| i)
         .collect()
@@ -460,11 +468,12 @@ pub enum WebApiAuthOutcome {
 /// function app already has Easy Auth, otherwise with concrete enablement
 /// guidance) or a push-time-resolved function key (never stored on disk).
 pub async fn resolve_webapi_auth(
+    ctx: &crate::commands::GlobalContext,
     doc: &mut Value,
     idx: usize,
     ds_display: &str,
-    plain: bool,
 ) -> Result<WebApiAuthOutcome> {
+    let plain = ctx.no_color;
     let uri = doc["skills"][idx]["uri"]
         .as_str()
         .unwrap_or_default()
@@ -486,19 +495,49 @@ pub async fn resolve_webapi_auth(
 
     const ENTRA_READY: &str =
         "identity-based (Entra ID) — recommended: keyless, verifiable by auth doctor";
+    const ENTRA_SETUP: &str =
+        "identity-based (Entra ID) — set it up now (registers the app and enables Easy Auth)";
     const ENTRA_GUIDE: &str = "identity-based (Entra ID) — recommended, but the function app has no Entra auth yet (show what's needed)";
     const KEY: &str = "function key, resolved at push time — key stays in Azure, never on disk";
     const SKIP: &str = "skip for now (enrichment will fail until authorized)";
-    let entra_option = if entra_audience.is_some() {
-        ENTRA_READY
-    } else {
-        ENTRA_GUIDE
+    // `rigg auth easy-auth` wires the app end to end, but only when the app
+    // is a declared function-app binding — that is where its scope comes from.
+    let wiring = easy_auth_binding_for(ctx, &parsed);
+    let entra_option = match (&entra_audience, &wiring) {
+        (Some(_), _) => ENTRA_READY,
+        (None, Some(_)) => ENTRA_SETUP,
+        (None, None) => ENTRA_GUIDE,
     };
     let choice = interactive::select(
         "How should the search service authenticate to this function?",
         vec![entra_option.to_string(), KEY.to_string(), SKIP.to_string()],
         plain,
     )?;
+
+    if choice == ENTRA_SETUP {
+        let (ws, env, binding) = wiring.expect("offered only when a binding was found");
+        // `wire` also rewrites the skillset FILE (every skill calling that
+        // app). The same edit is applied to the caller's in-memory document
+        // below, because the caller writes it back after this returns — so
+        // the two must agree rather than one silently undoing the other.
+        let wired = crate::commands::easy_auth::wire(ctx, &ws, &env, &binding, None).await?;
+        if !wired.applied {
+            return Ok(WebApiAuthOutcome::Skipped);
+        }
+        doc["skills"][idx]["authResourceId"] = Value::String(wired.audience.clone());
+        doc["skills"][idx]["uri"] = Value::String(strip_code_param(&uri));
+        remove_function_key_header(&mut doc["skills"][idx]);
+        if let Some(map) = doc["skills"][idx].as_object_mut() {
+            map.remove(X_RIGG_AUTH);
+        }
+        println!(
+            "  {} Easy Auth enabled on '{}'; authResourceId set to '{}'",
+            "✓".green(),
+            wired.site,
+            wired.audience
+        );
+        return Ok(WebApiAuthOutcome::EntraId);
+    }
 
     if choice == ENTRA_READY {
         let audience = entra_audience.expect("ready implies audience");
@@ -571,27 +610,77 @@ pub async fn resolve_webapi_auth(
     }
 }
 
-/// Push-time key injection: for every Web API skill annotated
-/// `x-rigg-auth: function-key`, fetch the function key via ARM and set the
-/// `code` parameter in the PUSHED body. The annotation itself is stripped
-/// with the other `x-rigg-*` keys before the PUT; the file never changes.
-pub async fn inject_function_keys(body: &mut Value) -> Result<()> {
+/// The workspace, environment and `function-app` binding name that
+/// `rigg auth easy-auth` would need for the site in `parsed` — `None` when
+/// there is no workspace, no environment, or no binding pointing at it.
+fn easy_auth_binding_for(
+    ctx: &crate::commands::GlobalContext,
+    parsed: &Option<(String, String)>,
+) -> Option<(Workspace, ResolvedEnv, String)> {
+    let (site, _) = parsed.as_ref()?;
+    let ws = crate::commands::load_workspace().ok()?;
+    let env = crate::commands::resolve_env(&ws, ctx).ok()?;
+    let binding = env
+        .env
+        .dependencies
+        .iter()
+        .find(|(_, b)| {
+            b.kind == BindingType::FunctionApp && b.physical_name().eq_ignore_ascii_case(site)
+        })
+        .map(|(name, _)| name.clone())?;
+    Some((ws, env, binding))
+}
+
+/// Push-time key injection: for every Web API skill annotated with a key
+/// source, fetch the key and place it in the PUSHED body —
+/// `function-key` through ARM `listkeys`, `key-vault:<secret>@<binding>`
+/// through the vault's data plane (spec §6). The annotation itself is
+/// stripped with the other `x-rigg-*` keys before the PUT; the file never
+/// changes.
+///
+/// The fetched value exists only in `body` from here on: it is never
+/// written to disk, printed, or traced — not even in an error, which names
+/// the secret and the vault but never the value.
+pub async fn inject_function_keys(
+    body: &mut Value,
+    ws: &Workspace,
+    env: &ResolvedEnv,
+) -> Result<()> {
     let Some(skills) = body.get_mut("skills").and_then(Value::as_array_mut) else {
         return Ok(());
     };
     let mut arm: Option<ArmClient> = None;
     for skill in skills {
-        if skill.get(X_RIGG_AUTH).and_then(Value::as_str) != Some(X_RIGG_AUTH_FUNCTION_KEY) {
+        let Some(annotation) = skill.get(X_RIGG_AUTH).and_then(Value::as_str) else {
             continue;
+        };
+        if let Some((secret, binding)) = parse_key_vault_auth(annotation) {
+            let vault_uri = key_vault_uri(ws, env, binding).await?;
+            let key =
+                rigg_client::keyvault::get_secret(env.env.tenant.as_deref(), &vault_uri, secret)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("could not read secret '{secret}' from '{vault_uri}': {e}")
+                    })?;
+            place_function_key(skill, &key);
+            continue;
+        }
+        if annotation != X_RIGG_AUTH_FUNCTION_KEY {
+            anyhow::bail!(
+                "unknown `{X_RIGG_AUTH}` value '{annotation}' — expected '{X_RIGG_AUTH_FUNCTION_KEY}' \
+                 or '{X_RIGG_AUTH_KEY_VAULT_PREFIX}<secret>@<key-vault binding>'"
+            );
         }
         let uri = skill.get("uri").and_then(Value::as_str).unwrap_or_default();
         let Some((site, function)) = parse_function_uri(uri) else {
             anyhow::bail!("cannot parse function app URI '{uri}' for push-time key injection");
         };
         if arm.is_none() {
-            arm = Some(ArmClient::new().map_err(|e| {
-                anyhow::anyhow!("push-time key injection needs ARM access (az login): {e}")
-            })?);
+            arm = Some(
+                ArmClient::for_tenant(env.env.tenant.as_deref()).map_err(|e| {
+                    anyhow::anyhow!("push-time key injection needs ARM access (az login): {e}")
+                })?,
+            );
         }
         let arm = arm.as_ref().expect("just initialized");
         let site_id = arm.find_web_site_id(&site).await?;
@@ -599,6 +688,49 @@ pub async fn inject_function_keys(body: &mut Value) -> Result<()> {
         place_function_key(skill, &key);
     }
     Ok(())
+}
+
+/// The data-plane URI of the `key-vault` binding named by a
+/// `key-vault:<secret>@<binding>` annotation.
+///
+/// The binding must be a declared `key-vault` dependency — `rigg validate`
+/// says so too, but push must not depend on validate having run. The URI
+/// comes from the resolution cache when it has one, else from a fresh ARM
+/// lookup.
+async fn key_vault_uri(ws: &Workspace, env: &ResolvedEnv, binding: &str) -> Result<String> {
+    let declared = env.env.dependencies.get(binding).ok_or_else(|| {
+        anyhow::anyhow!(
+            "`{X_RIGG_AUTH}: {X_RIGG_AUTH_KEY_VAULT_PREFIX}…@{binding}` names no dependency in \
+             environment '{}' — declare it: `rigg env bind {} {binding} key-vault:<vault-name>`",
+            env.name,
+            env.name
+        )
+    })?;
+    if declared.kind != BindingType::KeyVault {
+        anyhow::bail!(
+            "'{binding}' is a {} binding, not a key-vault binding — a `{X_RIGG_AUTH}` key source \
+             must name a key vault",
+            declared.kind
+        );
+    }
+    let cache = BindingCache::load(ws, &env.name);
+    if let Some(uri) = cache.get(binding).and_then(|r| r.endpoint.clone()) {
+        return Ok(uri);
+    }
+    let arm = ArmClient::for_tenant(env.env.tenant.as_deref())
+        .map_err(|e| anyhow::anyhow!("resolving key vault '{binding}' needs ARM access: {e}"))?;
+    let resolved = arm
+        .resolve_binding(
+            BindingType::KeyVault,
+            &declared.value,
+            env.env.subscription.as_deref(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("could not resolve key-vault binding '{binding}': {e}"))?;
+    resolved
+        .endpoint
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("key vault '{binding}' reports no vaultUri"))
 }
 
 #[cfg(test)]

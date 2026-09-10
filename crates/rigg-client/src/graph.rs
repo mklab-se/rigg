@@ -106,6 +106,50 @@ impl GraphClient {
         Ok(Application { id, app_id })
     }
 
+    /// Find an existing application by its client (`appId`) id — what
+    /// `rigg auth easy-auth --client-id <id>` reuses instead of registering
+    /// a new one. `Ok(None)` when the tenant has no such application.
+    pub async fn application_by_app_id(
+        &self,
+        app_id: &str,
+    ) -> Result<Option<Application>, ClientError> {
+        let found = self
+            .send(
+                Method::GET,
+                &format!("/applications?$filter=appId%20eq%20'{app_id}'"),
+                None,
+            )
+            .await?;
+        Ok(found
+            .get("value")
+            .and_then(Value::as_array)
+            .and_then(|v| v.first())
+            .and_then(|app| {
+                Some(Application {
+                    id: string_at(app, "id")?,
+                    app_id: string_at(app, "appId")?,
+                })
+            }))
+    }
+
+    /// The `appId` (client id) of the service principal with directory
+    /// object id `object_id` — how a managed identity's *principal* id
+    /// becomes the client id Easy Auth's `allowedApplications` names.
+    pub async fn service_principal_app_id(&self, object_id: &str) -> Result<String, ClientError> {
+        let sp = self
+            .send(
+                Method::GET,
+                &format!("/servicePrincipals/{object_id}"),
+                None,
+            )
+            .await?;
+        string_at(&sp, "appId").ok_or_else(|| {
+            ClientError::InvalidResponse(format!(
+                "Microsoft Graph: service principal '{object_id}' reports no appId"
+            ))
+        })
+    }
+
     /// Set the application's identifier URI (the `authResourceId` a Web API
     /// skill will ask tokens for) and define the `Caller` app role that
     /// gated enterprise applications require. Returns the app role's id.

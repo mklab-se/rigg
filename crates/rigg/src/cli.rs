@@ -285,6 +285,11 @@ pub struct NewArgs {
     /// Describe what you want in natural language; AI drafts the definition (requires ailloy)
     #[arg(long)]
     pub describe: Option<String>,
+
+    /// Use this environment's `identity` binding (a user-assigned managed
+    /// identity) instead of the search service's system-assigned one
+    #[arg(long, value_name = "BINDING")]
+    pub identity: Option<String>,
 }
 
 #[derive(Args)]
@@ -789,6 +794,23 @@ pub enum AuthCommands {
         /// Also read each indexer's last run and attribute auth failures
         #[arg(long)]
         live: bool,
+    },
+    /// Enable Microsoft Entra authentication on a bound function app
+    ///
+    /// Registers (or reuses) an Entra application for the app, merges Easy
+    /// Auth into its authsettingsV2 so it accepts `api://<app-id>` from this
+    /// environment's search identity, and rewrites the Web API skills that
+    /// call it to be keyless. Nothing is pushed — run `rigg push` after.
+    ///
+    ///   rigg auth easy-auth enrich-fn -e dev
+    #[command(verbatim_doc_comment)]
+    EasyAuth {
+        /// Name of the `function-app` dependency binding to wire (from rigg.yaml)
+        #[arg(value_name = "BINDING")]
+        function_app: String,
+        /// Reuse this existing app registration instead of creating one
+        #[arg(long, value_name = "CLIENT_ID")]
+        client_id: Option<String>,
     },
     /// Manage the role assignments rigg created
     Roles {

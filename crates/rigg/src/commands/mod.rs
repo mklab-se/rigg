@@ -21,6 +21,7 @@ pub mod dev_spec;
 pub mod diff;
 pub mod discovery;
 pub mod doctor;
+pub mod easy_auth;
 pub mod env;
 pub mod infra_report;
 pub mod init;

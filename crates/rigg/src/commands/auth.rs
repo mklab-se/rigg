@@ -21,6 +21,10 @@ pub async fn run(ctx: &GlobalContext, cmd: AuthCommands) -> Result<()> {
             plan,
             live,
         } => crate::commands::doctor::run(ctx, fix, principal, plan, live).await,
+        AuthCommands::EasyAuth {
+            function_app,
+            client_id,
+        } => crate::commands::easy_auth::run(ctx, function_app, client_id).await,
         AuthCommands::Roles { command } => match command {
             RolesCommands::List => crate::commands::auth_roles::list(ctx).await,
             RolesCommands::Remove => crate::commands::auth_roles::remove(ctx).await,

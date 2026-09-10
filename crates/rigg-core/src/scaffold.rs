@@ -336,6 +336,77 @@ pub fn scaffold_api_spec(name: &str) -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Identity choice (spec 2026-09-09-identity-and-auth-design.md §7)
+// ---------------------------------------------------------------------------
+
+/// The user-assigned-identity object Azure AI Search expects in an
+/// `identity` / `authIdentity` field. `null` (the scaffold default) means the
+/// search service's system-assigned identity.
+pub fn identity_object(arm_id: &str) -> Value {
+    json!({
+        "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+        "userAssignedIdentity": arm_id
+    })
+}
+
+/// The field a scaffold's `--identity <binding>` writes into for `kind`:
+/// the first registry [`registry::InfraForm::UserAssignedIdentity`] path
+/// that addresses a single field rather than an array element.
+///
+/// Array-element identities (`skills[].authIdentity`,
+/// `vectorSearch.vectorizers[].authIdentity`,
+/// `models[].azureOpenAIParameters.authIdentity`) belong to individual
+/// skills/vectorizers/models a scaffold does not yet have, so they are not
+/// scaffold targets. `Indexer` has none at all: its only user-assigned
+/// identity field is on the preview-only enrichment cache, which the
+/// registry deliberately does not model.
+pub fn identity_field(kind: ResourceKind) -> Option<&'static str> {
+    registry::infra_refs(kind)
+        .iter()
+        .find(|r| r.form == registry::InfraForm::UserAssignedIdentity && !r.path.contains("[]"))
+        .map(|r| r.path)
+}
+
+/// Every kind [`identity_field`] accepts, for the usage error naming them.
+pub fn kinds_accepting_identity() -> Vec<ResourceKind> {
+    ResourceKind::all()
+        .iter()
+        .copied()
+        .filter(|k| identity_field(*k).is_some())
+        .collect()
+}
+
+/// Point `kind`'s identity field at the user-assigned identity `arm_id`,
+/// creating the intermediate objects the path needs. Errors when the kind
+/// has no such field.
+pub fn set_identity(kind: ResourceKind, doc: &mut Value, arm_id: &str) -> Result<(), String> {
+    let path = identity_field(kind).ok_or_else(|| {
+        format!(
+            "{} has no user-assigned identity field — --identity applies to: {}",
+            kind.cli_name(),
+            kinds_accepting_identity()
+                .iter()
+                .map(|k| k.cli_name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+    let mut cursor = doc;
+    let segments: Vec<&str> = path.split('.').collect();
+    let (last, parents) = segments.split_last().expect("registry paths are non-empty");
+    for segment in parents {
+        if !cursor.get(*segment).is_some_and(Value::is_object) {
+            cursor[*segment] = json!({});
+        }
+        cursor = cursor
+            .get_mut(*segment)
+            .expect("just ensured it is an object");
+    }
+    cursor[*last] = identity_object(arm_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +493,62 @@ mod tests {
         assert_eq!(
             req["properties"]["values"]["items"]["required"][0],
             "recordId"
+        );
+    }
+
+    #[test]
+    fn identity_field_comes_from_the_registry_and_skips_array_paths() {
+        assert_eq!(identity_field(ResourceKind::DataSource), Some("identity"));
+        assert_eq!(
+            identity_field(ResourceKind::KnowledgeSource),
+            Some("azureBlobParameters.ingestionParameters.identity")
+        );
+        assert_eq!(
+            identity_field(ResourceKind::Skillset),
+            Some("cognitiveServices.identity")
+        );
+        // Only `vectorSearch.vectorizers[]` / `models[]` carry one — array
+        // elements a scaffold does not have.
+        assert_eq!(identity_field(ResourceKind::Index), None);
+        assert_eq!(identity_field(ResourceKind::KnowledgeBase), None);
+        // The indexer's only UAMI field is the unmodelled preview cache.
+        assert_eq!(identity_field(ResourceKind::Indexer), None);
+        assert_eq!(identity_field(ResourceKind::Agent), None);
+    }
+
+    #[test]
+    fn set_identity_writes_the_data_user_assigned_identity_object() {
+        let arm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi";
+        let mut ds = scaffold(ResourceKind::DataSource, "docs", None).unwrap();
+        set_identity(ResourceKind::DataSource, &mut ds, arm).unwrap();
+        assert_eq!(
+            ds["identity"]["@odata.type"],
+            "#Microsoft.Azure.Search.DataUserAssignedIdentity"
+        );
+        assert_eq!(ds["identity"]["userAssignedIdentity"], arm);
+        // Nothing else about the scaffold changed.
+        assert_eq!(ds["type"], "azureblob");
+    }
+
+    #[test]
+    fn set_identity_creates_the_intermediate_objects_a_nested_path_needs() {
+        let arm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi";
+        let mut ks = scaffold(ResourceKind::KnowledgeSource, "ks", None).unwrap();
+        set_identity(ResourceKind::KnowledgeSource, &mut ks, arm).unwrap();
+        assert_eq!(
+            ks["azureBlobParameters"]["ingestionParameters"]["identity"]["userAssignedIdentity"],
+            arm
+        );
+    }
+
+    #[test]
+    fn set_identity_rejects_kinds_without_an_identity_field_and_names_the_others() {
+        let err = set_identity(ResourceKind::Indexer, &mut json!({}), "id").unwrap_err();
+        assert!(err.contains("data-source"), "{err}");
+        assert!(err.contains("indexer has no"), "{err}");
+        assert!(
+            kinds_accepting_identity().contains(&ResourceKind::DataSource),
+            "data sources accept --identity"
         );
     }
 

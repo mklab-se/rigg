@@ -9,9 +9,9 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use rigg_core::binding::{BindingCache, EnvBindings};
+use rigg_core::binding::{BindingCache, BindingKind, BindingType, EnvBindings};
 use rigg_core::infra::{self, Class};
-use rigg_core::registry::{self, X_RIGG_API, X_RIGG_REF};
+use rigg_core::registry::{self, X_RIGG_API, X_RIGG_AUTH, X_RIGG_REF};
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::{Store, assert_exclusive_ownership};
 use rigg_core::workspace::{Project, Workspace};
@@ -331,6 +331,11 @@ fn validate_project(
             warn_missing_credentials(&value, &display);
         }
 
+        // x-rigg-auth key sources must name something rigg can resolve
+        if r.kind == ResourceKind::Skillset {
+            check_auth_annotations(&value, &display, this_bindings, &mut problems);
+        }
+
         // custom Web API skills with a redacted function key and no auth
         if r.kind == ResourceKind::Skillset
             && !crate::commands::credentials::webapi_skills_missing_auth(&value).is_empty()
@@ -474,6 +479,55 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
                         ));
                 }
             }
+        }
+    }
+}
+
+/// Every `x-rigg-auth` annotation must be a key source rigg can resolve at
+/// push time: `function-key`, or `key-vault:<secret>@<binding>` where the
+/// binding is a `key-vault` dependency of this environment (spec §6).
+///
+/// The binding check is what keeps a typo from becoming a push-time failure
+/// halfway through a plan — and it never reads the secret, only the
+/// declaration.
+fn check_auth_annotations(
+    value: &Value,
+    display: &str,
+    bindings: Option<&EnvBindings>,
+    problems: &mut Vec<String>,
+) {
+    let Some(skills) = value.get("skills").and_then(Value::as_array) else {
+        return;
+    };
+    for skill in skills {
+        let Some(annotation) = skill.get(X_RIGG_AUTH).and_then(Value::as_str) else {
+            continue;
+        };
+        if annotation == registry::X_RIGG_AUTH_FUNCTION_KEY {
+            continue;
+        }
+        let Some((_, binding)) = registry::parse_key_vault_auth(annotation) else {
+            problems.push(format!(
+                "[{display}] unknown \"{X_RIGG_AUTH}\" value '{annotation}' — expected \
+                 '{}' or '{}<secret-name>@<key-vault binding>'",
+                registry::X_RIGG_AUTH_FUNCTION_KEY,
+                registry::X_RIGG_AUTH_KEY_VAULT_PREFIX
+            ));
+            continue;
+        };
+        // No binding table at all (an environment rigg.yaml does not declare)
+        // is a different problem, already reported elsewhere.
+        let Some(bindings) = bindings else { continue };
+        match bindings.get(binding).map(|e| e.kind) {
+            Some(BindingKind::Declared(BindingType::KeyVault)) => {}
+            Some(_) => problems.push(format!(
+                "[{display}] \"{X_RIGG_AUTH}\": '{annotation}' names binding '{binding}', which \
+                 is not a key-vault dependency"
+            )),
+            None => problems.push(format!(
+                "[{display}] \"{X_RIGG_AUTH}\": '{annotation}' names no dependency '{binding}' — \
+                 declare it with `rigg env bind <env> {binding} key-vault:<vault-name>`"
+            )),
         }
     }
 }

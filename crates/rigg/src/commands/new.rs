@@ -3,6 +3,8 @@
 use anyhow::{Result, anyhow, bail};
 use colored::Colorize;
 
+use rigg_client::arm::ArmClient;
+use rigg_core::binding::{BindingCache, BindingType};
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::scaffold;
 use rigg_core::store::Store;
@@ -141,6 +143,22 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
             .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     }
 
+    // --identity and --describe are independent flags. The kind check runs
+    // BEFORE anything is scaffolded or drafted, so an inapplicable flag
+    // costs nothing; the write happens after the AI draft, which would
+    // otherwise replace the whole document and lose the identity.
+    if args.identity.is_some() && scaffold::identity_field(kind).is_none() {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "--identity does not apply to {}; it applies to: {}",
+            kind.cli_name(),
+            scaffold::kinds_accepting_identity()
+                .iter()
+                .map(|k| k.cli_name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))));
+    }
+
     let mut value = scaffold::scaffold(kind, &args.name, args.ds_type.as_deref())
         .map_err(|e| anyhow!(CommandError::Validation(e)))?;
 
@@ -159,10 +177,75 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
         }
     }
 
+    if let Some(binding) = &args.identity {
+        let arm_id = identity_arm_id(&ws, &env, binding).await?;
+        scaffold::set_identity(kind, &mut value, &arm_id)
+            .map_err(|e| anyhow!(CommandError::Validation(e)))?;
+        println!("Using user-assigned identity '{binding}' ({arm_id})");
+    }
+
     store.write(&r, &value)?;
     let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
     println!("Created {}", path.display());
     Ok(())
+}
+
+/// The ARM id of an `identity` binding, from the resolution cache when it
+/// has one and from ARM otherwise (bindings are refreshed explicitly, and a
+/// scaffold must not silently write a placeholder).
+async fn identity_arm_id(
+    ws: &Workspace,
+    env: &rigg_core::workspace::ResolvedEnv,
+    binding: &str,
+) -> Result<String> {
+    let declared = env.env.dependencies.get(binding).ok_or_else(|| {
+        anyhow!(CommandError::Validation(format!(
+            "environment '{}' has no dependency named '{binding}' — declare it first: \
+             `rigg env bind {} {binding} identity:<managed-identity-name>`",
+            env.name, env.name
+        )))
+    })?;
+    if declared.kind != BindingType::Identity {
+        return Err(anyhow!(CommandError::Validation(format!(
+            "'{binding}' is a {} binding, not an identity binding — --identity names a \
+             user-assigned managed identity",
+            declared.kind
+        ))));
+    }
+    if let Some(id) = BindingCache::load(ws, &env.name)
+        .get(binding)
+        .and_then(|r| r.arm_id.clone())
+    {
+        return Ok(id);
+    }
+    let arm = ArmClient::for_tenant(env.env.tenant.as_deref()).map_err(|e| {
+        anyhow!(CommandError::AuthDenied(format!(
+            "identity '{binding}' is not resolved yet and ARM is unreachable ({e}) — run \
+             `rigg env bind {} --learn` or `rigg env show {} --refresh`",
+            env.name, env.name
+        )))
+    })?;
+    let resolved = arm
+        .resolve_binding(
+            BindingType::Identity,
+            &declared.value,
+            env.env.subscription.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(CommandError::AuthDenied(format!(
+                "could not resolve identity binding '{binding}' ({e}) — run `rigg env bind {} \
+                 --learn` or `rigg env show {} --refresh`",
+                env.name, env.name
+            )))
+        })?;
+    resolved.arm_id.ok_or_else(|| {
+        anyhow!(CommandError::AuthDenied(format!(
+            "identity binding '{binding}' resolved without an ARM id — run `rigg env show {} \
+             --refresh`",
+            env.name
+        )))
+    })
 }
 
 /// Draft a resource definition from a natural-language description via ailloy.

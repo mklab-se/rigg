@@ -7,12 +7,18 @@
 
 #[path = "arm_fake.rs"]
 mod arm_fake;
+#[path = "graph_fake.rs"]
+mod graph_fake;
 
 use arm_fake::{
-    mount_arm_fake, mount_permissions, mount_search_service, mount_storage_account,
-    search_service_id,
+    last_auth_settings_put, mount_arm_fake, mount_easy_auth, mount_easy_auth_write,
+    mount_permissions, mount_search_service, mount_storage_account, search_service_id,
 };
 use assert_cmd::Command;
+use graph_fake::{
+    FAKE_APP_ID, mount_graph, mount_graph_application_lookup, mount_graph_service_principal,
+    mount_keyvault_secret,
+};
 use predicates::prelude::*;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path, path_regex};
@@ -94,6 +100,11 @@ fn rigg(dir: &std::path::Path, endpoint: &str) -> Command {
     cmd.env("RIGG_NO_UPDATE_CHECK", "1");
     cmd.env_remove("RIGG_ENV");
     cmd.env("RIGG_ARM_ENDPOINT", endpoint);
+    // One mock server serves ARM, Microsoft Graph and the Key Vault secrets
+    // data plane: their path spaces (`/subscriptions/…`, `/applications` +
+    // `/servicePrincipals`, `/secrets/…`) do not overlap.
+    cmd.env("RIGG_GRAPH_ENDPOINT", endpoint);
+    cmd.env("RIGG_KEYVAULT_ENDPOINT", endpoint);
     cmd.env("RIGG_ACCESS_TOKEN", operator_token(OPERATOR_OID));
     cmd.env("RIGG_NON_INTERACTIVE", "1");
     cmd.arg("--no-ai");
@@ -1722,4 +1733,537 @@ async fn verify_attributes_an_auth_shaped_indexer_failure_and_exits_1() {
         .stdout(predicate::str::contains("✗ indexer 'docs-indexer'"))
         .stdout(predicate::str::contains("→ likely"))
         .stderr(predicate::str::contains("1 of 1 verification(s) failed"));
+}
+
+// ------------------------------------------------ easy auth / key sources --
+
+const SEARCH_MI_CLIENT_ID: &str = "00000000-0000-0000-0000-0000000000c1";
+const FUNCTION_APP: &str = "fn";
+
+/// A `dev` environment that also declares the dependencies the Easy Auth,
+/// key-vault and `--identity` scenarios bind against.
+fn workspace_with_deps(endpoint: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        format!(
+            "name: acme\n\
+             environments:\n\
+             \x20 dev:\n\
+             \x20   default: true\n\
+             \x20   tenant: tenant-1\n\
+             \x20   subscription: {SUB}\n\
+             \x20   search: {{ service: {SEARCH}, endpoint: \"{endpoint}\" }}\n\
+             \x20   dependencies:\n\
+             \x20     docs: {{ storage: acct }}\n\
+             \x20     enrich-fn: {{ function-app: {FUNCTION_APP} }}\n\
+             \x20     secrets: {{ key-vault: kv }}\n\
+             \x20     pipeline-mi: {{ identity: rigg-mi }}\n"
+        ),
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    tmp
+}
+
+/// The ARM resources the Easy Auth scenarios need on top of [`mount_base`].
+async fn mount_easy_auth_base(server: &MockServer) {
+    mount_arm_fake(
+        server,
+        &[SUB],
+        &[
+            ("searchServices", SEARCH, RG, "swedencentral"),
+            ("storageAccounts", "acct", RG, "swedencentral"),
+            ("userAssignedIdentities", "rigg-mi", RG, "swedencentral"),
+            ("vaults", "kv", RG, "swedencentral"),
+            ("sites", FUNCTION_APP, RG, "swedencentral"),
+        ],
+    )
+    .await;
+    mount_search_service(
+        server,
+        SUB,
+        RG,
+        SEARCH,
+        "standard",
+        "SystemAssigned",
+        SEARCH_PID,
+        true,
+        "Enabled",
+    )
+    .await;
+}
+
+fn webapi_skillset(name: &str, extra: Value) -> Value {
+    let mut skill = json!({
+        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+        "name": "enrich",
+        "uri": format!("https://{FUNCTION_APP}.azurewebsites.net/api/enrich?code=<redacted>"),
+        "httpHeaders": {"x-functions-key": "<redacted>"},
+        "inputs": [],
+        "outputs": []
+    });
+    if let (Some(s), Some(e)) = (skill.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            s.insert(k.clone(), v.clone());
+        }
+    }
+    json!({"name": name, "skills": [skill]})
+}
+
+fn read_resource(ws: &std::path::Path, dir: &str, name: &str) -> Value {
+    let path = ws
+        .join("projects/demo/envs/dev/search")
+        .join(dir)
+        .join(format!("{name}.json"));
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// The whole §5 wiring in one run: Graph registers the application and its
+/// enterprise app, ARM gets a MERGED authsettingsV2, and the local skillset
+/// becomes keyless — without pushing anything.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_registers_the_app_merges_settings_and_makes_the_skillset_keyless() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    // The app already has a Google provider and its own login settings; both
+    // must survive the merge.
+    Mock::given(method("POST"))
+        .and(path_regex(format!(
+            r"^.*/sites/{FUNCTION_APP}/config/authsettingsV2/list$"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "properties": {
+                "platform": {"enabled": false, "runtimeVersion": "~1"},
+                "identityProviders": {"google": {"enabled": true}},
+                "login": {"tokenStore": {"enabled": true}}
+            }
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset("webss", json!({})),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "easy-auth", "enrich-fn", "-e", "dev", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("api://{FAKE_APP_ID}")))
+        .stdout(predicate::str::contains("rigg push"));
+
+    let put = last_auth_settings_put(&server)
+        .await
+        .expect("authsettingsV2 was written");
+    let props = &put["properties"];
+    assert_eq!(props["platform"]["enabled"], json!(true));
+    assert_eq!(props["platform"]["runtimeVersion"], json!("~1"), "kept");
+    assert_eq!(
+        props["globalValidation"]["requireAuthentication"],
+        json!(true)
+    );
+    assert_eq!(
+        props["globalValidation"]["unauthenticatedClientAction"],
+        json!("Return401")
+    );
+    assert_eq!(props["identityProviders"]["google"]["enabled"], json!(true));
+    assert_eq!(props["login"]["tokenStore"]["enabled"], json!(true));
+    let aad = &props["identityProviders"]["azureActiveDirectory"];
+    assert_eq!(aad["enabled"], json!(true));
+    assert_eq!(aad["registration"]["clientId"], json!(FAKE_APP_ID));
+    assert_eq!(
+        aad["registration"]["openIdIssuer"],
+        json!("https://login.microsoftonline.com/tenant-1/v2.0")
+    );
+    assert_eq!(
+        aad["validation"]["allowedAudiences"],
+        json!([format!("api://{FAKE_APP_ID}")])
+    );
+    assert_eq!(
+        aad["validation"]["defaultAuthorizationPolicy"]["allowedApplications"],
+        json!([SEARCH_MI_CLIENT_ID]),
+        "the search service's system identity is what calls the function"
+    );
+
+    let skill = read_resource(ws.path(), "skillsets", "webss")["skills"][0].clone();
+    assert_eq!(
+        skill["authResourceId"],
+        json!(format!("api://{FAKE_APP_ID}"))
+    );
+    assert_eq!(
+        skill["uri"],
+        json!(format!(
+            "https://{FUNCTION_APP}.azurewebsites.net/api/enrich"
+        )),
+        "the redacted code parameter goes with the key"
+    );
+    assert!(skill.get("httpHeaders").is_none_or(|h| {
+        h.as_object()
+            .is_none_or(|m| !m.contains_key("x-functions-key"))
+    }));
+    assert!(skill.get("x-rigg-auth").is_none());
+}
+
+/// A skillset that authenticates through a user-assigned identity: THAT
+/// identity's client id is what Easy Auth must admit, not the search
+/// service's (spec §7).
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_admits_the_skillsets_user_assigned_identity_when_it_declares_one() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    mount_easy_auth(&server, FUNCTION_APP, false, "").await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset(
+            "webss",
+            json!({"authIdentity": {
+                "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+                "userAssignedIdentity": uami_id()
+            }}),
+        ),
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "easy-auth", "enrich-fn", "-e", "dev", "--yes"])
+        .assert()
+        .success();
+
+    let put = last_auth_settings_put(&server).await.unwrap();
+    // The ARM fake reports every managed identity's clientId as this value.
+    assert_eq!(
+        put["properties"]["identityProviders"]["azureActiveDirectory"]["validation"]["defaultAuthorizationPolicy"]
+            ["allowedApplications"],
+        json!(["00000000-0000-0000-0000-00000000cccc"])
+    );
+}
+
+/// `--client-id` reuses an existing app registration instead of creating
+/// one — no `POST /applications` at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_reuses_the_registration_named_by_client_id() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    mount_easy_auth(&server, FUNCTION_APP, false, "").await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph_application_lookup(&server, true).await;
+    mount_graph(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    rigg(ws.path(), &server.uri())
+        .args([
+            "auth",
+            "easy-auth",
+            "enrich-fn",
+            "-e",
+            "dev",
+            "--client-id",
+            FAKE_APP_ID,
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    let created = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST && r.url.path() == "/applications")
+        .count();
+    assert_eq!(
+        created, 0,
+        "an existing registration is reused, not re-created"
+    );
+    let put = last_auth_settings_put(&server).await.unwrap();
+    assert_eq!(
+        put["properties"]["identityProviders"]["azureActiveDirectory"]["registration"]["clientId"],
+        json!(FAKE_APP_ID)
+    );
+}
+
+/// Non-interactively and without `--yes`, the confirmation is a question:
+/// exit 6, the id named, and not one byte written to Azure or to the file.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_asks_before_changing_anything() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    mount_easy_auth(&server, FUNCTION_APP, false, "").await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    let before = webapi_skillset("webss", json!({}));
+    write_resource(ws.path(), "skillsets", "webss", &before);
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "easy-auth", "enrich-fn", "-e", "dev"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains(format!(
+            "auth.easyauth.{FUNCTION_APP}"
+        )));
+
+    assert!(
+        last_auth_settings_put(&server).await.is_none(),
+        "nothing may be written before the confirmation"
+    );
+    let after = read_resource(ws.path(), "skillsets", "webss");
+    assert!(after["skills"][0].get("authResourceId").is_none());
+}
+
+/// The positional is a binding name, and it must name a function app.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_rejects_a_binding_that_is_not_a_function_app() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "easy-auth", "docs", "-e", "dev", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("is a storage binding"));
+
+    rigg(ws.path(), &server.uri())
+        .args(["auth", "easy-auth", "nope", "-e", "dev", "--yes"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "rigg env bind dev nope function-app:",
+        ));
+}
+
+/// The `key-vault:<secret>@<binding>` key source: the secret is read from
+/// the vault at push time, lands ONLY in the outgoing body, and never
+/// reaches the file, stdout or stderr.
+#[tokio::test(flavor = "multi_thread")]
+async fn push_injects_the_key_vault_secret_into_the_body_only() {
+    const SECRET: &str = "s3cr3t-function-key-value";
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    mount_keyvault_secret(&server, "fn-key", SECRET).await;
+    for p in [
+        "datasources",
+        "indexes",
+        "skillsets",
+        "indexers",
+        "synonymmaps",
+        "aliases",
+        "knowledgeSources",
+        "knowledgeBases",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{p}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": []})))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/skillsets/webss"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    // Azure echoes the pushed document with every secret redacted, and push
+    // canonicalization writes that echo back to disk — so the fake redacts
+    // too, and the on-disk assertion below is a real end-to-end check.
+    Mock::given(method("PUT"))
+        .and(path("/skillsets/webss"))
+        .respond_with(|req: &Request| {
+            let mut doc: Value = serde_json::from_slice(&req.body).unwrap();
+            doc["skills"][0]["httpHeaders"]["x-functions-key"] = json!("<redacted>");
+            ResponseTemplate::new(201).set_body_json(doc)
+        })
+        .mount(&server)
+        .await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset("webss", json!({"x-rigg-auth": "key-vault:fn-key@secrets"})),
+    );
+
+    let out = rigg(ws.path(), &server.uri())
+        .args([
+            "push",
+            "demo",
+            "-e",
+            "dev",
+            "--yes",
+            "--skip-auth-preflight",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!printed.contains(SECRET), "the key must never be printed");
+
+    let put = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.method == wiremock::http::Method::PUT && r.url.path() == "/skillsets/webss")
+        .expect("the skillset was pushed");
+    let body: Value = serde_json::from_slice(&put.body).unwrap();
+    assert_eq!(
+        body["skills"][0]["httpHeaders"]["x-functions-key"],
+        json!(SECRET),
+        "the key goes in the carrier the skill already uses"
+    );
+    assert!(
+        body["skills"][0].get("x-rigg-auth").is_none(),
+        "x-rigg-* keys are stripped before the PUT"
+    );
+
+    // The file keeps the annotation and the placeholder — never the value.
+    let on_disk = std::fs::read_to_string(
+        ws.path()
+            .join("projects/demo/envs/dev/search/skillsets/webss.json"),
+    )
+    .unwrap();
+    assert!(!on_disk.contains(SECRET), "no secret on disk");
+    assert!(on_disk.contains("key-vault:fn-key@secrets"));
+}
+
+/// `validate` accepts the annotation only when the binding really is a key
+/// vault — a typo must not become a push-time failure mid-plan.
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_checks_the_key_vault_binding_behind_the_annotation() {
+    let server = MockServer::start().await;
+    let ws = workspace_with_deps(&server.uri());
+
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "good",
+        &webapi_skillset("good", json!({"x-rigg-auth": "key-vault:fn-key@secrets"})),
+    );
+    rigg(ws.path(), &server.uri())
+        .args(["validate", "demo"])
+        .assert()
+        .success();
+
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "wrong-kind",
+        &webapi_skillset(
+            "wrong-kind",
+            json!({"x-rigg-auth": "key-vault:fn-key@docs"}),
+        ),
+    );
+    rigg(ws.path(), &server.uri())
+        .args(["validate", "demo"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("not a key-vault dependency"));
+
+    std::fs::remove_file(
+        ws.path()
+            .join("projects/demo/envs/dev/search/skillsets/wrong-kind.json"),
+    )
+    .unwrap();
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "unknown",
+        &webapi_skillset("unknown", json!({"x-rigg-auth": "whatever"})),
+    );
+    rigg(ws.path(), &server.uri())
+        .args(["validate", "demo"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("unknown \"x-rigg-auth\" value"));
+}
+
+/// `rigg new … --identity <binding>` resolves the binding and writes the
+/// DataUserAssignedIdentity object (spec §7).
+#[tokio::test(flavor = "multi_thread")]
+async fn new_with_identity_writes_the_user_assigned_identity_object() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    rigg(ws.path(), &server.uri())
+        .args([
+            "new",
+            "data-source",
+            "docs",
+            "-p",
+            "demo",
+            "-e",
+            "dev",
+            "--identity",
+            "pipeline-mi",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pipeline-mi"));
+
+    let doc = read_resource(ws.path(), "data-sources", "docs");
+    assert_eq!(
+        doc["identity"]["@odata.type"],
+        json!("#Microsoft.Azure.Search.DataUserAssignedIdentity")
+    );
+    assert_eq!(doc["identity"]["userAssignedIdentity"], json!(uami_id()));
+
+    // A kind with no identity field is a usage error naming the ones that
+    // do; a binding of the wrong type is a validation error.
+    rigg(ws.path(), &server.uri())
+        .args([
+            "new",
+            "indexer",
+            "ix",
+            "-p",
+            "demo",
+            "-e",
+            "dev",
+            "--identity",
+            "pipeline-mi",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("data-source"));
+    rigg(ws.path(), &server.uri())
+        .args([
+            "new",
+            "data-source",
+            "other",
+            "-p",
+            "demo",
+            "-e",
+            "dev",
+            "--identity",
+            "docs",
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("not an identity binding"));
 }

@@ -194,6 +194,41 @@ around that. No compatibility with 1.x workspaces.
   that would explain them (`→ likely <edge>`); exit 1 on any failure. New MCP
   tool `rigg_verify` (`project?`, `env?`) and new `rigg_push` parameters
   `verify` / `skip_auth_preflight` bring the MCP surface to 14 tools.
+- **`rigg auth easy-auth <function-app binding> [--client-id <id>]`** wires
+  Microsoft Entra authentication onto a bound function app end to end: it
+  registers (or reuses) an application with `api://<app-id>` and a `Caller`
+  app role, creates the enterprise application, and PUTs a **merged**
+  `authsettingsV2` — every other identity provider and unrelated setting is
+  kept, `allowedAudiences` and `allowedApplications` are unioned, never
+  replaced. The caller it admits is the search service's system-assigned
+  identity, or the user-assigned identity a skillset declares in
+  `authIdentity`. The merged document is shown as a diff and confirmed
+  (`auth.easyauth.<site>`, exit 6 non-interactively without `--yes`) before
+  anything is written. Every skillset in the environment whose WebApiSkill
+  calls that app then becomes keyless on disk — `authResourceId` set, the
+  `code=` parameter, `x-functions-key` header and `x-rigg-auth` carrier
+  removed — and rigg tells you to `rigg push`; it never pushes for you. The
+  same wiring is offered inline from push's Web API auth question
+  ("identity-based — set it up now").
+- **Key Vault as a key source**: `"x-rigg-auth": "key-vault:<secret>@<key-vault
+  binding>"` on a WebApiSkill. At push time the secret is read from the
+  vault's data plane with the operator's token and placed in the skill's own
+  carrier **in the outgoing body only** — never on disk, in output, or in a
+  trace. `rigg validate` accepts the annotation only when the binding really
+  is a `key-vault` dependency, and rejects any `x-rigg-auth` value rigg
+  cannot resolve.
+- **`rigg new <kind> <name> --identity <binding>`** points a scaffold at an
+  environment's user-assigned managed identity instead of the search
+  service's system-assigned one, writing
+  `{"@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+  "userAssignedIdentity": "<arm id>"}` into the kind's identity field. The
+  ARM id comes from the binding cache, or from ARM when the cache has none
+  (exit 4 with the `rigg env bind --learn` hint when neither can answer).
+  Applies to the kinds whose registry table declares a non-array
+  user-assigned identity field (`data-source`, `skillset`,
+  `knowledge-source`); any other kind is a usage error naming those.
+  Independent of `--describe` — both may be given, and the identity is
+  applied after the AI draft.
 
 ### Removed (library API)
 

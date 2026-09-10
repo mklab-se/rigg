@@ -372,9 +372,14 @@ rigg auth login       # delegates to Azure CLI
 rigg auth status
 rigg auth doctor      # verify service-to-service identities and RBAC
 rigg auth doctor --fix
+rigg auth easy-auth <function-app-binding>   # make a Web API skill keyless
 ```
 
-`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation.
+`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation; `rigg new <kind> <name> --identity <binding>` points a scaffold at one.
+
+`auth easy-auth` covers the one edge RBAC cannot: a custom skill calling your Azure Function. It registers an Entra application for the app, merges Microsoft authentication into its Easy Auth settings so it accepts `api://<app-id>` from your search identity, and rewrites the skillsets that call it to be keyless (`authResourceId`, no `code=`, no `x-functions-key`). It shows the merged settings as a diff and asks before writing, and leaves the push to you.
+
+Where Azure still insists on a runtime key, name a key source instead of storing one: `"x-rigg-auth": "function-key"` (fetched from ARM at push time) or `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` (read from the vault at push time). Either way the value only ever exists in the outgoing request body.
 
 In CI or automation, rigg also accepts service-principal environment variables (`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/…) or a static bearer token via `RIGG_ACCESS_TOKEN`. Sovereign clouds and test rigs can override the service endpoint with `endpoint:` on a connection in `rigg.yaml`.
 

@@ -45,6 +45,36 @@ pub async fn mount_graph_existing_sp(
     mount_graph_writes(server).await;
 }
 
+/// Mount `GET /applications?$filter=appId eq '…'` — the `--client-id` reuse
+/// path. `found` is whether the tenant already has that application.
+pub async fn mount_graph_application_lookup(server: &MockServer, found: bool) {
+    let value = if found {
+        json!([{"id": FAKE_APP_OBJECT_ID, "appId": FAKE_APP_ID, "displayName": "existing"}])
+    } else {
+        json!([])
+    };
+    Mock::given(method("GET"))
+        .and(path("/applications"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": value})))
+        .mount(server)
+        .await;
+}
+
+/// Mount `GET /servicePrincipals/{objectId}` — how a managed identity's
+/// principal (object) id becomes the client id Easy Auth admits.
+pub async fn mount_graph_service_principal(server: &MockServer, object_id: &str, app_id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/servicePrincipals/{object_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": object_id,
+            "appId": app_id,
+            "appRoleAssignmentRequired": false
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
 async fn mount_graph_sp_lookup(
     server: &MockServer,
     sp_id: Option<&str>,

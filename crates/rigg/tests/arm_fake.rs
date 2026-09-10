@@ -60,7 +60,9 @@ pub async fn mount_arm_fake(
                         "properties": {
                             "endpoint": format!("https://{name}.cognitiveservices.azure.com/"),
                             "vaultUri": format!("https://{name}.vault.azure.net/"),
+                            "defaultHostName": format!("{name}.azurewebsites.net"),
                             "principalId": "00000000-0000-0000-0000-00000000aaaa",
+                            "clientId": "00000000-0000-0000-0000-00000000cccc",
                             "primaryEndpoints": {
                                 "blob": format!("https://{name}.blob.core.windows.net/")
                             }
@@ -97,7 +99,9 @@ pub async fn mount_arm_fake(
                 "properties": {
                     "endpoint": format!("https://{name}.cognitiveservices.azure.com/"),
                     "vaultUri": format!("https://{name}.vault.azure.net/"),
+                    "defaultHostName": format!("{name}.azurewebsites.net"),
                     "principalId": "00000000-0000-0000-0000-00000000aaaa",
+                    "clientId": "00000000-0000-0000-0000-00000000cccc",
                     "primaryEndpoints": {
                         "blob": format!("https://{name}.blob.core.windows.net/")
                     }
@@ -140,6 +144,36 @@ pub async fn mount_easy_auth(server: &MockServer, site: &str, enabled: bool, cli
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(server)
         .await;
+}
+
+/// Mount the `authsettingsV2` PUT — the write half of Easy Auth. Echoes the
+/// body back, so a test can read the merged document out of the request log.
+pub async fn mount_easy_auth_write(server: &MockServer, site: &str) {
+    Mock::given(method("PUT"))
+        .and(path_regex(format!(
+            r"^.*/sites/{site}/config/authsettingsV2$"
+        )))
+        .respond_with(|req: &Request| {
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::from_slice::<Value>(&req.body).unwrap_or(json!({})))
+        })
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// The body of the last `PUT …/config/authsettingsV2` the server saw.
+pub async fn last_auth_settings_put(server: &MockServer) -> Option<Value> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .rfind(|r| {
+            r.method == wiremock::http::Method::PUT
+                && r.url.path().ends_with("/config/authsettingsV2")
+        })
+        .and_then(|r| serde_json::from_slice(&r.body).ok())
 }
 
 /// Mount one site's `authsettingsV2` action as a failure (403, 500, …) —
