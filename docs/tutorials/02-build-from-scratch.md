@@ -77,16 +77,22 @@ scaffold left placeholders:
   "name": "docs-ds",
   "type": "azureblob",
   "credentials": {
-    "connectionString": "ResourceId=/subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Storage/storageAccounts/contosodocs;"
+    "connectionString": "ResourceId=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<storage-account>;"
   },
-  "container": { "name": "handbook" },
+  "container": { "name": "<container-name>" },
+  "dataChangeDetectionPolicy": null,
   "dataDeletionDetectionPolicy": {
     "@odata.type": "#Microsoft.Azure.Search.NativeBlobSoftDeleteDeletionDetectionPolicy"
   }
 }
 ```
 
-Fill in your subscription id, resource group, storage account and container.
+Replace the four `<…>` placeholders with your subscription id, resource group,
+storage account and container — `contoso-rg`, `contosodocs` and `handbook` in
+the examples that follow. `dataChangeDetectionPolicy: null` means "re-read
+everything each run"; blob storage has a built-in high-water-mark policy, so
+you rarely need to set it. The deletion policy is filled in for you because
+without one, documents deleted from the container stay in the index forever.
 
 Note what is *not* there: an account key. `ResourceId=` is the keyless form —
 the Search service authenticates to storage with its managed identity, and
@@ -276,6 +282,21 @@ rigg az index stats docs-index
 rigg az index query docs-index "onboarding"
 ```
 
+<!-- verify-live -->
+```text
+# output
+Index 'docs-index'
+  documents: 128
+  storage:   4.2 MiB
+  vectors:   1.1 MiB
+3 match(es) in 'docs-index' (showing 3)
+
+[1] score 4.812
+  id: handbook-onboarding-01
+  title: Onboarding checklist
+  url: https://contosodocs.blob.core.windows.net/handbook/onboarding.md
+```
+
 ## 9. Ask the knowledge base
 
 ```bash
@@ -307,6 +328,13 @@ The agent needs a model deployment to run on:
 ```bash
 rigg new deployment gpt-4.1-mini -p docs-rag
 rigg new agent docs-agent -p docs-rag
+```
+
+<!-- verify-live -->
+```text
+# output
+Created /Users/you/contoso-rag/projects/docs-rag/envs/dev/foundry/deployments/gpt-4.1-mini.json
+Created /Users/you/contoso-rag/projects/docs-rag/envs/dev/foundry/agents/docs-agent.json
 ```
 
 Edit `projects/docs-rag/envs/dev/foundry/deployments/gpt-4.1-mini.json` to set

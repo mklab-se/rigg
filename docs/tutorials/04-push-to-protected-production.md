@@ -5,8 +5,14 @@ environment protected, walks through what that changes for a human, for a CI
 job and for an AI agent, and finishes with a GitHub Actions pipeline that
 deploys on merge using OIDC and no stored secrets.
 
-**Time:** about 30 minutes. **Azure cost:** none beyond what your prod stack
-already costs — every mutating step here can be run as `--dry-run`.
+**Time:** about 30 minutes.
+
+**Azure cost:** step 3 is the one step that is not a preview. It is a real
+`rigg push … --verify` against production: the push itself costs nothing, but
+`--verify` runs every indexer in the project to completion and asks every agent
+one question, so it bills ingestion, embedding and tokens. Drop `--verify` (or
+add `--dry-run`) if you are only rehearsing the gate. Everything else here —
+steps 1, 2, 4, 5, 6 and 7 — reads, previews or writes files on your machine.
 
 ## Prerequisites
 
@@ -47,8 +53,11 @@ are documented in [the policy reference](../reference/rigg-yaml.md#policy).
 Two policy flags, doing different jobs:
 
 - **`protected: true`** requires a typed confirmation before rigg mutates the
-  environment — `push` (create/update and `--prune`), `delete --remote`,
-  `az indexer run`/`reset`, `verify`, and `auth doctor --fix`.
+  environment. That is every command that writes to it: `push` (create/update
+  and `--prune`), `delete --remote`, `verify`, `az indexer run`,
+  `az indexer reset`, `auth doctor --fix`, `auth easy-auth` and
+  `auth roles remove`. Each of them also takes `--confirm-env prod` so a
+  script can supply the answer up front.
 - **`strict-bindings: true`** turns *warnings* about infrastructure references
   into *errors*: a reference that matches no binding fails `validate` and
   `push` with exit 3. It defaults to the value of `protected`, so writing it
@@ -81,6 +90,19 @@ A dry run is never gated — a preview mutates nothing:
 ```bash
 rigg push docs-rag -e prod --dry-run
 ```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: prod, protected)
+  Search:  contoso-search-prod → https://contoso-search-prod.search.windows.net
+  Foundry: contoso-ai/rag-prod → https://contoso-ai.services.ai.azure.com/api/projects/rag-prod
+  update indexes/docs-index
+  update agents/docs-agent
+  (dry run — nothing pushed)
+```
+
+No confirmation was asked for, because nothing was going to be written.
 
 Now attempt the real thing the way a script would — `--yes`, and
 `--non-interactive` so that you see on your terminal what CI would see (a job,
@@ -183,8 +205,10 @@ auth roles assignments described 'rigg:contoso-rag:prod:…' across 3 scope(s) (
 Every role assignment rigg creates carries a description of the form
 `rigg:<workspace>:<env>:<reason>`, and this command lists exactly those — not
 the assignments your platform team made, not another environment's, not ones
-granted subscription-wide. `rigg auth roles remove -e prod` undoes precisely
-this list, which means adopting rigg is reversible.
+granted subscription-wide. `rigg auth roles remove -e prod --confirm-env prod`
+undoes precisely this list, which means adopting rigg is reversible. `list`
+only reads, so it is not gated; `remove` writes, so it is — which is why it
+takes the same `--confirm-env` as `push`.
 
 ## 5. Guard the boundary
 
@@ -204,11 +228,24 @@ reference to the dev storage account" fails validation instead of production.
 rigg validate docs-rag -e prod --strict --show-bindings
 ```
 
+<!-- verify-live -->
+```text
+# output
+✓ all checks passed
+✓ bound 'docs-storage' (storage contosodocsprod)
+```
+
+Validation reads files; it never writes, so it is not gated.
+
 ## 6. Deploy from CI, with no secrets
 
 ```bash
-rigg ci init github
+rigg ci init github -e prod
 ```
+
+`-e prod` matters: `ci init` pins the workflows to whichever environment
+resolves — flag, then `RIGG_ENV`, then the workspace default — and step 5 just
+made that `dev`.
 
 <!-- verify-live -->
 ```text
@@ -275,8 +312,20 @@ out about a missing role now rather than at 3 a.m.
 
 If you have connected rigg's MCP server (`rigg mcp install claude-code`), your
 assistant reaches the identical gate — it cannot push to prod because it
-decided to. Ask it to push and the `rigg_push` tool comes back with, as its
-*result* rather than an error:
+decided to.
+
+Ask it to push and its first `rigg_push` call has no `force` — the arguments
+are just the project and the environment:
+
+```json
+{ "project": "docs-rag", "env": "prod" }
+```
+
+The server turns a call without `force` into `--dry-run`. A preview writes
+nothing, so it is never gated: the assistant gets the plan back and shows it
+to you. You approve, and it calls `rigg_push` again with `force: true` — the
+call that would actually write. *That* one comes back with, as its *result*
+rather than an error:
 
 ```json
 {
@@ -293,9 +342,11 @@ decided to. Ask it to push and the `rigg_push` tool comes back with, as its
 }
 ```
 
-The agent shows you that question, you say `prod`, and it calls the same tool
-again with `answers: {"confirm.protected.prod": "prod"}` (or the `confirm_env`
-shorthand) plus `force: true`. One exchange, and the decision was yours. See
+The agent shows you that question, you say `prod`, and it calls the tool a
+third time — `force: true` again, now with
+`answers: {"confirm.protected.prod": "prod"}` (or the `confirm_env: "prod"`
+shorthand). Preview, consent, write: the assistant can drive the loop, but the
+one value that opens the gate has to come from you. See
 [MCP.md](../../MCP.md#the-needs-input-loop) for the loop in full.
 
 ## What you have now
@@ -314,7 +365,8 @@ shorthand) plus `force: true`. One exchange, and the decision was yours. See
 Nothing to undo unless this was a rehearsal. To take the protection off, drop
 `policy.protected` from `rigg.yaml`; to remove the workflows, delete the three
 files in `.github/workflows/`; to withdraw rigg's role assignments, run
-`rigg auth roles remove -e prod`.
+`rigg auth roles remove -e prod --confirm-env prod` (or drop the flag and type
+`prod` at the prompt).
 
 ## Next
 

@@ -78,8 +78,14 @@ nothing is asked at all, so the flags are the whole input:
 ```bash
 rigg env add staging --like dev \
   --search-service contoso-search-stg --foundry-account contoso-ai --foundry-project rag-stg \
-  --bind docs-storage=storage:contosodocsstg --same enrich-fn
+  --bind docs-storage=storage:contosodocsstg
 ```
+
+`docs-storage` is dev's only binding here, so that one `--bind` is the whole
+input. To keep staging on dev's storage account instead — a *shared* binding —
+name it with `--same docs-storage`; to leave it unbound, `--skip docs-storage`.
+A `--same`/`--skip` naming a binding the model environment does not have is a
+usage error (exit 2), not a silent no-op.
 
 On a terminal you can also pre-answer a question by its id, which is useful
 once you know the ids from a previous run:
@@ -258,7 +264,59 @@ files and bindings.
 
 ```bash
 rigg push docs-rag -e staging --dry-run
+```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: staging)
+  Search:  contoso-search-stg → https://contoso-search-stg.search.windows.net
+  Foundry: contoso-ai/rag-stg → https://contoso-ai.services.ai.azure.com/api/projects/rag-stg
+  create data-sources/docs-ds
+  create indexes/docs-index
+  create skillsets/docs-skills
+  create indexers/docs-indexer
+  create knowledge-sources/docs-ks
+  create knowledge-bases/docs-kb
+  create deployments/gpt-4.1-mini
+  create agents/docs-agent
+  (dry run — nothing pushed)
+```
+
+```bash
 rigg push docs-rag -e staging
+```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: staging)
+  Search:  contoso-search-stg → https://contoso-search-stg.search.windows.net
+  Foundry: contoso-ai/rag-stg → https://contoso-ai.services.ai.azure.com/api/projects/rag-stg
+  create data-sources/docs-ds
+  create indexes/docs-index
+  create skillsets/docs-skills
+  create indexers/docs-indexer
+  create knowledge-sources/docs-ks
+  create knowledge-bases/docs-kb
+  create deployments/gpt-4.1-mini
+  create agents/docs-agent
+
+Apply 8 change(s)? (y/N) y
+  ✓ data-sources/docs-ds
+  ✓ indexes/docs-index
+  ✓ skillsets/docs-skills
+  ✓ indexers/docs-indexer
+  ✓ knowledge-sources/docs-ks
+  ✓ knowledge-bases/docs-kb
+  ✓ deployments/gpt-4.1-mini
+  ✓ agents/docs-agent
+```
+
+Then prove staging actually runs — this triggers a real indexer run and one
+agent turn, so it costs ingestion and tokens:
+
+```bash
 rigg verify docs-rag -e staging
 ```
 
@@ -309,13 +367,20 @@ it reports `0 changed`, the two trees mean the same thing.
 
 ```bash
 rigg delete docs-rag --remote -e staging
-rigg auth roles remove -e staging
 rigg env remove staging --clean-roles
+rm -r projects/docs-rag/envs/staging
 ```
 
-`rigg env remove --clean-roles` deletes the role assignments rigg created for
-the environment as it removes it — otherwise they outlive the environment that
-explains them, on infrastructure other environments may share.
+`rigg delete --remote` removes everything the project owns in *that*
+environment from Azure; `-e staging` is what keeps it away from dev. It leaves
+the local files alone, which is why the `rm -r` is a separate line:
+`rigg env remove` only edits `rigg.yaml`, so the promoted tree under
+`projects/<project>/envs/staging/` stays on disk until you delete it.
+
+`--clean-roles` deletes the role assignments rigg created for the environment
+as it removes it — otherwise they outlive the environment that explains them,
+on infrastructure other environments may share. It does the same job as
+`rigg auth roles remove -e staging`, so run one or the other, not both.
 
 ## Next
 

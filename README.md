@@ -93,10 +93,16 @@ rigg init .
 # 2. Group what you manage into a project
 rigg new project docs-rag
 
-# 3. Adopt what already exists in Azure — or scaffold a pipeline from scratch
+# 3. Adopt what already exists in Azure...
 rigg adopt docs-rag all
-rigg new pipeline docs -p docs-rag --type azureblob
+```
 
+```bash
+# ...or scaffold a pipeline from scratch instead
+rigg new pipeline docs -p docs-rag --type azureblob
+```
+
+```bash
 # 4. Review, then apply
 rigg validate docs-rag
 rigg push docs-rag --dry-run

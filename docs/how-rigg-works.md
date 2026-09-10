@@ -162,7 +162,7 @@ is stable and namespaced, so the same question always has the same name:
 
 | Prefix | Asked by |
 |---|---|
-| `confirm.protected.<env>` | the protected-environment gate on `push`, `delete --remote`, `az indexer run/reset`, `verify`, `auth doctor --fix` |
+| `confirm.protected.<env>` | the protected-environment gate on `push`, `delete --remote`, `verify`, `az indexer run/reset`, `auth doctor --fix`, `auth easy-auth`, `auth roles remove` |
 | `binding.<env>.<name>` | `rigg env add --like`, and promote when the target lacks a binding |
 | `env.<name>.…` | `rigg env add` (e.g. whether to protect the new environment) |
 | `learn.<env>.record` | the offer to record learned bindings after `adopt`/`pull` |

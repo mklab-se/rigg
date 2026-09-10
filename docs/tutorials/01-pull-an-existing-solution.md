@@ -9,7 +9,14 @@ By the end of this tutorial that whole stack is a Git repository, and you have
 proved the round trip works: you will delete a resource from Azure and put it
 back with one command.
 
-**Time:** about 20 minutes. **New Azure cost:** none — nothing is created.
+**Time:** about 20 minutes.
+
+**New Azure cost:** small, but not zero. Adopting, committing and describing
+create nothing. Step 8 creates one throwaway synonym map (free) and deletes it
+again. Step 10 runs `rigg verify`, which triggers a full run of every indexer
+in the project and asks every agent one question — that is real ingestion,
+embedding and token spend on the stack you already have. Skip step 10 if you
+would rather not pay for it; nothing later depends on it.
 
 ## Prerequisites
 
@@ -180,6 +187,15 @@ Answer `y` to the prompt above, or run the learn step explicitly:
 rigg env bind dev --learn
 ```
 
+<!-- verify-live -->
+```text
+# output
+Found 1 unbound infrastructure reference(s) in 'dev':
+  contosodocs  storage  contosodocs  (1 reference(s), e.g. data-sources/docs-ds.json:credentials.connectionString)
+Name for the storage 'contosodocs' (or 'skip'): [contosodocs]
+Bound 'contosodocs' in environment 'dev': storage contosodocs
+```
+
 Your data source's connection string names a storage account; your skillset
 may name a function app. Those are **bindings**: rigg gives each one a name in
 `rigg.yaml`, so the same file can later be translated to a staging or prod
@@ -275,65 +291,99 @@ the OpenAPI specs a custom skill expects you to implement.
 ## 8. Prove the round trip
 
 Version control is only worth something if you can restore from it. Do the
-scariest possible test on the least scary possible resource: create a
-throwaway synonym map, adopt it, delete it from Azure, and push it back.
+scariest possible test on the least scary possible resource: scaffold a
+throwaway synonym map, push it, delete it from Azure, and push it back.
+Nothing in your stack references it, so every command below is scoped to that
+one file.
 
-> **Do not use one of your real resources for this step.** A delete is a
-> delete.
+> **Warning:** `rigg delete <project> --remote` is a *different* command, and
+> it is deliberately not part of this tutorial. It deletes **every** resource
+> the project owns from Azure — after step 4 that is your entire real stack —
+> and deleting a Search index destroys the documents in it, which come back
+> only once an indexer has re-ingested the whole corpus. The round trip below
+> uses `push --prune`, which touches only the resources whose local file you
+> removed.
 
-Create `projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json`:
-
-```json
-{
-  "name": "roundtrip-demo",
-  "format": "solr",
-  "synonyms": "usa, united states, united states of america"
-}
-```
-
-Push it, then delete the whole project's resources from Azure and put them
-back. `rigg delete` lists exactly what it will remove and makes you type the
-project name — there is no way to do this by accident:
+Scaffold the throwaway resource:
 
 ```bash
-rigg push docs-rag
-rigg delete docs-rag --remote
+rigg new synonym-map roundtrip-demo -p docs-rag
 ```
 
 <!-- verify-live -->
 ```text
 # output
-DELETING the following resources of project 'docs-rag' from Azure (env: dev):
-  Search:  contoso-search → https://contoso-search.search.windows.net
-  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
-  delete agents/docs-agent
-  delete knowledge-bases/docs-kb
-  delete knowledge-sources/docs-ks
-  delete indexers/docs-indexer
-  delete synonym-maps/roundtrip-demo
-  delete skillsets/docs-skills
-  delete indexes/docs-index
-  delete data-sources/docs-ds
-
-Type the project name to confirm: docs-rag
-  ✓ deleted agents/docs-agent
-  ✓ deleted knowledge-bases/docs-kb
-  ✓ deleted knowledge-sources/docs-ks
-  ✓ deleted indexers/docs-indexer
-  ✓ deleted synonym-maps/roundtrip-demo
-  ✓ deleted skillsets/docs-skills
-  ✓ deleted indexes/docs-index
-  ✓ deleted data-sources/docs-ds
-i local files kept; push the project to re-create everything
+Created /Users/you/contoso-rag/projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
 ```
 
-Deletion runs in reverse dependency order — the agent goes before the
-knowledge base it grounds on, the indexer before the index it writes to.
-The local files are untouched.
-
-## 9. Push it all back
+Push it, and commit it — you can only restore from a repository that holds the
+version you mean to restore:
 
 ```bash
+rigg push docs-rag
+git add projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
+git commit -m "Add a throwaway synonym map"
+```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: dev)
+  Search:  contoso-search → https://contoso-search.search.windows.net
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  create synonym-maps/roundtrip-demo
+
+Apply 1 change(s)? (y/N) y
+  ✓ synonym-maps/roundtrip-demo
+```
+
+Now delete it from Azure — by deleting the *file*. A resource with a recorded
+baseline and no file is an **orphan**, and orphans are removed from Azure only
+when you say `--prune`. Preview first; a dry run writes nothing:
+
+```bash
+rm projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
+rigg push docs-rag --prune --dry-run
+```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: dev)
+  Search:  contoso-search → https://contoso-search.search.windows.net
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  delete synonym-maps/roundtrip-demo
+  (dry run — nothing pushed)
+```
+
+Everything else is in sync, so the plan is one line long — that one line is
+the whole blast radius. Apply it:
+
+```bash
+rigg push docs-rag --prune --yes
+```
+
+<!-- verify-live -->
+```text
+# output
+Push project 'docs-rag' (env: dev)
+  Search:  contoso-search → https://contoso-search.search.windows.net
+  Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
+  delete synonym-maps/roundtrip-demo
+  ✓ deleted synonym-maps/roundtrip-demo
+```
+
+`roundtrip-demo` is gone from Azure. Check the portal if you want to see it
+for yourself. Without `--prune` the same plan would have printed
+`orphan synonym-maps/roundtrip-demo (file deleted locally; pass --prune to
+delete remotely)` and changed nothing: deletes are always explicit.
+
+## 9. Push it back
+
+Restore the file from Git and push:
+
+```bash
+git checkout -- projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
 rigg push docs-rag
 ```
 
@@ -343,33 +393,22 @@ rigg push docs-rag
 Push project 'docs-rag' (env: dev)
   Search:  contoso-search → https://contoso-search.search.windows.net
   Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com/api/projects/rag
-  create data-sources/docs-ds
-  create indexes/docs-index
-  create skillsets/docs-skills
   create synonym-maps/roundtrip-demo
-  create indexers/docs-indexer
-  create knowledge-sources/docs-ks
-  create knowledge-bases/docs-kb
-  create agents/docs-agent
 
-Apply 8 change(s)? (y/N) y
-  ✓ data-sources/docs-ds
-  ✓ indexes/docs-index
-  ✓ skillsets/docs-skills
+Apply 1 change(s)? (y/N) y
   ✓ synonym-maps/roundtrip-demo
-  ✓ indexers/docs-indexer
-  ✓ knowledge-sources/docs-ks
-  ✓ knowledge-bases/docs-kb
-  ✓ agents/docs-agent
 ```
 
-Two things happened that are easy to miss. Push ordered the writes from the
-reference graph, so nothing was created before what it points at. And before
-the first write it ran the **auth preflight**: it derived, from these very
+That is the round trip: Azure lost a resource, Git had it, one command put it
+back. The same command restores eight resources, or eighty, and at that scale
+two things it does on every push become visible. Push orders the writes from the
+reference graph, so nothing is created before what it points at (the data
+source before the indexer, the knowledge base before the agent). And before
+the first write it runs the **auth preflight**: it derives, from these very
 documents, which managed identity needs which role on which resource, and
-checked each one against Azure. Had the search service's identity lacked
-`Storage Blob Data Reader` on `contosodocs`, the push would have refused with
-exit 4 and printed the `az` line — before writing anything.
+checks each one against Azure. Were the search service's identity to lack
+`Storage Blob Data Reader` on `contosodocs`, the push would refuse with
+exit 4 and print the `az` line — before writing anything.
 
 After each PUT, rigg reads the server's copy back, normalizes it, and rewrites
 the local file and the baseline. That is why `rigg status` says `in sync`
@@ -377,6 +416,11 @@ immediately afterwards instead of inventing a diff out of a default Azure
 filled in for you.
 
 ## 10. Prove it actually works
+
+This is the step that costs money: `verify` runs every indexer in the project
+to completion and asks every agent one question, so it bills ingestion,
+embedding and tokens on your existing stack. Skip it if that is not what you
+want today.
 
 ```bash
 rigg verify docs-rag
@@ -413,15 +457,17 @@ identity cannot read `contosodocs`" instead of a raw 403.
 
 ## Clean up
 
-Delete the throwaway synonym map from Azure and from the repository:
+Step 9 put `roundtrip-demo` back. Remove it for good — the same two commands
+as step 8, plus a commit so the repository agrees:
 
 ```bash
 rm projects/docs-rag/envs/dev/search/synonym-maps/roundtrip-demo.json
 rigg push docs-rag --prune
+git commit -am "Remove the throwaway synonym map"
 ```
 
-A removed local file becomes an *orphan*, and orphans are only deleted from
-Azure when you say `--prune`. Deletes are always explicit.
+Your adopted stack is untouched: `--prune` deletes only the resources whose
+local file you removed.
 
 ## Next
 
