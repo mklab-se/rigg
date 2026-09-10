@@ -15,7 +15,7 @@ use serde_json::Value;
 use rigg_core::normalize::normalize_for_push;
 use rigg_core::registry;
 use rigg_core::resources::{ResourceKind, ResourceRef};
-use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
+use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership, baseline_doc};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 
 use crate::cli::PullArgs;
@@ -121,7 +121,7 @@ async fn pull_project(
             SyncClass::InSync => {
                 // Content equal — refresh the baseline unconditionally so a
                 // stale baseline (e.g. after both sides converged) self-heals.
-                state.set_baseline(r, doc);
+                state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
             }
             SyncClass::RemoteAhead | SyncClass::RemoteOnly => {
                 if store.write(r, doc)? {
@@ -129,7 +129,7 @@ async fn pull_project(
                     written += 1;
                     report_unknown_fields(r, doc, &mut unknown_fields_seen);
                 }
-                state.set_baseline(r, doc);
+                state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
             }
             SyncClass::LocalAhead => {
                 println!("  {} {} (local ahead — push pending)", "≠".yellow(), r);
@@ -143,7 +143,7 @@ async fn pull_project(
                     if store.write(r, doc)? {
                         report_unknown_fields(r, doc, &mut unknown_fields_seen);
                     }
-                    state.set_baseline(r, doc);
+                    state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
                     println!("  {} overwrote {}", "~".cyan(), r);
                     written += 1;
                 } else if ctx.interactive() {
@@ -170,7 +170,7 @@ async fn pull_project(
                                 if store.write(r, doc)? {
                                     report_unknown_fields(r, doc, &mut unknown_fields_seen);
                                 }
-                                state.set_baseline(r, doc);
+                                state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
                                 println!("  {} overwrote {}", "~".cyan(), r);
                                 written += 1;
                                 break;

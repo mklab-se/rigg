@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use rigg_core::normalize::normalize_for_compare;
 use rigg_core::resources::{ResourceKind, ResourceRef};
-use rigg_core::store::Store;
+use rigg_core::store::{Store, carry_over_write_only};
 use rigg_core::workspace::{Project, Workspace};
 use rigg_diff::output::SideLabels;
 use rigg_diff::semantic::DiffResult;
@@ -138,6 +138,9 @@ async fn diff_project(
     let remote_b = Remote::for_project(&env_b, project);
 
     let mut pairs: Vec<(ResourceRef, Option<Value>, Option<Value>)> = Vec::new();
+    // Only meaningful local-vs-remote: with --compare-env both sides are
+    // remote GETs and no baseline speaks for either.
+    let mut baselines: Option<rigg_core::store::ProjectState> = None;
 
     if let Some(compare_env) = &args.compare_env {
         // env A (selected/default) vs env B (--compare-env)
@@ -185,6 +188,7 @@ async fn diff_project(
                 }
             }
         }
+        baselines = Some(state);
     }
 
     let mut out = Vec::new();
@@ -217,12 +221,24 @@ async fn diff_project(
         // write-only fields (a data source's connection string), which the
         // server never echoes back — comparing them would report drift on
         // every data source forever.
-        let left_n = left
-            .map(|v| normalize_for_compare(r.kind, &v))
+        let mut left_n = left
+            .as_ref()
+            .map(|v| normalize_for_compare(r.kind, v))
             .unwrap_or(Value::Null);
-        let right_n = right
-            .map(|v| normalize_for_compare(r.kind, &v))
+        let mut right_n = right
+            .as_ref()
+            .map(|v| normalize_for_compare(r.kind, v))
             .unwrap_or(Value::Null);
+        // …but a write-only field the user edited locally IS a pending change,
+        // and the baseline — not the redacted remote — is what `status` and
+        // `push` classify it against. Put both sides' recorded values back so
+        // a re-pointed connection string reads as `old → new`.
+        if let (Some(state), Some(local)) = (baselines.as_ref(), left.as_ref())
+            && let Some(base) = state.baseline_document(&r)
+        {
+            carry_over_write_only(r.kind, local, &mut left_n);
+            carry_over_write_only(r.kind, base, &mut right_n);
+        }
         // diff(old=remote/right, new=local/left): report what pushing would change
         let result = rigg_diff::semantic::diff(&right_n, &left_n, "name");
         out.push((format!("{}/{}", project.name, r), result));

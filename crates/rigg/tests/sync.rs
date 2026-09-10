@@ -3683,3 +3683,135 @@ async fn push_verify_exercises_the_pushed_resources() {
         "posts: {posts:?}"
     );
 }
+
+/// A local edit that touches ONLY a data source's write-only connection
+/// string must still be pushable. Checksums deliberately ignore write-only
+/// fields (Azure redacts them on every GET, so comparing them against the
+/// remote would report drift forever) — so the BASELINE is what such an edit
+/// is measured against. Regression: re-pointing a data source at another
+/// storage account used to classify as "in sync" and `push` skipped it.
+#[tokio::test]
+async fn a_connection_string_only_edit_is_pushed() {
+    const OLD: &str = "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/old-acct;";
+    const NEW: &str = "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/new-acct;";
+    // Azure redacts the connection string on every GET — the remote can never
+    // witness this change.
+    let redacted = json!({
+        "@odata.etag": "\"0x1\"",
+        "name": "ds",
+        "type": "azureblob",
+        "credentials": {"connectionString": null},
+        "container": {"name": "docs"}
+    });
+
+    let server = MockServer::start().await;
+    mount_empty_lists_except(&server, "datasources").await;
+    Mock::given(method("GET"))
+        .and(path("/datasources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [redacted]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/ds"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(redacted.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/datasources/ds"))
+        .respond_with(|req: &Request| {
+            // echo the body back the way Azure does: credentials redacted
+            let mut body: Value = serde_json::from_slice(&req.body).unwrap();
+            body["credentials"]["connectionString"] = Value::Null;
+            body["@odata.etag"] = json!("\"0xNEW\"");
+            ResponseTemplate::new(200).set_body_json(body)
+        })
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    let ds = |conn: &str| {
+        json!({
+            "name": "ds",
+            "type": "azureblob",
+            "credentials": {"connectionString": conn},
+            "container": {"name": "docs"}
+        })
+    };
+    write_resource(ws.path(), "data-sources", "ds", &ds(OLD));
+
+    // pull records a baseline that remembers the local connection string
+    rigg(ws.path())
+        .args(["pull", "demo", "--yes"])
+        .assert()
+        .success();
+    let file = ws
+        .path()
+        .join("projects/demo/envs/dev/search/data-sources/ds.json");
+    let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        on_disk["credentials"]["connectionString"],
+        json!(OLD),
+        "pull must not wipe the local connection string with Azure's redaction"
+    );
+
+    // re-point the data source at another storage account — nothing else
+    std::fs::write(&file, serde_json::to_string_pretty(&ds(NEW)).unwrap()).unwrap();
+
+    rigg(ws.path())
+        .args(["status", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local ahead"));
+
+    // diff shows old → new from local vs BASELINE — never from the redacted
+    // remote, which has nothing to show.
+    let report = rigg(ws.path())
+        .args(["diff", "demo", "--exit-code", "--format", "json"])
+        .assert()
+        .code(5)
+        .get_output()
+        .stdout
+        .clone();
+    let report = String::from_utf8(report).unwrap();
+    assert!(report.contains("data-sources/ds"), "{report}");
+    assert!(report.contains("credentials.connectionString"), "{report}");
+    assert!(
+        report.contains("old-acct") && report.contains("new-acct"),
+        "{report}"
+    );
+
+    rigg(ws.path())
+        .args(["push", "demo", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("data-sources/ds"));
+
+    rigg(ws.path())
+        .args(["push", "demo", "--yes"])
+        .assert()
+        .success();
+
+    let puts: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(puts.len(), 1, "exactly one PUT: {puts:?}");
+    assert_eq!(
+        puts[0]["credentials"]["connectionString"],
+        json!(NEW),
+        "the PUT body must carry the new connection string"
+    );
+
+    // canonicalization keeps the local carrier and refreshes the baseline
+    let after: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(after["credentials"]["connectionString"], json!(NEW));
+    rigg(ws.path())
+        .args(["status", "demo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("in sync"));
+}

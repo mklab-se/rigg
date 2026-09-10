@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 
 use rigg_core::binding::{BindingCache, EnvBindings};
 use rigg_core::infra;
-use rigg_core::normalize::normalize_for_push;
+use rigg_core::normalize::{normalize_for_compare, normalize_for_push};
 use rigg_core::resources::{ResourceKind, ResourceRef};
-use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership};
+use rigg_core::store::{ProjectState, Store, SyncClass, assert_exclusive_ownership, baseline_doc};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use rigg_core::{graph, migrate, registry};
 
@@ -765,9 +765,12 @@ async fn push_project(
         let remote_doc = remote.get(r).await?.unwrap_or(Value::Null);
         say!(ctx);
         say!(ctx, "{} {}", "Conflict:".red().bold(), r);
+        // `normalize_for_compare`, matching what classified this as a
+        // conflict: it also strips the write-only fields Azure redacts, so
+        // the diff does not open with a phantom `connectionString: null → …`.
         let diff = rigg_diff::semantic::diff(
-            &normalize_for_push(r.kind, &remote_doc),
-            &normalize_for_push(r.kind, &local),
+            &normalize_for_compare(r.kind, &remote_doc),
+            &normalize_for_compare(r.kind, &local),
             "name",
         );
         let conflict_labels = rigg_diff::output::SideLabels {
@@ -801,7 +804,7 @@ async fn push_project(
             }),
             KEEP_REMOTE => {
                 store.write(r, &remote_doc)?;
-                state.set_baseline(r, &remote_doc);
+                state.set_baseline(r, &baseline_doc(r.kind, &remote_doc, Some(&local)));
                 say!(ctx, "  kept remote version for {r}");
             }
             AI_MERGE => {
@@ -889,7 +892,7 @@ async fn push_project(
                 // placeholders go back in before anything is persisted.
                 credentials::restore_key_carriers(&mut server_doc, &carriers);
                 store.write(r, &server_doc)?;
-                state.set_baseline(r, &server_doc);
+                state.set_baseline(r, &baseline_doc(r.kind, &server_doc, Some(&item.body)));
                 state.save(ws, &env.name, &project.name)?;
                 say!(ctx, "  {} {}", "✓".green(), r);
             }
@@ -1789,7 +1792,7 @@ async fn execute_replace(
             .with_context(|| step(&format!("while re-creating {r}")))?;
         credentials::restore_key_carriers(&mut server_doc, &carriers);
         store.write(r, &server_doc)?;
-        state.set_baseline(r, &server_doc);
+        state.set_baseline(r, &baseline_doc(r.kind, &server_doc, Some(body)));
         state.save(ws, &env.name, &project.name)?;
         say!(ctx, "      {} {}", "✓".green(), r);
     }
@@ -1802,7 +1805,10 @@ async fn execute_replace(
         .await
         .with_context(|| step("while re-creating the knowledge source"))?;
     store.write(ks, &server_doc)?;
-    state.set_baseline(ks, &server_doc);
+    state.set_baseline(
+        ks,
+        &baseline_doc(ks.kind, &server_doc, Some(&bundle.new_body)),
+    );
     state.save(ws, &env.name, &project.name)?;
     say!(ctx, "      {} {} (kind: searchIndex)", "✓".green(), ks);
 

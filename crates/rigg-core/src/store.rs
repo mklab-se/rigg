@@ -29,7 +29,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::normalize::{format_json, normalize_for_compare, normalize_for_disk};
+use crate::normalize::{
+    format_json, normalize_for_compare, normalize_for_disk, normalize_for_push,
+};
 use crate::resources::traits::{ResourceKind, ResourceRef, validate_resource_name};
 use crate::service::ServiceDomain;
 use crate::sidecar::{self, SidecarError};
@@ -500,15 +502,24 @@ fn physical_name(path: &Path, fallback_stem: &str) -> Result<String> {
 /// would read every canonicalization as drift) — but a LOCAL write that
 /// only changes a credential must still reach the disk.
 fn write_only_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
-    fn values_at(doc: &Value, spec: &str) -> Vec<Value> {
-        let mut out = Vec::new();
-        crate::registry::collect_path(doc, spec, &mut |v| out.push(v.clone()));
-        out
-    }
     crate::registry::meta(kind)
         .write_only_fields
         .iter()
-        .all(|spec| values_at(a, spec) == values_at(b, spec))
+        .all(|spec| write_only_values(a, spec) == write_only_values(b, spec))
+}
+
+/// The non-null values a document carries at one write-only field spec.
+/// Nulls are dropped so that "absent" and "redacted to null" (Azure does
+/// both, endpoint depending) compare equal — the same rule `canonical_form`
+/// applies to the stored baseline.
+fn write_only_values(doc: &Value, spec: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    crate::registry::collect_path(doc, spec, &mut |v| {
+        if !v.is_null() {
+            out.push(v.clone());
+        }
+    });
+    out
 }
 
 /// Whether a write may take values from the file it replaces. Every write
@@ -521,9 +532,25 @@ enum CarryOver {
     No,
 }
 
+/// The document to record as a baseline after a sync wrote `doc` to disk.
+///
+/// `doc` is normally the server's echo, and Azure never echoes a write-only
+/// field (a data source's `credentials.connectionString` comes back null or
+/// absent). [`Store::write`] carries those values over from the local file,
+/// so the baseline has to as well — otherwise it can never notice that the
+/// user later re-pointed the data source at another storage account, and
+/// `status`/`push` would call such an edit "in sync" forever.
+pub fn baseline_doc(kind: ResourceKind, doc: &Value, local: Option<&Value>) -> Value {
+    let mut out = doc.clone();
+    if let Some(local) = local {
+        carry_over_write_only(kind, local, &mut out);
+    }
+    out
+}
+
 /// Preserve write-only fields (server never echoes them) from the existing
 /// local file when the incoming document lacks them or has them as null.
-fn carry_over_write_only(kind: ResourceKind, from: &Value, to: &mut Value) {
+pub fn carry_over_write_only(kind: ResourceKind, from: &Value, to: &mut Value) {
     for spec in crate::registry::meta(kind).write_only_fields {
         let mut existing_value: Option<Value> = None;
         crate::registry::collect_path(from, spec, &mut |v| {
@@ -625,18 +652,20 @@ pub enum SyncClass {
     Untracked,
 }
 
-/// A sync baseline. Newer rigg versions store the compare-normalized
-/// document so the checksum can be recomputed under CURRENT normalization
-/// rules — surviving rule evolution across rigg upgrades. Legacy entries
-/// hold only the frozen checksum and behave as before until the resource
-/// next syncs (every successful pull/push/adopt rewrites its baseline).
+/// A sync baseline. Newer rigg versions store the push-normalized document
+/// so the checksum can be recomputed under CURRENT normalization rules —
+/// surviving rule evolution across rigg upgrades — and so the write-only
+/// fields the checksum deliberately ignores are still on record. Legacy
+/// entries hold only the frozen checksum and behave as before until the
+/// resource next syncs (every successful pull/push/adopt rewrites its
+/// baseline).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Baseline {
     /// Legacy: frozen checksum (string MUST be tried first — `Value`
     /// deserializes any JSON, including strings).
     Checksum(String),
-    /// Compare-normalized canonical document.
+    /// Push-normalized canonical document (write-only fields included).
     Doc(Value),
 }
 
@@ -697,13 +726,44 @@ impl ProjectState {
         }
     }
 
+    /// The recorded baseline document, when one was stored (legacy
+    /// checksum-only baselines have none).
+    pub fn baseline_document(&self, r: &ResourceRef) -> Option<&Value> {
+        match self.baselines.get(&r.key())? {
+            Baseline::Checksum(_) => None,
+            Baseline::Doc(v) => Some(v),
+        }
+    }
+
+    /// Record a baseline. `kind_value` should be the document as it now
+    /// exists on disk — see [`baseline_doc`], which merges the local file's
+    /// write-only fields into a server echo that redacts them.
     pub fn set_baseline(&mut self, r: &ResourceRef, kind_value: &Value) {
-        let doc = canonical_form(&normalize_for_compare(r.kind, kind_value));
+        // `normalize_for_push`, not `normalize_for_compare`: the write-only
+        // fields are kept so a later credentials-only local edit is visible.
+        let doc = canonical_form(&normalize_for_push(r.kind, kind_value));
         self.baselines.insert(r.key(), Baseline::Doc(doc));
     }
 
     pub fn clear_baseline(&mut self, r: &ResourceRef) {
         self.baselines.remove(&r.key());
+    }
+
+    /// Whether the local document's write-only fields have moved away from
+    /// the ones the baseline recorded.
+    ///
+    /// Answers `false` when the baseline is a legacy checksum-only entry: it
+    /// records no values, so it cannot testify either way, and the old
+    /// behaviour (write-only fields invisible to classification) stands until
+    /// the resource next syncs.
+    fn write_only_drifted(&self, r: &ResourceRef, local: &Value) -> bool {
+        if crate::registry::meta(r.kind).write_only_fields.is_empty() {
+            return false;
+        }
+        let Some(base) = self.baseline_document(r) else {
+            return false;
+        };
+        !write_only_eq(r.kind, base, local)
     }
 
     /// Classify a resource given its (optional) local and remote documents.
@@ -730,18 +790,29 @@ impl ProjectState {
                         }
                     }
                     Some(base) => {
-                        let local_changed = lsum != base;
+                        // Checksums ignore write-only fields (Azure redacts
+                        // them, so including them would read as drift on
+                        // every data source forever) — but a local edit that
+                        // touches ONLY the credentials is still a change the
+                        // user needs pushed. The baseline is the only side
+                        // that can witness it; the remote never can.
+                        let write_only_drift = self.write_only_drifted(r, l);
+                        let local_changed = lsum != base || write_only_drift;
                         let remote_changed = rsum != base;
                         match (local_changed, remote_changed) {
                             (false, false) => SyncClass::InSync,
                             (true, false) => SyncClass::LocalAhead,
                             (false, true) => SyncClass::RemoteAhead,
                             (true, true) => {
-                                if lsum == rsum {
+                                if lsum != rsum {
+                                    SyncClass::Conflict
+                                } else if write_only_drift {
+                                    // Same content both sides; only the local
+                                    // credential moved.
+                                    SyncClass::LocalAhead
+                                } else {
                                     // Both moved to the same content.
                                     SyncClass::InSync
-                                } else {
-                                    SyncClass::Conflict
                                 }
                             }
                         }
@@ -1380,6 +1451,53 @@ mod tests {
             back.baselines.get("agents/new"),
             Some(Baseline::Doc(_))
         ));
+    }
+
+    #[test]
+    fn a_credential_only_local_edit_classifies_as_local_ahead() {
+        // Regression: checksums ignore write-only fields, so re-pointing a
+        // data source at another storage account used to classify as InSync
+        // and `push` skipped it — the credential could never be rotated.
+        let r = ResourceRef::new(ResourceKind::DataSource, "ds");
+        let ds = |conn: &str| {
+            json!({
+                "name": "ds", "type": "azureblob",
+                "credentials": {"connectionString": conn},
+                "container": {"name": "c"}
+            })
+        };
+        let local_a = ds("ResourceId=/subscriptions/s/…/storageAccounts/acct-a;");
+        let local_b = ds("ResourceId=/subscriptions/s/…/storageAccounts/acct-b;");
+        // Azure's GET redacts the connection string to null, always.
+        let remote = json!({
+            "name": "ds", "type": "azureblob",
+            "credentials": {"connectionString": null},
+            "container": {"name": "c"}
+        });
+
+        let mut state = ProjectState::default();
+        state.set_baseline(&r, &local_a);
+        assert_eq!(
+            state.classify(&r, Some(&local_a), Some(&remote)),
+            SyncClass::InSync,
+            "unchanged credentials against a redacted remote stay in sync"
+        );
+        assert_eq!(
+            state.classify(&r, Some(&local_b), Some(&remote)),
+            SyncClass::LocalAhead,
+            "a new connection string is a pending local change"
+        );
+
+        // A legacy checksum-only baseline records no values and cannot
+        // testify: the old behaviour stands until the resource next syncs.
+        state.baselines.insert(
+            r.key(),
+            Baseline::Checksum(ProjectState::checksum(r.kind, &local_a)),
+        );
+        assert_eq!(
+            state.classify(&r, Some(&local_b), Some(&remote)),
+            SyncClass::InSync
+        );
     }
 
     #[test]
