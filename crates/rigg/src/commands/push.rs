@@ -1023,10 +1023,11 @@ async fn diagnose_rbac(
     body: &Value,
     search_service: &str,
 ) -> Result<Option<RbacDiagnosis>> {
-    use rigg_core::identity::{EdgeKind, Principal, edges_for};
+    use rigg_core::binding::BindingType;
+    use rigg_core::identity::{EdgeKind, Principal, Scope, edges_for};
     let edges: Vec<_> = edges_for(r.kind, &r.name, body)
         .into_iter()
-        .filter(|e| e.kind == EdgeKind::Rbac && e.principal == Principal::SearchService)
+        .filter(|e| e.kind == EdgeKind::Rbac && e.principal == Principal::SearchSystem)
         .collect();
     if edges.is_empty() {
         return Ok(None);
@@ -1047,16 +1048,17 @@ async fn diagnose_rbac(
     let mut missing = Vec::new();
     let mut any_resolved = false;
     for edge in edges {
+        // Without a resolved binding table (this diagnosis sees one document,
+        // not the environment), Cognitive Services scopes are still
+        // resolvable by name through ARM.
         let scope = match &edge.scope {
-            Some(s) => Some(s.clone()),
-            None => match edge
-                .target
-                .strip_prefix("AI services account '")
-                .and_then(|t| t.strip_suffix('\''))
-            {
-                Some(account) => arm.find_cognitive_account_id(account).await.ok(),
-                None => None,
-            },
+            Scope::Resolved(id) => Some(id.clone()),
+            Scope::Unresolved {
+                kind: Some(BindingType::AiServices),
+                physical,
+                ..
+            } => arm.find_cognitive_account_id(physical).await.ok(),
+            Scope::Unresolved { .. } => None,
         };
         let Some(scope) = scope else { continue };
         any_resolved = true;
@@ -1066,7 +1068,7 @@ async fn diagnose_rbac(
                 .list_role_assignments(&scope, p)
                 .await?
                 .iter()
-                .any(|rd| rd.ends_with(&edge.role_id))
+                .any(|rd| rd.ends_with(edge.role.id))
             {
                 have = true;
                 break;
@@ -1074,8 +1076,8 @@ async fn diagnose_rbac(
         }
         if !have {
             missing.push(MissingRole {
-                role_name: edge.role_name,
-                role_id: edge.role_id,
+                role_name: edge.role.name.to_string(),
+                role_id: edge.role.id.to_string(),
                 scope,
                 reason: edge.reason,
             });
