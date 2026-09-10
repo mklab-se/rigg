@@ -876,6 +876,12 @@ pub struct McpArgs {
 pub enum McpCommands {
     /// Run the MCP server on stdio
     Serve,
+    /// List the tools the MCP server exposes
+    Tools {
+        /// Print the MCP.md tool table as Markdown
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Register rigg's MCP server with an AI tool
     Install {
         /// Tool to install for
@@ -927,6 +933,16 @@ pub enum DevCommands {
     },
     /// Regenerate the pinned schema fixtures under crates/rigg-core/fixtures/schema
     ApiFixture { provider: String },
+    /// Print docs/reference/cli.md — the generated command reference
+    CliReference,
+    /// Print the infrastructure-reference table for docs/reference/resource-files.md
+    InfraTable,
+    /// Check the docs: every `rigg` command line parses, every link resolves
+    DocsCheck {
+        /// Workspace root to check (default: the current directory)
+        #[arg(long, value_name = "DIR")]
+        root: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

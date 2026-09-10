@@ -92,6 +92,26 @@ projects/<name>/
 - `crates/rigg/tests/sync.rs` — wiremock fake Azure via `endpoint:` override + `RIGG_ACCESS_TOKEN`; covers pull normalization, push ordering/canonicalization, prune, conflicts (exit 5), diff formats, status classification.
 - Live testing uses `mklabsrch` (Search) and `mklabaifndr`/`proj-default` (Foundry) — create resources inside them freely, always delete afterwards, keep SKUs/capacity minimal.
 
+## Keeping docs current
+
+Three pieces of user documentation are printed from the binary, never hand-written; a change to the CLI surface, the registry's `InfraRef` table, or an MCP tool means regenerating them:
+
+```bash
+cargo run -q --bin rigg -- dev cli-reference > docs/reference/cli.md
+cargo run -q --bin rigg -- dev infra-table          # → docs/reference/resource-files.md
+cargo run -q --bin rigg -- mcp tools --markdown     # → MCP.md
+```
+
+The last two replace the text between `<!-- generated:<name>:start -->` / `<!-- generated:<name>:end -->` markers (`infra-table`, `mcp-tools`); never edit inside the markers by hand.
+
+`crates/rigg/tests/docs_guards.rs` fails when any of the three drifts, and drives the fourth guard:
+
+```bash
+cargo run -q --bin rigg -- dev docs-check           # defaults to the current directory
+```
+
+`rigg dev docs-check` walks `README.md`, `GETTING_STARTED.md`, `CONCEPTS.md`, `MCP.md`, `docs/**` (minus `docs/superpowers/`, which is plans and specs), `samples/**` and `.claude/skills/*/SKILL.md`, then: parses every `rigg …` line in a `bash`/`sh`/`shell`/untagged fence through clap, resolves every relative link and `#anchor`, and — once those pages exist — checks that every `RIGG_*`/`AZURE_*` variable the code reads appears in `docs/reference/environment-variables.md` and every `ask::KNOWN_ID_PREFIXES` entry in `docs/reference/exit-codes-and-questions.md`. A block that shows command *output* rather than input must be tagged (```` ```text ````) so it is not read as a command. Fix the docs, never the parser.
+
 ## Releasing
 
 Releases are driven by the `/release` skill (`.claude/skills/release/SKILL.md`, run with `major`/`minor`/`patch`): it runs `cargo update` and the pre-flight gates, bumps `version` in the workspace `Cargo.toml` (incl. the internal `rigg-core`/`rigg-client`/`rigg-diff` dependency versions), dates the `[Unreleased]` changelog section, commits `Release vX.Y.Z`, pushes, and tags `vX.Y.Z`.

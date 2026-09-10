@@ -11,8 +11,141 @@ use crate::cli::{McpArgs, McpCommands};
 pub async fn run(args: McpArgs) -> Result<()> {
     match args.command {
         McpCommands::Serve => serve().await,
+        McpCommands::Tools { markdown } => {
+            if markdown {
+                print!("{}", tools_markdown());
+            } else {
+                for tool in tools::RiggMcpServer::new().tool_list() {
+                    println!("{}\t{}", tool.name, purpose(tool.description.as_deref()));
+                }
+            }
+            Ok(())
+        }
         McpCommands::Install { target, scope } => install(target, scope),
     }
+}
+
+/// The `| Tool | Purpose | Parameters |` table for the generated region of
+/// `MCP.md`, built from the tool router's own list — the exact names,
+/// descriptions and JSON schemas an MCP client sees.
+///
+/// `list_all()` sorts by tool name, and parameters are ordered required
+/// first, then alphabetically within each group, so the output is stable.
+pub fn tools_markdown() -> String {
+    let mut out = String::from("| Tool | Purpose | Parameters |\n|---|---|---|\n");
+    for tool in tools::RiggMcpServer::new().tool_list() {
+        out.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            tool.name,
+            cell(&purpose(tool.description.as_deref())),
+            parameters(&tool.input_schema),
+        ));
+    }
+    out
+}
+
+/// The first sentence of a tool description: a `.` followed by whitespace
+/// and a capital letter. That keeps `e.g. dev → staging` inside the
+/// sentence it belongs to.
+fn purpose(description: Option<&str>) -> String {
+    let Some(text) = description.map(str::trim).filter(|t| !t.is_empty()) else {
+        return String::new();
+    };
+    let chars: Vec<char> = text.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c != '.' {
+            continue;
+        }
+        let Some(next) = chars.get(i + 1) else {
+            return text.to_string();
+        };
+        if !next.is_whitespace() {
+            continue;
+        }
+        if chars
+            .get(i + 2)
+            .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
+        {
+            return chars[..=i].iter().collect();
+        }
+    }
+    text.to_string()
+}
+
+/// `name: type` per property, `*` marking the required ones.
+fn parameters(schema: &serde_json::Map<String, serde_json::Value>) -> String {
+    let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return "none".to_string();
+    };
+    if properties.is_empty() {
+        return "none".to_string();
+    }
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let mut names: Vec<&String> = properties.keys().collect();
+    names.sort();
+    let (mut req, opt): (Vec<&String>, Vec<&String>) = names
+        .into_iter()
+        .partition(|n| required.contains(&n.as_str()));
+    req.extend(opt);
+
+    req.iter()
+        .map(|name| {
+            let ty = type_label(&properties[*name]);
+            let star = if required.contains(&name.as_str()) {
+                "*"
+            } else {
+                ""
+            };
+            format!("`{name}`: {ty}{star}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The JSON-schema type of one property, with the `null` half of an
+/// `Option<T>` dropped.
+fn type_label(schema: &serde_json::Value) -> String {
+    if let Some(t) = schema.get("type") {
+        if let Some(name) = t.as_str() {
+            return name.to_string();
+        }
+        if let Some(list) = t.as_array() {
+            let names: Vec<String> = list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|v| *v != "null")
+                .map(String::from)
+                .collect();
+            if !names.is_empty() {
+                return names.join(" \\| ");
+            }
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(list) = schema.get(key).and_then(|v| v.as_array()) {
+            let names: Vec<String> = list
+                .iter()
+                .map(type_label)
+                .filter(|n| n != "null" && n != "any")
+                .collect();
+            if !names.is_empty() {
+                return names.join(" \\| ");
+            }
+        }
+    }
+    "any".to_string()
+}
+
+fn cell(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
 }
 
 /// Start the MCP server on stdio transport

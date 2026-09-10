@@ -266,6 +266,13 @@ impl RiggMcpServer {
             tool_router: Self::tool_router(),
         }
     }
+
+    /// Every tool this server exposes, name-sorted — exactly what a client
+    /// gets from `tools/list`. Used by `rigg mcp tools` to generate the
+    /// `MCP.md` table so the docs cannot describe a tool that is not here.
+    pub fn tool_list(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
 }
 
 impl Default for RiggMcpServer {

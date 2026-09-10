@@ -225,7 +225,7 @@ Compare local files against the live service with field-level change description
 rigg diff my-rag
 ```
 
-```
+```text
 docs-index — differs (2 field(s))
 
   field                                    local                Azure (dev)
@@ -311,7 +311,7 @@ rigg env list
 rigg env set-default prod
 ```
 
-The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands; `RIGG_NON_INTERACTIVE=1` (like `--non-interactive`) is the other environment variable worth knowing — it tells rigg never to prompt, so questions come back as a `needs-input` document and exit 6 instead (see [protected environments](#environments) below and [CONCEPTS.md](CONCEPTS.md#exit-codes)). When `--env` is omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
+The `--env`/`-e` flag (or the `RIGG_ENV` environment variable) works with all commands; `RIGG_NON_INTERACTIVE=1` (like `--non-interactive`) is the other environment variable worth knowing — it tells rigg never to prompt, so questions come back as a `needs-input` document and exit 6 instead (see [protected environments](CONCEPTS.md#protected-environments) and [exit codes](CONCEPTS.md#exit-codes)). When `--env` is omitted, rigg uses the environment marked `default: true` in `rigg.yaml`:
 
 ```yaml
 environments:
@@ -442,9 +442,10 @@ Pass `--no-ai` on any command to disable AI assistance for that invocation.
 rigg pins every Azure api-version in one registry table and ships tools to keep it honest:
 
 ```bash
-rigg dev api-check                                # is every pinned api-version still the newest?
-rigg dev api-diff <provider> [--from v] [--to v]  # added/removed properties and enum values between two versions
-rigg dev api-fixture <provider>                   # refresh the pinned schema fixtures used by pull's drift canary
+rigg dev api-check                                    # is every pinned api-version still the newest?
+rigg dev api-diff <provider>                          # what changed between the pinned version and the newest one
+rigg dev api-diff <provider> --from <v1> --to <v2>    # ...or between two versions you name
+rigg dev api-fixture <provider>                       # refresh the pinned schema fixtures used by pull's drift canary
 ```
 
 A weekly GitHub Action runs `api-check` and opens an issue when Azure has shipped something newer.
@@ -509,7 +510,7 @@ Exit 6 means a guided flow needs an answer it can't prompt for outside a termina
 
 Four crates with a clear dependency hierarchy:
 
-```
+```text
 rigg  →  rigg-core
      ↓          ↑
 rigg-client ───┘

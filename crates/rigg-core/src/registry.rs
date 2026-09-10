@@ -735,6 +735,29 @@ pub enum InfraForm {
     Endpoint,
 }
 
+impl InfraForm {
+    /// The environment binding type a value of this form binds to, as the
+    /// `dependencies:` key that declares it in `rigg.yaml`.
+    ///
+    /// This is the [`crate::binding::BindingType`] `infra::binding_type_for`
+    /// returns for the [`crate::infra::Target`] this form parses to, spelled
+    /// out for documentation. Composite forms — the ones whose target
+    /// depends on the value's host — list every type they can yield, in the
+    /// order `infra::parse` tries them. `search` is the implicit
+    /// environment target rather than a declared dependency.
+    pub fn binding_type_label(&self) -> &'static str {
+        match self {
+            InfraForm::StorageResourceId => "storage",
+            InfraForm::UserAssignedIdentity => "identity",
+            InfraForm::OpenAiEndpoint | InfraForm::AiServicesSubdomain => "ai-services",
+            InfraForm::ApiUri => "function-app or api",
+            InfraForm::KeyVaultUri => "key-vault",
+            InfraForm::SearchKbMcpUrl => "search",
+            InfraForm::Endpoint => "search, ai-services, function-app or api",
+        }
+    }
+}
+
 /// An infrastructure-reference field: `path` (registry path syntax, `a.b[].c`)
 /// addresses a value that names supporting Azure infrastructure rather than
 /// another rigg-managed resource. `only_odata_type`, when set, restricts the

@@ -718,6 +718,38 @@ mod tests {
     use crate::workspace::{Environment, FoundryConnection, SearchConnection};
     use serde_json::json;
 
+    /// `InfraForm::binding_type_label` documents the same mapping this
+    /// module classifies by, so the generated reference table cannot drift
+    /// away from `binding_type_for`.
+    #[test]
+    fn binding_type_labels_match_binding_type_for() {
+        let single = [
+            (InfraForm::StorageResourceId, Target::Storage),
+            (InfraForm::UserAssignedIdentity, Target::Identity),
+            (InfraForm::OpenAiEndpoint, Target::ModelHost),
+            (InfraForm::AiServicesSubdomain, Target::AiServices),
+            (InfraForm::KeyVaultUri, Target::KeyVault),
+        ];
+        for (form, target) in single {
+            let expected = binding_type_for(target)
+                .expect("a declared binding type")
+                .to_string();
+            assert_eq!(form.binding_type_label(), expected, "{form:?}");
+        }
+        // The search service is the implicit environment target, not a
+        // declared dependency: `binding_type_for` has nothing to return.
+        assert!(binding_type_for(Target::SearchService).is_none());
+        assert_eq!(InfraForm::SearchKbMcpUrl.binding_type_label(), "search");
+        // Composite forms name every type they can yield.
+        for form in [InfraForm::ApiUri, InfraForm::Endpoint] {
+            let label = form.binding_type_label();
+            for target in [Target::FunctionApp, Target::Api] {
+                let name = binding_type_for(target).expect("declared").to_string();
+                assert!(label.contains(&name), "{form:?} label omits {name}");
+            }
+        }
+    }
+
     fn env_with(
         deps: &[(&str, BindingType, &str)],
         search_svc: &str,

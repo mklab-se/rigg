@@ -15,6 +15,15 @@ pub async fn run(ctx: &GlobalContext, cmd: DevCommands) -> Result<()> {
         DevCommands::ApiFixture { provider } => {
             crate::commands::dev_spec::api_fixture(&provider).await
         }
+        DevCommands::CliReference => {
+            print!("{}", crate::commands::docgen::cli_reference_markdown());
+            Ok(())
+        }
+        DevCommands::InfraTable => {
+            print!("{}", crate::commands::docgen::infra_table_markdown());
+            Ok(())
+        }
+        DevCommands::DocsCheck { root } => crate::commands::docs_check::run(root),
     }
 }
 
