@@ -395,6 +395,11 @@ pub async fn mount_permissions(server: &MockServer, scope: &str, can_write_role_
 /// Mount `{scope}/providers/Microsoft.Authorization/roleAssignments`:
 /// a GET listing (`role_ids` assigned to `principal`, each carrying a
 /// `rigg:` description) and a PUT/DELETE recorder for assignment writes.
+///
+/// The listing always ends with one **inherited** assignment — made at the
+/// parent subscription, `rigg:`-described, and returned by `atScope()` just
+/// as ARM returns it. It counts for a role check but must never be listed or
+/// removed as one of this scope's own.
 pub async fn mount_role_assignments(
     server: &MockServer,
     scope: &str,
@@ -402,24 +407,18 @@ pub async fn mount_role_assignments(
     role_ids: &[&str],
 ) {
     let sub = scope.split('/').nth(2).unwrap_or("sub");
-    let value: Vec<Value> = role_ids
+    let mut value: Vec<Value> = role_ids
         .iter()
         .enumerate()
-        .map(|(i, r)| {
-            json!({
-                "id": format!("{scope}/providers/Microsoft.Authorization/roleAssignments/ra-{i}"),
-                "name": format!("ra-{i}"),
-                "properties": {
-                    "roleDefinitionId": format!(
-                        "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{r}"
-                    ),
-                    "principalId": principal,
-                    "principalType": "ServicePrincipal",
-                    "description": format!("rigg: env dev edge {i}")
-                }
-            })
-        })
+        .map(|(i, r)| role_assignment(scope, scope, principal, r, i))
         .collect();
+    value.push(role_assignment(
+        scope,
+        &format!("/subscriptions/{sub}"),
+        principal,
+        INHERITED_ROLE,
+        99,
+    ));
     Mock::given(method("GET"))
         .and(path(format!(
             "{scope}/providers/Microsoft.Authorization/roleAssignments"
@@ -441,6 +440,70 @@ pub async fn mount_role_assignments(
             r"^.*/providers/Microsoft\.Authorization/roleAssignments/[^/]+$",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "deleted"})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// The role definition the inherited assignment [`mount_role_assignments`]
+/// always appends carries.
+pub const INHERITED_ROLE: &str = "role-inherited";
+
+/// One role-assignment document: listed under `listed_at`, but *made* at
+/// `made_at` — the two differ for an assignment inherited from an ancestor
+/// scope, which `properties.scope` is what reports.
+fn role_assignment(listed_at: &str, made_at: &str, principal: &str, role: &str, i: usize) -> Value {
+    let sub = listed_at.split('/').nth(2).unwrap_or("sub");
+    json!({
+        "id": format!("{made_at}/providers/Microsoft.Authorization/roleAssignments/ra-{i}"),
+        "name": format!("ra-{i}"),
+        "properties": {
+            "roleDefinitionId": format!(
+                "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{role}"
+            ),
+            "principalId": principal,
+            "principalType": "ServicePrincipal",
+            "scope": made_at,
+            "description": format!("rigg: env dev edge {i}")
+        }
+    })
+}
+
+/// Mount a role-assignment listing that spans two pages linked by
+/// `nextLink` — page 2 lives at `roleAssignments-page2`, as ARM's own
+/// absolute next link, which the client must follow verbatim.
+pub async fn mount_role_assignments_paged(
+    server: &MockServer,
+    scope: &str,
+    principal: &str,
+    page_one: &[&str],
+    page_two: &[&str],
+) {
+    let base = format!("{scope}/providers/Microsoft.Authorization/roleAssignments");
+    let first: Vec<Value> = page_one
+        .iter()
+        .enumerate()
+        .map(|(i, r)| role_assignment(scope, scope, principal, r, i))
+        .collect();
+    let second: Vec<Value> = page_two
+        .iter()
+        .enumerate()
+        .map(|(i, r)| role_assignment(scope, scope, principal, r, i + page_one.len()))
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(base.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": first,
+            // The marker stands in for the real api-version, which would
+            // trip the registry's no-version-literals guard.
+            "nextLink": format!("{}{base}-page2?api-version=from-the-next-link", server.uri())
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{base}-page2")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": second})))
         .with_priority(1)
         .mount(server)
         .await;

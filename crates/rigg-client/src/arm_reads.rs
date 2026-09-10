@@ -105,6 +105,9 @@ pub struct RoleAssignmentInfo {
     pub role_definition_id: String,
     /// `properties.description` — rigg stamps its own assignments here.
     pub description: String,
+    /// `properties.scope` — the scope the assignment was **made** at, which
+    /// an `atScope()` listing reports for inherited assignments too.
+    pub scope: String,
 }
 
 impl RoleAssignmentInfo {
@@ -179,24 +182,42 @@ impl ArmClient {
         .map(|_| ())
     }
 
-    /// Attach a user-assigned identity to a resource, keeping the
-    /// system-assigned one enabled (`SystemAssigned, UserAssigned`).
+    /// Attach a user-assigned identity to a resource, keeping every identity
+    /// it already has.
     ///
-    /// The system identity is kept because it is the only one the storage
-    /// trusted-services exception accepts (spec §7).
+    /// The current `identity` block is read back and merged: PATCHing
+    /// `identity` replaces it, so sending only the new entry would detach
+    /// every other user-assigned identity and — where one exists — the
+    /// system-assigned identity, which is the only one the storage
+    /// trusted-services exception accepts (spec §7). A system identity that
+    /// is already on stays on; one that is not is not switched on here.
     pub async fn attach_user_assigned_identity(
         &self,
         id: &str,
         provider: Provider,
         uami_id: &str,
     ) -> Result<(), ClientError> {
+        let url = self.url(id, provider);
+        let current = self.get_json(&url).await?;
+        let mut map = current
+            .pointer("/identity/userAssignedIdentities")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        map.insert(uami_id.to_string(), json!({}));
+        let has_system = str_at(&current, "/identity/type")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("systemassigned");
+        let kind = if has_system {
+            "SystemAssigned, UserAssigned"
+        } else {
+            "UserAssigned"
+        };
         self.patch_json(
-            &self.url(id, provider),
+            &url,
             &json!({
-                "identity": {
-                    "type": "SystemAssigned, UserAssigned",
-                    "userAssignedIdentities": {uami_id: {}}
-                }
+                "identity": {"type": kind, "userAssignedIdentities": Value::Object(map)}
             }),
         )
         .await
@@ -235,7 +256,14 @@ impl ArmClient {
             name: str_at(&value, "/name").unwrap_or_default(),
             location: str_at(&value, "/location").unwrap_or_default(),
             default_action: str_at(&acls, "/defaultAction").unwrap_or_else(|| "Allow".to_string()),
-            bypass: str_at(&acls, "/bypass").unwrap_or_default(),
+            // ARM always reports `bypass` (a new account defaults to
+            // `AzureServices`), so an absent value is not a default to
+            // reconstruct — it is a value rigg has not seen. `None` is the
+            // conservative reading: it makes the trusted-services check say
+            // "not bypassed", which at worst proposes a fix that is already
+            // in place, where assuming `AzureServices` would silently pass a
+            // check that was never verified.
+            bypass: str_at(&acls, "/bypass").unwrap_or_else(|| "None".to_string()),
             resource_access_rules: acls
                 .get("resourceAccessRules")
                 .and_then(Value::as_array)
@@ -417,26 +445,70 @@ impl ArmClient {
             }))
     }
 
-    /// Role assignments made **at** `scope` (not inherited) for one principal.
+    /// Every role assignment that applies to one principal **at** `scope` —
+    /// the ones made here and the ones inherited from an ancestor scope.
     ///
     /// `atScope() and assignedTo('{id}')` is the filter doctor needs:
-    /// `assignedTo` also matches assignments the principal inherits through
-    /// group membership, and `atScope()` keeps the result to this scope so
-    /// the remove path never touches a parent's assignment.
+    /// `assignedTo` also matches assignments the principal holds through
+    /// group membership, and `atScope()` includes what a parent scope grants,
+    /// which is just as effective as a grant made here. Each entry reports
+    /// the scope it was made at, so a caller that *writes* — `rigg auth roles
+    /// remove` — can keep to the ones at this scope; see
+    /// [`Self::list_rigg_role_assignments`].
     pub async fn role_assignments_for(
         &self,
         scope: &str,
         principal_id: &str,
     ) -> Result<Vec<RoleAssignmentInfo>, ClientError> {
-        let url = format!(
-            "{}&$filter=atScope()%20and%20assignedTo('{principal_id}')",
+        self.list_role_assignments_filtered(
+            scope,
+            &format!("atScope() and assignedTo('{principal_id}')"),
+        )
+        .await
+    }
+
+    /// `{scope}/…/roleAssignments?$filter=…`, following `nextLink` to the
+    /// end: a scope with many assignments pages, and a truncated first page
+    /// would read as "the role is missing".
+    async fn list_role_assignments_filtered(
+        &self,
+        scope: &str,
+        filter: &str,
+    ) -> Result<Vec<RoleAssignmentInfo>, ClientError> {
+        // Same cycle and page-cap guard as `ArmClient::list_location`: a
+        // server that keeps handing back a next link cannot hang the caller.
+        const MAX_LIST_PAGES: usize = 1000;
+
+        let mut url = format!(
+            "{}&$filter={}",
             self.url(
                 &format!("{scope}/providers/Microsoft.Authorization/roleAssignments"),
                 Provider::AuthorizationArm
-            )
+            ),
+            urlencoding::encode(filter)
         );
-        let value = self.get_json(&url).await?;
-        Ok(role_assignments_from(&value))
+        let mut assignments = Vec::new();
+        let mut pages = 0usize;
+        loop {
+            let value = self.get_json(&url).await?;
+            assignments.extend(role_assignments_from(&value));
+            pages += 1;
+            match value.get("nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => {
+                    if next == url || pages >= MAX_LIST_PAGES {
+                        return Err(ClientError::Api {
+                            status: 502,
+                            message: format!(
+                                "listing role assignments at {scope} did not terminate: Azure kept \
+                                 returning a next page link after {pages} pages"
+                            ),
+                        });
+                    }
+                    url = next.to_string();
+                }
+                _ => return Ok(assignments),
+            }
+        }
     }
 
     /// Create a role assignment with an explicit principal type and
@@ -487,25 +559,26 @@ impl ArmClient {
             .await
     }
 
-    /// Role assignments at `scope` whose description starts with
-    /// `description_prefix` — the ones rigg stamped, for
+    /// Role assignments made **at** `scope` whose description starts with
+    /// `description_prefix` — the ones rigg stamped here, for
     /// `rigg auth roles list|remove`.
+    ///
+    /// `atScope()` also returns what ancestor scopes grant, so the result is
+    /// narrowed to assignments whose own `properties.scope` *is* `scope`:
+    /// removing a subscription-wide grant because it happened to be visible
+    /// at a storage account would take away far more than rigg gave.
     pub async fn list_rigg_role_assignments(
         &self,
         scope: &str,
         description_prefix: &str,
     ) -> Result<Vec<RoleAssignmentInfo>, ClientError> {
-        let url = format!(
-            "{}&$filter=atScope()",
-            self.url(
-                &format!("{scope}/providers/Microsoft.Authorization/roleAssignments"),
-                Provider::AuthorizationArm
-            )
-        );
-        let value = self.get_json(&url).await?;
-        Ok(role_assignments_from(&value)
+        Ok(self
+            .list_role_assignments_filtered(scope, "atScope()")
+            .await?
             .into_iter()
-            .filter(|a| a.description.starts_with(description_prefix))
+            .filter(|a| {
+                a.description.starts_with(description_prefix) && a.scope.eq_ignore_ascii_case(scope)
+            })
             .collect())
     }
 
@@ -562,6 +635,7 @@ fn role_assignments_from(value: &Value) -> Vec<RoleAssignmentInfo> {
                     role_definition_id: str_at(a, "/properties/roleDefinitionId")
                         .unwrap_or_default(),
                     description: str_at(a, "/properties/description").unwrap_or_default(),
+                    scope: str_at(a, "/properties/scope").unwrap_or_default(),
                 })
                 .collect()
         })
@@ -623,11 +697,14 @@ fn bypass_contains_azure_services(bypass: &str) -> bool {
 }
 
 /// `bypass` with `AzureServices` added, preserving the existing entries.
+///
+/// `None` is ARM's sentinel for "nothing is bypassed", not an entry: keeping
+/// it would make the set `None, AzureServices`, which ARM rejects.
 fn with_azure_services(bypass: &str) -> String {
     let mut parts: Vec<&str> = bypass
         .split(',')
         .map(str::trim)
-        .filter(|p| !p.is_empty())
+        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("None"))
         .collect();
     parts.push("AzureServices");
     parts.join(", ")
@@ -789,6 +866,9 @@ mod tests {
             "Logging, Metrics, AzureServices"
         );
         assert_eq!(with_azure_services(""), "AzureServices");
+        // `None` is the "nothing bypassed" sentinel, not an entry to keep.
+        assert_eq!(with_azure_services("None"), "AzureServices");
+        assert_eq!(with_azure_services("none"), "AzureServices");
     }
 
     #[test]
@@ -886,6 +966,7 @@ mod tests {
                 "/subscriptions/s/providers/Microsoft.Authorization/roleDefinitions/guid-1"
                     .to_string(),
             description: String::new(),
+            scope: "/scope".to_string(),
         };
         assert_eq!(a.role_guid(), "guid-1");
     }

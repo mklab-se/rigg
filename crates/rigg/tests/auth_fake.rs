@@ -175,6 +175,10 @@ async fn mount_assignments_for(
                     ),
                     "principalId": principal,
                     "principalType": "ServicePrincipal",
+                    // ARM reports the scope an assignment was made at; an
+                    // `atScope()` listing carries inherited ones too, and
+                    // `auth roles` keeps to the ones made here.
+                    "scope": scope,
                     "description": format!("rigg:acme:{description_env}:test edge {i}")
                 }
             })
@@ -926,7 +930,8 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
         false,
     )
     .await;
-    // One rigg-stamped assignment plus a hand-made one that must survive.
+    // One rigg-stamped assignment, a hand-made one, and a rigg-stamped one
+    // *inherited* from the subscription — the last two must both survive.
     let scope = storage_id("acct");
     Mock::given(method("GET"))
         .and(path(format!(
@@ -939,6 +944,7 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
                 "properties": {
                     "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
                     "principalId": SEARCH_PID,
+                    "scope": scope,
                     "description": "rigg:acme:dev:data source 'docs' reads blobs"
                 }
             },
@@ -948,7 +954,18 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
                 "properties": {
                     "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
                     "principalId": SEARCH_PID,
+                    "scope": scope,
                     "description": "granted by the platform team"
+                }
+            },
+            {
+                "id": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleAssignments/rigg-inherited"),
+                "name": "rigg-inherited",
+                "properties": {
+                    "roleDefinitionId": format!("/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/{BLOB_DATA_READER}"),
+                    "principalId": SEARCH_PID,
+                    "scope": format!("/subscriptions/{SUB}"),
+                    "description": "rigg:acme:dev:granted subscription-wide"
                 }
             }
         ]})))
@@ -966,7 +983,9 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
         .assert()
         .success()
         .stdout(predicate::str::contains("rigg:acme:dev:"))
-        .stdout(predicate::str::contains("granted by the platform team").not());
+        .stdout(predicate::str::contains("granted by the platform team").not())
+        // An ancestor's grant is visible at this scope but was not made here.
+        .stdout(predicate::str::contains("granted subscription-wide").not());
 
     // Removal needs an answer; without one it is exit 6, not a silent delete.
     rigg(ws.path(), &server.uri())
@@ -991,6 +1010,10 @@ async fn auth_roles_lists_and_removes_only_riggs_own_assignments() {
     assert!(
         !deleted.iter().any(|p| p.ends_with("by-hand")),
         "an assignment rigg did not create is never removed: {deleted:?}"
+    );
+    assert!(
+        !deleted.iter().any(|p| p.ends_with("rigg-inherited")),
+        "an assignment inherited from an ancestor scope is never removed: {deleted:?}"
     );
 }
 

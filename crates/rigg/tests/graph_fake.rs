@@ -21,7 +21,8 @@ pub const FAKE_APP_ID: &str = "22222222-2222-2222-2222-222222222222";
 pub const FAKE_SP_OBJECT_ID: &str = "33333333-3333-3333-3333-333333333333";
 
 /// Mount the Graph endpoints the Easy Auth wiring uses:
-/// `POST /applications`, `PATCH /applications/{id}`, `POST /servicePrincipals`,
+/// `POST /applications`, `GET /applications/{id}`, `PATCH /applications/{id}`,
+/// `POST /servicePrincipals`,
 /// `POST /servicePrincipals/{id}/appRoleAssignedTo`, and a
 /// `GET /servicePrincipals?$filter=appId eq '…'` that reports **no** existing
 /// service principal (so `ensure_service_principal` takes the create path).
@@ -64,7 +65,34 @@ async fn mount_graph_sp_lookup(
         .await;
 }
 
+/// Mount `GET /applications/{id}` with the `appRoles` the application
+/// already publishes. Priority 1, so it wins over [`mount_graph`]'s default
+/// (an application with no roles) regardless of mount order.
+pub async fn mount_graph_application_roles(server: &MockServer, app_roles: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/applications/[^/]+$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": FAKE_APP_OBJECT_ID,
+            "appId": FAKE_APP_ID,
+            "displayName": "rigg-app",
+            "appRoles": app_roles
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
 async fn mount_graph_writes(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/applications/[^/]+$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": FAKE_APP_OBJECT_ID,
+            "appId": FAKE_APP_ID,
+            "displayName": "rigg-app",
+            "appRoles": []
+        })))
+        .mount(server)
+        .await;
     Mock::given(method("POST"))
         .and(path("/applications"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({

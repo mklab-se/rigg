@@ -5,7 +5,7 @@
 rigg authenticates via the Azure CLI or service principal credentials:
 
 - **For development**: Install the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) and run `az login`
-- **For CI/CD**: Set `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_TENANT_ID` environment variables
+- **For CI/CD**: Set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and either `AZURE_CLIENT_SECRET` or `AZURE_FEDERATED_TOKEN_FILE` (GitHub Actions OIDC / workload identity) environment variables
 
 If neither is configured, `rigg init` will fall back to manual service name entry. All other commands require authentication.
 

@@ -114,8 +114,12 @@ fn token_cache_key(tenant: Option<&str>, audience: &str) -> String {
 ///
 /// Every audience is addressed as a scope (`<audience>/.default`) except
 /// Microsoft Graph, which the CLI serves via `--resource-type ms-graph`.
-/// `username` is set on the service-principal path (`EnvAuth`).
-fn az_token_args(tenant: Option<&str>, audience: &str, username: Option<&str>) -> Vec<String> {
+///
+/// There is deliberately no `--username`: `az account get-access-token`
+/// rejects it, and a service principal never comes through here — it is
+/// minted directly against Entra ID by
+/// [`mint_service_principal_token`].
+fn az_token_args(tenant: Option<&str>, audience: &str) -> Vec<String> {
     let mut args = vec!["account".to_string(), "get-access-token".to_string()];
     if let Some(t) = tenant {
         args.push("--tenant".to_string());
@@ -128,10 +132,6 @@ fn az_token_args(tenant: Option<&str>, audience: &str, username: Option<&str>) -
         args.push("--scope".to_string());
         args.push(format!("{audience}/.default"));
     }
-    if let Some(u) = username {
-        args.push("--username".to_string());
-        args.push(u.to_string());
-    }
     args.extend(
         ["--query", "accessToken", "--output", "tsv"]
             .into_iter()
@@ -140,13 +140,212 @@ fn az_token_args(tenant: Option<&str>, audience: &str, username: Option<&str>) -
     args
 }
 
+/// Entra ID's token endpoint host. `RIGG_LOGIN_ENDPOINT` replaces it (tests,
+/// and sovereign clouds).
+const DEFAULT_LOGIN_ENDPOINT: &str = "https://login.microsoftonline.com";
+
+/// The login base to use: `RIGG_LOGIN_ENDPOINT` when set (trimmed of a
+/// trailing `/`), else [`DEFAULT_LOGIN_ENDPOINT`]. A pure function so it is
+/// testable without mutating process env vars.
+fn login_endpoint_from(env: Option<&str>) -> String {
+    match env {
+        Some(v) if !v.is_empty() => v.trim_end_matches('/').to_string(),
+        _ => DEFAULT_LOGIN_ENDPOINT.to_string(),
+    }
+}
+
+/// The configured Entra ID login base.
+pub fn login_endpoint() -> String {
+    login_endpoint_from(std::env::var("RIGG_LOGIN_ENDPOINT").ok().as_deref())
+}
+
+/// How a service principal proves itself to Entra ID.
+///
+/// Never `Debug`-derived and never logged: both variants are bearer
+/// credentials.
+#[derive(Clone)]
+pub enum SpCredential {
+    /// A client secret (`AZURE_CLIENT_SECRET`).
+    Secret(String),
+    /// A federated identity assertion — the OIDC token GitHub Actions (and
+    /// any workload-identity issuer) writes to `AZURE_FEDERATED_TOKEN_FILE`.
+    FederatedAssertion(String),
+}
+
+impl std::fmt::Debug for SpCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Secret(_) => f.write_str("SpCredential::Secret(<redacted>)"),
+            Self::FederatedAssertion(_) => {
+                f.write_str("SpCredential::FederatedAssertion(<redacted>)")
+            }
+        }
+    }
+}
+
+/// The service-principal credential the environment carries.
+///
+/// A federated assertion wins when `AZURE_FEDERATED_TOKEN_FILE` names one:
+/// a workload-identity runner (GitHub OIDC, AKS) sets that file and no
+/// secret, and where both are present the short-lived assertion is the
+/// better credential. The file is read at every token request, since the
+/// issuer rewrites it as it rotates.
+fn sp_credential_from_env() -> Result<SpCredential, AuthError> {
+    if let Ok(path) = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
+        && !path.is_empty()
+    {
+        let assertion = std::fs::read_to_string(&path).map_err(|e| {
+            AuthError::AuthFailed(format!(
+                "could not read the federated token file AZURE_FEDERATED_TOKEN_FILE={path}: {e}"
+            ))
+        })?;
+        return Ok(SpCredential::FederatedAssertion(
+            assertion.trim().to_string(),
+        ));
+    }
+    match std::env::var("AZURE_CLIENT_SECRET") {
+        Ok(secret) if !secret.is_empty() => Ok(SpCredential::Secret(secret)),
+        _ => Err(AuthError::MissingEnvVar("AZURE_CLIENT_SECRET".to_string())),
+    }
+}
+
+/// The form body of an OAuth2 client-credentials request. Pure, so the wire
+/// shape is unit-testable without a network.
+fn client_credentials_form(
+    client_id: &str,
+    audience: &str,
+    credential: &SpCredential,
+) -> Vec<(&'static str, String)> {
+    let mut form = vec![
+        ("grant_type", "client_credentials".to_string()),
+        ("client_id", client_id.to_string()),
+        ("scope", format!("{audience}/.default")),
+    ];
+    match credential {
+        SpCredential::Secret(secret) => form.push(("client_secret", secret.clone())),
+        SpCredential::FederatedAssertion(assertion) => {
+            form.push((
+                "client_assertion_type",
+                "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".to_string(),
+            ));
+            form.push(("client_assertion", assertion.clone()));
+        }
+    }
+    form
+}
+
+/// Mint a token for `audience` directly from Entra ID's v2 token endpoint,
+/// `POST {login_base}/{tenant}/oauth2/v2.0/token`.
+///
+/// This is how a service principal authenticates: `az account
+/// get-access-token` cannot do it (it has no `--username`/`--password` form
+/// and would need `az login --service-principal` to have run first), so CI
+/// that only sets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / a credential is
+/// served here rather than through the CLI.
+///
+/// The credential is sent in the form body and never appears in a log line,
+/// an error message, or a process argument.
+pub fn mint_service_principal_token(
+    login_base: &str,
+    tenant: &str,
+    client_id: &str,
+    credential: &SpCredential,
+    audience: &str,
+) -> Result<String, AuthError> {
+    let url = format!(
+        "{}/{tenant}/oauth2/v2.0/token",
+        login_base.trim_end_matches('/')
+    );
+    let form = client_credentials_form(client_id, audience, credential);
+    tracing::debug!("minting a service-principal token for {audience} at {url}");
+    let (status, body) = post_form(&url, form)?;
+    if !(200..300).contains(&status) {
+        return Err(AuthError::AuthFailed(format!(
+            "Entra ID refused the service-principal token request for {audience} \
+             (client {client_id}, tenant {tenant}): {}",
+            token_endpoint_error(status, &body)
+        )));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        AuthError::TokenError(format!("could not parse the Entra ID token response: {e}"))
+    })?;
+    match parsed.get("access_token").and_then(|t| t.as_str()) {
+        Some(token) if !token.is_empty() => Ok(token.to_string()),
+        _ => Err(AuthError::TokenError(
+            "Entra ID returned no access_token".to_string(),
+        )),
+    }
+}
+
+/// Entra ID's own error text for a failed token request — `error` plus
+/// `error_description` (which carries the AADSTS code) when the body is the
+/// documented JSON envelope, else the raw body. Only ever the *response*, so
+/// no credential can end up here.
+fn token_endpoint_error(status: u16, body: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let code = v.get("error").and_then(|e| e.as_str()).map(str::to_string);
+            let description = v
+                .get("error_description")
+                .and_then(|e| e.as_str())
+                .map(|d| d.lines().next().unwrap_or(d).trim().to_string());
+            match (code, description) {
+                (Some(c), Some(d)) => Some(format!("{c}: {d}")),
+                (Some(c), None) => Some(c),
+                (None, Some(d)) => Some(d),
+                (None, None) => None,
+            }
+        })
+        .unwrap_or_else(|| body.trim().to_string());
+    format!("HTTP {status} {detail}")
+}
+
+/// POST a form and return `(status, body)`.
+///
+/// `token_for` is synchronous (it backs the blocking `AuthProvider` trait),
+/// so the request runs on its own thread with its own single-threaded
+/// runtime rather than borrowing the caller's — exactly as blocking as the
+/// `az` subprocess it replaces, and safe to call from inside an async
+/// command.
+fn post_form(url: &str, form: Vec<(&'static str, String)>) -> Result<(u16, String), AuthError> {
+    let url = url.to_string();
+    let worker = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                AuthError::TokenError(format!("could not start the token request runtime: {e}"))
+            })?;
+        runtime.block_on(async move {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .map_err(|e| AuthError::TokenError(e.to_string()))?;
+            let response = client.post(&url).form(&form).send().await.map_err(|e| {
+                AuthError::TokenError(format!("token request to {url} failed: {e}"))
+            })?;
+            let status = response.status().as_u16();
+            let body = response
+                .text()
+                .await
+                .map_err(|e| AuthError::TokenError(format!("token response from {url}: {e}")))?;
+            Ok((status, body))
+        })
+    });
+    worker
+        .join()
+        .map_err(|_| AuthError::TokenError("the token request thread panicked".to_string()))?
+}
+
 /// An access token for one `(tenant, audience)` pair — the single entry point
 /// every client uses (spec §8).
 ///
 /// Resolution order, highest first:
 /// 1. `RIGG_ACCESS_TOKEN` — a pre-minted token, honoured for any audience.
 /// 2. Service-principal environment variables (`AZURE_CLIENT_ID` /
-///    `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`), via `az`.
+///    `AZURE_TENANT_ID` plus `AZURE_CLIENT_SECRET` or
+///    `AZURE_FEDERATED_TOKEN_FILE`), minted straight from Entra ID.
 /// 3. The operator's Azure CLI login.
 ///
 /// Results are cached for 5 minutes keyed by `(tenant, audience)`; failures
@@ -165,34 +364,30 @@ pub fn token_for(tenant: Option<&str>, audience: &str) -> Result<String, AuthErr
 
 fn fetch_token_for(tenant: Option<&str>, audience: &str) -> Result<String, AuthError> {
     if EnvAuth::is_configured() {
-        let client_id = std::env::var("AZURE_CLIENT_ID")
-            .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_ID".to_string()))?;
-        let client_secret = std::env::var("AZURE_CLIENT_SECRET")
-            .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_SECRET".to_string()))?;
-        let sp_tenant = std::env::var("AZURE_TENANT_ID")
-            .map_err(|_| AuthError::MissingEnvVar("AZURE_TENANT_ID".to_string()))?;
-        // An explicitly requested tenant wins over the service principal's
-        // home tenant (multi-tenant environments name theirs in rigg.yaml).
-        let tenant = tenant.unwrap_or(&sp_tenant);
-        let args = az_token_args(Some(tenant), audience, Some(&client_id));
-        return run_az_token(&args, Some(tenant), Some(&client_secret));
+        return fetch_service_principal_token(tenant, audience);
     }
-    let args = az_token_args(tenant, audience, None);
-    run_az_token(&args, tenant, None)
+    run_az_token(&az_token_args(tenant, audience), tenant)
+}
+
+/// Mint a token for the service principal the environment describes.
+fn fetch_service_principal_token(
+    tenant: Option<&str>,
+    audience: &str,
+) -> Result<String, AuthError> {
+    let client_id = std::env::var("AZURE_CLIENT_ID")
+        .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_ID".to_string()))?;
+    let sp_tenant = std::env::var("AZURE_TENANT_ID")
+        .map_err(|_| AuthError::MissingEnvVar("AZURE_TENANT_ID".to_string()))?;
+    // An explicitly requested tenant wins over the service principal's
+    // home tenant (multi-tenant environments name theirs in rigg.yaml).
+    let tenant = tenant.unwrap_or(&sp_tenant);
+    let credential = sp_credential_from_env()?;
+    mint_service_principal_token(&login_endpoint(), tenant, &client_id, &credential, audience)
 }
 
 /// Run `az` with `args` and return the token it prints.
-fn run_az_token(
-    args: &[String],
-    tenant: Option<&str>,
-    client_secret: Option<&str>,
-) -> Result<String, AuthError> {
-    let mut command = Command::new("az");
-    command.args(args);
-    if let Some(secret) = client_secret {
-        command.env("AZURE_CLIENT_SECRET", secret);
-    }
-    let output = command.output().map_err(|e| {
+fn run_az_token(args: &[String], tenant: Option<&str>) -> Result<String, AuthError> {
+    let output = Command::new("az").args(args).output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             AuthError::AzCliNotFound
         } else {
@@ -202,15 +397,20 @@ fn run_az_token(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // A non-home tenant that the operator has not signed into is the
-        // common failure; say exactly which `az login` fixes it.
-        if let Some(t) = tenant {
-            return Err(AuthError::TokenError(format!(
-                "{}\n  run: az login --tenant {t}",
-                token_error_detail(&stderr, output.status)
-            )));
-        }
-        if stderr.contains("not logged in") || stderr.contains("AADSTS") {
+        // Only a sign-in failure is fixed by signing in: an unrelated `az`
+        // error (a bad scope, a CLI crash) must not be labelled as one.
+        let sign_in_failure = stderr.contains("not logged in")
+            || stderr.contains("az login")
+            || stderr.contains("AADSTS");
+        if sign_in_failure {
+            // A non-home tenant the operator has not signed into is the
+            // common case; say exactly which `az login` fixes it.
+            if let Some(t) = tenant {
+                return Err(AuthError::TokenError(format!(
+                    "{}\n  run: az login --tenant {t}",
+                    token_error_detail(&stderr, output.status)
+                )));
+            }
             return Err(AuthError::NotLoggedIn);
         }
         return Err(AuthError::TokenError(token_error_detail(
@@ -395,7 +595,7 @@ impl AzCliAuth {
 #[derive(Debug)]
 pub struct EnvAuth {
     client_id: String,
-    client_secret: String,
+    credential: SpCredential,
     tenant_id: String,
     resource_scope: &'static str,
 }
@@ -410,56 +610,40 @@ impl EnvAuth {
     pub fn from_env_for_scope(scope: &'static str) -> Result<Self, AuthError> {
         let client_id = std::env::var("AZURE_CLIENT_ID")
             .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_ID".to_string()))?;
-        let client_secret = std::env::var("AZURE_CLIENT_SECRET")
-            .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_SECRET".to_string()))?;
         let tenant_id = std::env::var("AZURE_TENANT_ID")
             .map_err(|_| AuthError::MissingEnvVar("AZURE_TENANT_ID".to_string()))?;
+        let credential = sp_credential_from_env()?;
 
         Ok(Self {
             client_id,
-            client_secret,
+            credential,
             tenant_id,
             resource_scope: scope,
         })
     }
 
-    /// Check if environment variables are set
+    /// Whether the environment describes a usable service principal: a client
+    /// id, a tenant, and a credential — either a secret or the federated
+    /// assertion file a workload-identity runner writes.
     pub fn is_configured() -> bool {
-        std::env::var("AZURE_CLIENT_ID").is_ok()
-            && std::env::var("AZURE_CLIENT_SECRET").is_ok()
-            && std::env::var("AZURE_TENANT_ID").is_ok()
+        let set = |name: &str| std::env::var(name).is_ok_and(|v| !v.is_empty());
+        set("AZURE_CLIENT_ID")
+            && set("AZURE_TENANT_ID")
+            && (set("AZURE_CLIENT_SECRET") || set("AZURE_FEDERATED_TOKEN_FILE"))
     }
 }
 
 impl AuthProvider for EnvAuth {
     fn get_token(&self) -> Result<String, AuthError> {
-        // Use Azure CLI to get token with service principal
-        let output = Command::new("az")
-            .args([
-                "account",
-                "get-access-token",
-                "--resource",
-                self.resource_scope,
-                "--query",
-                "accessToken",
-                "--output",
-                "tsv",
-                "--tenant",
-                &self.tenant_id,
-                "--username",
-                &self.client_id,
-            ])
-            .env("AZURE_CLIENT_SECRET", &self.client_secret)
-            .output()
-            .map_err(|e| AuthError::TokenError(e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AuthError::AuthFailed(stderr.to_string()));
-        }
-
-        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(token)
+        // Same client-credentials mint as `token_for`'s service-principal
+        // branch, for this provider's own audience.
+        mint_service_principal_token(
+            &login_endpoint(),
+            &self.tenant_id,
+            &self.client_id,
+            &self.credential,
+            self.resource_scope,
+        )
     }
 
     fn method_name(&self) -> &'static str {
@@ -548,6 +732,7 @@ mod tests {
             std::env::remove_var("AZURE_CLIENT_ID");
             std::env::remove_var("AZURE_CLIENT_SECRET");
             std::env::remove_var("AZURE_TENANT_ID");
+            std::env::remove_var("AZURE_FEDERATED_TOKEN_FILE");
         }
     }
 
@@ -570,10 +755,67 @@ mod tests {
         assert!(result.is_ok());
         let auth = result.unwrap();
         assert_eq!(auth.client_id, "test-client-id");
-        assert_eq!(auth.client_secret, "test-client-secret");
+        assert!(
+            matches!(&auth.credential, SpCredential::Secret(s) if s == "test-client-secret"),
+            "{:?}",
+            auth.credential
+        );
         assert_eq!(auth.tenant_id, "test-tenant-id");
 
         unsafe { clear_azure_env_vars() };
+    }
+
+    #[test]
+    fn env_auth_accepts_a_federated_token_file_instead_of_a_secret() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let file = std::env::temp_dir().join("rigg-federated-token-test");
+        std::fs::write(&file, "  assertion-jwt\n").unwrap();
+        unsafe {
+            clear_azure_env_vars();
+            std::env::set_var("AZURE_CLIENT_ID", "test-client-id");
+            std::env::set_var("AZURE_TENANT_ID", "test-tenant-id");
+            std::env::set_var("AZURE_FEDERATED_TOKEN_FILE", &file);
+        }
+
+        // GitHub OIDC sets no secret at all — that is still a configured
+        // service principal.
+        assert!(EnvAuth::is_configured());
+        let auth = EnvAuth::from_env().unwrap();
+        assert!(
+            matches!(&auth.credential, SpCredential::FederatedAssertion(a) if a == "assertion-jwt"),
+            "{:?}",
+            auth.credential
+        );
+
+        unsafe { clear_azure_env_vars() };
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn a_federated_assertion_wins_over_a_secret() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let file = std::env::temp_dir().join("rigg-federated-token-precedence");
+        std::fs::write(&file, "assertion-jwt").unwrap();
+        unsafe {
+            set_azure_env_vars();
+            std::env::set_var("AZURE_FEDERATED_TOKEN_FILE", &file);
+        }
+
+        assert!(matches!(
+            sp_credential_from_env().unwrap(),
+            SpCredential::FederatedAssertion(_)
+        ));
+
+        unsafe { clear_azure_env_vars() };
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[test]
+    fn a_credential_never_appears_in_its_debug_output() {
+        let secret = SpCredential::Secret("s3cr3t".to_string());
+        assert!(!format!("{secret:?}").contains("s3cr3t"));
+        let federated = SpCredential::FederatedAssertion("assertion-jwt".to_string());
+        assert!(!format!("{federated:?}").contains("assertion-jwt"));
     }
 
     #[test]
@@ -821,7 +1063,7 @@ mod token_for_tests {
 
     #[test]
     fn az_args_use_the_scope_form_for_ordinary_audiences() {
-        let args = az_token_args(None, "https://management.azure.com", None);
+        let args = az_token_args(None, "https://management.azure.com");
         assert_eq!(args[..2], ["account", "get-access-token"]);
         assert!(!args.contains(&"--tenant".to_string()));
         assert!(args.contains(&"--scope".to_string()));
@@ -834,7 +1076,7 @@ mod token_for_tests {
 
     #[test]
     fn az_args_pass_the_tenant_through() {
-        let args = az_token_args(Some("tenant-1"), "https://search.azure.com", None);
+        let args = az_token_args(Some("tenant-1"), "https://search.azure.com");
         let at = args.iter().position(|a| a == "--tenant").unwrap();
         assert_eq!(args[at + 1], "tenant-1");
         assert!(args.contains(&"https://search.azure.com/.default".to_string()));
@@ -842,7 +1084,7 @@ mod token_for_tests {
 
     #[test]
     fn az_args_address_graph_by_resource_type() {
-        let args = az_token_args(Some("tenant-1"), graph_audience(), None);
+        let args = az_token_args(Some("tenant-1"), graph_audience());
         assert!(args.contains(&"--resource-type".to_string()));
         assert!(args.contains(&"ms-graph".to_string()));
         assert!(
@@ -853,18 +1095,86 @@ mod token_for_tests {
     }
 
     #[test]
-    fn az_args_carry_the_service_principal_username() {
-        let args = az_token_args(Some("t"), "https://vault.azure.net", Some("client-1"));
-        let at = args.iter().position(|a| a == "--username").unwrap();
-        assert_eq!(args[at + 1], "client-1");
-        // The secret is never an argument — it goes in the environment.
-        assert!(!args.iter().any(|a| a.contains("secret")), "{args:?}");
+    fn az_args_never_carry_a_service_principal_username() {
+        // `az account get-access-token` has no `--username`: it rejects the
+        // flag outright. A service principal is minted from Entra ID instead.
+        for audience in ["https://vault.azure.net", graph_audience()] {
+            let args = az_token_args(Some("t"), audience);
+            assert!(!args.iter().any(|a| a == "--username"), "{args:?}");
+            assert!(!args.iter().any(|a| a.contains("secret")), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn client_credentials_form_carries_the_secret_grant() {
+        let form = client_credentials_form(
+            "client-1",
+            "https://management.azure.com",
+            &SpCredential::Secret("s3cr3t".to_string()),
+        );
+        let field = |name: &str| {
+            form.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(field("grant_type"), Some("client_credentials"));
+        assert_eq!(field("client_id"), Some("client-1"));
+        assert_eq!(
+            field("scope"),
+            Some("https://management.azure.com/.default")
+        );
+        assert_eq!(field("client_secret"), Some("s3cr3t"));
+        assert_eq!(field("client_assertion"), None);
+    }
+
+    #[test]
+    fn client_credentials_form_carries_the_federated_grant() {
+        let form = client_credentials_form(
+            "client-1",
+            "https://graph.microsoft.com",
+            &SpCredential::FederatedAssertion("assertion-jwt".to_string()),
+        );
+        let field = |name: &str| {
+            form.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(field("scope"), Some("https://graph.microsoft.com/.default"));
+        assert_eq!(
+            field("client_assertion_type"),
+            Some("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+        );
+        assert_eq!(field("client_assertion"), Some("assertion-jwt"));
+        assert_eq!(field("client_secret"), None);
+    }
+
+    #[test]
+    fn login_endpoint_is_overridable() {
+        assert_eq!(login_endpoint_from(None), DEFAULT_LOGIN_ENDPOINT);
+        assert_eq!(login_endpoint_from(Some("")), DEFAULT_LOGIN_ENDPOINT);
+        assert_eq!(
+            login_endpoint_from(Some("http://127.0.0.1:1/")),
+            "http://127.0.0.1:1"
+        );
+    }
+
+    #[test]
+    fn token_endpoint_error_reports_the_aadsts_code_only() {
+        let detail = token_endpoint_error(
+            401,
+            r#"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided.\r\nTrace ID: x"}"#,
+        );
+        assert!(detail.contains("AADSTS7000215"), "{detail}");
+        assert!(detail.contains("invalid_client"), "{detail}");
+        assert!(detail.contains("401"), "{detail}");
+        // A non-JSON body still says something.
+        assert!(token_endpoint_error(500, "  boom  ").contains("boom"));
     }
 
     #[test]
     fn every_provider_audience_produces_usable_az_args() {
         for meta in registry::providers() {
-            let args = az_token_args(None, meta.audience, None);
+            let args = az_token_args(None, meta.audience);
             assert!(
                 args.contains(&"--scope".to_string()) || args.contains(&"ms-graph".to_string()),
                 "{}: {args:?}",

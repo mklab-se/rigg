@@ -50,6 +50,8 @@ tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 wiremock = "0.6"
+# Decoding the form body the Entra ID token fake receives.
+urlencoding.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/rigg-v{ version }-{ target }.{ archive-format }"

@@ -11,19 +11,22 @@ mod arm_fake;
 mod graph_fake;
 
 use arm_fake::{
-    mount_cognitive_account, mount_create_uami, mount_permissions, mount_role_assignments,
-    mount_search_service, mount_storage_account, search_service_id,
+    INHERITED_ROLE, mount_cognitive_account, mount_create_uami, mount_permissions,
+    mount_role_assignments, mount_role_assignments_paged, mount_search_service,
+    mount_storage_account, search_service_id,
 };
 use graph_fake::{
-    FAKE_APP_ID, FAKE_APP_OBJECT_ID, FAKE_SP_OBJECT_ID, mount_graph, mount_graph_existing_sp,
-    mount_graph_failure, mount_keyvault_secret,
+    FAKE_APP_ID, FAKE_APP_OBJECT_ID, FAKE_SP_OBJECT_ID, mount_graph, mount_graph_application_roles,
+    mount_graph_existing_sp, mount_graph_failure, mount_keyvault_secret,
 };
 use rigg_client::arm::ArmClient;
+use rigg_client::auth::{SpCredential, mint_service_principal_token};
 use rigg_client::graph::GraphClient;
 use rigg_client::keyvault::KeyVaultClient;
 use rigg_core::registry::Provider;
-use serde_json::Value;
-use wiremock::MockServer;
+use serde_json::{Value, json};
+use wiremock::matchers::{method, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SUB: &str = "sub-a";
 const RG: &str = "rg";
@@ -113,8 +116,15 @@ async fn set_search_auth_options_patches_aad_or_api_key() {
     );
 }
 
+/// The user-assigned identity the search-service fake already carries.
+fn existing_uami() -> String {
+    format!(
+        "/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami"
+    )
+}
+
 #[tokio::test]
-async fn attach_user_assigned_identity_patches_dual_identity_map() {
+async fn attach_user_assigned_identity_merges_with_the_identities_already_there() {
     let server = MockServer::start().await;
     let id = search_service_id(SUB, RG, "srch");
     mount_search_service(
@@ -123,15 +133,46 @@ async fn attach_user_assigned_identity_patches_dual_identity_map() {
         RG,
         "srch",
         "standard",
-        "SystemAssigned",
+        "SystemAssigned, UserAssigned",
         "p",
         true,
         "Enabled",
     )
     .await;
-    let uami = format!(
-        "/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami"
+    let added = format!(
+        "/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/rigg-mi"
     );
+    arm(&server)
+        .attach_user_assigned_identity(&id, Provider::SearchArm, &added)
+        .await
+        .unwrap();
+    let body = bodies(&server, "PATCH", "/searchServices/srch")
+        .await
+        .pop()
+        .expect("a PATCH was sent");
+    assert_eq!(
+        body.pointer("/identity/type").and_then(Value::as_str),
+        Some("SystemAssigned, UserAssigned")
+    );
+    let map = body
+        .pointer("/identity/userAssignedIdentities")
+        .and_then(Value::as_object)
+        .expect("an identity map was sent");
+    assert!(map.contains_key(&added), "{map:?}");
+    // PATCHing `identity` replaces it: an identity already attached must be
+    // re-sent, or attaching one detaches the other.
+    assert!(map.contains_key(&existing_uami()), "{map:?}");
+}
+
+#[tokio::test]
+async fn attach_user_assigned_identity_does_not_switch_on_a_system_identity() {
+    let server = MockServer::start().await;
+    let id = search_service_id(SUB, RG, "srch");
+    mount_search_service(
+        &server, SUB, RG, "srch", "standard", "None", "", true, "Enabled",
+    )
+    .await;
+    let uami = existing_uami();
     arm(&server)
         .attach_user_assigned_identity(&id, Provider::SearchArm, &uami)
         .await
@@ -142,7 +183,7 @@ async fn attach_user_assigned_identity_patches_dual_identity_map() {
         .expect("a PATCH was sent");
     assert_eq!(
         body.pointer("/identity/type").and_then(Value::as_str),
-        Some("SystemAssigned, UserAssigned")
+        Some("UserAssigned")
     );
     assert!(
         body.pointer("/identity/userAssignedIdentities")
@@ -384,7 +425,7 @@ async fn can_write_role_assignments_false_when_not_actions_exclude_it() {
 }
 
 #[tokio::test]
-async fn role_assignments_for_filters_at_scope_and_parses_properties() {
+async fn role_assignments_for_keeps_inherited_assignments_and_parses_properties() {
     let server = MockServer::start().await;
     let scope = format!("/subscriptions/{SUB}/resourceGroups/{RG}");
     mount_role_assignments(&server, &scope, "principal-1", &["role-a", "role-b"]).await;
@@ -392,10 +433,16 @@ async fn role_assignments_for_filters_at_scope_and_parses_properties() {
         .role_assignments_for(&scope, "principal-1")
         .await
         .unwrap();
-    assert_eq!(assignments.len(), 2);
+    // Two made here plus the fake's inherited one: a role granted at the
+    // subscription is just as effective here, so the check must count it.
+    assert_eq!(assignments.len(), 3);
     assert!(assignments[0].role_definition_id.ends_with("role-a"));
     assert_eq!(assignments[0].description, "rigg: env dev edge 0");
     assert!(assignments[0].id.contains("/roleAssignments/ra-0"));
+    assert_eq!(assignments[0].scope, scope);
+    let inherited = assignments.last().unwrap();
+    assert!(inherited.role_definition_id.ends_with(INHERITED_ROLE));
+    assert_eq!(inherited.scope, format!("/subscriptions/{SUB}"));
 
     let query = server
         .received_requests()
@@ -405,9 +452,36 @@ async fn role_assignments_for_filters_at_scope_and_parses_properties() {
         .find(|r| r.url.path().ends_with("/roleAssignments"))
         .and_then(|r| r.url.query().map(str::to_string))
         .unwrap();
-    assert!(query.contains("atScope()"), "{query}");
-    assert!(query.contains("assignedTo("), "{query}");
-    assert!(query.contains("principal-1"), "{query}");
+    // The filter is percent-encoded, so ARM sees the value rigg meant to
+    // send rather than a query it has to guess at.
+    assert!(query.contains("$filter=atScope%28%29"), "{query}");
+    assert!(
+        query.contains("assignedTo%28%27principal-1%27%29"),
+        "{query}"
+    );
+}
+
+#[tokio::test]
+async fn role_assignments_follow_the_next_link_across_pages() {
+    let server = MockServer::start().await;
+    let scope = format!("/subscriptions/{SUB}/resourceGroups/{RG}");
+    mount_role_assignments_paged(&server, &scope, "principal-1", &["role-a"], &["role-b"]).await;
+    let assignments = arm(&server)
+        .role_assignments_for(&scope, "principal-1")
+        .await
+        .unwrap();
+    assert_eq!(assignments.len(), 2, "{assignments:?}");
+    assert!(assignments[1].role_definition_id.ends_with("role-b"));
+    let pages: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path().contains("/roleAssignments"))
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    assert!(pages[1].ends_with("-page2"), "{pages:?}");
 }
 
 #[tokio::test]
@@ -451,7 +525,7 @@ async fn create_role_assignment_keeps_service_principal_default() {
 }
 
 #[tokio::test]
-async fn list_rigg_role_assignments_filters_by_description_prefix() {
+async fn list_rigg_role_assignments_filters_by_description_prefix_and_scope() {
     let server = MockServer::start().await;
     let scope = format!("/subscriptions/{SUB}/resourceGroups/{RG}");
     mount_role_assignments(&server, &scope, "p", &["role-a", "role-b"]).await;
@@ -459,7 +533,17 @@ async fn list_rigg_role_assignments_filters_by_description_prefix() {
         .list_rigg_role_assignments(&scope, "rigg:")
         .await
         .unwrap();
-    assert_eq!(ours.len(), 2);
+    // The fake's inherited assignment is `rigg:`-described too, but it was
+    // made at the subscription: removing it here would take away far more
+    // than rigg granted.
+    assert_eq!(ours.len(), 2, "{ours:?}");
+    assert!(ours.iter().all(|a| a.scope == scope), "{ours:?}");
+    assert!(
+        !ours
+            .iter()
+            .any(|a| a.role_definition_id.ends_with(INHERITED_ROLE)),
+        "{ours:?}"
+    );
     let none = arm(&server)
         .list_rigg_role_assignments(&scope, "someone-else:")
         .await
@@ -632,6 +716,80 @@ async fn graph_easy_auth_flow_creates_app_role_and_service_principal() {
 }
 
 #[tokio::test]
+async fn set_identifier_uri_and_role_keeps_the_roles_the_app_already_has() {
+    let server = MockServer::start().await;
+    mount_graph(&server).await;
+    mount_graph_application_roles(
+        &server,
+        json!([{
+            "id": "99999999-9999-9999-9999-999999999999",
+            "allowedMemberTypes": ["User"],
+            "displayName": "Admin",
+            "description": "Runs the thing",
+            "value": "Admin",
+            "isEnabled": true
+        }]),
+    )
+    .await;
+    let graph = GraphClient::with_token_and_base("t".into(), server.uri());
+    let uri = format!("api://{FAKE_APP_ID}");
+    let role_id = graph
+        .set_identifier_uri_and_role(FAKE_APP_OBJECT_ID, &uri)
+        .await
+        .unwrap();
+    let patch = bodies(&server, "PATCH", "/applications/")
+        .await
+        .pop()
+        .expect("a PATCH was sent");
+    let roles = patch["appRoles"].as_array().expect("roles were sent");
+    // PATCHing `appRoles` replaces the collection: a role rigg did not
+    // create must be re-sent, or it is deleted.
+    assert_eq!(roles.len(), 2, "{roles:?}");
+    assert!(roles.iter().any(|r| r["value"] == "Admin"), "{roles:?}");
+    let caller = roles
+        .iter()
+        .find(|r| r["value"] == "Caller")
+        .expect("the Caller role is there");
+    assert_eq!(caller["id"], role_id.as_str());
+}
+
+#[tokio::test]
+async fn set_identifier_uri_and_role_reuses_an_existing_caller_role_id() {
+    let server = MockServer::start().await;
+    mount_graph(&server).await;
+    // A Caller role created by an older rigg, under a different id: the
+    // directory's app-role assignments name *that* id.
+    mount_graph_application_roles(
+        &server,
+        json!([{
+            "id": "44444444-4444-4444-4444-444444444444",
+            "allowedMemberTypes": ["Application"],
+            "displayName": "Caller",
+            "description": "May call this API",
+            "value": "Caller",
+            "isEnabled": true
+        }]),
+    )
+    .await;
+    let graph = GraphClient::with_token_and_base("t".into(), server.uri());
+    let role_id = graph
+        .set_identifier_uri_and_role(FAKE_APP_OBJECT_ID, &format!("api://{FAKE_APP_ID}"))
+        .await
+        .unwrap();
+    assert_eq!(role_id, "44444444-4444-4444-4444-444444444444");
+    let patch = bodies(&server, "PATCH", "/applications/")
+        .await
+        .pop()
+        .expect("a PATCH was sent");
+    assert_eq!(
+        patch["appRoles"].as_array().map(Vec::len),
+        Some(1),
+        "no duplicate Caller role: {}",
+        patch["appRoles"]
+    );
+}
+
+#[tokio::test]
 async fn ensure_service_principal_reuses_an_existing_one() {
     let server = MockServer::start().await;
     mount_graph_existing_sp(&server, "existing-sp", true).await;
@@ -705,4 +863,161 @@ async fn key_vault_missing_secret_is_an_error_not_an_empty_value() {
     mount_keyvault_secret(&server, "other", "v").await;
     let kv = KeyVaultClient::with_token_and_base("t".into(), server.uri());
     assert!(kv.get_secret("func-key").await.is_err());
+}
+
+// ----------------------------------------------- service-principal tokens ---
+
+/// Mount Entra ID's v2 token endpoint, `POST /{tenant}/oauth2/v2.0/token`.
+async fn mount_login(server: &MockServer, access_token: &str) {
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/[^/]+/oauth2/v2\.0/token$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "token_type": "Bearer",
+            "expires_in": 3599,
+            "access_token": access_token
+        })))
+        .mount(server)
+        .await;
+}
+
+/// The form fields the login fake received, decoded.
+async fn login_form(server: &MockServer) -> Vec<(String, String)> {
+    let request = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.url.path().ends_with("/oauth2/v2.0/token"))
+        .expect("a token request was sent");
+    assert_eq!(
+        request
+            .headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/x-www-form-urlencoded")
+    );
+    let body = String::from_utf8(request.body.clone()).unwrap();
+    let decode = |s: &str| {
+        urlencoding::decode(&s.replace('+', " "))
+            .map(|v| v.into_owned())
+            .unwrap_or_else(|_| s.to_string())
+    };
+    body.split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((k, v)) => (decode(k), decode(v)),
+            None => (decode(pair), String::new()),
+        })
+        .collect()
+}
+
+fn field<'a>(form: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    form.iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
+}
+
+#[tokio::test]
+async fn a_service_principal_secret_is_exchanged_for_a_token() {
+    let server = MockServer::start().await;
+    mount_login(&server, "minted-token").await;
+    let base = server.uri();
+    let token = tokio::task::spawn_blocking(move || {
+        mint_service_principal_token(
+            &base,
+            "tenant-1",
+            "client-1",
+            &SpCredential::Secret("s3cr3t".to_string()),
+            "https://management.azure.com",
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(token, "minted-token");
+
+    let form = login_form(&server).await;
+    assert_eq!(field(&form, "grant_type"), Some("client_credentials"));
+    assert_eq!(field(&form, "client_id"), Some("client-1"));
+    assert_eq!(
+        field(&form, "scope"),
+        Some("https://management.azure.com/.default")
+    );
+    assert_eq!(field(&form, "client_secret"), Some("s3cr3t"));
+    assert_eq!(field(&form, "client_assertion"), None);
+    let path = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.url.path().contains("oauth2"))
+        .map(|r| r.url.path().to_string())
+        .unwrap();
+    assert_eq!(path, "/tenant-1/oauth2/v2.0/token");
+}
+
+#[tokio::test]
+async fn a_federated_assertion_is_exchanged_for_a_token() {
+    let server = MockServer::start().await;
+    mount_login(&server, "oidc-token").await;
+    let base = server.uri();
+    let token = tokio::task::spawn_blocking(move || {
+        mint_service_principal_token(
+            &base,
+            "tenant-2",
+            "client-2",
+            &SpCredential::FederatedAssertion("assertion-jwt".to_string()),
+            "https://graph.microsoft.com",
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(token, "oidc-token");
+
+    let form = login_form(&server).await;
+    assert_eq!(field(&form, "grant_type"), Some("client_credentials"));
+    assert_eq!(
+        field(&form, "client_assertion_type"),
+        Some("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+    );
+    assert_eq!(field(&form, "client_assertion"), Some("assertion-jwt"));
+    assert_eq!(field(&form, "client_secret"), None);
+    assert_eq!(
+        field(&form, "scope"),
+        Some("https://graph.microsoft.com/.default")
+    );
+}
+
+#[tokio::test]
+async fn a_refused_token_request_reports_aadsts_without_the_secret() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/[^/]+/oauth2/v2\.0/token$"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": "invalid_client",
+            "error_description": "AADSTS7000215: Invalid client secret provided.\r\nTrace ID: t"
+        })))
+        .mount(&server)
+        .await;
+    let base = server.uri();
+    let err = tokio::task::spawn_blocking(move || {
+        mint_service_principal_token(
+            &base,
+            "tenant-1",
+            "client-1",
+            &SpCredential::Secret("s3cr3t".to_string()),
+            "https://management.azure.com",
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("AADSTS7000215"), "{message}");
+    assert!(message.contains("client-1"), "{message}");
+    assert!(
+        !message.contains("s3cr3t"),
+        "the credential must never reach an error message: {message}"
+    );
 }

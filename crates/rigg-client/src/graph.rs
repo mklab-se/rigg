@@ -110,25 +110,54 @@ impl GraphClient {
     /// skill will ask tokens for) and define the `Caller` app role that
     /// gated enterprise applications require. Returns the app role's id.
     ///
-    /// The role id is derived from the URI, so re-running produces the same
-    /// role rather than piling up duplicates.
+    /// The application is read first and its `appRoles` merged: PATCHing
+    /// `appRoles` replaces the collection, so sending only rigg's role would
+    /// delete every role the application already publishes (and revoke the
+    /// assignments that reference them). A `Caller` role that is already
+    /// there is reused — id included, since the assignments in the directory
+    /// name it — rather than re-created under a new id.
     pub async fn set_identifier_uri_and_role(
         &self,
         app_object_id: &str,
         uri: &str,
     ) -> Result<String, ClientError> {
-        let role_id = app_role_id_for(uri);
+        let application = self
+            .send(Method::GET, &format!("/applications/{app_object_id}"), None)
+            .await?;
+        let mut roles = application
+            .get("appRoles")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let existing = roles
+            .iter()
+            .find(|r| {
+                r.get("value")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v.eq_ignore_ascii_case(CALLER_ROLE_VALUE))
+            })
+            .and_then(|r| string_at(r, "id"));
+        let role_id = match existing {
+            Some(id) => id,
+            None => {
+                // Deterministic in the URI, so a re-run that does not find
+                // the role still lands on the same id.
+                let role_id = app_role_id_for(uri);
+                roles.push(json!({
+                    "id": role_id,
+                    "allowedMemberTypes": ["Application"],
+                    "displayName": CALLER_ROLE_VALUE,
+                    "description": "May call this API",
+                    "value": CALLER_ROLE_VALUE,
+                    "isEnabled": true
+                }));
+                role_id
+            }
+        };
         let body = json!({
             "identifierUris": [uri],
             "api": {"requestedAccessTokenVersion": 2},
-            "appRoles": [{
-                "id": role_id,
-                "allowedMemberTypes": ["Application"],
-                "displayName": CALLER_ROLE_VALUE,
-                "description": "May call this API",
-                "value": CALLER_ROLE_VALUE,
-                "isEnabled": true
-            }]
+            "appRoles": roles
         });
         self.send(
             Method::PATCH,
