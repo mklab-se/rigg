@@ -237,7 +237,10 @@ pub fn binding_type_for(target: Target) -> Option<BindingType> {
     }
 }
 
-fn wanted_for(target: Target) -> Wanted {
+/// What a reference to `target` competes for when looking a binding up in an
+/// environment: the declared type it would bind to, or the implicit `search`
+/// target.
+pub fn wanted_for(target: Target) -> Wanted {
     match binding_type_for(target) {
         Some(kind) => Wanted::for_binding(kind),
         None => Wanted::SearchService,

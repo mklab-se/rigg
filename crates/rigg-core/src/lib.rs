@@ -13,6 +13,7 @@ pub mod infra;
 pub mod migrate;
 pub mod normalize;
 pub mod openapi;
+pub mod promote;
 pub mod registry;
 pub mod resources;
 pub mod scaffold;

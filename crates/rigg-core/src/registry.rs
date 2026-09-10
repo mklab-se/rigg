@@ -944,6 +944,11 @@ pub const X_RIGG_API: &str = "x-rigg-api";
 /// value, beyond the kind's registry defaults. Lives alongside other
 /// `x-rigg-*` keys: kept on disk, stripped before any PUT/POST.
 pub const X_RIGG_PIN: &str = "x-rigg-pin";
+/// Per-skill annotation on a WebApiSkill recording how the search service
+/// authenticates to the function it calls (`function-key` when a key in the
+/// URI or an `x-functions-key` header is the carrier). Environment-specific:
+/// it authorizes ONE environment's function app and never crosses a promote.
+pub const X_RIGG_AUTH: &str = "x-rigg-auth";
 
 /// Per-kind fields that are genuinely environment-specific but not already
 /// covered by `secret_fields`/`write_only_fields` (e.g. an Agent's MCP tool
@@ -1034,6 +1039,40 @@ pub fn rename_reference(
             }
         });
     }
+}
+
+/// Rewrite `x-rigg-ref` annotations: every `x-rigg-ref` value (at any depth)
+/// equal to `"<dir_name>/<old>"` becomes `"<dir_name>/<new>"`. The
+/// annotation counterpart of [`rename_reference`] — `rigg promote` uses both
+/// to follow a sibling that is physically named differently in the target
+/// environment.
+pub fn rename_x_rigg_ref(body: &mut Value, dir_name: &str, old: &str, new: &str) {
+    fn walk(v: &mut Value, from: &str, to: &str) {
+        match v {
+            Value::Object(map) => {
+                for (k, val) in map.iter_mut() {
+                    if k == X_RIGG_REF {
+                        if val.as_str() == Some(from) {
+                            *val = Value::String(to.to_string());
+                        }
+                    } else {
+                        walk(val, from, to);
+                    }
+                }
+            }
+            Value::Array(arr) => {
+                for item in arr {
+                    walk(item, from, to);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(
+        body,
+        &format!("{dir_name}/{old}"),
+        &format!("{dir_name}/{new}"),
+    );
 }
 
 /// Extract all references from `body` per the kind's `reference_fields`,
@@ -2004,6 +2043,30 @@ mod index_projection_ref_tests {
         assert_eq!(
             idxr["targetIndexName"], "old-index",
             "other kinds untouched"
+        );
+    }
+
+    #[test]
+    fn rename_x_rigg_ref_rewrites_only_the_matching_annotation() {
+        let mut agent = json!({
+            "name": "a",
+            "tools": [
+                {"type": "mcp", "x-rigg-ref": "knowledge-bases/kb-dev"},
+                {"type": "mcp", "x-rigg-ref": "knowledge-bases/other"},
+                {"type": "mcp", "x-rigg-ref": "connections/kb-dev"},
+                {"type": "mcp", "server_url": "knowledge-bases/kb-dev"}
+            ]
+        });
+        rename_x_rigg_ref(&mut agent, "knowledge-bases", "kb-dev", "kb");
+        assert_eq!(agent["tools"][0][X_RIGG_REF], "knowledge-bases/kb");
+        assert_eq!(agent["tools"][1][X_RIGG_REF], "knowledge-bases/other");
+        assert_eq!(
+            agent["tools"][2][X_RIGG_REF], "connections/kb-dev",
+            "another directory is a different resource"
+        );
+        assert_eq!(
+            agent["tools"][3]["server_url"], "knowledge-bases/kb-dev",
+            "only the annotation key is rewritten"
         );
     }
 }
