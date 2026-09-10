@@ -26,10 +26,10 @@ pub struct Remote {
 impl Remote {
     /// Build for a project in an environment. Connections are optional; using
     /// a kind whose connection is missing yields a clear error.
-    pub fn for_project(env: &ResolvedEnv, project: &Project) -> Remote {
+    pub fn for_project(env: &ResolvedEnv, _project: &Project) -> Remote {
         Remote {
-            search_conn: env.search_for(project).ok().cloned(),
-            foundry_conn: env.foundry_for(project).ok().cloned(),
+            search_conn: env.search().cloned(),
+            foundry_conn: env.foundry().cloned(),
             search: OnceCell::new(),
             foundry: OnceCell::new(),
             arm: OnceCell::new(),

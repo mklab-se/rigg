@@ -169,6 +169,10 @@ impl AzCliAuth {
                 .get("id")
                 .and_then(|i| i.as_str())
                 .map(String::from),
+            tenant_id: account_json
+                .get("tenantId")
+                .and_then(|t| t.as_str())
+                .map(String::from),
         })
     }
 
@@ -363,6 +367,7 @@ pub struct AuthStatus {
     pub user: Option<String>,
     pub subscription: Option<String>,
     pub subscription_id: Option<String>,
+    pub tenant_id: Option<String>,
 }
 
 /// Get the best available authentication provider for Search (backward compat)
@@ -623,6 +628,7 @@ mod tests {
             user: Some("testuser@example.com".to_string()),
             subscription: Some("My Subscription".to_string()),
             subscription_id: Some("00000000-0000-0000-0000-000000000000".to_string()),
+            tenant_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
         };
 
         assert!(status.logged_in);

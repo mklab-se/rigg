@@ -1,7 +1,8 @@
 //! Workspace and project model.
 //!
-//! A workspace is a directory containing `rigg.yaml` (environments, service
-//! connections, defaults), a `projects/` directory where each subdirectory
+//! A workspace is a directory containing `rigg.yaml` (environments, each with
+//! a single search/foundry target, tenant/subscription, policy and
+//! dependency bindings), a `projects/` directory where each subdirectory
 //! with a `project.yaml` is a project, and an `apis/` directory for shared
 //! OpenAPI specifications. Resource definitions live inside project
 //! directories; a resource belongs to exactly one project.
@@ -43,29 +44,11 @@ pub enum WorkspaceError {
         "no default environment configured; pass --env or set `default: true` on one environment"
     )]
     NoDefaultEnvironment,
-    #[error(
-        "environment '{env}' has {count} {kind} connections; set `{kind}-connection` in project.yaml for project '{project}'"
-    )]
-    AmbiguousConnection {
+    #[error("environment '{env}' has an invalid dependency binding name '{name}': {reason}")]
+    InvalidBindingName {
         env: String,
-        kind: &'static str,
-        count: usize,
-        project: String,
-    },
-    #[error("environment '{env}' has no {kind} connection (required by project '{project}')")]
-    MissingConnection {
-        env: String,
-        kind: &'static str,
-        project: String,
-    },
-    #[error(
-        "project '{project}' pins {kind} connection '{name}' which does not exist in environment '{env}'"
-    )]
-    UnknownConnection {
-        project: String,
-        kind: &'static str,
         name: String,
-        env: String,
+        reason: String,
     },
 }
 
@@ -84,22 +67,6 @@ pub struct WorkspaceConfig {
     pub root: Option<String>,
     #[serde(default)]
     pub environments: BTreeMap<String, Environment>,
-    #[serde(default, skip_serializing_if = "Defaults::is_empty")]
-    pub defaults: Defaults,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Defaults {
-    /// Preferred managed-identity style for scaffolds: "user-assigned" | "system-assigned".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
-}
-
-impl Defaults {
-    fn is_empty(&self) -> bool {
-        self.identity.is_none()
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -107,12 +74,22 @@ impl Defaults {
 pub struct Environment {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub default: bool,
-    #[serde(default, skip_serializing_if = "ConnectionList::is_empty")]
-    pub search: ConnectionList<SearchConnection>,
-    #[serde(default, skip_serializing_if = "ConnectionList::is_empty")]
-    pub foundry: ConnectionList<FoundryConnection>,
+    /// Azure AD tenant this environment's resources live in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+    /// Azure subscription this environment's resources live in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<SearchConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foundry: Option<FoundryConnection>,
     #[serde(default, skip_serializing_if = "Policy::is_default")]
     pub policy: Policy,
+    /// Named references to supporting resources outside rigg's own kinds
+    /// (storage accounts, function apps, key vaults, ...).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, Binding>,
 }
 
 /// Per-environment policy gates. `protected: true` requires an explicit,
@@ -123,42 +100,142 @@ pub struct Environment {
 pub struct Policy {
     #[serde(default)]
     pub protected: bool,
+    /// Require every `dependencies` binding to be resolvable before push.
+    /// Defaults to `protected` when unset.
+    #[serde(
+        default,
+        rename = "strict-bindings",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strict_bindings: Option<bool>,
 }
 
 impl Policy {
     fn is_default(&self) -> bool {
         self == &Policy::default()
     }
-}
 
-/// Accepts either a single mapping or a list of mappings in YAML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ConnectionList<T> {
-    One(T),
-    Many(Vec<T>),
-}
-
-impl<T> Default for ConnectionList<T> {
-    fn default() -> Self {
-        ConnectionList::Many(Vec::new())
+    pub fn strict_bindings(&self) -> bool {
+        self.strict_bindings.unwrap_or(self.protected)
     }
 }
 
-impl<T> ConnectionList<T> {
-    pub fn as_slice(&self) -> &[T] {
-        match self {
-            ConnectionList::One(one) => std::slice::from_ref(one),
-            ConnectionList::Many(many) => many.as_slice(),
+/// A named reference to a supporting Azure resource outside rigg's own
+/// kinds, e.g. `docs-storage: { storage: mklabstorageacc }`. Serialized as a
+/// one-key map `{ "<type>": "<value>" }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub kind: BindingType,
+    pub value: String,
+}
+
+impl<'de> Deserialize<'de> for Binding {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let map = BTreeMap::<String, String>::deserialize(d)?;
+        if map.len() != 1 {
+            return Err(serde::de::Error::custom(
+                "a binding is exactly one `<type>: <value>` pair",
+            ));
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.as_slice().is_empty()
+        let (k, value) = map.into_iter().next().expect("one entry");
+        let kind = k.parse::<BindingType>().map_err(serde::de::Error::custom)?;
+        if value.trim().is_empty() {
+            return Err(serde::de::Error::custom(format!(
+                "binding `{k}` has an empty value"
+            )));
+        }
+        Ok(Binding { kind, value })
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Serialize for Binding {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(Some(1))?;
+        map.serialize_entry(&self.kind.to_string(), &self.value)?;
+        map.end()
+    }
+}
+
+/// The kind of supporting resource a [`Binding`] points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BindingType {
+    Storage,
+    AiServices,
+    FunctionApp,
+    Identity,
+    KeyVault,
+    Api,
+}
+
+impl BindingType {
+    const ALL: [(&'static str, BindingType); 6] = [
+        ("storage", BindingType::Storage),
+        ("ai-services", BindingType::AiServices),
+        ("function-app", BindingType::FunctionApp),
+        ("identity", BindingType::Identity),
+        ("key-vault", BindingType::KeyVault),
+        ("api", BindingType::Api),
+    ];
+}
+
+impl std::fmt::Display for BindingType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = Self::ALL
+            .iter()
+            .find(|(_, t)| *t == *self)
+            .map(|(name, _)| *name)
+            .expect("all variants covered");
+        write!(f, "{name}")
+    }
+}
+
+impl std::str::FromStr for BindingType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::ALL
+            .iter()
+            .find(|(name, _)| *name == s)
+            .map(|(_, t)| *t)
+            .ok_or_else(|| {
+                format!(
+                    "unknown binding type '{s}' (expected one of: storage, ai-services, \
+                     function-app, identity, key-vault, api)"
+                )
+            })
+    }
+}
+
+/// Reserved dependency binding names — these name the `search`/`foundry`
+/// targets, not `dependencies` entries.
+const RESERVED_BINDING_NAMES: [&str; 2] = ["search", "foundry"];
+
+/// Validate a `dependencies` binding name: lowercase kebab-case, not
+/// reserved, not empty.
+pub fn validate_binding_name(name: &str) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("binding name must not be empty".to_string());
+    }
+    if RESERVED_BINDING_NAMES.contains(&name) {
+        return Err(format!(
+            "'{name}' is a reserved name (used for the search/foundry target) and cannot be a \
+             dependency binding"
+        ));
+    }
+    let valid_chars = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !valid_chars || name.starts_with('-') || name.ends_with('-') || name.contains("--") {
+        return Err(format!(
+            "binding name '{name}' must be lowercase kebab-case (letters, digits, single \
+             hyphens; no leading/trailing hyphen)"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,7 +273,7 @@ impl SearchConnection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FoundryConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,19 +312,6 @@ impl FoundryConnection {
 pub struct ProjectManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Pin to a named search connection when the environment defines several.
-    #[serde(
-        default,
-        rename = "search-connection",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub search_connection: Option<String>,
-    #[serde(
-        default,
-        rename = "foundry-connection",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub foundry_connection: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +366,18 @@ impl Workspace {
         })?;
         let config: WorkspaceConfig =
             serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse { path, source })?;
+
+        for (env_name, env) in &config.environments {
+            for name in env.dependencies.keys() {
+                if let Err(reason) = validate_binding_name(name) {
+                    return Err(WorkspaceError::InvalidBindingName {
+                        env: env_name.clone(),
+                        name: name.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
 
         let files_root = match &config.root {
             Some(sub) => root.join(sub),
@@ -421,72 +497,22 @@ impl Workspace {
 }
 
 impl ResolvedEnv {
-    pub fn search_for(&self, project: &Project) -> Result<&SearchConnection> {
-        pick_connection(
-            &self.name,
-            "search",
-            self.env.search.as_slice(),
-            project,
-            project.manifest.search_connection.as_deref(),
-            |c| c.name.as_deref(),
-        )
+    pub fn search(&self) -> Option<&SearchConnection> {
+        self.env.search.as_ref()
     }
 
-    pub fn foundry_for(&self, project: &Project) -> Result<&FoundryConnection> {
-        pick_connection(
-            &self.name,
-            "foundry",
-            self.env.foundry.as_slice(),
-            project,
-            project.manifest.foundry_connection.as_deref(),
-            |c| c.name.as_deref(),
-        )
-    }
-
-    pub fn has_search(&self) -> bool {
-        !self.env.search.is_empty()
-    }
-
-    pub fn has_foundry(&self) -> bool {
-        !self.env.foundry.is_empty()
+    pub fn foundry(&self) -> Option<&FoundryConnection> {
+        self.env.foundry.as_ref()
     }
 
     /// Whether this environment's policy gates cloud-mutating operations.
     pub fn protected(&self) -> bool {
         self.env.policy.protected
     }
-}
 
-fn pick_connection<'a, T>(
-    env_name: &str,
-    kind: &'static str,
-    conns: &'a [T],
-    project: &Project,
-    pinned: Option<&str>,
-    name_of: impl Fn(&T) -> Option<&str>,
-) -> Result<&'a T> {
-    match (pinned, conns.len()) {
-        (_, 0) => Err(WorkspaceError::MissingConnection {
-            env: env_name.to_string(),
-            kind,
-            project: project.name.clone(),
-        }),
-        (Some(pin), _) => conns
-            .iter()
-            .find(|c| name_of(c) == Some(pin))
-            .ok_or_else(|| WorkspaceError::UnknownConnection {
-                project: project.name.clone(),
-                kind,
-                name: pin.to_string(),
-                env: env_name.to_string(),
-            }),
-        (None, 1) => Ok(&conns[0]),
-        (None, n) => Err(WorkspaceError::AmbiguousConnection {
-            env: env_name.to_string(),
-            kind,
-            count: n,
-            project: project.name.clone(),
-        }),
+    /// Whether every `dependencies` binding must resolve before push.
+    pub fn strict_bindings(&self) -> bool {
+        self.env.policy.strict_bindings()
     }
 }
 
@@ -507,16 +533,24 @@ environments:
 "#
     }
 
-    fn ws_yaml_multi() -> &'static str {
+    fn ws_yaml_bindings() -> &'static str {
         r#"
 environments:
   dev:
     default: true
-    search:
-      - name: primary
-        service: srch-a
-      - name: secondary
-        service: srch-b
+    tenant: 45943588-b4fb-4765-ae17-76638c45bb5c
+    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a
+    search: { service: mklabsrch }
+    foundry: { account: mklabaifndr, project: proj-default }
+    dependencies:
+      docs-storage: { storage: mklabstorageacc }
+      enrich-fn: { function-app: mklab }
+      partner: { api: https://api.partner.example/v1 }
+  prod:
+    policy: { protected: true }
+    search: { service: mklabsrch-prod }
+    dependencies:
+      docs-storage: { storage: /subscriptions/0b1d/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/mklabstorageprod }
 "#
     }
 
@@ -539,9 +573,8 @@ environments:
             &[("p1", "description: test\n")],
         );
         let dev = ws.resolve_env(Some("dev")).unwrap();
-        let p1 = ws.project("p1").unwrap();
-        assert_eq!(dev.search_for(p1).unwrap().service, "mklabsrch");
-        let f = dev.foundry_for(p1).unwrap();
+        assert_eq!(dev.search().unwrap().service, "mklabsrch");
+        let f = dev.foundry().unwrap();
         assert_eq!(
             (f.account.as_str(), f.project.as_str()),
             ("mklabaifndr", "proj-default")
@@ -549,23 +582,66 @@ environments:
     }
 
     #[test]
-    fn parses_multi_connection_env_and_requires_pin() {
+    fn parses_targets_tenant_subscription_and_dependencies() {
         let tmp = tempfile::tempdir().unwrap();
-        let ws = make_ws(
-            tmp.path(),
-            ws_yaml_multi(),
-            &[
-                ("pinned", "search-connection: secondary\n"),
-                ("unpinned", "{}\n"),
-            ],
+        let ws = make_ws(tmp.path(), ws_yaml_bindings(), &[("p", "{}\n")]);
+        let dev = ws.resolve_env(Some("dev")).unwrap();
+        assert_eq!(dev.search().unwrap().service, "mklabsrch");
+        assert_eq!(dev.foundry().unwrap().project, "proj-default");
+        assert_eq!(
+            dev.env.subscription.as_deref(),
+            Some("fa354123-c4ee-4b2e-a700-bf01decf803a")
         );
-        let dev = ws.resolve_env(None).unwrap();
-        let pinned = ws.project("pinned").unwrap();
-        assert_eq!(dev.search_for(pinned).unwrap().service, "srch-b");
-        let unpinned = ws.project("unpinned").unwrap();
+        let b = &dev.env.dependencies["docs-storage"];
+        assert_eq!(b.kind, BindingType::Storage);
+        assert_eq!(b.value, "mklabstorageacc");
+        assert_eq!(dev.env.dependencies["partner"].kind, BindingType::Api);
+        let prod = ws.resolve_env(Some("prod")).unwrap();
+        assert!(prod.foundry().is_none());
+        assert!(
+            prod.protected() && prod.strict_bindings(),
+            "strict-bindings defaults to protected"
+        );
+        assert!(!dev.strict_bindings());
+    }
+
+    #[test]
+    fn binding_round_trips_as_a_one_key_map() {
+        let b: Binding = serde_yaml::from_str("key-vault: mklabkv").unwrap();
+        assert_eq!(b.kind, BindingType::KeyVault);
+        assert_eq!(
+            serde_yaml::to_string(&b).unwrap().trim(),
+            "key-vault: mklabkv"
+        );
+        assert!(
+            serde_yaml::from_str::<Binding>("cosmos: x").is_err(),
+            "unknown type rejected"
+        );
+        assert!(
+            serde_yaml::from_str::<Binding>("storage: a\nidentity: b").is_err(),
+            "exactly one key"
+        );
+    }
+
+    #[test]
+    fn binding_names_are_validated_and_reserved() {
+        assert!(validate_binding_name("docs-storage").is_ok());
+        assert!(validate_binding_name("Docs").is_err());
+        assert!(validate_binding_name("search").is_err());
+        assert!(validate_binding_name("foundry").is_err());
+    }
+
+    #[test]
+    fn list_form_targets_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(WORKSPACE_FILE),
+            "environments:\n  dev:\n    search:\n      - service: a\n",
+        )
+        .unwrap();
         assert!(matches!(
-            dev.search_for(unpinned),
-            Err(WorkspaceError::AmbiguousConnection { count: 2, .. })
+            Workspace::load(tmp.path()),
+            Err(WorkspaceError::Parse { .. })
         ));
     }
 
@@ -656,24 +732,5 @@ environments:
         );
         assert!(!ws.resolve_env(Some("dev")).unwrap().protected());
         assert!(ws.resolve_env(Some("prod")).unwrap().protected());
-    }
-
-    #[test]
-    fn missing_connection_errors() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ws = make_ws(
-            tmp.path(),
-            "environments:\n  dev:\n    default: true\n    search: { service: s }\n",
-            &[("p", "{}\n")],
-        );
-        let dev = ws.resolve_env(None).unwrap();
-        let p = ws.project("p").unwrap();
-        assert!(matches!(
-            dev.foundry_for(p),
-            Err(WorkspaceError::MissingConnection {
-                kind: "foundry",
-                ..
-            })
-        ));
     }
 }

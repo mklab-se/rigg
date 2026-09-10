@@ -779,7 +779,7 @@ async fn push_project(
         }
     }
 
-    let search_service = env.search_for(project).ok().map(|c| c.service.clone());
+    let search_service = env.search().map(|c| c.service.clone());
 
     // Execute in order (conflicts resolved to local were appended — reorder).
     let order = graph::push_order(
@@ -793,7 +793,7 @@ async fn push_project(
         // Resolve cross-service refs BEFORE stripping the x-rigg-* annotations
         // that drive the resolution.
         let mut with_refs = item.body.clone();
-        resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+        resolve_cross_service_refs(env.search(), &mut with_refs)?;
         credentials::inject_function_keys(&mut with_refs).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
@@ -1360,7 +1360,7 @@ async fn execute_replace(
             .find(|(sr, _)| sr == r)
             .expect("ordered item");
         let mut with_refs = body.clone();
-        resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+        resolve_cross_service_refs(env.search(), &mut with_refs)?;
         credentials::inject_function_keys(&mut with_refs).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
         let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, search_service)
@@ -1374,7 +1374,7 @@ async fn execute_replace(
 
     // 6. Create the new knowledge source.
     let mut with_refs = bundle.new_body.clone();
-    resolve_cross_service_refs(env.search_for(project).ok(), &mut with_refs)?;
+    resolve_cross_service_refs(env.search(), &mut with_refs)?;
     let push_body = normalize_for_push(ks.kind, &with_refs);
     let server_doc = put_with_rbac_help(remote, ks, &push_body, ctx, search_service)
         .await

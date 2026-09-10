@@ -33,8 +33,8 @@ pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
     let arm = ArmClient::new().context("auth doctor needs ARM access (az login)")?;
 
     // Resolve principal identities once.
-    let search_conn = env.env.search.as_slice().first();
-    let foundry_conn = env.env.foundry.as_slice().first();
+    let search_conn = env.search();
+    let foundry_conn = env.foundry();
 
     let mut search_identity = None;
     let mut search_service_id = None;

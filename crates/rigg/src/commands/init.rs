@@ -88,6 +88,17 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     yaml.push_str("environments:\n");
     yaml.push_str(&format!("  {}:\n", args.env_name));
     yaml.push_str("    default: true\n");
+    // Tenant/subscription are informational context, not required for rigg
+    // to function — write them only when `az` tells us, and write neither
+    // if the user isn't logged in.
+    if let Ok(status) = rigg_client::auth::AzCliAuth::check_status() {
+        if let Some(tenant) = &status.tenant_id {
+            yaml.push_str(&format!("    tenant: {tenant}\n"));
+        }
+        if let Some(subscription) = &status.subscription_id {
+            yaml.push_str(&format!("    subscription: {subscription}\n"));
+        }
+    }
     if let Some(service) = &search {
         yaml.push_str(&format!("    search: {{ service: {service} }}\n"));
     }

@@ -761,6 +761,28 @@ fn status_empty_workspace_hints_next_steps() {
 }
 
 #[test]
+fn removed_search_connection_pin_errors_clearly() {
+    // `search-connection`/`foundry-connection` project.yaml pins are gone in
+    // rigg.yaml 2.0 (single target per environment); serde's
+    // deny_unknown_fields names the removed key in the error.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    search: { service: unit-test-svc }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "search-connection: x\n").unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .arg("status")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("search-connection"));
+}
+
+#[test]
 fn describe_empty_workspace_hints_next_steps() {
     let ws = empty_workspace();
     rigg()

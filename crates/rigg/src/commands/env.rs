@@ -36,8 +36,10 @@ fn list(ctx: &GlobalContext) -> Result<()> {
                     "name": name,
                     "default": env.default,
                     "protected": env.policy.protected,
-                    "search": env.search.as_slice().iter().map(|s| &s.service).collect::<Vec<_>>(),
-                    "foundry": env.foundry.as_slice().iter().map(|f| format!("{}/{}", f.account, f.project)).collect::<Vec<_>>(),
+                    "tenant": env.tenant,
+                    "subscription": env.subscription,
+                    "search": env.search.as_ref().map(|s| &s.service),
+                    "foundry": env.foundry.as_ref().map(|f| format!("{}/{}", f.account, f.project)),
                 })
             })
             .collect();
@@ -62,7 +64,13 @@ fn show(ctx: &GlobalContext, name: Option<&str>) -> Result<()> {
 
 fn print_env(env: &Environment, indent: &str) {
     println!("{indent}protected: {}", env.policy.protected);
-    for s in env.search.as_slice() {
+    if let Some(tenant) = &env.tenant {
+        println!("{indent}tenant: {tenant}");
+    }
+    if let Some(subscription) = &env.subscription {
+        println!("{indent}subscription: {subscription}");
+    }
+    if let Some(s) = &env.search {
         let label = s.name.as_deref().unwrap_or("search");
         println!(
             "{indent}{label}: {} → {} (Azure AI Search)",
@@ -70,7 +78,7 @@ fn print_env(env: &Environment, indent: &str) {
             s.url()
         );
     }
-    for f in env.foundry.as_slice() {
+    if let Some(f) = &env.foundry {
         let label = f.name.as_deref().unwrap_or("foundry");
         println!(
             "{indent}{label}: {}/{} → {} (Microsoft Foundry)",
@@ -78,6 +86,9 @@ fn print_env(env: &Environment, indent: &str) {
             f.project,
             f.url()
         );
+    }
+    for (name, binding) in &env.dependencies {
+        println!("{indent}{name}: {} ({})", binding.value, binding.kind);
     }
 }
 
