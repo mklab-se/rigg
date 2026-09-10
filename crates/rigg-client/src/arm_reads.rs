@@ -27,6 +27,9 @@ pub struct SearchServiceInfo {
     /// `sku.name` — `free`, `basic`, `standard`, `standard2`, … (Free has no
     /// managed identity; knowledge bases need Basic+).
     pub sku: String,
+    /// `properties.hostingMode` — `default` or `highDensity`. Standard3 in
+    /// high-density mode hosts many small indexes and no knowledge bases.
+    pub hosting_mode: String,
     pub identity: ResourceIdentity,
     /// Entra ID authentication is accepted: `authOptions.aadOrApiKey` is
     /// present, or local auth is disabled outright (RBAC-only).
@@ -170,6 +173,8 @@ impl ArmClient {
             name: str_at(&value, "/name").unwrap_or_default(),
             location: str_at(&value, "/location").unwrap_or_default(),
             sku: str_at(&value, "/sku/name").unwrap_or_default(),
+            hosting_mode: str_at(&value, "/properties/hostingMode")
+                .unwrap_or_else(|| "default".to_string()),
             identity: crate::arm::identity_from(&value).unwrap_or(ResourceIdentity {
                 kind: "None".to_string(),
                 principal_id: None,
@@ -221,10 +226,14 @@ impl ArmClient {
     ) -> Result<(), ClientError> {
         let url = self.url(id, provider);
         let current = self.get_json(&url).await?;
-        let mut map = current
+        // Every entry is sent as `{}`: what ARM reads back carries the
+        // identity's `principalId`/`clientId`, which are read-only and are
+        // rejected (or silently ignored) on the way in. Only the keys —
+        // the identities' ARM ids — are the request's payload.
+        let mut map: serde_json::Map<String, Value> = current
             .pointer("/identity/userAssignedIdentities")
             .and_then(Value::as_object)
-            .cloned()
+            .map(|m| m.keys().map(|k| (k.clone(), json!({}))).collect())
             .unwrap_or_default();
         map.insert(uami_id.to_string(), json!({}));
         let has_system = str_at(&current, "/identity/type")
@@ -1112,7 +1121,7 @@ mod tests {
         assert!(!permissions_cover_role(&owner, &RoleDefinition::default()));
         // A mixed role needs both halves: Owner fails on the data half.
         let mixed = RoleDefinition {
-            name: "Azure AI User".into(),
+            name: "Foundry User".into(),
             actions: vec!["Microsoft.CognitiveServices/accounts/read".into()],
             data_actions: vec!["Microsoft.CognitiveServices/accounts/OpenAI/*/read".into()],
             ..RoleDefinition::default()

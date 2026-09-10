@@ -83,14 +83,20 @@ pub mod roles {
         "4633458b-17de-408a-b874-0445c86b69e6",
         "Key Vault Secrets User",
     );
-    pub const FOUNDRY_USER: Role = role("53ca6127-db72-4b80-b1b0-d745d6d5456d", "Azure AI User");
+    // The three Foundry roles carry the names Microsoft renamed them to
+    // (Azure AI User / Project Manager / Account Owner → Foundry …). The
+    // GUIDs are unchanged and are what rigg assigns and prints: Microsoft's
+    // own guidance during the rename rollout is to use the role definition
+    // id rather than the name, because a name resolves against the tenant's
+    // role definitions and those are renamed on their own schedule.
+    pub const FOUNDRY_USER: Role = role("53ca6127-db72-4b80-b1b0-d745d6d5456d", "Foundry User");
     pub const FOUNDRY_PROJECT_MANAGER: Role = role(
         "eadc314b-1a2d-4efa-be10-5d325db5065e",
-        "Azure AI Project Manager",
+        "Foundry Project Manager",
     );
     pub const FOUNDRY_ACCOUNT_OWNER: Role = role(
         "e47c6f54-e4a2-4754-9501-8e0985b135e1",
-        "Azure AI Account Owner",
+        "Foundry Account Owner",
     );
 
     /// Not an ARM role: the marker carried by [`super::EdgeKind::AppAuthorization`]
@@ -983,9 +989,13 @@ fn encryption_keys(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
     let physical = found.physical.physical.clone();
     let scope = scope_for(b.env, Target::KeyVault, &physical);
+    // `encryptionKey.identity` (a `DataUserAssignedIdentity`) names the
+    // identity the service uses to reach the vault; without it the key is
+    // fetched with the system-assigned identity.
+    let principal = principal_for(b.env, doc.at("encryptionKey.identity"));
     b.edge(
         Edge::rbac(
-            Principal::SearchSystem,
+            principal,
             roles::KEY_VAULT_CRYPTO_SERVICE_ENCRYPTION_USER,
             scope,
         )
@@ -1054,7 +1064,7 @@ fn search_checks(b: &mut Builder<'_>) {
 ///
 /// `foundry_project_id` is the ARM id of the environment's Foundry *project*
 /// (`<account id>/projects/<project>`), which the binding table does not
-/// carry — the caller resolves it. Azure AI User is scoped there (spec
+/// carry — the caller resolves it. Foundry User is scoped there (spec
 /// §3.2); the account-level roles stay on the account. Without it the
 /// project-scoped edge falls back to the account, where an `atScope()` check
 /// would miss a project-only assignment.
@@ -1111,6 +1121,13 @@ pub fn operator_edges(
                 roles::FOUNDRY_PROJECT_MANAGER,
                 foundry_scope(env),
             )
+            // Creating a project connection is a pure control-plane write.
+            // Foundry Project Manager carries `dataActions:
+            // ["Microsoft.CognitiveServices/*"]`, which no subscription
+            // Owner covers; Cognitive Services Contributor is control-plane
+            // only, so Owner/Contributor satisfy this edge through their
+            // effective permissions.
+            .or_role(roles::COGNITIVE_SERVICES_CONTRIBUTOR)
             .because("create project connections"),
         );
     }
@@ -1686,6 +1703,38 @@ mod tests {
         );
     }
 
+    /// I-5: `encryptionKey.identity` names the identity that fetches the
+    /// key, exactly like every other sibling `identity`/`authIdentity`
+    /// field — the CMK edge (and therefore `--fix`) must follow it rather
+    /// than grant the system identity a role it never uses.
+    #[test]
+    fn encryption_key_identity_attributes_the_cmk_edge_to_the_user_assigned_identity() {
+        let g = graph(&[(
+            ResourceKind::Index,
+            "idx",
+            json!({
+                "name": "idx", "fields": [],
+                "encryptionKey": {
+                    "keyVaultUri": "https://kv.vault.azure.net",
+                    "keyVaultKeyName": "k", "keyVaultKeyVersion": "1",
+                    "identity": {
+                        "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+                        "userAssignedIdentity": UAMI_ID
+                    }
+                }
+            }),
+        )]);
+        let e = rbac_edges(&g)[0];
+        assert_eq!(e.role, roles::KEY_VAULT_CRYPTO_SERVICE_ENCRYPTION_USER);
+        assert_eq!(
+            e.principal,
+            Principal::SearchUser {
+                binding: "mi".to_string()
+            }
+        );
+        assert_eq!(e.scope, Scope::Resolved(VAULT_ID.into()));
+    }
+
     // ---- scopes ----------------------------------------------------
 
     #[test]
@@ -1844,9 +1893,9 @@ mod tests {
         assert_eq!(
             used,
             vec![
-                "Azure AI User",
-                "Azure AI Project Manager",
-                "Azure AI Account Owner"
+                "Foundry User",
+                "Foundry Project Manager",
+                "Foundry Account Owner"
             ]
         );
         assert!(
@@ -1859,6 +1908,19 @@ mod tests {
             owner.alternatives,
             vec![roles::COGNITIVE_SERVICES_CONTRIBUTOR]
         );
+        // I-1: creating a project connection is a pure control-plane write.
+        // Azure's Foundry Project Manager definition carries
+        // `dataActions: ["Microsoft.CognitiveServices/*"]`, which no
+        // subscription Owner covers, so the edge names a control-plane
+        // alternative that Owner/Contributor do cover.
+        let manager = foundry
+            .iter()
+            .find(|e| e.role == roles::FOUNDRY_PROJECT_MANAGER)
+            .expect("connections need Foundry Project Manager");
+        assert_eq!(
+            manager.alternatives,
+            vec![roles::COGNITIVE_SERVICES_CONTRIBUTOR]
+        );
 
         let (guardrail, _) = operator_edges(&env, &[ResourceKind::Guardrail], false, &[], None);
         assert_eq!(guardrail.len(), 1);
@@ -1866,7 +1928,7 @@ mod tests {
     }
 
     #[test]
-    fn azure_ai_user_is_scoped_at_the_foundry_project_when_one_is_given() {
+    fn foundry_user_is_scoped_at_the_foundry_project_when_one_is_given() {
         let env = env();
         let project = format!("{FOUNDRY_ID}/projects/p");
         let (edges, _) = operator_edges(
@@ -1879,13 +1941,13 @@ mod tests {
         let user = edges
             .iter()
             .find(|e| e.role == roles::FOUNDRY_USER)
-            .expect("agents need Azure AI User");
+            .expect("agents need Foundry User");
         assert_eq!(user.scope, Scope::Resolved(project));
         // The account-level role stays on the account.
         let manager = edges
             .iter()
             .find(|e| e.role == roles::FOUNDRY_PROJECT_MANAGER)
-            .expect("connections need Azure AI Project Manager");
+            .expect("connections need Foundry Project Manager");
         assert_eq!(manager.scope, Scope::Resolved(FOUNDRY_ID.into()));
     }
 

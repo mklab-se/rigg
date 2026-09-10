@@ -764,6 +764,11 @@ static DATA_SOURCE_INFRA: &[InfraRef] = &[
         form: InfraForm::KeyVaultUri,
         only_odata_type: None,
     },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
 ];
 
 static INDEX_INFRA: &[InfraRef] = &[
@@ -780,6 +785,11 @@ static INDEX_INFRA: &[InfraRef] = &[
     InfraRef {
         path: "encryptionKey.keyVaultUri",
         form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
         only_odata_type: None,
     },
 ];
@@ -825,16 +835,28 @@ static SKILLSET_INFRA: &[InfraRef] = &[
         form: InfraForm::KeyVaultUri,
         only_odata_type: None,
     },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
 ];
 
 // The indexer's incremental-enrichment cache (`cache.storageConnectionString`,
 // `cache.identity`) is preview-only and out of scope for rigg 2.0 — it is
 // deliberately not modelled here.
-static INDEXER_INFRA: &[InfraRef] = &[InfraRef {
-    path: "encryptionKey.keyVaultUri",
-    form: InfraForm::KeyVaultUri,
-    only_odata_type: None,
-}];
+static INDEXER_INFRA: &[InfraRef] = &[
+    InfraRef {
+        path: "encryptionKey.keyVaultUri",
+        form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
+];
 
 static KNOWLEDGE_SOURCE_INFRA: &[InfraRef] = &[
     InfraRef {
@@ -882,6 +904,11 @@ static KNOWLEDGE_SOURCE_INFRA: &[InfraRef] = &[
         form: InfraForm::KeyVaultUri,
         only_odata_type: None,
     },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
+        only_odata_type: None,
+    },
 ];
 
 static KNOWLEDGE_BASE_INFRA: &[InfraRef] = &[
@@ -898,6 +925,11 @@ static KNOWLEDGE_BASE_INFRA: &[InfraRef] = &[
     InfraRef {
         path: "encryptionKey.keyVaultUri",
         form: InfraForm::KeyVaultUri,
+        only_odata_type: None,
+    },
+    InfraRef {
+        path: "encryptionKey.identity",
+        form: InfraForm::UserAssignedIdentity,
         only_odata_type: None,
     },
 ];
@@ -1485,11 +1517,25 @@ mod tests {
             .collect();
         assert!(connection.contains(&"properties.target"));
 
+        // Every kind that carries `encryptionKey.keyVaultUri` also carries
+        // its sibling `encryptionKey.identity`, so a CMK edge is attributed
+        // to the identity that actually fetches the key (spec §3.2 row 9).
+        for kind in all_kinds() {
+            let paths: Vec<&str> = infra_refs(*kind).iter().map(|r| r.path).collect();
+            if paths.contains(&"encryptionKey.keyVaultUri") {
+                assert!(
+                    paths.contains(&"encryptionKey.identity"),
+                    "{kind:?} has a CMK vault reference but no identity reference"
+                );
+            }
+        }
+
         // Total row count across every kind, per the spec table — 31 rows
         // minus the two preview-only Indexer `cache.*` rows this rigg 2.0
-        // scope deliberately does not model.
+        // scope deliberately does not model, plus the six
+        // `encryptionKey.identity` siblings.
         let total: usize = all_kinds().iter().map(|k| infra_refs(*k).len()).sum();
-        assert_eq!(total, 29);
+        assert_eq!(total, 35);
     }
 
     #[test]

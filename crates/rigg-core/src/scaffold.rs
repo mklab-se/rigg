@@ -383,7 +383,15 @@ pub fn identity_field(kind: ResourceKind) -> Option<&'static str> {
     }
     registry::infra_refs(kind)
         .iter()
-        .find(|r| r.form == registry::InfraForm::UserAssignedIdentity && !r.path.contains("[]"))
+        .find(|r| {
+            r.form == registry::InfraForm::UserAssignedIdentity
+                && !r.path.contains("[]")
+                // `encryptionKey.identity` is the identity that fetches the
+                // customer-managed *key*, not the one the resource reaches
+                // data with — `--identity` is about the latter, and a
+                // scaffold has no `encryptionKey` block to hang it on.
+                && !r.path.starts_with("encryptionKey.")
+        })
         .map(|r| r.path)
 }
 
