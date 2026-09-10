@@ -521,10 +521,10 @@ static KINDS: &[KindMeta] = &[
             "azureBlobParameters.createdResources",
             "indexedOneLakeParameters.createdResources",
         ],
-        // azureBlobParameters.connectionString is credential material for the
-        // managed-ingestion (azureBlob) KS shape: rejecting key values in
-        // validate AND keeping it env-pinned during promote (via env_pinned's
-        // secret ∪ write-only ∪ extras union).
+        // azureBlobParameters.connectionString is credential material for
+        // the managed-ingestion (azureBlob) KS shape: `validate` rejects key
+        // values in it, and `promote` translates it through the environment's
+        // storage binding like any other infrastructure reference.
         secret_fields: &[
             "searchIndexParameters.apiKey",
             "azureBlobParameters.connectionString",
@@ -949,47 +949,6 @@ pub const X_RIGG_PIN: &str = "x-rigg-pin";
 /// URI or an `x-functions-key` header is the carrier). Environment-specific:
 /// it authorizes ONE environment's function app and never crosses a promote.
 pub const X_RIGG_AUTH: &str = "x-rigg-auth";
-
-/// Per-kind fields that are genuinely environment-specific but not already
-/// covered by `secret_fields`/`write_only_fields` (e.g. an Agent's MCP tool
-/// pointing at a per-environment Search endpoint and Foundry connection, or a
-/// Connection's target endpoint). Consulted only by [`env_pinned`].
-fn env_pinned_extra(kind: ResourceKind) -> &'static [&'static str] {
-    match kind {
-        ResourceKind::Agent => &["tools[].server_url", "tools[].project_connection_id"],
-        ResourceKind::Connection => &["properties.target"],
-        // A custom Web API skill's endpoint and how the search service
-        // authenticates to it are environment infrastructure, not pipeline
-        // content — each env keeps its own function URL and auth carrier.
-        ResourceKind::Skillset => &[
-            "skills[].uri",
-            "skills[].authResourceId",
-            "skills[].httpHeaders.x-functions-key",
-            "skills[].x-rigg-auth",
-        ],
-        _ => &[],
-    }
-}
-
-/// Fields `rigg promote` keeps pinned to the TARGET environment's existing
-/// value by default: the kind's `secret_fields` ∪ `write_only_fields` ∪
-/// [`env_pinned_extra`] (de-duplicated; order-stable). `"name"` is pinned by
-/// the promote code itself, not the registry — it isn't a per-kind concern.
-pub fn env_pinned(kind: ResourceKind) -> Vec<&'static str> {
-    let m = meta(kind);
-    let mut out: Vec<&'static str> = Vec::new();
-    for field in m
-        .secret_fields
-        .iter()
-        .chain(m.write_only_fields)
-        .chain(env_pinned_extra(kind))
-    {
-        if !out.contains(field) {
-            out.push(field);
-        }
-    }
-    out
-}
 
 /// Mutable counterpart of [`collect_path`]: visit every value at `path`.
 fn collect_path_mut(v: &mut Value, path: &str, f: &mut dyn FnMut(&mut Value)) {
@@ -1751,56 +1710,15 @@ mod tests {
     }
 
     #[test]
-    fn env_pinned_agent_covers_tool_server_fields() {
-        let pinned = env_pinned(ResourceKind::Agent);
-        assert!(pinned.contains(&"tools[].server_url"));
-        assert!(pinned.contains(&"tools[].project_connection_id"));
-    }
-
-    #[test]
-    fn env_pinned_connection_covers_target_endpoint() {
-        let pinned = env_pinned(ResourceKind::Connection);
-        assert!(pinned.contains(&"properties.target"));
-        // Credential fields already covered by secret_fields — no duplicate.
-        assert_eq!(
-            pinned.iter().filter(|f| **f == "properties.target").count(),
-            1
-        );
-    }
-
-    #[test]
-    fn env_pinned_datasource_is_covered_by_secret_and_write_only_alone() {
-        // credentials.connectionString appears in both secret_fields and
-        // write_only_fields — env_pinned must de-duplicate it, not double it.
-        let pinned = env_pinned(ResourceKind::DataSource);
-        assert_eq!(
-            pinned
-                .iter()
-                .filter(|f| **f == "credentials.connectionString")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn env_pinned_empty_for_kinds_with_no_defaults() {
-        assert!(env_pinned(ResourceKind::Guardrail).is_empty());
-    }
-
-    #[test]
-    fn knowledge_source_blob_connection_is_secret_and_env_pinned() {
+    fn knowledge_source_blob_connection_is_credential_material() {
         // The azureBlob KS shape carries a per-env storage connection string:
-        // it must be validate-rejected as credential material AND kept pinned
-        // to the target env during promote.
+        // it must be validate-rejected as credential material (promote
+        // translates it through the storage binding, like every other
+        // infrastructure reference).
         assert!(
             meta(ResourceKind::KnowledgeSource)
                 .secret_fields
                 .contains(&"azureBlobParameters.connectionString")
-        );
-        assert!(
-            env_pinned(ResourceKind::KnowledgeSource)
-                .contains(&"azureBlobParameters.connectionString"),
-            "env_pinned includes it via the secret_fields union"
         );
     }
 
@@ -2068,23 +1986,5 @@ mod index_projection_ref_tests {
             agent["tools"][3]["server_url"], "knowledge-bases/kb-dev",
             "only the annotation key is rewritten"
         );
-    }
-}
-
-#[cfg(test)]
-mod skillset_env_pinned_tests {
-    use super::*;
-
-    #[test]
-    fn skillset_webapi_auth_carriers_are_env_pinned() {
-        let pinned = env_pinned(ResourceKind::Skillset);
-        for path in [
-            "skills[].uri",
-            "skills[].authResourceId",
-            "skills[].httpHeaders.x-functions-key",
-            "skills[].x-rigg-auth",
-        ] {
-            assert!(pinned.contains(&path), "missing env-pinned path: {path}");
-        }
     }
 }

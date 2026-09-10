@@ -25,7 +25,13 @@ use super::{CommandError, interactive};
 /// Id prefixes every `--answer <id>=<value>` is validated against at
 /// startup. Later tasks and workstreams append their own prefixes
 /// (`binding.`, `env.`, `promote.`, `auth.`, `new.`, …).
-pub const KNOWN_ID_PREFIXES: &[&str] = &["confirm.protected.", "binding.", "env.", "learn."];
+pub const KNOWN_ID_PREFIXES: &[&str] = &[
+    "confirm.protected.",
+    "binding.",
+    "env.",
+    "learn.",
+    "promote.",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionKind {

@@ -304,7 +304,7 @@ fn physical_of(proposal: &Proposal) -> String {
 /// `userAssignedIdentity` — and the bare physical name only when it does
 /// not. Keeping the id means the binding needs no ARM by-name lookup (and
 /// no guess about which subscription the resource lives in).
-fn proposed_value(kind: BindingType, found: &infra::FoundRef) -> String {
+pub fn proposed_value(kind: BindingType, found: &infra::FoundRef) -> String {
     if kind == BindingType::Api {
         return origin(found.physical.original.as_str().unwrap_or_default());
     }

@@ -411,6 +411,41 @@ fn learn_bindings(ctx: &GlobalContext, env_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Run the `rigg env add <name> --like <like>` flow inline, from another
+/// command that found the environment missing (today: `rigg promote --to`
+/// naming an environment that does not exist yet). The whole question set
+/// lives in [`add`] — the caller only supplies the two names, and reloads
+/// the workspace afterwards.
+pub async fn add_like_inline(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    name: &str,
+    like: &str,
+) -> Result<()> {
+    if !ws.config.environments.contains_key(like) {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "unknown environment '{like}' (see `rigg env list`)"
+        ))));
+    }
+    add(
+        ctx,
+        AddOptions {
+            name: name.to_string(),
+            tenant: None,
+            subscription: None,
+            search_service: None,
+            foundry_account: None,
+            foundry_project: None,
+            protected: false,
+            bind: Vec::new(),
+            like: Some(like.to_string()),
+            same: Vec::new(),
+            skip: Vec::new(),
+        },
+    )
+    .await
+}
+
 struct AddOptions {
     name: String,
     tenant: Option<String>,

@@ -1,73 +1,63 @@
-//! `rigg promote` — copy one environment's project tree into another,
-//! preserving pinned (environment-specific) fields. Purely local: it reads
-//! and writes project files only, and never talks to Azure. The subsequent
-//! `rigg diff`/`rigg push` (against the target env) are what actually sync
-//! with the cloud.
+//! `rigg promote` — translate one environment's project tree into another.
 //!
-//! Correlation across environments is by LOGICAL id — the resource's file
-//! stem within its kind directory — not by physical (Azure) name, since the
-//! two may diverge once a resource is renamed in one environment (see
-//! `rigg-core::store` module docs).
+//! The translation itself is [`rigg_core::promote::translate`], which is
+//! pure: it takes both environments' binding tables and documents and
+//! returns the document the target should have for every logical resource,
+//! plus what it could not decide. This module is the I/O around it:
+//!
+//! 1. load both environments (bindings + documents, correlated by LOGICAL
+//!    id — the file stem — never by physical name);
+//! 2. turn everything the engine left [`Pending`] into a question, write the
+//!    answers into `rigg.yaml` as bindings, and re-translate (up to
+//!    [`MAX_ROUNDS`] times, so a question that does not settle cannot loop);
+//! 3. show the rewiring preview — what points where after the translation,
+//!    which sibling references were renamed, and what changes per resource;
+//! 4. write the merged documents through the target environment's `Store`.
+//!
+//! Nothing is deleted and resources that exist only in the target are never
+//! touched. `--dry-run` stops after the preview.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use colored::Colorize;
 use serde_json::{Value, json};
 
-use rigg_core::registry::{self, X_RIGG_PIN};
+use rigg_core::binding::{Binding, BindingCache, BindingType, EnvBindings, validate_binding_name};
+use rigg_core::infra;
+use rigg_core::promote::{
+    AuthCarrier, Change, Doc, EnvDocs, Item, Pending, Plan, rewiring_table, translate,
+};
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::Store;
+use rigg_core::workspace::{Environment, Workspace};
 use rigg_diff::output::SideLabels;
-use rigg_diff::semantic::DiffResult;
-
-use rigg_client::arm::ArmClient;
 
 use crate::cli::PromoteArgs;
+use crate::commands::ask::{Answer, Candidate, Question};
 use crate::commands::{
-    CommandError, GlobalContext, credentials, interactive, load_workspace, select_one_project,
+    CommandError, GlobalContext, bindings, discovery, env as env_cmd, interactive, load_workspace,
+    select_one_project,
 };
+use crate::say;
 
-/// One logical resource's promotion plan: what it looks like in the source
-/// env, what (if anything) it looks like in the target env today, and what
-/// it would become after pinned fields are re-applied.
-struct Item {
-    kind: ResourceKind,
-    stem: String,
-    target: Option<Value>,
-    merged: Value,
-    /// Pinned paths used to build `merged` (empty when nothing was kept,
-    /// i.e. a brand-new file where there is nothing to pin from yet).
-    pinned: Vec<String>,
-    diff: DiffResult,
-}
+/// How many times the question loop may re-translate. Each round writes the
+/// answers it got as bindings, so a well-formed answer settles its question;
+/// the cap only catches an answer that keeps the same question open (e.g. a
+/// binding value that still matches no resource).
+const MAX_ROUNDS: usize = 5;
 
-impl Item {
-    fn label(&self) -> String {
-        format!("{}/{}", self.kind.directory_name(), self.stem)
-    }
-}
-
-struct Plan {
-    changed: Vec<Item>,
-    new: Vec<Item>,
-    unchanged: Vec<Item>,
-    kept_only_in_to: Vec<(ResourceKind, String)>,
-}
+/// The answer that declines a question.
+const SKIP: &str = "skip";
+/// The answer that gives the target environment the source's own value.
+const SAME: &str = "same";
 
 pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
-    let ws = load_workspace()?;
+    let mut ws = load_workspace()?;
     if !ws.config.environments.contains_key(&args.from) {
         return Err(anyhow!(CommandError::Usage(format!(
             "unknown environment '{}' (see `rigg env list`)",
             args.from
-        ))));
-    }
-    if !ws.config.environments.contains_key(&args.to) {
-        return Err(anyhow!(CommandError::Usage(format!(
-            "unknown environment '{}' (see `rigg env list`)",
-            args.to
         ))));
     }
     if args.from == args.to {
@@ -75,32 +65,85 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
             "--from and --to must name different environments".to_string()
         )));
     }
+    if !ws.config.environments.contains_key(&args.to) {
+        if !ctx.interactive() {
+            return Err(anyhow!(CommandError::Usage(missing_env_message(
+                &ws, &args.from, &args.to
+            ))));
+        }
+        // The environment-creation questions live in `env add`, not here.
+        env_cmd::add_like_inline(ctx, &ws, &args.to, &args.from).await?;
+        ws = load_workspace()?;
+        if !ws.config.environments.contains_key(&args.to) {
+            bail!("environment '{}' was not created", args.to);
+        }
+    }
+    let project_name = select_one_project(&ws, args.project.as_deref())?
+        .name
+        .clone();
+
+    // --- translate, asking about anything it cannot decide ---------------
+    let mut settled = Settled::default();
+    let mut round = 0usize;
+    let plan = loop {
+        let (source, target) = load_sides(&ws, &project_name, &args)?;
+        let plan = translate(&source, &target);
+        let asks = build_asks(ctx, &args, &ws, &plan, &source, &settled).await;
+        if asks.is_empty() {
+            break plan;
+        }
+        round += 1;
+        if round > MAX_ROUNDS {
+            bail!(
+                "promote still has open questions after {MAX_ROUNDS} rounds — \
+                 record the bindings it needs with `rigg env bind` and re-run"
+            );
+        }
+        let questions: Vec<Question> = asks.iter().map(|a| a.question.clone()).collect();
+        let mut asker = ctx.asker(
+            "promote",
+            json!({"project": project_name, "from": args.from, "to": args.to}),
+        );
+        let answers = asker.ask_all(&questions)?;
+        apply_answers(&args, &asks, &answers, &mut settled)?;
+        ws = load_workspace()?;
+    };
 
     let project = select_one_project(&ws, args.project.as_deref())?;
-    let store_from = Store::new(project, &args.from);
     let store_to = Store::new(project, &args.to);
+    let targets = Targets::of(&ws, &args);
+    let checks = checks(&plan, &args, &settled);
 
-    let mut plan = build_plan(&store_from, &store_to)?;
-
+    let preview = Preview {
+        project: &project_name,
+        args: &args,
+        plan: &plan,
+        checks: &checks,
+        targets: &targets,
+    };
     if !ctx.json() {
-        print_preview(&args, &project.name, &plan);
+        preview.print();
     }
 
-    let nothing_to_do = plan.changed.is_empty() && plan.new.is_empty();
+    let pending_writes = plan
+        .items
+        .iter()
+        .filter(|i| i.change() != Change::Unchanged)
+        .count();
 
     if args.dry_run {
-        if !ctx.json() {
+        if ctx.json() {
+            println!("{}", preview.to_json(true));
+        } else {
             println!();
             println!("(dry run — nothing written)");
-        } else {
-            print_json(&plan, true);
         }
         return Ok(());
     }
 
-    if nothing_to_do {
+    if pending_writes == 0 {
         if ctx.json() {
-            print_json(&plan, false);
+            println!("{}", preview.to_json(false));
         } else {
             println!();
             println!(
@@ -111,7 +154,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         return Ok(());
     }
 
-    if ctx.interactive() && !ctx.json() {
+    if ctx.interactive() {
         if !interactive::confirm_default_yes("Proceed?", ctx.no_color)? {
             println!("aborted");
             return Ok(());
@@ -122,561 +165,839 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         )));
     }
 
-    resolve_new_webapi_uris(ctx, &args.from, &args.to, &mut plan.new).await?;
-
-    for item in &plan.changed {
-        let name = item
-            .merged
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(&item.stem)
-            .to_string();
-        store_to.write(&ResourceRef::new(item.kind, name), &item.merged)?;
-    }
-    for item in &plan.new {
-        store_to.write_at(&item.stem, item.kind, &item.merged)?;
+    for item in &plan.items {
+        match item.change() {
+            Change::Unchanged => {}
+            Change::Changed => {
+                store_to.write(
+                    &ResourceRef::new(item.kind, item.target_name.clone()),
+                    &item.merged,
+                )?;
+            }
+            // A new resource lands at the SOURCE's stem: that is the logical
+            // id the two trees correlate by.
+            Change::New => {
+                store_to.write_at(&item.stem, item.kind, &item.merged)?;
+            }
+        }
     }
 
     if ctx.json() {
-        print_json(&plan, false);
-    } else {
-        println!();
-        println!("hint: rigg diff {} -e {}", project.name, args.to);
-        println!("      rigg push {} -e {}", project.name, args.to);
-        print_new_file_hints(&args, &plan);
+        println!("{}", preview.to_json(false));
     }
+    say!(ctx);
+    say!(
+        ctx,
+        "Promoted {pending_writes} resource(s) into '{}'.",
+        args.to
+    );
+    say!(ctx, "hint: rigg validate {project_name}");
+    say!(ctx, "      rigg auth doctor -e {}", args.to);
+    say!(
+        ctx,
+        "      rigg push {project_name} -e {} --dry-run",
+        args.to
+    );
+    say!(ctx, "      rigg push {project_name} -e {}", args.to);
     Ok(())
 }
 
-/// A skillset that is NEW in the target env carries its Web API skill URLs
-/// verbatim from the source env — usually the WRONG function for the target
-/// (the pinned paths protect existing files, but a new file has nothing to
-/// pin from). Resolve each URL: automatically when Azure shows the source's
-/// function app as the only one visible (both envs share it), interactively
-/// otherwise; non-interactively the copy is kept but flagged loudly.
-async fn resolve_new_webapi_uris(
-    ctx: &GlobalContext,
-    from: &str,
-    to: &str,
-    new_items: &mut [Item],
-) -> Result<()> {
-    let mut sites: Option<Vec<String>> = None; // ARM site list, fetched once on demand
-    for item in new_items
-        .iter_mut()
-        .filter(|i| i.kind == ResourceKind::Skillset)
-    {
-        let Some(skills) = item.merged.get_mut("skills").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for skill in skills {
-            let is_webapi = skill
-                .get("@odata.type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t.ends_with("WebApiSkill"));
-            if !is_webapi {
-                continue;
-            }
-            let uri = skill
-                .get("uri")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let Some((site, _)) = credentials::parse_function_uri(&uri) else {
-                continue;
-            };
-            let skill_name = skill
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("<unnamed>")
-                .to_string();
-
-            if !ctx.interactive() || ctx.json() {
-                if !ctx.json() {
-                    println!(
-                        "  {} skill '{skill_name}' calls {uri} — copied from env '{from}'; \
-                         verify this is the right function for '{to}' (edit the file, then `rigg push -e {to}`)",
-                        "!".yellow()
-                    );
-                }
-                continue;
-            }
-
-            if sites.is_none() {
-                sites = Some(match ArmClient::new() {
-                    Ok(arm) => arm.list_web_sites().await.unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                });
-            }
-            let known = sites.as_ref().expect("filled above");
-            let others: Vec<&String> = known
-                .iter()
-                .filter(|s| !s.eq_ignore_ascii_case(&site))
-                .collect();
-            if others.is_empty() && known.iter().any(|s| s.eq_ignore_ascii_case(&site)) {
-                println!(
-                    "  {} skill '{skill_name}': '{site}' is the only function app your login can see — both environments share it, keeping {uri}",
-                    "✓".green()
-                );
-                continue;
-            }
-
-            let keep = format!("keep {uri} (same function app as '{from}')");
-            const MANUAL: &str = "enter a URL manually";
-            let mut options = vec![keep.clone()];
-            for other in &others {
-                options.push(swap_function_site(&uri, &site, other));
-            }
-            options.push(MANUAL.to_string());
-            let choice = interactive::select(
-                &format!(
-                    "Skill '{skill_name}' calls a function in env '{from}' — which URL should '{to}' use?"
-                ),
-                options,
-                ctx.no_color,
-            )?;
-            let new_uri = if choice == keep {
-                uri.clone()
-            } else if choice == MANUAL {
-                interactive::text_with_default(
-                    &format!("Function URL for env '{to}':"),
-                    &uri,
-                    ctx.no_color,
-                )?
-            } else {
-                choice
-            };
-            if new_uri != uri {
-                skill["uri"] = Value::String(new_uri);
-            }
+/// The exact command that creates the missing target environment, filled in
+/// from the source environment's own targets.
+fn missing_env_message(ws: &Workspace, from: &str, to: &str) -> String {
+    let mut command = format!("rigg env add {to} --like {from}");
+    if let Some(env) = ws.config.environments.get(from) {
+        if let Some(search) = &env.search {
+            command.push_str(&format!(" --search-service {}", search.service));
+        }
+        if let Some(foundry) = &env.foundry {
+            command.push_str(&format!(
+                " --foundry-account {} --foundry-project {}",
+                foundry.account, foundry.project
+            ));
         }
     }
-    Ok(())
+    format!("environment '{to}' does not exist — create it first: {command}")
 }
 
-/// `https://<site>.azurewebsites.net/<path>` with the site swapped.
-fn swap_function_site(uri: &str, old_site: &str, new_site: &str) -> String {
-    uri.replacen(
-        &format!("https://{old_site}.azurewebsites.net"),
-        &format!("https://{new_site}.azurewebsites.net"),
-        1,
-    )
+// ---------------------------------------------------------------------
+// loading both sides
+// ---------------------------------------------------------------------
+
+fn load_sides(
+    ws: &Workspace,
+    project_name: &str,
+    args: &PromoteArgs,
+) -> Result<(EnvDocs, EnvDocs)> {
+    let project = ws.project(project_name)?;
+    let source = env_docs(ws, project, &args.from)?;
+    let target = env_docs(ws, project, &args.to)?;
+    Ok((source, target))
 }
 
-/// Build the promotion plan: correlate FROM/TO by (kind, stem), merge each
-/// FROM resource into its TO counterpart (pinning fields per
-/// `pinned_paths`), and classify the result.
-fn build_plan(store_from: &Store, store_to: &Store) -> Result<Plan> {
-    let from_map = list_by_stem(store_from)?;
-    let to_map = list_by_stem(store_to)?;
-
-    let mut changed = Vec::new();
-    let mut new = Vec::new();
-    let mut unchanged = Vec::new();
-
-    for ((kind, stem), from_path) in &from_map {
-        let source = store_from.read_path(from_path)?;
-        let target = match to_map.get(&(*kind, stem.clone())) {
-            Some(to_path) => Some(store_to.read_path(to_path)?),
-            None => None,
-        };
-        let pinned = pinned_paths(*kind, target.as_ref());
-        let merged = merge_promote(*kind, &source, target.as_ref(), &pinned);
-        let diff =
-            rigg_diff::semantic::diff(target.as_ref().unwrap_or(&Value::Null), &merged, "name");
-        let item = Item {
-            kind: *kind,
-            stem: stem.clone(),
-            target: target.clone(),
-            merged,
-            pinned,
-            diff,
-        };
-        match &item.target {
-            None => new.push(item),
-            Some(_) if item.diff.is_equal => unchanged.push(item),
-            Some(_) => changed.push(item),
-        }
-    }
-
-    let mut kept_only_in_to: Vec<(ResourceKind, String)> = to_map
-        .keys()
-        .filter(|k| !from_map.contains_key(*k))
+fn env_docs(
+    ws: &Workspace,
+    project: &rigg_core::workspace::Project,
+    env_name: &str,
+) -> Result<EnvDocs> {
+    let env = ws
+        .config
+        .environments
+        .get(env_name)
         .cloned()
-        .collect();
-    kept_only_in_to.sort();
-
-    Ok(Plan {
-        changed,
-        new,
-        unchanged,
-        kept_only_in_to,
+        .unwrap_or_default();
+    let cache = BindingCache::load(ws, env_name);
+    let bindings = EnvBindings::of_env(env_name, &env, Some(&cache));
+    let store = Store::new(project, env_name);
+    let mut docs = Vec::new();
+    for (r, path) in store.list()? {
+        let body = store.read_path(&path)?;
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        docs.push(Doc {
+            kind: r.kind,
+            stem,
+            physical: r.name,
+            body,
+        });
+    }
+    Ok(EnvDocs {
+        env: env_name.to_string(),
+        bindings,
+        docs,
     })
 }
 
-fn list_by_stem(store: &Store) -> Result<BTreeMap<(ResourceKind, String), PathBuf>> {
-    let mut out = BTreeMap::new();
-    for (r, path) in store.list()? {
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
-        out.insert((r.kind, stem), path);
-    }
-    Ok(out)
+// ---------------------------------------------------------------------
+// questions
+// ---------------------------------------------------------------------
+
+/// What the user already told us, carried across question rounds so nothing
+/// is asked twice (and so the preview can report what was declined).
+#[derive(Default)]
+struct Settled {
+    /// Physical resources the user declined to bind in the source.
+    unbound_skipped: BTreeSet<String>,
+    /// Binding names the user declined to give the target.
+    binding_skipped: BTreeSet<String>,
+    /// External hosts the user confirmed keeping verbatim.
+    external_kept: BTreeSet<String>,
 }
 
-/// The full set of paths kept pinned to the target's current value for this
-/// kind/resource: `"name"` (always — the target keeps its physical name) ∪
-/// the kind's registry defaults ∪ any extra paths the target's own
-/// `x-rigg-pin` annotation names ∪ the annotation key itself (so it survives
-/// the promote and keeps applying on the next one). When there is no target
-/// yet, this is still the set that WOULD apply — used to hint which fields
-/// are worth reviewing on the new copy.
-fn pinned_paths(kind: ResourceKind, target: Option<&Value>) -> Vec<String> {
-    let mut pinned: Vec<String> = vec!["name".to_string()];
-    pinned.extend(registry::env_pinned(kind).into_iter().map(String::from));
-    if let Some(target) = target {
-        if let Some(extra) = target.get(X_RIGG_PIN).and_then(Value::as_array) {
-            for p in extra {
-                if let Some(s) = p.as_str() {
-                    pinned.push(s.to_string());
+/// One question, plus what to do with its answer.
+struct Ask {
+    question: Question,
+    action: Action,
+}
+
+enum Action {
+    /// Record a binding for the physical resource in the SOURCE environment.
+    Bind {
+        physical: String,
+        kind: BindingType,
+        value: String,
+    },
+    /// Give the TARGET environment a binding the source has.
+    Missing {
+        binding: String,
+        kind: BindingType,
+        source_value: String,
+    },
+    /// Keep an unbound external endpoint verbatim.
+    External { host: String },
+}
+
+async fn build_asks(
+    ctx: &GlobalContext,
+    args: &PromoteArgs,
+    ws: &Workspace,
+    plan: &Plan,
+    source: &EnvDocs,
+    settled: &Settled,
+) -> Vec<Ask> {
+    let mut asks: Vec<Ask> = Vec::new();
+    let mut asked: BTreeSet<String> = BTreeSet::new();
+    for pending in &plan.pending {
+        let ask = match pending {
+            Pending::UnboundInSource {
+                kind,
+                stem,
+                path,
+                target,
+                physical,
+                proposed_name,
+            } => {
+                if settled.unbound_skipped.contains(physical) {
+                    continue;
+                }
+                let Some(binding_type) = infra::binding_type_for(*target) else {
+                    continue; // a search service is an env target, not a binding
+                };
+                let value = reference_value(source, *kind, stem, path, binding_type)
+                    .unwrap_or_else(|| physical.clone());
+                Ask {
+                    question: Question::text(
+                        format!("promote.bind.{}.{physical}", args.from),
+                        format!(
+                            "{}/{stem} at {path} uses {target} '{physical}', which is not bound \
+                             in '{}'. Bind it as (or '{SKIP}'):",
+                            kind.directory_name(),
+                            args.from,
+                        ),
+                    )
+                    .with_default(proposed_name.clone()),
+                    action: Action::Bind {
+                        physical: physical.clone(),
+                        kind: binding_type,
+                        value,
+                    },
+                }
+            }
+            Pending::MissingInTarget {
+                binding,
+                binding_type,
+                source_physical,
+                used_by,
+            } => {
+                if settled.binding_skipped.contains(binding) {
+                    continue;
+                }
+                // An implicit `search`/`foundry` target cannot be declared as
+                // a dependency binding — it is reported, not asked about.
+                let Some(binding_type) = *binding_type else {
+                    continue;
+                };
+                let source_value = declared_value(ws, &args.from, binding)
+                    .unwrap_or_else(|| source_physical.clone());
+                let mut candidates = vec![Candidate {
+                    value: SAME.to_string(),
+                    label: format!("same as {}: {source_value} (shared)", args.from),
+                }];
+                candidates.extend(
+                    arm_candidates(ctx, args, ws, binding_type, &source_value)
+                        .await
+                        .into_iter()
+                        .map(|name| Candidate {
+                            value: name.clone(),
+                            label: name,
+                        }),
+                );
+                candidates.push(Candidate {
+                    value: SKIP.to_string(),
+                    label: format!("skip (keep the value '{}' has)", args.from),
+                });
+                Ask {
+                    question: Question::choice(
+                        format!("binding.{}.{binding}", args.to),
+                        format!(
+                            "'{}' has no binding '{binding}' ({binding_type}), used by {} \
+                             reference(s). Use:",
+                            args.to,
+                            used_by.len()
+                        ),
+                        candidates,
+                    )
+                    .allow_other(),
+                    action: Action::Missing {
+                        binding: binding.clone(),
+                        kind: binding_type,
+                        source_value,
+                    },
+                }
+            }
+            Pending::External { host, used_by } => {
+                if settled.external_kept.contains(host) {
+                    continue;
+                }
+                Ask {
+                    question: Question::confirm(
+                        format!("promote.external.{host}"),
+                        format!(
+                            "'{host}' is an external API, bound in neither environment (used by \
+                             {} reference(s)). Keep it verbatim in '{}'?",
+                            used_by.len(),
+                            args.to
+                        ),
+                        true,
+                    ),
+                    action: Action::External { host: host.clone() },
+                }
+            }
+            // Never a question: the binding exists, it just isn't resolved
+            // well enough to rewrite this value's shape.
+            Pending::UnresolvedTarget { .. } => continue,
+        };
+        if asked.insert(ask.question.id.clone()) {
+            asks.push(ask);
+        }
+    }
+    asks
+}
+
+/// The value to record for a reference the source does not bind: the ARM id
+/// the file already carries when it has one, else the physical name — the
+/// same rule `rigg env bind --learn` applies.
+fn reference_value(
+    source: &EnvDocs,
+    kind: ResourceKind,
+    stem: &str,
+    path: &str,
+    binding_type: BindingType,
+) -> Option<String> {
+    let doc = source
+        .docs
+        .iter()
+        .find(|d| d.kind == kind && d.stem == stem)?;
+    let found = infra::extract(kind, &doc.body)
+        .into_iter()
+        .find(|f| f.path == path)?;
+    Some(bindings::proposed_value(binding_type, &found))
+}
+
+/// The value `env` declares for dependency binding `name`.
+fn declared_value(ws: &Workspace, env: &str, name: &str) -> Option<String> {
+    ws.config
+        .environments
+        .get(env)?
+        .dependencies
+        .get(name)
+        .map(|b| b.value.clone())
+}
+
+/// Resources of `kind` visible in the target environment's subscription, as
+/// extra candidates. Only fetched for an interactive pick-list: a scripted
+/// caller answers with any name or id it likes (the question `allow_other`s),
+/// and a promote that is only translating files should not depend on ARM.
+async fn arm_candidates(
+    ctx: &GlobalContext,
+    args: &PromoteArgs,
+    ws: &Workspace,
+    kind: BindingType,
+    source_value: &str,
+) -> Vec<String> {
+    if args.offline || !ctx.interactive() {
+        return Vec::new();
+    }
+    let Some(env) = ws.config.environments.get(&args.to) else {
+        return Vec::new();
+    };
+    let source_physical = Binding {
+        kind,
+        value: source_value.to_string(),
+    }
+    .physical_name();
+    discovery::binding_candidates(kind, env.tenant.as_deref(), env.subscription.as_deref())
+        .await
+        .into_iter()
+        .filter(|found| !found.eq_ignore_ascii_case(&source_physical))
+        .collect()
+}
+
+fn apply_answers(
+    args: &PromoteArgs,
+    asks: &[Ask],
+    answers: &[Answer],
+    settled: &mut Settled,
+) -> Result<()> {
+    for (ask, answer) in asks.iter().zip(answers) {
+        match &ask.action {
+            Action::Bind {
+                physical,
+                kind,
+                value,
+            } => {
+                let raw = answer.as_str().unwrap_or_default().trim().to_string();
+                if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP) {
+                    settled.unbound_skipped.insert(physical.clone());
+                    continue;
+                }
+                validate_binding_name(&raw).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+                bindings::write_binding(
+                    &args.from,
+                    &raw,
+                    &Binding {
+                        kind: *kind,
+                        value: value.clone(),
+                    },
+                )?;
+            }
+            Action::Missing {
+                binding,
+                kind,
+                source_value,
+            } => {
+                let raw = answer.as_str().unwrap_or_default().trim().to_string();
+                if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP) {
+                    settled.binding_skipped.insert(binding.clone());
+                    continue;
+                }
+                let value = if raw == SAME {
+                    source_value.clone()
+                } else {
+                    raw
+                };
+                bindings::write_binding(&args.to, binding, &Binding { kind: *kind, value })?;
+            }
+            Action::External { host } => {
+                if answer.as_bool().unwrap_or(false) {
+                    settled.external_kept.insert(host.clone());
+                } else {
+                    return Err(anyhow!(CommandError::Usage(format!(
+                        "'{host}' is not bound in either environment — bind it before promoting: \
+                         `rigg env bind {} <name> api:https://{host}` (and the same in '{}')",
+                        args.from, args.to
+                    ))));
                 }
             }
         }
-        pinned.push(X_RIGG_PIN.to_string());
     }
-    pinned.sort();
-    pinned.dedup();
-    pinned
+    Ok(())
 }
 
-/// The source's document becomes the target's, except at `pinned` paths,
-/// which keep the target's current value (when a target exists at all — a
-/// brand-new resource has nothing to pin from, and is created verbatim).
-/// Target-only array elements along pinned array paths survive wholesale
-/// (see `registry::restore_path`).
-fn merge_promote(
-    kind: ResourceKind,
-    source: &Value,
-    target: Option<&Value>,
-    pinned: &[String],
-) -> Value {
-    let mut merged = source.clone();
-    // The x-rigg-pin annotation belongs to the TARGET env's file only — a
-    // source-side copy must not leak across; the target's own annotation (if
-    // any) is restored below via the pinned X_RIGG_PIN path.
-    if let Some(map) = merged.as_object_mut() {
-        map.remove(X_RIGG_PIN);
-    }
-    // Same for a skill's x-rigg-auth: it authorizes THE SOURCE env's
-    // function URL, and unlike other pinned paths it must not survive when
-    // the target has no counterpart — an annotation pointing at the wrong
-    // env's function would silence push's Web API auth gate. Strip it here;
-    // the target's own annotation (if any) is restored via the pinned path.
-    if kind == ResourceKind::Skillset
-        && let Some(skills) = merged.get_mut("skills").and_then(Value::as_array_mut)
-    {
-        for skill in skills {
-            if let Some(map) = skill.as_object_mut() {
-                map.remove(credentials::X_RIGG_AUTH);
+// ---------------------------------------------------------------------
+// checks
+// ---------------------------------------------------------------------
+
+struct Check {
+    ok: bool,
+    message: String,
+}
+
+/// Everything worth saying about the plan that is neither a rewiring, a
+/// rename, nor a per-resource diff: unresolved bindings, declined questions,
+/// and Web API auth carriers that did not cross.
+fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
+    let mut out = Vec::new();
+
+    for item in &plan.items {
+        for carrier in &item.auth {
+            if let AuthCarrier::Stripped { path, .. } = carrier {
+                out.push(Check {
+                    ok: false,
+                    message: format!(
+                        "{} {path}: Web API auth carrier not carried over (it authorizes '{}') \
+                         — resolved against '{}' on push",
+                        item.label(),
+                        args.from,
+                        args.to
+                    ),
+                });
             }
         }
     }
-    if let Some(target) = target {
-        for path in pinned {
-            registry::restore_path(&mut merged, target, path);
+
+    for pending in &plan.pending {
+        match pending {
+            Pending::UnresolvedTarget { binding, .. } => out.push(Check {
+                ok: false,
+                message: format!(
+                    "binding '{binding}' in '{}' is declared by name only — run `rigg env show \
+                     {} --refresh` (or declare the full ARM id)",
+                    args.to, args.to
+                ),
+            }),
+            Pending::MissingInTarget {
+                binding,
+                binding_type,
+                used_by,
+                ..
+            } => {
+                let declinable = binding_type.is_some();
+                if declinable && !settled.binding_skipped.contains(binding) {
+                    continue;
+                }
+                let why = if declinable {
+                    format!("binding '{binding}' skipped")
+                } else {
+                    format!("'{}' has no '{binding}' target", args.to)
+                };
+                for (kind, stem, path) in used_by {
+                    out.push(Check {
+                        ok: false,
+                        message: format!(
+                            "{}/{stem} {path}: kept from '{}' ({why})",
+                            kind.directory_name(),
+                            args.from
+                        ),
+                    });
+                }
+            }
+            Pending::UnboundInSource {
+                kind,
+                stem,
+                path,
+                target,
+                physical,
+                ..
+            } => {
+                let bindable = infra::binding_type_for(*target).is_some();
+                if bindable && !settled.unbound_skipped.contains(physical) {
+                    continue;
+                }
+                out.push(Check {
+                    ok: false,
+                    message: format!(
+                        "{}/{stem} {path}: {target} '{physical}' is not bound in '{}' — kept as is",
+                        kind.directory_name(),
+                        args.from
+                    ),
+                });
+            }
+            Pending::External { host, used_by } => {
+                if !settled.external_kept.contains(host) {
+                    continue;
+                }
+                for (kind, stem, path) in used_by {
+                    out.push(Check {
+                        ok: true,
+                        message: format!(
+                            "{}/{stem} {path}: external API '{host}' kept verbatim",
+                            kind.directory_name()
+                        ),
+                    });
+                }
+            }
         }
     }
-    merged
+    out
 }
 
-fn print_preview(args: &PromoteArgs, project_name: &str, plan: &Plan) {
-    println!(
-        "{} project '{}': {} {} {}",
-        "Promote".bold(),
-        project_name,
-        args.from,
-        "→".dimmed(),
-        args.to
-    );
-    println!(
-        "  {} changed, {} new, {} unchanged, {} kept (only in '{}')",
-        plan.changed.len(),
-        plan.new.len(),
-        plan.unchanged.len(),
-        plan.kept_only_in_to.len(),
-        args.to
-    );
+// ---------------------------------------------------------------------
+// preview
+// ---------------------------------------------------------------------
 
-    if !plan.changed.is_empty() {
-        println!();
-        let labels = SideLabels {
-            new_side: format!("{} (incoming)", args.from),
-            old_side: args.to.clone(),
+/// The two environments' service targets, for the preview's header line.
+#[derive(Default)]
+struct Targets {
+    search: Option<(String, String)>,
+    foundry: Option<(String, String)>,
+}
+
+impl Targets {
+    fn of(ws: &Workspace, args: &PromoteArgs) -> Targets {
+        let from = ws.config.environments.get(&args.from);
+        let to = ws.config.environments.get(&args.to);
+        let search = match (from.and_then(search_of), to.and_then(search_of)) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
         };
-        for item in &plan.changed {
-            print!(
-                "{}",
-                rigg_diff::output::format_text(&item.diff, &item.label(), &labels)
-            );
-        }
-    }
-
-    if !plan.new.is_empty() {
-        println!();
-        println!("new (will be created in '{}'):", args.to);
-        for item in &plan.new {
-            println!("  {}", item.label());
-        }
-    }
-
-    if !plan.kept_only_in_to.is_empty() {
-        println!();
-        println!("kept (only in '{}' — never touched by promote):", args.to);
-        for (kind, stem) in &plan.kept_only_in_to {
-            println!("  {}/{}", kind.directory_name(), stem);
-        }
+        let foundry = match (from.and_then(foundry_of), to.and_then(foundry_of)) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        };
+        Targets { search, foundry }
     }
 }
 
-fn print_new_file_hints(args: &PromoteArgs, plan: &Plan) {
-    let with_pins: Vec<&Item> = plan
-        .new
-        .iter()
-        .filter(|i| !registry::env_pinned(i.kind).is_empty())
-        .collect();
-    if with_pins.is_empty() {
-        return;
+fn search_of(env: &Environment) -> Option<String> {
+    env.search.as_ref().map(|s| s.service.clone())
+}
+
+fn foundry_of(env: &Environment) -> Option<String> {
+    env.foundry
+        .as_ref()
+        .map(|f| format!("{}/{}", f.account, f.project))
+}
+
+/// One row of the `Renamed siblings` table.
+struct RenamedRow {
+    label: String,
+    from: String,
+    to: String,
+    references: usize,
+}
+
+fn renamed_rows(plan: &Plan) -> Vec<RenamedRow> {
+    let mut rows: BTreeMap<(ResourceKind, String), (String, String, usize)> = BTreeMap::new();
+    for renamed in plan.items.iter().flat_map(|i| &i.renamed) {
+        rows.entry((renamed.kind, renamed.stem.clone()))
+            .and_modify(|row| row.2 += 1)
+            .or_insert((renamed.from.clone(), renamed.to.clone(), 1));
     }
-    println!();
-    println!(
-        "New files were created verbatim from '{}'. Fields worth reviewing (env-pinned by default):",
-        args.from
-    );
-    for item in with_pins {
+    rows.into_iter()
+        .map(|((kind, stem), (from, to, references))| RenamedRow {
+            label: format!("{}/{stem}", kind.directory_name()),
+            from,
+            to,
+            references,
+        })
+        .collect()
+}
+
+fn items_of(plan: &Plan, change: Change) -> Vec<&Item> {
+    plan.items.iter().filter(|i| i.change() == change).collect()
+}
+
+struct Preview<'a> {
+    project: &'a str,
+    args: &'a PromoteArgs,
+    plan: &'a Plan,
+    checks: &'a [Check],
+    targets: &'a Targets,
+}
+
+impl Preview<'_> {
+    fn print(&self) {
+        let (from, to) = (&self.args.from, &self.args.to);
         println!(
-            "  {}: {}",
-            item.label(),
-            registry::env_pinned(item.kind).join(", ")
+            "{} project '{}': {} {} {}",
+            "Promote".bold(),
+            self.project,
+            from,
+            "→".dimmed(),
+            to
         );
-    }
-}
+        let mut targets: Vec<String> = Vec::new();
+        if let Some((a, b)) = &self.targets.search {
+            targets.push(format!("Search {a} → {b}"));
+        }
+        if let Some((a, b)) = &self.targets.foundry {
+            targets.push(format!("Foundry {a} → {b}"));
+        }
+        if !targets.is_empty() {
+            println!("  Targets: {}", targets.join(", "));
+        }
 
-fn print_json(plan: &Plan, dry_run: bool) {
-    let mut pinned_kept: serde_json::Map<String, Value> = serde_json::Map::new();
-    for item in &plan.changed {
-        pinned_kept.insert(item.label(), json!(item.pinned));
+        let rewiring = rewiring_table(self.plan);
+        if !rewiring.is_empty() {
+            println!();
+            println!("{}", "Rewiring (bindings)".bold());
+            for (binding, target, from_name, to_name, shared, references) in &rewiring {
+                let arrow = if *shared { "=" } else { "→" };
+                let mut row = format!(
+                    "  {binding:<14} {:<14} {from_name:<26} {arrow} {to_name:<26}",
+                    target.to_string()
+                );
+                if *shared {
+                    row.push_str(" shared");
+                }
+                if *references > 1 {
+                    row.push_str(&format!(" ({references} references)"));
+                }
+                println!("{}", row.trim_end());
+            }
+        }
+
+        let renamed = renamed_rows(self.plan);
+        if !renamed.is_empty() {
+            println!();
+            println!("{}", "Renamed siblings".bold());
+            for row in &renamed {
+                println!(
+                    "  {:<24} {} → {}  ({} reference(s) rewritten)",
+                    row.label, row.from, row.to, row.references
+                );
+            }
+        }
+
+        let changed = items_of(self.plan, Change::Changed);
+        let new = items_of(self.plan, Change::New);
+        let unchanged = items_of(self.plan, Change::Unchanged);
+        println!();
+        println!("{}", "Resources".bold());
+        println!(
+            "  {} changed, {} new, {} unchanged, {} kept (only in '{to}')",
+            changed.len(),
+            new.len(),
+            unchanged.len(),
+            self.plan.kept_only_in_to.len(),
+        );
+        if !changed.is_empty() {
+            println!();
+            let labels = SideLabels {
+                new_side: format!("{from} (incoming)"),
+                old_side: to.clone(),
+            };
+            for item in &changed {
+                let diff = rigg_diff::semantic::diff(
+                    item.before.as_ref().unwrap_or(&Value::Null),
+                    &item.merged,
+                    "name",
+                );
+                print!(
+                    "{}",
+                    rigg_diff::output::format_text(&diff, &item.label(), &labels)
+                );
+            }
+        }
+        if !new.is_empty() {
+            println!();
+            println!("new (will be created in '{to}'):");
+            for item in &new {
+                println!("  {}", item.label());
+            }
+        }
+        if !self.plan.kept_only_in_to.is_empty() {
+            println!();
+            println!("kept (only in '{to}' — never touched by promote):");
+            for (kind, stem) in &self.plan.kept_only_in_to {
+                println!("  {}/{stem}", kind.directory_name());
+            }
+        }
+
+        if !self.checks.is_empty() {
+            println!();
+            println!("{}", "Checks".bold());
+            for check in self.checks {
+                let mark = if check.ok {
+                    "✓".green()
+                } else {
+                    "!".yellow()
+                };
+                println!("  {mark} {}", check.message);
+            }
+        }
     }
-    let value = json!({
-        "dry_run": dry_run,
-        "promoted": plan.changed.iter().map(Item::label).collect::<Vec<_>>(),
-        "created": plan.new.iter().map(Item::label).collect::<Vec<_>>(),
-        "kept_only_in_to": plan
-            .kept_only_in_to
-            .iter()
-            .map(|(k, s)| format!("{}/{}", k.directory_name(), s))
-            .collect::<Vec<_>>(),
-        "pinned_kept": pinned_kept,
-    });
-    println!(
-        "{}",
+
+    fn to_json(&self, dry_run: bool) -> String {
+        let labels =
+            |items: Vec<&Item>| -> Vec<String> { items.iter().map(|i| i.label()).collect() };
+        let mut targets = serde_json::Map::new();
+        if let Some((from, to)) = &self.targets.search {
+            targets.insert("search".to_string(), json!({"from": from, "to": to}));
+        }
+        if let Some((from, to)) = &self.targets.foundry {
+            targets.insert("foundry".to_string(), json!({"from": from, "to": to}));
+        }
+        let value = json!({
+            "project": self.project,
+            "from": self.args.from,
+            "to": self.args.to,
+            "targets": Value::Object(targets),
+            "rewiring": rewiring_table(self.plan)
+                .into_iter()
+                .map(|(binding, target, from, to, shared, references)| json!({
+                    "binding": binding,
+                    "type": target.to_string(),
+                    "from": from,
+                    "to": to,
+                    "shared": shared,
+                    "references": references,
+                }))
+                .collect::<Vec<_>>(),
+            "renamed": renamed_rows(self.plan)
+                .into_iter()
+                .map(|row| json!({
+                    "resource": row.label,
+                    "from": row.from,
+                    "to": row.to,
+                    "references": row.references,
+                }))
+                .collect::<Vec<_>>(),
+            "resources": {
+                "changed": labels(items_of(self.plan, Change::Changed)),
+                "new": labels(items_of(self.plan, Change::New)),
+                "unchanged": labels(items_of(self.plan, Change::Unchanged)),
+                "kept_only_in_to": self.plan
+                    .kept_only_in_to
+                    .iter()
+                    .map(|(kind, stem)| format!("{}/{stem}", kind.directory_name()))
+                    .collect::<Vec<_>>(),
+            },
+            "checks": self.checks
+                .iter()
+                .map(|c| json!({"ok": c.ok, "message": c.message}))
+                .collect::<Vec<_>>(),
+            // Everything the engine could not decide has been answered by the
+            // time a preview exists; the key stays for shape stability.
+            "questions": Vec::<Value>::new(),
+            "dry_run": dry_run,
+        });
         serde_json::to_string_pretty(&value).unwrap_or_default()
-    );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    #[test]
-    fn merge_promote_keeps_name_from_target() {
-        let source = json!({"name": "a-name", "model": "m"});
-        let target = json!({"name": "b-name", "model": "old"});
-        let merged = merge_promote(
-            ResourceKind::Agent,
-            &source,
-            Some(&target),
-            &["name".to_string()],
-        );
-        assert_eq!(merged["name"], json!("b-name"));
-        assert_eq!(
-            merged["model"],
-            json!("m"),
-            "non-pinned field comes from source"
-        );
+    fn args(from: &str, to: &str) -> PromoteArgs {
+        PromoteArgs {
+            project: None,
+            from: from.to_string(),
+            to: to.to_string(),
+            dry_run: false,
+            offline: true,
+        }
     }
 
     #[test]
-    fn merge_promote_keeps_registry_pinned_path() {
-        // Real Agent shape: tools[].server_url differs per env (points at a
-        // different Search service) and must stay pinned to the target's.
-        let source = json!({
-            "name": "agent",
-            "model": "gpt-5-mini",
-            "tools": [{"type": "mcp", "server_url": "https://dev.search.windows.net/x"}]
-        });
-        let target = json!({
-            "name": "agent",
-            "model": "gpt-5-mini",
-            "tools": [{"type": "mcp", "server_url": "https://prod.search.windows.net/x"}]
-        });
-        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
-        assert!(pinned.iter().any(|p| p == "tools[].server_url"));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
-        assert_eq!(
-            merged["tools"][0]["server_url"],
-            json!("https://prod.search.windows.net/x"),
-            "target's server_url kept, not source's"
-        );
-    }
-
-    #[test]
-    fn merge_promote_preserves_target_only_tools() {
-        // CRITICAL regression: prod (target) has customizations dev doesn't —
-        // an extra file_search tool and a second MCP tool. Promote must not
-        // silently delete them: they survive the merge wholesale.
-        let source = json!({
-            "name": "agent",
-            "model": "gpt-5-mini",
-            "tools": [{"type": "mcp", "server_url": "https://dev.search.windows.net/x"}]
-        });
-        let target = json!({
-            "name": "agent",
-            "model": "gpt-4o-old",
-            "tools": [
-                {"type": "mcp", "server_url": "https://prod.search.windows.net/x"},
-                {"type": "file_search", "vector_store_ids": ["vs-prod"]},
-                {"type": "mcp", "server_url": "https://prod.search.windows.net/y",
-                 "project_connection_id": "conn-prod-2"}
-            ]
-        });
-        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
-        let tools = merged["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3, "target-only tools survive: {tools:?}");
-        assert_eq!(
-            tools[0]["server_url"],
-            json!("https://prod.search.windows.net/x"),
-            "paired tool keeps target's pinned field"
-        );
-        assert_eq!(
-            tools[1],
-            json!({"type": "file_search", "vector_store_ids": ["vs-prod"]}),
-            "target-only tool survives wholesale"
-        );
-        assert_eq!(
-            tools[2]["project_connection_id"],
-            json!("conn-prod-2"),
-            "second target-only tool survives with all fields"
-        );
-        assert_eq!(merged["model"], json!("gpt-5-mini"), "non-pinned promoted");
-    }
-
-    #[test]
-    fn merge_promote_source_only_tools_stay() {
-        // Reverse direction: source has MORE tools than the target. The
-        // extras come from the source (that's the promotion) and keep the
-        // source's own values — nothing on the target side to pin from.
-        let source = json!({
-            "name": "agent",
-            "tools": [
-                {"type": "mcp", "server_url": "https://dev/x"},
-                {"type": "code_interpreter"}
-            ]
-        });
-        let target = json!({
-            "name": "agent",
-            "tools": [{"type": "mcp", "server_url": "https://prod/x"}]
-        });
-        let pinned = pinned_paths(ResourceKind::Agent, Some(&target));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
-        let tools = merged["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2, "source's extra tool is promoted: {tools:?}");
-        assert_eq!(tools[0]["server_url"], json!("https://prod/x"), "paired");
-        assert_eq!(tools[1], json!({"type": "code_interpreter"}));
-    }
-
-    #[test]
-    fn merge_promote_keeps_x_rigg_pin_listed_extra_path() {
-        let source = json!({"name": "conn", "properties": {"description": "new description"}});
-        let target = json!({
-            "name": "conn",
-            "properties": {"description": "prod description"},
-            "x-rigg-pin": ["properties.description"]
-        });
-        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
-        assert_eq!(
-            merged["properties"]["description"],
-            json!("prod description"),
-            "x-rigg-pin-listed path kept from target"
-        );
-    }
-
-    #[test]
-    fn merge_promote_target_none_is_source_verbatim() {
-        let source = json!({"name": "a", "model": "m", "tools": []});
-        let merged = merge_promote(
-            ResourceKind::Agent,
-            &source,
-            None,
-            &["name".to_string(), "model".to_string()],
-        );
-        assert_eq!(merged, source);
-    }
-
-    #[test]
-    fn merge_promote_x_rigg_pin_annotation_itself_survives() {
-        let source = json!({"name": "conn", "properties": {"target": "https://dev"}});
-        let target = json!({
-            "name": "conn",
-            "properties": {"target": "https://prod"},
-            "x-rigg-pin": ["properties.description"]
-        });
-        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
-        assert_eq!(
-            merged["x-rigg-pin"],
-            json!(["properties.description"]),
-            "the annotation itself travels with the target, unmerged from source"
-        );
-        assert_eq!(
-            merged["properties"]["target"],
-            json!("https://prod"),
-            "properties.target is env_pinned_extra for Connection — kept from target too"
-        );
-    }
-
-    #[test]
-    fn merge_promote_strips_source_side_x_rigg_pin() {
-        // The annotation lives in the TARGET env's file. A source-side copy
-        // (e.g. promoted A→B earlier, now promoting B→A's sibling) must not
-        // leak into the merged output when the target has none of its own.
-        let source = json!({
-            "name": "conn",
-            "properties": {"target": "https://dev"},
-            "x-rigg-pin": ["properties.description"]
-        });
-        let target = json!({"name": "conn", "properties": {"target": "https://prod"}});
-        let pinned = pinned_paths(ResourceKind::Connection, Some(&target));
-        let merged = merge_promote(ResourceKind::Agent, &source, Some(&target), &pinned);
+    fn missing_env_message_names_the_source_environments_targets() {
+        let ws: rigg_core::workspace::WorkspaceConfig = serde_yaml::from_str(
+            "environments:\n  dev:\n    search: { service: s-dev }\n    foundry: { account: a, project: p }\n",
+        )
+        .unwrap();
+        let ws = Workspace {
+            root: std::path::PathBuf::from("."),
+            config: ws,
+            projects: Vec::new(),
+        };
+        let message = missing_env_message(&ws, "dev", "staging");
         assert!(
-            merged.get(X_RIGG_PIN).is_none(),
-            "source's annotation must not leak: {merged:?}"
+            message.contains(
+                "rigg env add staging --like dev --search-service s-dev --foundry-account a \
+                 --foundry-project p"
+            ),
+            "{message}"
         );
-        // and target None (new file) also drops it — the fresh copy starts clean
-        let created = merge_promote(ResourceKind::Agent, &source, None, &pinned);
-        assert!(created.get(X_RIGG_PIN).is_none());
     }
 
     #[test]
-    fn pinned_paths_has_no_target_annotation_key_when_target_is_none() {
-        // A brand-new file: nothing to keep pinned yet, so pinned_paths is
-        // just the structural defaults (used only for the review hint).
-        let pinned = pinned_paths(ResourceKind::Agent, None);
-        assert!(!pinned.iter().any(|p| p == X_RIGG_PIN));
-        assert!(pinned.iter().any(|p| p == "tools[].server_url"));
+    fn declined_external_endpoint_is_a_usage_error_naming_env_bind() {
+        let asks = vec![Ask {
+            question: Question::confirm("promote.external.api.partner.example", "keep?", true),
+            action: Action::External {
+                host: "api.partner.example".to_string(),
+            },
+        }];
+        let err = apply_answers(
+            &args("dev", "prod"),
+            &asks,
+            &[Answer::Confirm(false)],
+            &mut Settled::default(),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("rigg env bind dev <name> api:https://api.partner.example"),
+            "the decline must name the command that binds it: {message}"
+        );
+    }
+
+    #[test]
+    fn skip_answers_are_remembered_instead_of_written() {
+        let mut settled = Settled::default();
+        let asks = vec![
+            Ask {
+                question: Question::text("promote.bind.dev.acct", "?"),
+                action: Action::Bind {
+                    physical: "acct".to_string(),
+                    kind: BindingType::Storage,
+                    value: "acct".to_string(),
+                },
+            },
+            Ask {
+                question: Question::choice("binding.prod.docs", "?", Vec::new()),
+                action: Action::Missing {
+                    binding: "docs".to_string(),
+                    kind: BindingType::Storage,
+                    source_value: "devacct".to_string(),
+                },
+            },
+        ];
+        apply_answers(
+            &args("dev", "prod"),
+            &asks,
+            &[
+                Answer::Text(SKIP.to_string()),
+                Answer::Choice(SKIP.to_string()),
+            ],
+            &mut settled,
+        )
+        .expect("skipping writes nothing, so no workspace is touched");
+        assert!(settled.unbound_skipped.contains("acct"));
+        assert!(settled.binding_skipped.contains("docs"));
     }
 }

@@ -109,21 +109,21 @@ pub enum Commands {
     /// Delete a project's resources from Azure
     Delete(DeleteArgs),
 
-    /// Copy one environment's project tree into another, locally
+    /// Translate one environment's project tree into another
     ///
     /// A→B and B→A are the same operation — the A/B sync + hot-swap
     /// workflow. Correlates resources by their file stem (logical id), not
-    /// their physical (Azure) name. Pinned fields keep the target env's
-    /// existing values instead of being overwritten: the resource's `name`
-    /// (always), the kind's registry-default env-pinned fields (secrets,
-    /// write-only fields, and a few genuinely per-environment fields like an
-    /// Agent's `tools[].server_url`), and any extra paths named in the
-    /// target file's own `x-rigg-pin` annotation. New-in-target resources
-    /// are created verbatim from the source (stem preserved); resources that
-    /// only exist in the target are left untouched. Always previews before
-    /// writing; `--dry-run` stops there. Local only — never touches Azure;
-    /// run `rigg diff`/`rigg push` against the target env afterward to sync
-    /// it.
+    /// their physical (Azure) name, and TRANSLATES rather than copies: every
+    /// infrastructure reference (storage, identity, model host, function
+    /// app, key vault, api) is re-pointed at the target environment's
+    /// binding of the same name, and every reference to a sibling that is
+    /// physically named differently in the target follows that name. The
+    /// target keeps its own `name`, the paths its own `x-rigg-pin`
+    /// annotation lists, and its Web API auth carriers — the source's never
+    /// cross. Anything rigg cannot decide (an unbound reference, a binding
+    /// the target lacks) becomes a question instead of a guess. Resources
+    /// that only exist in the target are left untouched. Always previews the
+    /// rewiring before writing; `--dry-run` stops there.
     Promote(PromoteArgs),
 
     /// Operate the LIVE Azure resources: run indexers, query indexes,
@@ -426,6 +426,11 @@ pub struct PromoteArgs {
     /// Preview only; write nothing
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Skip every Azure lookup (candidate lists, Web API auth re-derivation,
+    /// deployment availability); unresolved items are reported instead
+    #[arg(long)]
+    pub offline: bool,
 }
 
 #[derive(Subcommand)]
