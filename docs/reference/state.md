@@ -29,12 +29,19 @@ remembers where the two last met.
 
 | Path | Written by | Holds |
 |---|---|---|
-| `.rigg/<env>/<project>/state.json` | every successful `pull`, `push`, `adopt`, `promote` | one [baseline](#baselines-statejson) per resource |
+| `.rigg/<env>/<project>/state.json` | every successful `pull`, `push`, `adopt` | one [baseline](#baselines-statejson) per resource |
 | `.rigg/<env>/bindings.json` | `rigg env show --refresh`, and any command that resolves a binding | the [bindings cache](#bindings-cache) |
 | `.rigg/<env>/<project>/replace-<name>.json` | `rigg push` during a knowledge-source replace | a [crash-recovery record](#replace-recovery-files) |
 
 If `rigg.yaml` sets `root:`, `.rigg/` lives under that subdirectory alongside
 `projects/` and `apis/`.
+
+`rigg promote` is deliberately absent from that table. It writes the target
+environment's **files** and never touches a baseline — which is exactly why a
+promoted resource shows as `local-ahead` until it is pushed. It can, however,
+write `rigg.yaml`: binding answers accepted during a promote are persisted to
+the workspace file once the preview is confirmed (see
+[rigg.yaml § Managing bindings from the CLI](rigg-yaml.md#managing-bindings-from-the-cli)).
 
 ## Baselines (`state.json`)
 

@@ -97,11 +97,10 @@ A name that is not in the file:
 Error: unknown environment 'staging' (available: dev, prod)
 ```
 
-Two commands deliberately do **not** accept `default: true` as good enough,
-because acting on the wrong environment there is expensive. `rigg adopt`
-(and any flow that adopts) requires an explicit `--env` / `RIGG_ENV` when the
-workspace has more than one environment — interactively it asks which one,
-otherwise:
+One command deliberately does **not** accept `default: true` as good enough,
+because adopting into the wrong environment is expensive to undo. `rigg adopt`
+requires an explicit `--env` / `RIGG_ENV` when the workspace has more than one
+environment — interactively it asks which one, otherwise:
 
 ```
 Error: multiple environments configured (dev, prod); pass --env <name> (or set RIGG_ENV) to say which one to adopt from
@@ -228,10 +227,29 @@ rigg env remove staging
 `rigg env add` writes a new environment block. `rigg env bind` adds or
 replaces one `dependencies` entry; `--learn` instead scans the environment's
 resource files for infrastructure references that no binding covers and
-proposes a name for each (question ids `learn.<env>.<resource>`, then
+proposes a name for each (question ids `learn.<env>.<proposed-name>`, then
 `learn.<env>.record` to write them). `rigg env show --refresh` re-resolves
 every binding against Azure and rewrites the [bindings
 cache](state.md#bindings-cache); it never edits `rigg.yaml`.
+
+**Every command that edits `rigg.yaml` rewrites the whole file, and comments
+do not survive.** The file is parsed, changed and re-serialized, so the
+hand-written comments in the example above — and any others you add — are
+gone after the first `rigg env add` / `bind` / `unbind` / `set-default` /
+`remove`. Only the header block `rigg init` writes is regenerated. If you
+annotate `rigg.yaml`, either keep the annotations somewhere else or edit the
+file by hand instead of through `rigg env`.
+
+`rigg env` is not the only writer: **`rigg promote` can edit `rigg.yaml`
+too.** The binding answers a promote collects — `binding.<to-env>.<name>` for
+a binding the target environment lacks, `promote.bind.<from-env>.<physical>`
+for a physical resource the source has never bound — are held in memory while
+the run works out what it would do, and written into the named environment's
+`dependencies` only once the preview has been confirmed. So `--dry-run`, an
+aborted confirmation and the `needs-input` (exit 6) path all leave the
+workspace file untouched, while a promote that runs to the end records what
+you told it, in the source environment, the target environment, or both. The
+same comment loss applies.
 
 ## Multi-subscription and multi-tenant workspaces
 

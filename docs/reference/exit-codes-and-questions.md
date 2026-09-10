@@ -11,7 +11,7 @@ for both.
 |---|---|---|
 | 0 | success | The command did what it said. Includes "nothing to do" and a user declining a confirmation. |
 | 1 | error | Anything unclassified: an Azure 5xx, a network failure, malformed JSON in a resource file, an unreadable `rigg.yaml`. |
-| 2 | usage error | The invocation itself is wrong: a project name that is needed and missing, `--project` and `--all` together, an unknown `--answer` id, an answer that does not coerce, a `--confirm-env` that does not match. |
+| 2 | usage error | The invocation itself is wrong: a project name that is needed and missing, `--project` and `--all` together, an unknown `--answer` id, an answer that does not coerce, a `--confirm-env` that does not match, a non-interactive `push` with changes to apply and no `--yes` (`non-interactive push requires --yes`), a push plan containing replaces without `--allow-replace`. |
 | 3 | validation failed | `rigg validate` found problems, or a command refused because its input would not validate. |
 | 4 | auth / permission denied | Azure returned 401 or 403, or a token could not be obtained. Also produced explicitly by flows that establish rigg cannot reach a resource it needs. |
 | 5 | drift or conflict detected | `rigg pull` / `rigg push` stopped because local and remote both moved since the baseline, or `rigg diff --exit-code` found differences. |
@@ -35,11 +35,15 @@ Note that `rigg diff` reports drift on stdout but exits 0 **unless**
 
 Notes on the boundaries:
 
-- **Declining is success.** Answering `n` to "Apply 3 change(s)?", or typing
-  the wrong name at a protected-environment prompt, prints `Aborted.` /
-  `no changes made` and exits 0. Nothing was asked for, nothing failed. A
-  *wrong pre-supplied answer* is different — that is exit 2, because you told
-  rigg something and it was not usable.
+- **Declining a confirmation is success.** Answering `n` to "Apply 3
+  change(s)?" prints `  aborted`; typing the wrong name at a
+  protected-environment prompt prints `Aborted.` — both exit 0. Nothing was
+  asked for, nothing failed. Two things that look similar are *not* success:
+  **cancelling** a prompt with Esc or Ctrl-C aborts the command with an error
+  (exit **1**), and so does declining a prompt whose "no" leaves the command
+  with nothing to do (`rigg adopt`'s "Create one now?" when there is no
+  project yet). A *wrong pre-supplied answer* is different again — that is
+  exit 2, because you told rigg something and it was not usable.
 - **401/403 from any Azure plane is 4**, not 1, even when it surfaces in the
   middle of a push. That is what lets CI distinguish "grant the service
   principal a role" from "retry later".
@@ -63,27 +67,21 @@ A session is non-interactive when any of these hold:
 
 ### The document
 
+Pushing a project to a protected environment with nobody at the keyboard:
+
+```bash
+rigg push contoso-docs --env prod --non-interactive
+```
+
 ```json
 {
   "status": "needs-input",
-  "command": "promote",
+  "command": "push",
   "context": {
     "project": "contoso-docs",
-    "from": "dev",
-    "to": "prod",
     "env": "prod"
   },
   "questions": [
-    {
-      "id": "binding.prod.docs-storage",
-      "kind": "choice",
-      "prompt": "'prod' has no binding 'docs-storage' (storage), used by 2 reference(s). Use:",
-      "candidates": [
-        { "value": "contosostorageprod", "label": "contosostorageprod (contoso-prod-rg)" },
-        { "value": "skip", "label": "skip — leave the reference as it is" }
-      ],
-      "allow_other": true
-    },
     {
       "id": "confirm.protected.prod",
       "kind": "confirm-env",
@@ -92,6 +90,46 @@ A session is non-interactive when any of these hold:
   ]
 }
 ```
+
+A different flow, a different document. `rigg promote` asks about the bindings
+the target environment is missing — every open question in one document, one
+entry in `questions` each:
+
+```bash
+rigg promote contoso-docs --from dev --to prod --non-interactive
+```
+
+```json
+{
+  "status": "needs-input",
+  "command": "promote",
+  "context": {
+    "project": "contoso-docs",
+    "from": "dev",
+    "to": "prod"
+  },
+  "questions": [
+    {
+      "id": "binding.prod.docs-storage",
+      "kind": "choice",
+      "prompt": "'prod' has no binding 'docs-storage' (storage), used by 2 reference(s). Use:",
+      "candidates": [
+        { "value": "same", "label": "same as dev: contosostoragedev (shared)" },
+        { "value": "contosostorageprod", "label": "contosostorageprod" },
+        { "value": "skip", "label": "skip (keep the value 'dev' has)" }
+      ],
+      "allow_other": true
+    }
+  ]
+}
+```
+
+Note that these are two *different* documents, and never one. `rigg promote`
+has no protected-environment gate at all — it writes the target environment's
+files, not Azure — so a promote document never carries a
+`confirm.protected.*` question, and the gate (which builds its own asker, with
+its own `command` and `context`) never carries a binding question. Answer each
+document with the questions it actually contains.
 
 | Key | Type | Always present | Meaning |
 |---|---|---|---|
@@ -109,7 +147,7 @@ A session is non-interactive when any of these hold:
 In text mode a human-readable summary also goes to **stderr**:
 
 ```
-2 question(s) need an answer: binding.prod.docs-storage, confirm.protected.prod
+2 question(s) need an answer: binding.prod.docs-storage, binding.prod.enrich-fn
 Answer with --answer <id>=<value> (or --answers-file) and re-run.
 ```
 
@@ -121,7 +159,7 @@ MCP server work.
 ```bash
 rigg promote contoso-docs --from dev --to prod \
   --answer binding.prod.docs-storage=contosostorageprod \
-  --answer confirm.protected.prod=prod
+  --answer binding.prod.enrich-fn=contoso-enrich-prod
 ```
 
 or from a file, for anything more than a couple of answers:
@@ -133,7 +171,7 @@ rigg promote contoso-docs --from dev --to prod --answers-file answers.json
 ```json
 {
   "binding.prod.docs-storage": "contosostorageprod",
-  "confirm.protected.prod": "prod"
+  "binding.prod.enrich-fn": "contoso-enrich-prod"
 }
 ```
 
@@ -176,8 +214,24 @@ Error: unknown answer id 'foo': no question with this id is known
 ### The protected-environment gate
 
 An environment with `policy: { protected: true }` requires its name to be
-typed back before any cloud mutation — `push` (apply or `--prune`),
-`delete --remote`, `az indexer run`, `az indexer reset`.
+typed back before any cloud mutation. Every command behind the gate:
+
+| Command | Gated because |
+|---|---|
+| `rigg push` (apply or `--prune`) | creates, updates, replaces and deletes resources |
+| `rigg delete <project> --remote` | deletes the project's resources from the service |
+| `rigg verify` | runs every indexer (ingestion, skill and embedding cost) |
+| `rigg az indexer run` | runs an indexer |
+| `rigg az indexer reset` | reprocesses every document on the next run |
+| `rigg auth doctor --fix` | assigns roles, changes auth options and firewall rules |
+| `rigg auth easy-auth` | rewrites a function app's authentication |
+| `rigg auth roles remove` | deletes role assignments |
+
+(`rigg env remove --clean-roles` removes role assignments without the gate:
+the flag names the removal and the environment is going away anyway.
+`rigg push --verify` is not gated twice — the push's own gate covered it.)
+`rigg promote` is **not** on this list: it writes the target environment's
+files, and the push that follows is where the gate fires.
 
 ```
 Environment 'prod' is protected. Type its name to confirm push:
@@ -214,13 +268,16 @@ prefixes; anything else is rejected at startup.
 | `confirm.protected.` | any cloud mutation against a protected environment | `confirm.protected.<env>` | `confirm-env` | the environment's name, exactly |
 | `binding.` | `rigg promote` (a binding the target environment lacks); `rigg env add --like` (a binding to carry over) | `binding.<env>.<binding>` | `choice`, other values allowed | a resource name or ARM id, or `skip` |
 | `env.` | `rigg env add` | `env.<name>.protected` | `confirm` | `yes` / `no` |
-| `learn.` | `rigg env bind <env> --learn` | `learn.<env>.<resource>`, `learn.<env>.record` | `text`, `confirm` | a binding name (or `skip`); `yes` / `no` to write them to `rigg.yaml` |
+| `learn.` | `rigg env bind <env> --learn` | `learn.<env>.<proposed-name>`, `learn.<env>.record` | `text`, `confirm` | a binding name (or `skip`); `yes` / `no` to write them to `rigg.yaml` |
 | `promote.` | `rigg promote` | `promote.bind.<from-env>.<physical>`, `promote.external.<host>`, `promote.deployment.<stem>` | `text`, `confirm`, `choice` | a binding name or `skip`; `yes` / `no`; `skip` or `capacity:<n>` |
 | `auth.` | `rigg auth doctor --fix`, `rigg push` (auth preflight), `rigg auth easy-auth`, `rigg auth roles remove`, `rigg auth doctor` key-vault carrier | `auth.fix.all`, `auth.easyauth.<site>`, `auth.roles.remove`, `auth.webapi.key-vault` | `confirm`, `text` | `yes` / `no`; `<secret>@<key-vault binding>` |
 
 The variable segment is always the thing the question is about — an
 environment name, a binding name, a resource stem, a host — so an agent can
-construct the id it needs to answer without parsing the prompt.
+construct the id it needs to answer without parsing the prompt. In a
+`learn.<env>.<proposed-name>` id that segment is the **binding name rigg
+proposes** (the physical resource's name in lower-kebab), not the resource id
+it was learned from; the answer is the name to record instead, or `skip`.
 
 Three sentinel answers recur:
 
@@ -241,13 +298,23 @@ Error: invalid answer for 'promote.deployment.gpt-5.2-chat': 'maybe' — expecte
 every command:
 
 ```bash
-rigg push contoso-docs --env prod --output json
+rigg push contoso-docs --env prod --output json --yes \
+  --answer confirm.protected.prod=prod
 ```
 
 Exit 6 → parse stdout, answer each `questions[].id`, re-run with the
-`--answer` flags appended. Exit 2 → an answer was wrong; fix it, do not
-retry blindly. Exit 5 → a real conflict; a human decides between
-`rigg pull` and `rigg push`.
+`--answer` flags appended. Exit 2 → the invocation is wrong; fix it, do not
+retry blindly (an answer that was rejected, or a missing flag — a
+non-interactive `push` with changes to apply needs `--yes`, which is why it
+is there from the first attempt). Exit 5 → a real conflict; a human decides
+between `rigg pull` and `rigg push`.
+
+`--yes` and `--confirm-env` / `--answer confirm.protected.prod=prod` are
+different keys to different locks and a protected push needs both: `--yes`
+for the routine "apply N change(s)?" prompt that a non-interactive push
+cannot show, the answer for the gate. Supplying only `--yes` exits 6 (the
+gate has no answer); supplying only the answer exits 2
+(`non-interactive push requires --yes`).
 
 **Fail CI on drift:**
 

@@ -221,13 +221,28 @@ Extraction on pull happens for a field when either of two things is true:
 
 - the kind declares it as a sidecar field by default — today that is exactly
   **`instructions` on an agent**; or
-- a sidecar file for that field already exists on disk, in which case rigg
-  keeps using it.
+- a sidecar file for that field already exists on disk **at the name rigg
+  looks for**, in which case rigg keeps using it.
 
-The second rule is what lets you opt any field in: write the `$file` object
-and the file once, and every future pull writes the prose back to the
-Markdown rather than into the JSON. Diffs then show the prose line by line,
-which is the point.
+That second rule is what lets you opt any field in, and it has two conditions
+that are easy to miss:
+
+- **The filename must be `<json-stem>.<field>.md`, exactly.** For
+  `search/skillsets/contoso-enrich.json` and a field `description`, that is
+  `contoso-enrich.description.md` in the same directory. rigg does not follow
+  the name inside the `$file` object when it decides whether to extract — it
+  builds the expected name and checks whether that file exists. A `$file`
+  pointing at `notes.md` is read fine on load, but the next `rigg pull`
+  extracts nothing, inlines the prose back into the JSON, and leaves
+  `notes.md` orphaned.
+- **The field must be top-level.** Extraction looks at the document's own
+  keys only; a long string nested inside an object or array — a skill's
+  `description`, a scoring function's text — cannot be a sidecar, and a
+  `$file` there survives only until the next pull rewrites the document.
+
+Get both right and every future pull writes the prose back to the Markdown
+rather than into the JSON. Diffs then show the prose line by line, which is
+the point.
 
 A `$file` pointing nowhere is an error rather than an empty string:
 

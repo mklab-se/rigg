@@ -35,7 +35,10 @@ rigg new api contoso-enrich
 ```
 
 writes `apis/contoso-enrich.json` — a complete, valid starting point you edit
-in place.
+in place. Its two `data` schemas are empty and marked
+`"additionalProperties": true`, so the scaffold is an **open** contract:
+nothing is name-checked until you fill the schemas in (see
+[openness](#what-rigg-reads) below).
 
 ## Complete example
 
@@ -147,16 +150,28 @@ operation. Local `$ref`s (`#/components/…`) are followed.
 | `paths.<path>.post.requestBody.content.application/json.schema` | schema | no | — | The request envelope. rigg reads `properties.values.items.properties.data`. |
 | `paths.<path>.post.responses.200.content.application/json.schema` | schema | no | — | The response envelope, read the same way. |
 | `…data.properties` | object | no | `{}` | The input (request) / output (response) field names available to the skill. |
-| `…data.additionalProperties` | bool | no | open | `false` makes the contract **closed**: rigg then checks the skill's `inputs`/`outputs` names against `properties`. Anything else leaves it open and the name check is skipped. |
+| `…data.additionalProperties` | bool | no | closed when `properties` are declared | A `data` schema is **closed** when `additionalProperties: false`, and also when the key is simply absent and `properties` is non-empty — which is how most schemas are written. It is **open** when `additionalProperties` is present with any other value, when `properties` is empty, or when the `data` schema is missing entirely. |
 
 Everything else in the document — `info`, `servers`, `security`, other
 operations, other status codes, descriptions, examples — rigg reads past. Put
 whatever your API tooling needs there; it is your document.
 
-Keep the contract **closed** (`additionalProperties: false`) once the field
-names have settled. That is what turns a typo in a skillset's `outputs` into a
-validation error instead of an empty enriched field discovered three indexer
-runs later.
+**Openness is one flag for the whole contract, not one per schema.** rigg
+combines the request and response schemas into a single open/closed verdict:
+the contract is closed only when it declares a **request** schema that is
+closed *and* any response schema it declares is closed too. Leaving the
+response schema open (or declaring only a response schema and no request
+schema) opens the whole contract, and the `inputs` check goes with it — the
+name check in step 4 below is all-or-nothing across `inputs` and `outputs`.
+
+Because the closed state is the default for any schema that declares
+`properties`, writing a `data` schema and forgetting `additionalProperties`
+turns the name check **on**, not off. That is usually what you want: it is
+what turns a typo in a skillset's `outputs` into a validation error instead of
+an empty enriched field discovered three indexer runs later. To opt out while
+the field names are still moving, set `additionalProperties: true` on every
+`data` schema in the document; to lock the contract down, spell out
+`additionalProperties: false` on each of them.
 
 ## What `rigg validate` checks
 
@@ -183,7 +198,9 @@ For every `WebApiSkill` carrying `x-rigg-api`:
    ```
 
 4. **Closed contracts only:** every `inputs[].name` is a request `data`
-   property, and every `outputs[].name` is a response `data` property.
+   property, and every `outputs[].name` is a response `data` property. Both
+   loops are gated on the one contract-wide closed verdict above — if the
+   contract is open, neither runs.
 
    ```
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] skill inputs 'body' is not in apis/contoso-enrich.json's data schema (language, text)
@@ -208,7 +225,7 @@ rigg describe contoso-docs
 ```
 
 The same list is in `rigg describe --output json` as `apis_to_implement`,
-with `api`, `spec_path` and `used_by` — which is how an AI agent asked to
+with `api`, `spec_path` and `consumed_by` — which is how an AI agent asked to
 "implement the missing APIs" finds them.
 
 ## Authenticating the call

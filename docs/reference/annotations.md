@@ -189,7 +189,7 @@ key path entirely by wiring Entra authentication instead.
 ## `x-rigg-pin`
 
 ```json
-"x-rigg-pin": ["properties.capacity", "skills[].uri"]
+"x-rigg-pin": ["sku.capacity", "skills[].uri"]
 ```
 
 | | |
@@ -197,25 +197,39 @@ key path entirely by wiring Entra authentication instead.
 | **Type** | array of strings — registry dot-paths |
 | **Valid on** | the top level of any resource file |
 | **Required** | no |
-| **Default** | none; each kind already has registry defaults that promote pins |
+| **Default** | none — there are no per-kind default pins; a path is protected only if this list names it |
 
 `x-rigg-pin` lives in the **target** environment's file and answers: "when
 something is promoted onto this file, which of my current values must
 survive?" Path syntax is the registry's: dot-separated keys, with `[]` after
-a key to descend into each element of an array — `properties.capacity`,
+a key to descend into each element of an array — `sku.capacity`,
 `skills[].uri`, `vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri`.
+A path that neither document has is a silent no-op, so check the path against
+the file you mean to protect: a model deployment's capacity is `sku.capacity`,
+not `properties.capacity`.
+
+A `[]` segment pairs the target's array with the promoted one **by position**,
+not by name: element 0 keeps element 0's pinned value, element 1 keeps element
+1's. When the target's array is longer, its extra elements are appended to the
+promoted document wholesale — a tool only prod has survives the promote — and
+when the promoted array is longer, its extra elements are left alone. Reordering
+an array in one environment therefore changes what an array pin protects.
 
 `rigg promote <project> --from dev --to prod` builds each target document by
 taking the source's shape, translating references and infrastructure values
 into the target's world, then restoring from the target: its `name`
 (unconditionally — a promoted document is never renamed to the source's
-name), the kind's registry-default pins, and every path this list asks for.
-The list itself is restored too, so it does not evaporate on the first
-promote.
+name) and every path this list asks for. `name` is the *only* unconditional
+restore; everything else the target must keep has to be listed here
+explicitly, or the source's value replaces it. The list itself is restored
+too, so it does not evaporate on the first promote.
 
 Use it for values that are legitimately different in this environment and
-that promote would otherwise overwrite — a production deployment's capacity,
-a hand-tuned scoring profile, a URL rigg has no binding for.
+that promote would otherwise overwrite — a production deployment's
+`sku.capacity`, a hand-tuned scoring profile, a URL rigg has no binding for.
+Nothing is pinned for you: an unlisted path is promoted over, and a capacity
+that goes *down* is not even flagged (the `promote.deployment.*` question only
+fires on an increase).
 
 `x-rigg-pin` in the **source** file does nothing to that promote (it is
 stripped along with the source's other annotations), and it never reaches
