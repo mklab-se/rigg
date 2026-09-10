@@ -19,3 +19,9 @@ rigg validate                # everything is checked, including the OpenAPI cont
 rigg describe                # dependency graph + the API you must implement
 rigg push quickstart-blob    # after pointing rigg.yaml at your services
 ```
+
+These files are a reference, not a walkthrough. To build the same thing
+step by step against your own subscription, follow
+[tutorial 2 — Build from scratch](../docs/tutorials/02-build-from-scratch.md);
+to put a stack you *already* have under version control, start with
+[tutorial 1](../docs/tutorials/01-pull-an-existing-solution.md).

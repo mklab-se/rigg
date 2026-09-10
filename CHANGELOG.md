@@ -348,6 +348,43 @@ around that. No compatibility with 1.x workspaces.
   around it, and the MCP guide documents `rigg_verify` and `rigg_push`'s
   `verify` / `skip_auth_preflight`.
 
+### Docs
+
+- **A `docs/` tree replaces the wall of README prose.** Four runnable
+  tutorials — [pull an existing solution][t1], [build from scratch][t2],
+  [add an environment and promote][t3], [push to protected production][t4] —
+  each with prerequisites (roles, Azure resources, cost), the expected output
+  of every command, and *what you have now* / *clean up* sections.
+  `docs/how-rigg-works.md` is the connective narrative: sync classes and
+  baselines, the binding layer and the InfraRef table, the identity
+  requirement graph, promote as translation, the question protocol, and what
+  rigg never does.
+- **A complete reference section** under `docs/reference/`: `rigg-yaml.md`,
+  `project-yaml.md`, `resource-files.md`, `annotations.md`, `apis.md`,
+  `state.md`, `cli.md`, `environment-variables.md` and
+  `exit-codes-and-questions.md`, indexed by `docs/README.md`.
+- **Three pages are generated from the binary, not hand-written**, and
+  guarded by `crates/rigg/tests/docs_guards.rs`: `docs/reference/cli.md`
+  (`rigg dev cli-reference`), the InfraRef table inside
+  `docs/reference/resource-files.md` (`rigg dev infra-table`) and the tool
+  table in `MCP.md` (`rigg mcp tools --markdown`).
+- **`rigg dev docs-check`** — the mechanical honesty check for the docs: every
+  `rigg …` line in a shell fence is parsed through clap, every relative link
+  and `#anchor` is resolved, and every `RIGG_*`/`AZURE_*` variable and
+  question-id prefix the code uses must be documented. The docs can no longer
+  claim a flag that does not exist.
+- README is now an entry point (problem, what rigg does, install, a 12-line
+  quick start, the documentation index, exit codes) instead of a manual; the
+  command table moved to `docs/reference/cli.md` and the feature prose to
+  `docs/how-rigg-works.md`. `GETTING_STARTED.md` is a pointer at the
+  tutorials, and the samples READMEs link to them instead of describing
+  portal steps.
+
+[t1]: docs/tutorials/01-pull-an-existing-solution.md
+[t2]: docs/tutorials/02-build-from-scratch.md
+[t3]: docs/tutorials/03-add-an-environment-and-promote.md
+[t4]: docs/tutorials/04-push-to-protected-production.md
+
 ### Removed (library API)
 
 - `rigg_core::config` and everything in it: `Config`, `ConfigError`,

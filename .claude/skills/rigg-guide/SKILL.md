@@ -13,6 +13,30 @@ definitions as JSON files. A resource belongs to exactly ONE project, and
 `pull`/`push`/`diff` always operate on whole projects — that is what keeps local and cloud
 consistent.
 
+## Where the exact answers live
+
+Never guess a flag, a field or an exit code — every one of them is written
+down, and the first three pages are generated from the binary itself:
+
+| Question | Page |
+|---|---|
+| Does this command take that flag? | [docs/reference/cli.md](../../../docs/reference/cli.md) |
+| What does this resource file's field mean, and which paths does the binding layer rewrite? | [docs/reference/resource-files.md](../../../docs/reference/resource-files.md) |
+| Which MCP tools exist, and what parameters? | [MCP.md](../../../MCP.md) |
+| Every `rigg.yaml` key, incl. environments/dependencies/policy | [docs/reference/rigg-yaml.md](../../../docs/reference/rigg-yaml.md) |
+| `project.yaml` and the directory-is-membership rule | [docs/reference/project-yaml.md](../../../docs/reference/project-yaml.md) |
+| `x-rigg-api` / `-auth` / `-pin` / `-ref` / `-note` semantics | [docs/reference/annotations.md](../../../docs/reference/annotations.md) |
+| The OpenAPI contract for a WebApiSkill | [docs/reference/apis.md](../../../docs/reference/apis.md) |
+| What `.rigg/` holds and what is safe to delete | [docs/reference/state.md](../../../docs/reference/state.md) |
+| Every `RIGG_*` / `AZURE_*` variable | [docs/reference/environment-variables.md](../../../docs/reference/environment-variables.md) |
+| Exit codes, the `needs-input` protocol, every question id | [docs/reference/exit-codes-and-questions.md](../../../docs/reference/exit-codes-and-questions.md) |
+
+Narrative, when the user needs the *why*:
+[docs/how-rigg-works.md](../../../docs/how-rigg-works.md) (sync classes,
+bindings, the identity graph, promote, the question protocol),
+[CONCEPTS.md](../../../CONCEPTS.md) (the model), and the four walkthroughs in
+[docs/tutorials/](../../../docs/tutorials/01-pull-an-existing-solution.md).
+
 ## Getting oriented quickly
 
 1. `rigg_describe` (MCP) or `rigg describe --output json` — projects, every
