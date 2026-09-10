@@ -288,6 +288,7 @@ pub struct NewArgs {
 
     /// Use this environment's `identity` binding (a user-assigned managed
     /// identity) instead of the search service's system-assigned one
+    /// (data-source, skillset)
     #[arg(long, value_name = "BINDING")]
     pub identity: Option<String>,
 }

@@ -29,7 +29,11 @@ pub enum ClientError {
     #[error("API error ({status}): {message}")]
     Api { status: u16, message: String },
 
-    #[error("Access denied (403 Forbidden): {service}")]
+    // Azure's own `error.message` says WHICH access is missing, and push's
+    // RBAC classifier reads the rendered message to decide whether a
+    // diagnosis is worth running — so it belongs in the Display. The raw
+    // body never does: it may carry more than the message.
+    #[error("Access denied (403 Forbidden): {service}{}", forbidden_detail(.message))]
     Forbidden {
         service: String,
         message: String,
@@ -221,6 +225,17 @@ impl ClientError {
     }
 }
 
+/// The ` — <message>` tail of a [`ClientError::Forbidden`] Display, empty
+/// when Azure said nothing beyond the status.
+fn forbidden_detail(message: &str) -> String {
+    let message = message.trim();
+    if message.is_empty() {
+        String::new()
+    } else {
+        format!(" — {message}")
+    }
+}
+
 /// Check if a reqwest error is caused by a TLS certificate verification failure
 fn has_certificate_error(err: &reqwest::Error) -> bool {
     use std::error::Error;
@@ -391,6 +406,27 @@ mod tests {
         let display = format!("{}", err);
         assert!(display.contains("403 Forbidden"));
         assert!(display.contains("my-svc.search.windows.net"));
+        assert!(!display.contains('—'), "no empty tail: {display}");
+    }
+
+    /// Azure's own message is what says which access is missing — push's
+    /// RBAC classifier reads it off the rendered error — but the raw body
+    /// stays out of the Display.
+    #[test]
+    fn test_forbidden_display_carries_azures_message_not_the_body() {
+        let err = ClientError::from_response_with_url(
+            403,
+            r#"{"error": {"message": "the managed identity does not have permission"}}"#,
+            Some("https://my-svc.search.windows.net/indexes"),
+        );
+        let display = format!("{err}");
+        assert!(display.contains("403 Forbidden"), "{display}");
+        assert!(display.contains("my-svc.search.windows.net"), "{display}");
+        assert!(
+            display.contains("the managed identity does not have permission"),
+            "{display}"
+        );
+        assert!(!display.contains(r#"{"error""#), "{display}");
     }
 
     #[test]

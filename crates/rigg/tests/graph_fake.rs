@@ -9,6 +9,8 @@
 
 #![allow(dead_code)] // included by several test binaries; each uses part of it
 
+use std::sync::{Arc, Mutex};
+
 use serde_json::json;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -164,6 +166,39 @@ async fn mount_graph_writes(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path_regex(r"^/servicePrincipals/[^/]+/appRoleAssignedTo$"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "assignment-1"})))
+        .mount(server)
+        .await;
+}
+
+/// Mount a STATEFUL `appRoleAssignedTo` pair (priority 1, so it wins over
+/// [`mount_graph`]'s fire-and-forget POST): the POST records the assignment,
+/// the GET lists what has been recorded. That is how Graph behaves, and it
+/// is what lets a test prove the wiring is idempotent — a second run sees
+/// its own first grant instead of a fresh, empty directory.
+pub async fn mount_graph_app_role_assignments(server: &MockServer) {
+    let assignments: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let listing = Arc::clone(&assignments);
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/servicePrincipals/[^/]+/appRoleAssignedTo$"))
+        .respond_with(move |_: &Request| {
+            let value = listing.lock().expect("assignments lock").clone();
+            ResponseTemplate::new(200).set_body_json(json!({"value": value}))
+        })
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/servicePrincipals/[^/]+/appRoleAssignedTo$"))
+        .respond_with(move |req: &Request| {
+            let mut body: serde_json::Value = req.body_json().unwrap_or(json!({}));
+            body["id"] = json!("assignment-1");
+            assignments
+                .lock()
+                .expect("assignments lock")
+                .push(body.clone());
+            ResponseTemplate::new(201).set_body_json(body)
+        })
+        .with_priority(1)
         .mount(server)
         .await;
 }

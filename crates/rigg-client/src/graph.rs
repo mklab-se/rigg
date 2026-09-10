@@ -258,24 +258,52 @@ impl GraphClient {
 
     /// Grant `principal_object_id` (a managed identity's object id) the app
     /// role `app_role_id` on the enterprise application `resource_sp_id`.
+    ///
+    /// Idempotent, like every other step of the Easy Auth wiring: the
+    /// existing assignments are listed first and a matching one short-circuits
+    /// the POST. Graph answers a duplicate POST with a
+    /// `400 Request_BadRequest` ("Permission being assigned already exists on
+    /// the object"), and that is tolerated too — for the race, and for a
+    /// directory that will not let rigg read the assignment list it is
+    /// allowed to write to. Re-running the command must never fail *after*
+    /// the `authsettingsV2` PUT has already landed.
     pub async fn assign_app_role(
         &self,
         resource_sp_id: &str,
         principal_object_id: &str,
         app_role_id: &str,
     ) -> Result<(), ClientError> {
+        let assignments = format!("/servicePrincipals/{resource_sp_id}/appRoleAssignedTo");
+        let listed = self
+            .send(
+                Method::GET,
+                &format!("{assignments}?$filter=principalId%20eq%20'{principal_object_id}'"),
+                None,
+            )
+            .await;
+        if let Ok(list) = listed
+            && list
+                .get("value")
+                .and_then(Value::as_array)
+                .is_some_and(|items| {
+                    items.iter().any(|a| {
+                        string_at(a, "principalId").as_deref() == Some(principal_object_id)
+                            && string_at(a, "appRoleId").as_deref() == Some(app_role_id)
+                    })
+                })
+        {
+            return Ok(());
+        }
         let body = json!({
             "principalId": principal_object_id,
             "resourceId": resource_sp_id,
             "appRoleId": app_role_id
         });
-        self.send(
-            Method::POST,
-            &format!("/servicePrincipals/{resource_sp_id}/appRoleAssignedTo"),
-            Some(&body),
-        )
-        .await
-        .map(|_| ())
+        match self.send(Method::POST, &assignments, Some(&body)).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_already_assigned(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     async fn send(
@@ -310,6 +338,15 @@ impl GraphClient {
 /// role survives re-running the wiring.
 pub(crate) fn app_role_id_for(uri: &str) -> String {
     deterministic_uuid(&format!("rigg-app-role|{uri}"))
+}
+
+/// Graph's way of saying the app-role assignment is already there — the one
+/// 400 that means "nothing to do" rather than "the request was wrong".
+fn is_already_assigned(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::Api { status: 400, message } if message.to_lowercase().contains("already exists")
+    )
 }
 
 fn service_principal_from(value: &Value) -> ServicePrincipal {
@@ -384,6 +421,21 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("403"), "{err}");
+    }
+
+    #[test]
+    fn a_duplicate_app_role_assignment_is_not_an_error() {
+        let dup = graph_error(
+            400,
+            r#"{"error":{"code":"Request_BadRequest","message":"Permission being assigned already exists on the object"}}"#,
+        );
+        assert!(is_already_assigned(&dup));
+        // Any other 400 still fails.
+        assert!(!is_already_assigned(&graph_error(
+            400,
+            r#"{"error":{"code":"Request_BadRequest","message":"Invalid appRoleId"}}"#
+        )));
+        assert!(!is_already_assigned(&graph_error(403, "already exists")));
     }
 
     #[test]

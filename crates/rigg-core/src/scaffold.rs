@@ -350,9 +350,25 @@ pub fn identity_object(arm_id: &str) -> Value {
     })
 }
 
+/// The AI services account a `--identity` skillset scaffold bills its
+/// built-in skills to — a placeholder, like every other `<…>` in a scaffold,
+/// because only the operator knows which Foundry account it is.
+pub const AI_SERVICES_SUBDOMAIN_PLACEHOLDER: &str =
+    "https://<ai-services-account>.cognitiveservices.azure.com";
+
+/// Kinds whose registry identity path exists but does not fit the *scaffold*
+/// `rigg new` writes.
+///
+/// `KnowledgeSource` scaffolds as `kind: "searchIndex"`, and its only
+/// single-field identity path lives under `azureBlobParameters` — a
+/// parameter block that contradicts that kind. The blob forms of a knowledge
+/// source come from `rigg env learn` / `rigg pull`, not from `rigg new`.
+const IDENTITY_NOT_A_SCAFFOLD_TARGET: &[ResourceKind] = &[ResourceKind::KnowledgeSource];
+
 /// The field a scaffold's `--identity <binding>` writes into for `kind`:
 /// the first registry [`registry::InfraForm::UserAssignedIdentity`] path
-/// that addresses a single field rather than an array element.
+/// that addresses a single field rather than an array element, minus the
+/// kinds in [`IDENTITY_NOT_A_SCAFFOLD_TARGET`].
 ///
 /// Array-element identities (`skills[].authIdentity`,
 /// `vectorSearch.vectorizers[].authIdentity`,
@@ -362,6 +378,9 @@ pub fn identity_object(arm_id: &str) -> Value {
 /// identity field is on the preview-only enrichment cache, which the
 /// registry deliberately does not model.
 pub fn identity_field(kind: ResourceKind) -> Option<&'static str> {
+    if IDENTITY_NOT_A_SCAFFOLD_TARGET.contains(&kind) {
+        return None;
+    }
     registry::infra_refs(kind)
         .iter()
         .find(|r| r.form == registry::InfraForm::UserAssignedIdentity && !r.path.contains("[]"))
@@ -378,8 +397,16 @@ pub fn kinds_accepting_identity() -> Vec<ResourceKind> {
 }
 
 /// Point `kind`'s identity field at the user-assigned identity `arm_id`,
-/// creating the intermediate objects the path needs. Errors when the kind
-/// has no such field.
+/// creating the intermediate objects the path needs — and the discriminator
+/// its container needs to be a legal document. Errors when the kind has no
+/// such field.
+///
+/// A `Skillset`'s identity lives on `cognitiveServices`, which Azure AI
+/// Search will only accept with an `@odata.type` saying *which* form of AI
+/// services connection it is: writing the identity alone produces a document
+/// the service rejects at push. `--identity` therefore also declares the
+/// keyless form (`AIServicesByIdentity`) and its required `subdomainUrl`
+/// placeholder — the same pair `rigg validate` recommends.
 pub fn set_identity(kind: ResourceKind, doc: &mut Value, arm_id: &str) -> Result<(), String> {
     let path = identity_field(kind).ok_or_else(|| {
         format!(
@@ -392,7 +419,7 @@ pub fn set_identity(kind: ResourceKind, doc: &mut Value, arm_id: &str) -> Result
                 .join(", ")
         )
     })?;
-    let mut cursor = doc;
+    let mut cursor: &mut Value = &mut *doc;
     let segments: Vec<&str> = path.split('.').collect();
     let (last, parents) = segments.split_last().expect("registry paths are non-empty");
     for segment in parents {
@@ -404,6 +431,17 @@ pub fn set_identity(kind: ResourceKind, doc: &mut Value, arm_id: &str) -> Result
             .expect("just ensured it is an object");
     }
     cursor[*last] = identity_object(arm_id);
+    if kind == ResourceKind::Skillset {
+        let cs = &mut doc["cognitiveServices"];
+        cs["@odata.type"] = json!("#Microsoft.Azure.Search.AIServicesByIdentity");
+        if !cs
+            .get("subdomainUrl")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
+            cs["subdomainUrl"] = json!(AI_SERVICES_SUBDOMAIN_PLACEHOLDER);
+        }
+    }
     Ok(())
 }
 
@@ -500,13 +538,13 @@ mod tests {
     fn identity_field_comes_from_the_registry_and_skips_array_paths() {
         assert_eq!(identity_field(ResourceKind::DataSource), Some("identity"));
         assert_eq!(
-            identity_field(ResourceKind::KnowledgeSource),
-            Some("azureBlobParameters.ingestionParameters.identity")
-        );
-        assert_eq!(
             identity_field(ResourceKind::Skillset),
             Some("cognitiveServices.identity")
         );
+        // The knowledge-source scaffold is `kind: "searchIndex"`; its only
+        // identity path belongs to the blob forms, which come from
+        // `rigg env learn` / pull rather than from `rigg new`.
+        assert_eq!(identity_field(ResourceKind::KnowledgeSource), None);
         // Only `vectorSearch.vectorizers[]` / `models[]` carry one — array
         // elements a scaffold does not have.
         assert_eq!(identity_field(ResourceKind::Index), None);
@@ -531,13 +569,27 @@ mod tests {
     }
 
     #[test]
-    fn set_identity_creates_the_intermediate_objects_a_nested_path_needs() {
+    fn set_identity_creates_the_intermediate_objects_and_the_discriminator() {
         let arm = "/subscriptions/s/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi";
-        let mut ks = scaffold(ResourceKind::KnowledgeSource, "ks", None).unwrap();
-        set_identity(ResourceKind::KnowledgeSource, &mut ks, arm).unwrap();
+        let mut ss = scaffold(ResourceKind::Skillset, "ss", None).unwrap();
+        set_identity(ResourceKind::Skillset, &mut ss, arm).unwrap();
+        let cs = &ss["cognitiveServices"];
+        assert_eq!(cs["identity"]["userAssignedIdentity"], arm);
+        // Without the discriminator (and the subdomain it implies) Azure AI
+        // Search rejects the PUT — see review finding 1.
         assert_eq!(
-            ks["azureBlobParameters"]["ingestionParameters"]["identity"]["userAssignedIdentity"],
-            arm
+            cs["@odata.type"],
+            "#Microsoft.Azure.Search.AIServicesByIdentity"
+        );
+        assert_eq!(cs["subdomainUrl"], AI_SERVICES_SUBDOMAIN_PLACEHOLDER);
+        // A subdomain the document already carries is kept.
+        let mut existing = scaffold(ResourceKind::Skillset, "ss", None).unwrap();
+        existing["cognitiveServices"] =
+            json!({"subdomainUrl": "https://real.cognitiveservices.azure.com"});
+        set_identity(ResourceKind::Skillset, &mut existing, arm).unwrap();
+        assert_eq!(
+            existing["cognitiveServices"]["subdomainUrl"],
+            "https://real.cognitiveservices.azure.com"
         );
     }
 
@@ -546,9 +598,9 @@ mod tests {
         let err = set_identity(ResourceKind::Indexer, &mut json!({}), "id").unwrap_err();
         assert!(err.contains("data-source"), "{err}");
         assert!(err.contains("indexer has no"), "{err}");
-        assert!(
-            kinds_accepting_identity().contains(&ResourceKind::DataSource),
-            "data sources accept --identity"
+        assert_eq!(
+            kinds_accepting_identity(),
+            vec![ResourceKind::DataSource, ResourceKind::Skillset]
         );
     }
 

@@ -180,8 +180,20 @@ Given a bound function app and the search identity:
    Existing settings are merged, not replaced; the current document is shown
    as a diff before writing.
 4. If the enterprise app has `appRoleAssignmentRequired: true`: Graph
-   `POST /servicePrincipals/{miObjectId}/appRoleAssignments` with the default
-   role `00000000-0000-0000-0000-000000000000`.
+   `POST /servicePrincipals/{resourceSpObjectId}/appRoleAssignedTo`
+   `{ principalId: <caller MI object id>, resourceId: <resourceSpObjectId>, appRoleId: <Caller role id> }`.
+   The role is a real one rigg defines on the application in step 1 —
+   `value: "Caller"`, `allowedMemberTypes: ["Application"]`, its id
+   deterministic in the identifier URI so a re-run finds the same role —
+   rather than the all-zeros default role: an explicit application-only role
+   is auditable and revocable on its own. Posting to the *resource* service
+   principal's `appRoleAssignedTo` and posting to the *principal's*
+   `appRoleAssignments` create the same directory object; the resource-side
+   form is used because rigg already holds the resource SP's object id. The
+   call is idempotent: existing assignments for the principal are listed
+   first, and Graph's "Permission being assigned already exists" 400 is
+   treated as success, so a second run cannot fail after step 3's PUT has
+   landed.
 5. Skill file: `authResourceId: "api://<appId>"`, key carrier removed,
    `x-rigg-auth` removed.
 
@@ -218,7 +230,13 @@ from 1.6.4). Keys never appear in output; the injected body is never logged.
   (system identity, or a resource-instance rule).
 - Scaffolds and `rigg new` set the identity fields from the environment's
   `identity` binding when `--identity <binding>` is given, else leave them
-  null (system).
+  null (system). The flag applies to the kinds whose *scaffold* has a place
+  for a single identity object — `data-source` and `skillset`; for a
+  skillset it also writes the `cognitiveServices` discriminator
+  (`AIServicesByIdentity` + a `subdomainUrl` placeholder) that the identity
+  is only legal alongside. Array-element identities (vectorizers, models,
+  individual skills) and the blob forms of a knowledge source come from
+  `rigg env learn` / pull, not from a fresh scaffold.
 
 ## 8. Tokens and tenancy
 

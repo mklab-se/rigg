@@ -326,18 +326,82 @@ fn unusable_key_value(v: &Value) -> bool {
     }
 }
 
+/// Which slot of a Web API skill a push-time key was written into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CarrierSlot {
+    /// An `httpHeaders` entry, named exactly as the local document wrote it.
+    Header(String),
+    /// The `uri`'s `code` query parameter — the whole uri is the carrier.
+    Uri,
+}
+
+/// One place a push-time key was injected, and what the LOCAL document held
+/// there before the injection. [`restore_key_carriers`] puts those values
+/// back on the document Azure echoes, so a key can never reach disk or a
+/// baseline however the service chooses to echo it.
+#[derive(Debug, Clone)]
+pub struct KeyCarrier {
+    /// Index into the document's `skills` array.
+    skill: usize,
+    slot: CarrierSlot,
+    /// The value the slot held locally — `None` when it held nothing.
+    original: Option<Value>,
+}
+
 /// Put a real function key into the carrier the skill actually uses: the
 /// `x-functions-key` header when present (name case preserved, uri left
-/// alone), otherwise the uri's `code` parameter.
-pub fn place_function_key(skill: &mut Value, key: &str) {
+/// alone), otherwise the uri's `code` parameter. Returns the slot written
+/// and the value it held before, for [`restore_key_carriers`].
+fn place_function_key_at(skill: &mut Value, key: &str) -> (CarrierSlot, Option<Value>) {
     let header_name = function_key_header(skill).map(|(k, _)| k.clone());
     if let Some(name) = header_name {
-        skill["httpHeaders"][name] = Value::String(key.to_string());
-        return;
+        let original = skill["httpHeaders"].get(&name).cloned();
+        skill["httpHeaders"][name.clone()] = Value::String(key.to_string());
+        return (CarrierSlot::Header(name), original);
     }
     let uri = skill.get("uri").and_then(Value::as_str).unwrap_or_default();
+    let original = skill.get("uri").cloned();
     let injected = set_code_param(uri, key);
     skill["uri"] = Value::String(injected);
+    (CarrierSlot::Uri, original)
+}
+
+/// Undo [`inject_function_keys`] on the document Azure echoed back, putting
+/// each carrier's LOCAL value back before it is written to disk and to the
+/// baseline.
+///
+/// Push canonicalization writes the service's PUT echo to disk. Azure Search
+/// redacts stored secrets on the way out — but "local files never contain
+/// secrets" is rigg's invariant, not Azure's promise, so rigg enforces it
+/// here rather than trusting the echo.
+pub fn restore_key_carriers(doc: &mut Value, carriers: &[KeyCarrier]) {
+    for carrier in carriers {
+        let Some(skill) = doc
+            .get_mut("skills")
+            .and_then(Value::as_array_mut)
+            .and_then(|skills| skills.get_mut(carrier.skill))
+        else {
+            continue;
+        };
+        match &carrier.slot {
+            CarrierSlot::Header(name) => {
+                // The echo may spell the header with different casing, so
+                // every variant goes before the local value comes back.
+                remove_function_key_header(skill);
+                if let Some(original) = &carrier.original {
+                    skill["httpHeaders"][name.clone()] = original.clone();
+                }
+            }
+            CarrierSlot::Uri => match &carrier.original {
+                Some(original) => skill["uri"] = original.clone(),
+                None => {
+                    if let Some(map) = skill.as_object_mut() {
+                        map.remove("uri");
+                    }
+                }
+            },
+        }
+    }
 }
 
 /// Remove the function-key header (any casing) — the Entra ID counterpart of
@@ -641,16 +705,21 @@ fn easy_auth_binding_for(
 /// The fetched value exists only in `body` from here on: it is never
 /// written to disk, printed, or traced — not even in an error, which names
 /// the secret and the vault but never the value.
+///
+/// Returns the carriers written, so the caller can hand them to
+/// [`restore_key_carriers`] before persisting whatever the service echoes
+/// back — the enforcement behind "local files never contain secrets".
 pub async fn inject_function_keys(
     body: &mut Value,
     ws: &Workspace,
     env: &ResolvedEnv,
-) -> Result<()> {
+) -> Result<Vec<KeyCarrier>> {
+    let mut carriers = Vec::new();
     let Some(skills) = body.get_mut("skills").and_then(Value::as_array_mut) else {
-        return Ok(());
+        return Ok(carriers);
     };
     let mut arm: Option<ArmClient> = None;
-    for skill in skills {
+    for (index, skill) in skills.iter_mut().enumerate() {
         let Some(annotation) = skill.get(X_RIGG_AUTH).and_then(Value::as_str) else {
             continue;
         };
@@ -662,7 +731,12 @@ pub async fn inject_function_keys(
                     .map_err(|e| {
                         anyhow::anyhow!("could not read secret '{secret}' from '{vault_uri}': {e}")
                     })?;
-            place_function_key(skill, &key);
+            let (slot, original) = place_function_key_at(skill, &key);
+            carriers.push(KeyCarrier {
+                skill: index,
+                slot,
+                original,
+            });
             continue;
         }
         if annotation != X_RIGG_AUTH_FUNCTION_KEY {
@@ -685,9 +759,14 @@ pub async fn inject_function_keys(
         let arm = arm.as_ref().expect("just initialized");
         let site_id = arm.find_web_site_id(&site).await?;
         let key = arm.function_key(&site_id, &function).await?;
-        place_function_key(skill, &key);
+        let (slot, original) = place_function_key_at(skill, &key);
+        carriers.push(KeyCarrier {
+            skill: index,
+            slot,
+            original,
+        });
     }
-    Ok(())
+    Ok(carriers)
 }
 
 /// The data-plane URI of the `key-vault` binding named by a
@@ -1003,7 +1082,7 @@ mod function_key_header_tests {
             "uri": URI,
             "httpHeaders": {"X-Functions-Key": "<redacted>"}
         });
-        place_function_key(&mut skill, "real-key");
+        place_function_key_at(&mut skill, "real-key");
         assert_eq!(skill["httpHeaders"]["X-Functions-Key"], "real-key");
         assert_eq!(
             skill["uri"], URI,
@@ -1017,8 +1096,89 @@ mod function_key_header_tests {
             "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
             "uri": format!("{URI}?code=<redacted>")
         });
-        place_function_key(&mut skill, "real-key");
+        place_function_key_at(&mut skill, "real-key");
         assert_eq!(skill["uri"], format!("{URI}?code=real-key"));
+    }
+
+    /// Both carriers, and a hostile echo: the service sends the key straight
+    /// back (and renames the header on the way), and the restore still puts
+    /// the local placeholder back before anything is persisted.
+    #[test]
+    fn restore_key_carriers_puts_the_local_placeholders_back() {
+        for (skill, expected) in [
+            (
+                json!({
+                    "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                    "uri": URI,
+                    "httpHeaders": {"X-Functions-Key": "<redacted>", "accept": "application/json"}
+                }),
+                json!({"X-Functions-Key": "<redacted>", "accept": "application/json"}),
+            ),
+            (
+                json!({
+                    "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                    "uri": format!("{URI}?code=<redacted>")
+                }),
+                json!(null),
+            ),
+        ] {
+            let mut local = json!({"name": "ss", "skills": [skill]});
+            let (slot, original) = place_function_key_at(&mut local["skills"][0], "real-key");
+            let carriers = vec![KeyCarrier {
+                skill: 0,
+                slot,
+                original,
+            }];
+            // The "echo": everything the PUT body carried, verbatim.
+            let mut echoed = local.clone();
+            assert!(
+                serde_json::to_string(&echoed).unwrap().contains("real-key"),
+                "the echo carries the key"
+            );
+            restore_key_carriers(&mut echoed, &carriers);
+            assert!(
+                !serde_json::to_string(&echoed).unwrap().contains("real-key"),
+                "nothing that reaches disk may carry the key: {echoed}"
+            );
+            assert_eq!(
+                echoed["skills"][0]["uri"]
+                    .as_str()
+                    .unwrap()
+                    .contains("code="),
+                expected.is_null()
+            );
+            if !expected.is_null() {
+                assert_eq!(echoed["skills"][0]["httpHeaders"], expected);
+            }
+        }
+    }
+
+    /// A case-shifted header in the echo must not survive as a second entry.
+    #[test]
+    fn restore_key_carriers_tolerates_a_recased_header_in_the_echo() {
+        let mut skill = json!({
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": URI,
+            "httpHeaders": {"X-Functions-Key": "<redacted>"}
+        });
+        let (slot, original) = place_function_key_at(&mut skill, "real-key");
+        let mut echoed = json!({"skills": [{
+            "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+            "uri": URI,
+            "httpHeaders": {"x-functions-key": "real-key"}
+        }]});
+        restore_key_carriers(
+            &mut echoed,
+            &[KeyCarrier {
+                skill: 0,
+                slot,
+                original,
+            }],
+        );
+        assert_eq!(
+            echoed["skills"][0]["httpHeaders"],
+            json!({"X-Functions-Key": "<redacted>"})
+        );
     }
 
     #[test]

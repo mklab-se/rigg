@@ -232,11 +232,13 @@ around that. No compatibility with 1.x workspaces.
   "userAssignedIdentity": "<arm id>"}` into the kind's identity field. The
   ARM id comes from the binding cache, or from ARM when the cache has none
   (exit 4 with the `rigg env bind --learn` hint when neither can answer).
-  Applies to the kinds whose registry table declares a non-array
-  user-assigned identity field (`data-source`, `skillset`,
-  `knowledge-source`); any other kind is a usage error naming those.
-  Independent of `--describe` — both may be given, and the identity is
-  applied after the AI draft.
+  Applies to `data-source` and `skillset`; any other kind is a usage error
+  naming those. A skillset's identity lives on `cognitiveServices`, so
+  `--identity` also declares the keyless connection form
+  (`AIServicesByIdentity` plus a `subdomainUrl` placeholder) that Azure AI
+  Search requires alongside it — the scaffold passes `rigg validate` as
+  written. Independent of `--describe` — both may be given, and the identity
+  is applied after the AI draft.
 
 ### Removed (library API)
 

@@ -878,11 +878,14 @@ async fn push_project(
         // that drive the resolution.
         let mut with_refs = item.body.clone();
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
-        credentials::inject_function_keys(&mut with_refs, ws, env).await?;
+        let carriers = credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let body = normalize_for_push(r.kind, &with_refs);
 
         match put_with_rbac_help(&remote, r, &body, ctx, ws, env).await {
-            Ok(server_doc) => {
+            Ok(mut server_doc) => {
+                // The echo may carry the injected key back; the local
+                // placeholders go back in before anything is persisted.
+                credentials::restore_key_carriers(&mut server_doc, &carriers);
                 store.write(r, &server_doc)?;
                 state.set_baseline(r, &server_doc);
                 state.save(ws, &env.name, &project.name)?;
@@ -1758,11 +1761,12 @@ async fn execute_replace(
             .expect("ordered item");
         let mut with_refs = body.clone();
         resolve_cross_service_refs(env.search(), &mut with_refs)?;
-        credentials::inject_function_keys(&mut with_refs, ws, env).await?;
+        let carriers = credentials::inject_function_keys(&mut with_refs, ws, env).await?;
         let push_body = normalize_for_push(r.kind, &with_refs);
-        let server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env)
+        let mut server_doc = put_with_rbac_help(remote, r, &push_body, ctx, ws, env)
             .await
             .with_context(|| step(&format!("while re-creating {r}")))?;
+        credentials::restore_key_carriers(&mut server_doc, &carriers);
         store.write(r, &server_doc)?;
         state.set_baseline(r, &server_doc);
         state.save(ws, &env.name, &project.name)?;

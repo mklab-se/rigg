@@ -12,11 +12,12 @@ use rigg_core::workspace::{PROJECT_FILE, PROJECTS_DIR, Workspace};
 
 use crate::cli::NewArgs;
 use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
+use crate::say;
 
 pub async fn run(ctx: &GlobalContext, args: NewArgs) -> Result<()> {
     match args.kind.as_str() {
-        "project" => new_project(&args.name),
-        "api" => new_api(&args.name),
+        "project" => new_project(ctx, &args.name),
+        "api" => new_api(ctx, &args.name),
         "pipeline" => new_pipeline(ctx, &args),
         kind_str => {
             let kind = ResourceKind::from_cli_name(kind_str).ok_or_else(|| {
@@ -34,19 +35,23 @@ pub async fn run(ctx: &GlobalContext, args: NewArgs) -> Result<()> {
     }
 }
 
-fn new_project(name: &str) -> Result<()> {
+fn new_project(ctx: &GlobalContext, name: &str) -> Result<()> {
     let ws = load_workspace()?;
-    create_project(&ws, name)?;
-    println!("Next steps:");
-    println!(
+    create_project(ctx, &ws, name)?;
+    say!(ctx, "Next steps:");
+    say!(
+        ctx,
         "  rigg adopt {name}                    # adopt existing Azure resources (interactive)"
     );
-    println!("  rigg new <kind> <name> -p {name}     # or scaffold new ones");
+    say!(
+        ctx,
+        "  rigg new <kind> <name> -p {name}     # or scaffold new ones"
+    );
     Ok(())
 }
 
 /// Create the project directory + manifest. Shared with the adopt wizard.
-pub fn create_project(ws: &Workspace, name: &str) -> Result<()> {
+pub fn create_project(ctx: &GlobalContext, ws: &Workspace, name: &str) -> Result<()> {
     rigg_core::resources::validate_resource_name(name)?;
     let dir = ws.files_root().join(PROJECTS_DIR).join(name);
     if dir.exists() {
@@ -59,11 +64,16 @@ pub fn create_project(ws: &Workspace, name: &str) -> Result<()> {
             "# Rigg project: {name}\n# The files in this directory ARE the project membership.\ndescription: \"\"\n"
         ),
     )?;
-    println!("Created project '{}' at {}", name.bold(), dir.display());
+    say!(
+        ctx,
+        "Created project '{}' at {}",
+        name.bold(),
+        dir.display()
+    );
     Ok(())
 }
 
-fn new_api(name: &str) -> Result<()> {
+fn new_api(ctx: &GlobalContext, name: &str) -> Result<()> {
     let ws = load_workspace()?;
     let dir = ws.apis_dir();
     std::fs::create_dir_all(&dir)?;
@@ -73,8 +83,11 @@ fn new_api(name: &str) -> Result<()> {
     }
     let spec = scaffold::scaffold_api_spec(name);
     std::fs::write(&path, rigg_core::normalize::format_json(&spec))?;
-    println!("Created OpenAPI spec {}", path.display());
-    println!("Link it from a skillset WebApiSkill with: \"x-rigg-api\": \"{name}\"");
+    say!(ctx, "Created OpenAPI spec {}", path.display());
+    say!(
+        ctx,
+        "Link it from a skillset WebApiSkill with: \"x-rigg-api\": \"{name}\""
+    );
     Ok(())
 }
 
@@ -112,18 +125,22 @@ fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
         }
         store.write(&r, value)?;
         let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
-        println!("  created {}", path.display());
+        say!(ctx, "  created {}", path.display());
     }
-    println!();
-    println!(
+    say!(ctx);
+    say!(
+        ctx,
         "Pipeline '{}' scaffolded in project '{}':",
         args.name.bold(),
         project.name
     );
-    println!("  1. Edit the data source (connection ResourceId, container)");
-    println!("  2. Shape the index fields for your data");
-    println!("  3. Adjust or remove the skillset, wire the indexer");
-    println!("  4. Push step by step: rigg push {}", project.name);
+    say!(
+        ctx,
+        "  1. Edit the data source (connection ResourceId, container)"
+    );
+    say!(ctx, "  2. Shape the index fields for your data");
+    say!(ctx, "  3. Adjust or remove the skillset, wire the indexer");
+    say!(ctx, "  4. Push step by step: rigg push {}", project.name);
     Ok(())
 }
 
@@ -181,12 +198,12 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
         let arm_id = identity_arm_id(&ws, &env, binding).await?;
         scaffold::set_identity(kind, &mut value, &arm_id)
             .map_err(|e| anyhow!(CommandError::Validation(e)))?;
-        println!("Using user-assigned identity '{binding}' ({arm_id})");
+        say!(ctx, "Using user-assigned identity '{binding}' ({arm_id})");
     }
 
     store.write(&r, &value)?;
     let path = store.locate(&r)?.unwrap_or_else(|| store.path_for(&r));
-    println!("Created {}", path.display());
+    say!(ctx, "Created {}", path.display());
     Ok(())
 }
 

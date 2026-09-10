@@ -16,7 +16,8 @@ use arm_fake::{
 };
 use assert_cmd::Command;
 use graph_fake::{
-    FAKE_APP_ID, mount_graph, mount_graph_application_lookup, mount_graph_service_principal,
+    FAKE_APP_ID, FAKE_SP_OBJECT_ID, mount_graph, mount_graph_app_role_assignments,
+    mount_graph_application_lookup, mount_graph_existing_sp, mount_graph_service_principal,
     mount_keyvault_secret,
 };
 use predicates::prelude::*;
@@ -1839,10 +1840,13 @@ async fn a_requirement_rigg_may_not_grant_stops_the_retry_loop() {
         .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
         .mount(&server)
         .await;
+    // A 403 is what Azure actually answers here, and `ClientError::Forbidden`
+    // carries Azure's `error.message` into its Display — so the RBAC
+    // classifier sees the reason and runs the diagnosis.
     Mock::given(method("PUT"))
         .and(path("/datasources/docs"))
-        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": {
-            "code": "InvalidRequestParameter",
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": {
+            "code": "Forbidden",
             "message": "Cannot access the storage account: the managed identity does not have permission."
         }})))
         .mount(&server)
@@ -2217,6 +2221,59 @@ async fn easy_auth_admits_the_skillsets_user_assigned_identity_when_it_declares_
     );
 }
 
+/// A gated enterprise application (`appRoleAssignmentRequired`) issues no
+/// token without an assignment — and the second run of the wiring must not
+/// fail on the grant it made itself, *after* the authsettingsV2 PUT has
+/// already landed. So: run it twice, expect exactly one POST.
+#[tokio::test(flavor = "multi_thread")]
+async fn easy_auth_assigns_the_app_role_when_the_enterprise_app_is_gated() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    mount_easy_auth(&server, FUNCTION_APP, false, "").await;
+    mount_easy_auth_write(&server, FUNCTION_APP).await;
+    mount_graph_existing_sp(&server, FAKE_SP_OBJECT_ID, true).await;
+    mount_graph_app_role_assignments(&server).await;
+    mount_graph_service_principal(&server, SEARCH_PID, SEARCH_MI_CLIENT_ID).await;
+
+    let ws = workspace_with_deps(&server.uri());
+    write_resource(
+        ws.path(),
+        "skillsets",
+        "webss",
+        &webapi_skillset("webss", json!({})),
+    );
+
+    for run in 1..=2 {
+        rigg(ws.path(), &server.uri())
+            .args(["auth", "easy-auth", "enrich-fn", "-e", "dev", "--yes"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("app role"));
+        assert!(
+            last_auth_settings_put(&server).await.is_some(),
+            "run {run} wrote the settings"
+        );
+    }
+
+    let posted: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| {
+            r.method == wiremock::http::Method::POST && r.url.path().ends_with("/appRoleAssignedTo")
+        })
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(
+        posted.len(),
+        1,
+        "the assignment is made once and then recognized: {posted:?}"
+    );
+    assert_eq!(posted[0]["principalId"], json!(SEARCH_PID));
+    assert_eq!(posted[0]["resourceId"], json!(FAKE_SP_OBJECT_ID));
+}
+
 /// `--client-id` reuses an existing app registration instead of creating
 /// one — no `POST /applications` at all.
 #[tokio::test(flavor = "multi_thread")]
@@ -2345,14 +2402,14 @@ async fn push_injects_the_key_vault_secret_into_the_body_only() {
         .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
         .mount(&server)
         .await;
-    // Azure echoes the pushed document with every secret redacted, and push
-    // canonicalization writes that echo back to disk — so the fake redacts
-    // too, and the on-disk assertion below is a real end-to-end check.
+    // The fake echoes the pushed document back VERBATIM — key and all.
+    // Azure redacts, but "local files never contain secrets" is rigg's
+    // invariant to keep, not the service's: with a hostile echo, the on-disk
+    // assertion below proves rigg scrubs rather than that the fake is polite.
     Mock::given(method("PUT"))
         .and(path("/skillsets/webss"))
         .respond_with(|req: &Request| {
-            let mut doc: Value = serde_json::from_slice(&req.body).unwrap();
-            doc["skills"][0]["httpHeaders"]["x-functions-key"] = json!("<redacted>");
+            let doc: Value = serde_json::from_slice(&req.body).unwrap();
             ResponseTemplate::new(201).set_body_json(doc)
         })
         .mount(&server)
@@ -2412,6 +2469,9 @@ async fn push_injects_the_key_vault_secret_into_the_body_only() {
     .unwrap();
     assert!(!on_disk.contains(SECRET), "no secret on disk");
     assert!(on_disk.contains("key-vault:fn-key@secrets"));
+    let baseline = std::fs::read_to_string(ws.path().join(".rigg/dev/demo/state.json"))
+        .expect("push wrote a baseline");
+    assert!(!baseline.contains(SECRET), "no secret in the baseline");
 }
 
 /// `validate` accepts the annotation only when the binding really is a key
@@ -2528,4 +2588,76 @@ async fn new_with_identity_writes_the_user_assigned_identity_object() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("not an identity binding"));
+}
+
+/// Whatever `--identity` writes must be a document rigg accepts and Azure
+/// would too: for a skillset that means the `cognitiveServices`
+/// discriminator, not a bare `identity` under it. Every accepting kind is
+/// scaffolded with `--identity` and put through `rigg validate` — the list
+/// comes from the library, so a kind added later is covered automatically.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_identity_scaffold_passes_validate() {
+    let server = MockServer::start().await;
+    mount_easy_auth_base(&server).await;
+    let ws = workspace_with_deps(&server.uri());
+
+    let accepting = rigg_core::scaffold::kinds_accepting_identity();
+    assert!(!accepting.is_empty());
+    for kind in &accepting {
+        rigg(ws.path(), &server.uri())
+            .args([
+                "new",
+                kind.cli_name(),
+                &format!("mi-{}", kind.cli_name()),
+                "-p",
+                "demo",
+                "-e",
+                "dev",
+                "--identity",
+                "pipeline-mi",
+            ])
+            .assert()
+            .success();
+    }
+    rigg(ws.path(), &server.uri())
+        .args(["validate", "demo"])
+        .assert()
+        .success();
+
+    // The skillset's identity needs the AI services discriminator alongside
+    // it — without it Azure rejects the PUT.
+    let ss = read_resource(ws.path(), "skillsets", "mi-skillset");
+    assert_eq!(
+        ss["cognitiveServices"]["@odata.type"],
+        json!("#Microsoft.Azure.Search.AIServicesByIdentity")
+    );
+    assert_eq!(
+        ss["cognitiveServices"]["identity"]["userAssignedIdentity"],
+        json!(uami_id())
+    );
+    assert!(
+        ss["cognitiveServices"]["subdomainUrl"]
+            .as_str()
+            .is_some_and(|u| u.contains("cognitiveservices.azure.com")),
+        "{ss}"
+    );
+
+    // A knowledge source scaffolds as `kind: "searchIndex"`; grafting the
+    // blob forms' identity onto it would contradict that, so it is a usage
+    // error naming the kinds that do accept the flag.
+    rigg(ws.path(), &server.uri())
+        .args([
+            "new",
+            "knowledge-source",
+            "ks",
+            "-p",
+            "demo",
+            "-e",
+            "dev",
+            "--identity",
+            "pipeline-mi",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("data-source, skillset"));
 }

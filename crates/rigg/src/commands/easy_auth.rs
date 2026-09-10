@@ -138,10 +138,11 @@ pub async fn wire(
     // 2. Which local skillsets call this app, and through which identity.
     let mut targets = webapi_targets(ws, &env.name, &hostname)?;
 
-    // 3. The caller Easy Auth must admit: the skillset's user-assigned
-    //    identity when it declares one (spec §7), else the search service's
-    //    system-assigned identity.
-    let caller = caller_identity(&arm, &tenant, &bindings, &targets).await?;
+    // 3. The callers Easy Auth must admit: EVERY user-assigned identity the
+    //    matching skillsets declare (spec §7), plus the search service's
+    //    system-assigned identity when a matching skill declares none.
+    let callers = caller_identities(ctx, &arm, &tenant, &bindings, &targets).await?;
+    let allowed: Vec<String> = callers.iter().map(|c| c.client_id.clone()).collect();
 
     // 4. Current settings, planned merge, diff, confirmation.
     let current = arm.site_auth_settings(&site_id).await?;
@@ -151,7 +152,7 @@ pub async fn wire(
         planned_client_id,
         &tenant,
         &format!("api://{planned_client_id}"),
-        &caller.client_id,
+        &allowed,
     );
     say!(ctx);
     say!(
@@ -172,12 +173,14 @@ pub async fn wire(
     {
         say!(ctx, "  {line}");
     }
-    say!(
-        ctx,
-        "  the search identity admitted is {} ({})",
-        caller.client_id,
-        caller.label
-    );
+    for caller in &callers {
+        say!(
+            ctx,
+            "  admitting the search identity {} ({})",
+            caller.client_id,
+            caller.label
+        );
+    }
     if !targets.is_empty() {
         say!(ctx, "  skillset files that become keyless:");
         for t in &targets {
@@ -213,21 +216,24 @@ pub async fn wire(
 
     // 6. The function app itself — merged over the document read above, so
     //    every other identity provider and unrelated setting survives.
-    let settings =
-        merge_auth_settings(&current, &app.app_id, &tenant, &audience, &caller.client_id);
+    let settings = merge_auth_settings(&current, &app.app_id, &tenant, &audience, &allowed);
     arm.put_site_auth_settings(&site_id, &settings).await?;
 
     // 7. A gated enterprise application issues no token without an
-    //    assignment, however correct the audience is.
+    //    assignment, however correct the audience is. `assign_app_role` is
+    //    idempotent, so re-running the command cannot fail here after the
+    //    PUT above has already landed.
     if sp.app_role_assignment_required {
-        graph
-            .assign_app_role(&sp.id, &caller.object_id, &role_id)
-            .await?;
-        say!(
-            ctx,
-            "  granted the '{}' identity the app role (assignment is required on this app)",
-            caller.label
-        );
+        for caller in &callers {
+            graph
+                .assign_app_role(&sp.id, &caller.object_id, &role_id)
+                .await?;
+            say!(
+                ctx,
+                "  granted the '{}' identity the app role (assignment is required on this app)",
+                caller.label
+            );
+        }
     }
 
     // 8. The skill files: keyless from here, and the key carriers go with
@@ -298,24 +304,61 @@ struct Caller {
     label: String,
 }
 
-async fn caller_identity(
+/// Every identity the matching skills call through: one per distinct
+/// user-assigned identity they declare (a skillset that declares one calls
+/// through THAT identity — admitting the system one would authorize
+/// nothing, spec §7), plus the search service's system-assigned identity
+/// when at least one matching skill declares none.
+///
+/// Admitting only the first would leave every other caller to a 403 at
+/// enrichment time with nothing said about it, so all of them go into
+/// `allowedApplications`. The system identity is only *required* when it is
+/// the sole caller: alongside user-assigned ones it is best-effort, and a
+/// failure to resolve it is a warning rather than the end of the run.
+async fn caller_identities(
+    ctx: &GlobalContext,
     arm: &ArmClient,
     tenant: &str,
     bindings: &EnvBindings,
     targets: &[SkillsetTarget],
-) -> Result<Caller> {
-    // A skillset that declares a user-assigned identity calls through THAT
-    // identity; admitting the system one would authorize nothing (spec §7).
-    if let Some(uami) = targets.iter().find_map(|t| t.uami.clone()) {
-        let (object_id, client_id) = arm.managed_identity_ids(&uami).await?;
-        return Ok(Caller {
+) -> Result<Vec<Caller>> {
+    let mut callers: Vec<Caller> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for uami in targets.iter().flat_map(|t| t.uamis.iter()) {
+        if seen.iter().any(|u| u.eq_ignore_ascii_case(uami)) {
+            continue;
+        }
+        seen.push(uami.clone());
+        let (object_id, client_id) = arm.managed_identity_ids(uami).await?;
+        callers.push(Caller {
             object_id,
             client_id,
-            label: rigg_core::binding::arm_resource_name(&uami)
+            label: rigg_core::binding::arm_resource_name(uami)
                 .unwrap_or("user-assigned identity")
                 .to_string(),
         });
     }
+    // Nothing declares an identity of its own (or there is nothing local to
+    // go on yet): the search service calls as itself.
+    let needs_system = targets.is_empty() || targets.iter().any(|t| t.needs_system_identity);
+    if !needs_system {
+        return Ok(callers);
+    }
+    match system_identity(arm, tenant, bindings).await {
+        Ok(caller) => callers.push(caller),
+        Err(e) if !callers.is_empty() => say!(
+            ctx,
+            "  {} the system-assigned identity could not be admitted ({e}) — skills without an \
+             `authIdentity` will still be refused",
+            "!".yellow()
+        ),
+        Err(e) => return Err(e),
+    }
+    Ok(callers)
+}
+
+/// The search service's own system-assigned identity.
+async fn system_identity(arm: &ArmClient, tenant: &str, bindings: &EnvBindings) -> Result<Caller> {
     let search_id = resolved_arm_id(bindings, "search").ok_or_else(|| {
         anyhow!(CommandError::AuthDenied(
             "the environment's search service does not resolve in Azure — `rigg env show \
@@ -351,8 +394,11 @@ struct SkillsetTarget {
     doc: Value,
     /// Indices into `skills` of the WebApiSkills calling this host.
     skills: Vec<usize>,
-    /// The user-assigned identity one of those skills authenticates with.
-    uami: Option<String>,
+    /// The distinct user-assigned identities those skills authenticate with.
+    uamis: Vec<String>,
+    /// At least one of those skills declares no `authIdentity`, so it calls
+    /// through the search service's system-assigned identity.
+    needs_system_identity: bool,
 }
 
 /// Every skillset in `env` whose WebApiSkill `uri` host is `hostname`.
@@ -372,7 +418,8 @@ fn webapi_targets(ws: &Workspace, env: &str, hostname: &str) -> Result<Vec<Skill
                 continue;
             };
             let mut indices = Vec::new();
-            let mut uami = None;
+            let mut uamis: Vec<String> = Vec::new();
+            let mut needs_system_identity = false;
             for (i, skill) in skills.iter().enumerate() {
                 let is_webapi = skill
                     .get("@odata.type")
@@ -386,12 +433,16 @@ fn webapi_targets(ws: &Workspace, env: &str, hostname: &str) -> Result<Vec<Skill
                     continue;
                 }
                 indices.push(i);
-                uami = uami.or_else(|| {
-                    skill
-                        .pointer("/authIdentity/userAssignedIdentity")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
+                match skill
+                    .pointer("/authIdentity/userAssignedIdentity")
+                    .and_then(Value::as_str)
+                {
+                    Some(uami) if !uamis.iter().any(|u| u.eq_ignore_ascii_case(uami)) => {
+                        uamis.push(uami.to_string())
+                    }
+                    Some(_) => {}
+                    None => needs_system_identity = true,
+                }
             }
             if indices.is_empty() {
                 continue;
@@ -406,20 +457,28 @@ fn webapi_targets(ws: &Workspace, env: &str, hostname: &str) -> Result<Vec<Skill
                     .to_string(),
                 doc,
                 skills: indices,
-                uami,
+                uamis,
+                needs_system_identity,
             });
         }
     }
     Ok(out)
 }
 
-/// The host of an `http(s)://host/…` URI.
+/// The host of an `http(s)://host[:port]/…` URI, without an explicit port
+/// or a trailing root dot — `https://fn.azurewebsites.net:443/api/x` names
+/// the same site as `https://fn.azurewebsites.net/api/x`, and comparing the
+/// raw authority would skip the skillset and call it a success.
 fn uri_host(uri: &str) -> Option<&str> {
     let rest = uri
         .strip_prefix("https://")
         .or_else(|| uri.strip_prefix("http://"))?;
-    let host = rest.split(['/', '?']).next().filter(|h| !h.is_empty())?;
-    Some(host)
+    let authority = rest.split(['/', '?', '#']).next()?;
+    // Credentials in the authority (`user:pass@host`) belong to neither the
+    // host nor rigg.
+    let host = authority.rsplit('@').next()?;
+    let host = host.split(':').next()?.trim_end_matches('.');
+    (!host.is_empty()).then_some(host)
 }
 
 /// Merge rigg's Entra settings into a site's current `authsettingsV2`
@@ -435,7 +494,7 @@ pub fn merge_auth_settings(
     client_id: &str,
     tenant: &str,
     audience: &str,
-    allowed_application: &str,
+    allowed_applications: &[String],
 ) -> Value {
     let mut merged = current.clone();
     if !merged.is_object() {
@@ -457,17 +516,32 @@ pub fn merge_auth_settings(
     aad["enabled"] = json!(true);
 
     ensure_object(aad, "registration");
+    let previous_client_id = aad
+        .pointer("/registration/clientId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     aad["registration"]["clientId"] = json!(client_id);
     aad["registration"]["openIdIssuer"] =
         json!(format!("https://login.microsoftonline.com/{tenant}/v2.0"));
+    // A `clientSecretSettingName` describes the PREVIOUS registration's
+    // secret app-setting; carried over onto a different clientId it is a 500
+    // on `/.auth/login/aad`. Token validation needs no secret at all.
+    if previous_client_id.is_some_and(|p| p != client_id)
+        && let Some(registration) = aad["registration"].as_object_mut()
+    {
+        registration.remove("clientSecretSettingName");
+    }
 
     ensure_object(aad, "validation");
-    let audiences = union_with(aad.pointer("/validation/allowedAudiences"), audience);
+    let audiences = union_with(
+        aad.pointer("/validation/allowedAudiences"),
+        std::slice::from_ref(&audience.to_string()),
+    );
     aad["validation"]["allowedAudiences"] = audiences;
     ensure_object(&mut aad["validation"], "defaultAuthorizationPolicy");
     let allowed = union_with(
         aad.pointer("/validation/defaultAuthorizationPolicy/allowedApplications"),
-        allowed_application,
+        allowed_applications,
     );
     aad["validation"]["defaultAuthorizationPolicy"]["allowedApplications"] = allowed;
 
@@ -481,8 +555,8 @@ fn ensure_object(value: &mut Value, key: &str) {
     }
 }
 
-/// `existing ∪ {entry}`, order-preserving — never a replacement.
-fn union_with(existing: Option<&Value>, entry: &str) -> Value {
+/// `existing ∪ entries`, order-preserving — never a replacement.
+fn union_with(existing: Option<&Value>, entries: &[String]) -> Value {
     let mut items: Vec<String> = existing
         .and_then(Value::as_array)
         .map(|a| {
@@ -492,8 +566,10 @@ fn union_with(existing: Option<&Value>, entry: &str) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    if !items.iter().any(|i| i == entry) {
-        items.push(entry.to_string());
+    for entry in entries {
+        if !items.iter().any(|i| i == entry) {
+            items.push(entry.clone());
+        }
     }
     json!(items)
 }
@@ -506,9 +582,14 @@ mod tests {
         "11111111-2222-3333-4444-555555555555"
     }
 
+    fn mi<const N: usize>(ids: [&str; N]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn merge_sets_every_field_the_spec_requires_on_an_empty_document() {
-        let merged = merge_auth_settings(&json!({}), "app-1", tenant(), "api://app-1", "mi-1");
+        let merged =
+            merge_auth_settings(&json!({}), "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
         let props = &merged["properties"];
         assert_eq!(props["platform"]["enabled"], json!(true));
         assert_eq!(
@@ -552,7 +633,7 @@ mod tests {
                 "httpSettings": {"requireHttps": true}
             }
         });
-        let merged = merge_auth_settings(&current, "app-1", tenant(), "api://app-1", "mi-1");
+        let merged = merge_auth_settings(&current, "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
         let props = &merged["properties"];
         assert_eq!(props["platform"]["runtimeVersion"], json!("~1"));
         assert_eq!(props["platform"]["enabled"], json!(true), "switched on");
@@ -579,7 +660,7 @@ mod tests {
                 }
             }
         }}}});
-        let merged = merge_auth_settings(&current, "app-1", tenant(), "api://app-1", "mi-1");
+        let merged = merge_auth_settings(&current, "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
         let validation =
             &merged["properties"]["identityProviders"]["azureActiveDirectory"]["validation"];
         assert_eq!(
@@ -598,9 +679,51 @@ mod tests {
 
     #[test]
     fn merge_is_idempotent() {
-        let once = merge_auth_settings(&json!({}), "app-1", tenant(), "api://app-1", "mi-1");
-        let twice = merge_auth_settings(&once, "app-1", tenant(), "api://app-1", "mi-1");
+        let once = merge_auth_settings(&json!({}), "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
+        let twice = merge_auth_settings(&once, "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
         assert_eq!(once, twice);
+    }
+
+    /// Every user-assigned identity a matching skillset declares is admitted,
+    /// not just the first: the others would 403 at enrichment time.
+    #[test]
+    fn merge_admits_every_identity_it_is_given() {
+        let merged = merge_auth_settings(
+            &json!({}),
+            "app-1",
+            tenant(),
+            "api://app-1",
+            &mi(["mi-a", "mi-b", "search-system"]),
+        );
+        assert_eq!(
+            merged["properties"]["identityProviders"]["azureActiveDirectory"]["validation"]["defaultAuthorizationPolicy"]
+                ["allowedApplications"],
+            json!(["mi-a", "mi-b", "search-system"])
+        );
+    }
+
+    /// A reused registration's `clientSecretSettingName` names the OLD app's
+    /// secret app-setting; carried over it 500s `/.auth/login/aad`.
+    #[test]
+    fn merge_drops_a_stale_client_secret_setting_when_the_client_id_changes() {
+        let current = json!({"properties": {"identityProviders": {"azureActiveDirectory": {
+            "registration": {"clientId": "old-app", "clientSecretSettingName": "OLD_SECRET"}
+        }}}});
+        let merged = merge_auth_settings(&current, "app-1", tenant(), "api://app-1", &mi(["mi-1"]));
+        let registration =
+            &merged["properties"]["identityProviders"]["azureActiveDirectory"]["registration"];
+        assert_eq!(registration["clientId"], json!("app-1"));
+        assert!(
+            registration.get("clientSecretSettingName").is_none(),
+            "{registration}"
+        );
+        // The SAME app keeps its setting — rigg is not rewriting a working
+        // confidential-client configuration.
+        let same = merge_auth_settings(&current, "old-app", tenant(), "api://old-app", &mi(["m"]));
+        assert_eq!(
+            same["properties"]["identityProviders"]["azureActiveDirectory"]["registration"]["clientSecretSettingName"],
+            json!("OLD_SECRET")
+        );
     }
 
     #[test]
@@ -613,6 +736,20 @@ mod tests {
             uri_host("https://fn.azurewebsites.net"),
             Some("fn.azurewebsites.net")
         );
+        // An explicit port, a root dot and userinfo all name the same host.
+        assert_eq!(
+            uri_host("https://fn.azurewebsites.net:443/api/enrich"),
+            Some("fn.azurewebsites.net")
+        );
+        assert_eq!(
+            uri_host("https://fn.azurewebsites.net./api/enrich"),
+            Some("fn.azurewebsites.net")
+        );
+        assert_eq!(
+            uri_host("https://user@fn.azurewebsites.net:8080/api"),
+            Some("fn.azurewebsites.net")
+        );
+        assert_eq!(uri_host("https:///api"), None);
         assert_eq!(uri_host("not a uri"), None);
     }
 }

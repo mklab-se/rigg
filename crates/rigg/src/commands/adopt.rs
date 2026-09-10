@@ -92,7 +92,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                 }
                 let name =
                     interactive::text("Project name (e.g. the agent or app it will own):", plain)?;
-                new::create_project(&ws, &name)?;
+                new::create_project(ctx, &ws, &name)?;
                 // Reload so ws.project() sees it.
                 drop(ws);
                 return Box::pin(run(
