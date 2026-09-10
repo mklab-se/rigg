@@ -8,14 +8,22 @@
 
 pub mod ai;
 pub mod arm;
+pub mod arm_reads;
 pub mod arm_resources;
 pub mod auth;
 pub mod client;
 pub mod error;
 pub mod foundry;
+pub mod graph;
+pub mod keyvault;
 
 pub use arm::ArmClient;
+pub use arm_reads::{
+    BlobServiceInfo, CallerIdentity, RoleAssignmentInfo, SearchServiceInfo, StorageAccountInfo,
+};
 pub use auth::AuthProvider;
 pub use client::AzureSearchClient;
 pub use error::ClientError;
 pub use foundry::FoundryClient;
+pub use graph::GraphClient;
+pub use keyvault::KeyVaultClient;

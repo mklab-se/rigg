@@ -44,6 +44,12 @@ pub struct ArmResource {
     pub kind: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// `properties.principalId` — set for managed identities.
+    #[serde(default)]
+    pub principal_id: Option<String>,
+    /// `properties.clientId` — set for managed identities.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 /// Azure subscription
@@ -261,8 +267,38 @@ impl ResourceIdentity {
     }
 }
 
+/// Parse a resource document's `identity` block. `None` when the resource
+/// has no identity block at all.
+pub(crate) fn identity_from(value: &Value) -> Option<ResourceIdentity> {
+    let identity = value.get("identity")?;
+    Some(ResourceIdentity {
+        kind: identity
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("None")
+            .to_string(),
+        principal_id: identity
+            .get("principalId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        user_assigned: identity
+            .get("userAssignedIdentities")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(id, v)| {
+                        v.get("principalId")
+                            .and_then(Value::as_str)
+                            .map(|p| (id.clone(), p.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 /// Deterministic UUID-shaped name from a string (stable role-assignment names).
-fn deterministic_uuid(input: &str) -> String {
+pub(crate) fn deterministic_uuid(input: &str) -> String {
     let mut h1: u64 = 0xcbf29ce484222325;
     let mut h2: u64 = 0x9e3779b97f4a7c15;
     for b in input.as_bytes() {
@@ -371,6 +407,68 @@ impl ArmClient {
         &self.base_url
     }
 
+    /// `GET url` with this client's bearer token, decoded as JSON.
+    /// Shared by [`crate::arm_reads`], which is a second `impl` block for
+    /// this same struct in its own file.
+    pub(crate) async fn get_json(&self, url: &str) -> Result<Value, ClientError> {
+        self.send_json(reqwest::Method::GET, url, None).await
+    }
+
+    /// `PATCH url` with a JSON body; the (usually echoed) document is returned.
+    pub(crate) async fn patch_json(&self, url: &str, body: &Value) -> Result<Value, ClientError> {
+        self.send_json(reqwest::Method::PATCH, url, Some(body))
+            .await
+    }
+
+    /// `PUT url` with a JSON body; the created/updated document is returned.
+    pub(crate) async fn put_json(&self, url: &str, body: &Value) -> Result<Value, ClientError> {
+        self.send_json(reqwest::Method::PUT, url, Some(body)).await
+    }
+
+    /// `DELETE url`; a 404 is success, since the caller wants the resource
+    /// gone and it already is.
+    pub(crate) async fn delete_ok(&self, url: &str) -> Result<(), ClientError> {
+        debug!("ARM DELETE {url}");
+        let response = self
+            .http
+            .delete(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() || status.as_u16() == 404 {
+            return Ok(());
+        }
+        let text = response.text().await?;
+        Err(ClientError::from_response(status.as_u16(), &text))
+    }
+
+    async fn send_json(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, ClientError> {
+        debug!("ARM {method} {url}");
+        let mut request = self
+            .http
+            .request(method, url)
+            .header("Authorization", format!("Bearer {}", self.token));
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        let text = response.text().await?;
+        if !status.is_success() {
+            return Err(ClientError::from_response(status.as_u16(), &text));
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
     /// `resourceType → apiVersions` as ARM registers them for `namespace` in
     /// `subscription_id` (what `az provider show` prints). The ground truth
     /// for which api-version a call may use — the specs repository can be
@@ -430,36 +528,7 @@ impl ArmClient {
             return Err(ClientError::from_response(status.as_u16(), &body));
         }
         let value: serde_json::Value = response.json().await?;
-        let Some(identity) = value.get("identity") else {
-            return Ok(None);
-        };
-        let kind = identity
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("None")
-            .to_string();
-        let principal_id = identity
-            .get("principalId")
-            .and_then(|p| p.as_str())
-            .map(str::to_string);
-        let user_assigned = identity
-            .get("userAssignedIdentities")
-            .and_then(|u| u.as_object())
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(id, v)| {
-                        v.get("principalId")
-                            .and_then(|p| p.as_str())
-                            .map(|p| (id.clone(), p.to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(Some(ResourceIdentity {
-            kind,
-            principal_id,
-            user_assigned,
-        }))
+        Ok(identity_from(&value))
     }
 
     /// Role definition IDs assigned to `principal_id` at (or inherited by) `scope`.
@@ -504,42 +573,26 @@ impl ArmClient {
     }
 
     /// Create a role assignment for a principal at a scope.
+    ///
+    /// Kept for callers that only ever grant a service principal and have
+    /// nothing to record; see
+    /// [`ArmClient::create_role_assignment_described`] for the form doctor
+    /// uses, which stamps a description so `rigg auth roles` can find its
+    /// own assignments again.
     pub async fn create_role_assignment(
         &self,
         scope: &str,
         principal_id: &str,
         role_definition_guid: &str,
     ) -> Result<(), ClientError> {
-        let assignment_name =
-            deterministic_uuid(&format!("{scope}|{principal_id}|{role_definition_guid}"));
-        let url = self.url(
-            &format!("{scope}/providers/Microsoft.Authorization/roleAssignments/{assignment_name}"),
-            Provider::AuthorizationArm,
-        );
-        let sub = scope.split('/').nth(2).unwrap_or_default();
-        let body = serde_json::json!({
-            "properties": {
-                "roleDefinitionId": format!(
-                    "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{role_definition_guid}"
-                ),
-                "principalId": principal_id,
-                "principalType": "ServicePrincipal"
-            }
-        });
-        let response = self
-            .http
-            .put(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&body)
-            .send()
-            .await?;
-        let status = response.status();
-        // 409 = already exists → fine
-        if status.is_success() || status.as_u16() == 409 {
-            return Ok(());
-        }
-        let text = response.text().await?;
-        Err(ClientError::from_response(status.as_u16(), &text))
+        self.create_role_assignment_described(
+            scope,
+            principal_id,
+            role_definition_guid,
+            "ServicePrincipal",
+            "",
+        )
+        .await
     }
 
     /// Enable a system-assigned managed identity on a resource (PATCH).
@@ -1404,6 +1457,8 @@ impl ArmClient {
                     location: a.location,
                     kind: Some(a.kind),
                     endpoint: a.properties.endpoint,
+                    principal_id: None,
+                    client_id: None,
                 })
                 .collect()),
             TargetKind::Binding(BindingType::Storage) => Ok(self
@@ -1416,6 +1471,8 @@ impl ArmClient {
                     location: a.location,
                     kind: None,
                     endpoint: None,
+                    principal_id: None,
+                    client_id: None,
                 })
                 .collect()),
             TargetKind::Binding(BindingType::FunctionApp) => {
@@ -1642,7 +1699,7 @@ impl ArmClient {
 
 /// Build an [`ArmResource`] from a raw ARM list-item `Value`, reading the
 /// endpoint from `properties.<endpoint_field>` when given.
-fn arm_resource_from_value(v: &Value, endpoint_field: Option<&str>) -> ArmResource {
+pub(crate) fn arm_resource_from_value(v: &Value, endpoint_field: Option<&str>) -> ArmResource {
     ArmResource {
         name: v
             .get("name")
@@ -1665,6 +1722,14 @@ fn arm_resource_from_value(v: &Value, endpoint_field: Option<&str>) -> ArmResour
                 .and_then(Value::as_str)
                 .map(String::from)
         }),
+        principal_id: v
+            .pointer("/properties/principalId")
+            .and_then(Value::as_str)
+            .map(String::from),
+        client_id: v
+            .pointer("/properties/clientId")
+            .and_then(Value::as_str)
+            .map(String::from),
     }
 }
 

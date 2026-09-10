@@ -6,6 +6,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+use rigg_core::registry;
+
 /// Process-wide cache of Azure CLI tokens per resource scope. Every `az
 /// account get-access-token` call spawns a subprocess; multi-env commands
 /// (e.g. `rigg status` fanning out over all environments) would otherwise
@@ -88,6 +90,140 @@ fn token_error_detail(stderr: &str, status: std::process::ExitStatus) -> String 
     } else {
         stderr.trim().to_string()
     }
+}
+
+/// The ARM token audience, from the registry provider table.
+fn arm_audience() -> &'static str {
+    registry::provider(registry::Provider::ResourcesArm).audience
+}
+
+/// The Microsoft Graph audience, from the registry provider table. Graph is
+/// the one audience the Azure CLI wants addressed by `--resource-type`
+/// rather than `--scope`.
+fn graph_audience() -> &'static str {
+    registry::provider(registry::Provider::Graph).audience
+}
+
+/// Cache key for one `(tenant, audience)` pair. `None` (the operator's home
+/// tenant) is `-`, so an explicit tenant can never collide with it.
+fn token_cache_key(tenant: Option<&str>, audience: &str) -> String {
+    format!("{}|{}", tenant.unwrap_or("-"), audience)
+}
+
+/// The `az account get-access-token` arguments for one `(tenant, audience)`.
+///
+/// Every audience is addressed as a scope (`<audience>/.default`) except
+/// Microsoft Graph, which the CLI serves via `--resource-type ms-graph`.
+/// `username` is set on the service-principal path (`EnvAuth`).
+fn az_token_args(tenant: Option<&str>, audience: &str, username: Option<&str>) -> Vec<String> {
+    let mut args = vec!["account".to_string(), "get-access-token".to_string()];
+    if let Some(t) = tenant {
+        args.push("--tenant".to_string());
+        args.push(t.to_string());
+    }
+    if audience == graph_audience() {
+        args.push("--resource-type".to_string());
+        args.push("ms-graph".to_string());
+    } else {
+        args.push("--scope".to_string());
+        args.push(format!("{audience}/.default"));
+    }
+    if let Some(u) = username {
+        args.push("--username".to_string());
+        args.push(u.to_string());
+    }
+    args.extend(
+        ["--query", "accessToken", "--output", "tsv"]
+            .into_iter()
+            .map(String::from),
+    );
+    args
+}
+
+/// An access token for one `(tenant, audience)` pair — the single entry point
+/// every client uses (spec §8).
+///
+/// Resolution order, highest first:
+/// 1. `RIGG_ACCESS_TOKEN` — a pre-minted token, honoured for any audience.
+/// 2. Service-principal environment variables (`AZURE_CLIENT_ID` /
+///    `AZURE_CLIENT_SECRET` / `AZURE_TENANT_ID`), via `az`.
+/// 3. The operator's Azure CLI login.
+///
+/// Results are cached for 5 minutes keyed by `(tenant, audience)`; failures
+/// are never cached. `tenant: None` means the CLI's current tenant.
+pub fn token_for(tenant: Option<&str>, audience: &str) -> Result<String, AuthError> {
+    // A pre-minted token wins over everything, for every audience — same
+    // rule the data-plane providers follow.
+    if let Ok(token) = std::env::var("RIGG_ACCESS_TOKEN")
+        && !token.is_empty()
+    {
+        return Ok(token);
+    }
+    let key = token_cache_key(tenant, audience);
+    az_token_cache().get_or_fetch(&key, || fetch_token_for(tenant, audience))
+}
+
+fn fetch_token_for(tenant: Option<&str>, audience: &str) -> Result<String, AuthError> {
+    if EnvAuth::is_configured() {
+        let client_id = std::env::var("AZURE_CLIENT_ID")
+            .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_ID".to_string()))?;
+        let client_secret = std::env::var("AZURE_CLIENT_SECRET")
+            .map_err(|_| AuthError::MissingEnvVar("AZURE_CLIENT_SECRET".to_string()))?;
+        let sp_tenant = std::env::var("AZURE_TENANT_ID")
+            .map_err(|_| AuthError::MissingEnvVar("AZURE_TENANT_ID".to_string()))?;
+        // An explicitly requested tenant wins over the service principal's
+        // home tenant (multi-tenant environments name theirs in rigg.yaml).
+        let tenant = tenant.unwrap_or(&sp_tenant);
+        let args = az_token_args(Some(tenant), audience, Some(&client_id));
+        return run_az_token(&args, Some(tenant), Some(&client_secret));
+    }
+    let args = az_token_args(tenant, audience, None);
+    run_az_token(&args, tenant, None)
+}
+
+/// Run `az` with `args` and return the token it prints.
+fn run_az_token(
+    args: &[String],
+    tenant: Option<&str>,
+    client_secret: Option<&str>,
+) -> Result<String, AuthError> {
+    let mut command = Command::new("az");
+    command.args(args);
+    if let Some(secret) = client_secret {
+        command.env("AZURE_CLIENT_SECRET", secret);
+    }
+    let output = command.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AuthError::AzCliNotFound
+        } else {
+            AuthError::TokenError(e.to_string())
+        }
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // A non-home tenant that the operator has not signed into is the
+        // common failure; say exactly which `az login` fixes it.
+        if let Some(t) = tenant {
+            return Err(AuthError::TokenError(format!(
+                "{}\n  run: az login --tenant {t}",
+                token_error_detail(&stderr, output.status)
+            )));
+        }
+        if stderr.contains("not logged in") || stderr.contains("AADSTS") {
+            return Err(AuthError::NotLoggedIn);
+        }
+        return Err(AuthError::TokenError(token_error_detail(
+            &stderr,
+            output.status,
+        )));
+    }
+
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        return Err(AuthError::TokenError("Empty token received".to_string()));
+    }
+    Ok(token)
 }
 
 /// Authentication provider trait
@@ -178,92 +314,14 @@ impl AzCliAuth {
 
     /// Get an access token for Azure Resource Manager (management.azure.com)
     pub fn get_arm_token() -> Result<String, AuthError> {
-        az_token_cache().get_or_fetch("https://management.azure.com", Self::fetch_arm_token)
+        token_for(None, arm_audience())
     }
 
-    /// Get an ARM access token scoped to a specific tenant (`az account
-    /// get-access-token --tenant <t> --resource https://management.azure.com`).
+    /// Get an ARM access token scoped to a specific tenant.
     /// `tenant: None` behaves exactly like [`Self::get_arm_token`] — same
     /// cache entry — so existing callers are unaffected.
     pub fn get_arm_token_for_tenant(tenant: Option<&str>) -> Result<String, AuthError> {
-        match tenant {
-            None => Self::get_arm_token(),
-            Some(t) => {
-                let scope = format!("{t}|https://management.azure.com");
-                az_token_cache().get_or_fetch(&scope, || Self::fetch_arm_token_for_tenant(t))
-            }
-        }
-    }
-
-    fn fetch_arm_token_for_tenant(tenant: &str) -> Result<String, AuthError> {
-        let output = Command::new("az")
-            .args([
-                "account",
-                "get-access-token",
-                "--tenant",
-                tenant,
-                "--resource",
-                "https://management.azure.com",
-                "--query",
-                "accessToken",
-                "--output",
-                "tsv",
-            ])
-            .output()
-            .map_err(|e| AuthError::TokenError(e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AuthError::TokenError(format!(
-                "{}\n  run: az login --tenant {tenant}",
-                token_error_detail(&stderr, output.status)
-            )));
-        }
-
-        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if token.is_empty() {
-            return Err(AuthError::TokenError(
-                "Empty ARM token received".to_string(),
-            ));
-        }
-
-        Ok(token)
-    }
-
-    fn fetch_arm_token() -> Result<String, AuthError> {
-        let output = Command::new("az")
-            .args([
-                "account",
-                "get-access-token",
-                "--resource",
-                "https://management.azure.com",
-                "--query",
-                "accessToken",
-                "--output",
-                "tsv",
-            ])
-            .output()
-            .map_err(|e| AuthError::TokenError(e.to_string()))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("not logged in") || stderr.contains("AADSTS") {
-                return Err(AuthError::NotLoggedIn);
-            }
-            return Err(AuthError::TokenError(token_error_detail(
-                &stderr,
-                output.status,
-            )));
-        }
-
-        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if token.is_empty() {
-            return Err(AuthError::TokenError(
-                "Empty ARM token received".to_string(),
-            ));
-        }
-
-        Ok(token)
+        token_for(tenant, arm_audience())
     }
 }
 
@@ -721,6 +779,98 @@ mod tests {
             .expect("failed to run `false`");
         let detail = token_error_detail("  ERROR: something specific broke  ", status);
         assert_eq!(detail, "ERROR: something specific broke");
+    }
+}
+
+#[cfg(test)]
+mod token_for_tests {
+    use super::*;
+
+    #[test]
+    fn cache_key_separates_tenants_and_audiences() {
+        assert_eq!(
+            token_cache_key(None, "https://management.azure.com"),
+            "-|https://management.azure.com"
+        );
+        assert_eq!(
+            token_cache_key(Some("t1"), "https://management.azure.com"),
+            "t1|https://management.azure.com"
+        );
+        // A tenant can never collide with the home-tenant entry, and the
+        // same tenant on two audiences gets two entries.
+        assert_ne!(
+            token_cache_key(Some("t1"), "https://management.azure.com"),
+            token_cache_key(None, "https://management.azure.com")
+        );
+        assert_ne!(
+            token_cache_key(Some("t1"), "https://search.azure.com"),
+            token_cache_key(Some("t1"), "https://management.azure.com")
+        );
+    }
+
+    #[test]
+    fn arm_token_helpers_share_the_home_tenant_cache_entry() {
+        // `get_arm_token` and `get_arm_token_for_tenant(None)` must key the
+        // same entry, so existing callers keep hitting one cached token.
+        assert_eq!(
+            token_cache_key(None, arm_audience()),
+            token_cache_key(None, arm_audience())
+        );
+        assert_eq!(arm_audience(), "https://management.azure.com");
+    }
+
+    #[test]
+    fn az_args_use_the_scope_form_for_ordinary_audiences() {
+        let args = az_token_args(None, "https://management.azure.com", None);
+        assert_eq!(args[..2], ["account", "get-access-token"]);
+        assert!(!args.contains(&"--tenant".to_string()));
+        assert!(args.contains(&"--scope".to_string()));
+        assert!(args.contains(&"https://management.azure.com/.default".to_string()));
+        assert_eq!(
+            args[args.len() - 4..],
+            ["--query", "accessToken", "--output", "tsv"]
+        );
+    }
+
+    #[test]
+    fn az_args_pass_the_tenant_through() {
+        let args = az_token_args(Some("tenant-1"), "https://search.azure.com", None);
+        let at = args.iter().position(|a| a == "--tenant").unwrap();
+        assert_eq!(args[at + 1], "tenant-1");
+        assert!(args.contains(&"https://search.azure.com/.default".to_string()));
+    }
+
+    #[test]
+    fn az_args_address_graph_by_resource_type() {
+        let args = az_token_args(Some("tenant-1"), graph_audience(), None);
+        assert!(args.contains(&"--resource-type".to_string()));
+        assert!(args.contains(&"ms-graph".to_string()));
+        assert!(
+            !args.contains(&"--scope".to_string()),
+            "Graph is not addressed by scope: {args:?}"
+        );
+        assert_eq!(graph_audience(), "https://graph.microsoft.com");
+    }
+
+    #[test]
+    fn az_args_carry_the_service_principal_username() {
+        let args = az_token_args(Some("t"), "https://vault.azure.net", Some("client-1"));
+        let at = args.iter().position(|a| a == "--username").unwrap();
+        assert_eq!(args[at + 1], "client-1");
+        // The secret is never an argument — it goes in the environment.
+        assert!(!args.iter().any(|a| a.contains("secret")), "{args:?}");
+    }
+
+    #[test]
+    fn every_provider_audience_produces_usable_az_args() {
+        for meta in registry::providers() {
+            let args = az_token_args(None, meta.audience, None);
+            assert!(
+                args.contains(&"--scope".to_string()) || args.contains(&"ms-graph".to_string()),
+                "{}: {args:?}",
+                meta.label
+            );
+        }
     }
 }
 

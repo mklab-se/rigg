@@ -213,3 +213,275 @@ pub async fn mount_models_paged(
         .mount(server)
         .await;
 }
+
+/// Mount one search service document at its ARM resource id.
+///
+/// Mounted at wiremock priority 1 so it wins over [`mount_arm_fake`]'s
+/// catch-all `GET {resource id}` responder regardless of mount order.
+///
+/// `identity_type` is the ARM `identity.type` string (`None`,
+/// `SystemAssigned`, `SystemAssigned, UserAssigned`, …); `principal_id` is
+/// the system-assigned principal (empty for none). `rbac_enabled` drives
+/// `properties.authOptions` (`aadOrApiKey` vs `apiKeyOnly`).
+#[allow(clippy::too_many_arguments)]
+pub async fn mount_search_service(
+    server: &MockServer,
+    sub: &str,
+    rg: &str,
+    name: &str,
+    sku: &str,
+    identity_type: &str,
+    principal_id: &str,
+    rbac_enabled: bool,
+    public_network: &str,
+) {
+    let id = search_service_id(sub, rg, name);
+    let auth_options = if rbac_enabled {
+        json!({"aadOrApiKey": {"aadAuthFailureMode": "http401WithBearerChallenge"}})
+    } else {
+        json!({"apiKeyOnly": {}})
+    };
+    let mut identity = json!({"type": identity_type});
+    if !principal_id.is_empty() {
+        identity["principalId"] = json!(principal_id);
+    }
+    if identity_type.contains("UserAssigned") {
+        identity["userAssignedIdentities"] = json!({
+            format!("/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami"):
+                {"principalId": "00000000-0000-0000-0000-0000000000ua", "clientId": "cid-ua"}
+        });
+    }
+    let body = json!({
+        "name": name,
+        "id": id,
+        "location": "swedencentral",
+        "sku": {"name": sku},
+        "identity": identity,
+        "properties": {
+            "authOptions": auth_options,
+            "disableLocalAuth": false,
+            "publicNetworkAccess": public_network,
+            "networkRuleSet": {"ipRules": []}
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path(id.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(id.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": name})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{id}/sharedPrivateLinkResources")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [{"name": "spl-blob", "properties": {"status": "Approved"}}]
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// The ARM resource id of a search service, as the fake serves it.
+pub fn search_service_id(sub: &str, rg: &str, name: &str) -> String {
+    format!(
+        "/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Search/searchServices/{name}"
+    )
+}
+
+/// Mount one storage account at `id`, plus its `blobServices/default`
+/// document (GET and PUT). Priority 1, same reason as
+/// [`mount_search_service`].
+#[allow(clippy::too_many_arguments)]
+pub async fn mount_storage_account(
+    server: &MockServer,
+    id: &str,
+    network_default_action: &str,
+    bypass: &str,
+    public_network: &str,
+    shared_key: bool,
+    hns: bool,
+    soft_delete: Option<u32>,
+    versioning: bool,
+) {
+    let name = id.rsplit('/').next().unwrap_or("acct").to_string();
+    let body = json!({
+        "name": name,
+        "id": id,
+        "location": "swedencentral",
+        "properties": {
+            "networkAcls": {
+                "defaultAction": network_default_action,
+                "bypass": bypass,
+                "ipRules": [],
+                "virtualNetworkRules": [],
+                "resourceAccessRules": []
+            },
+            "publicNetworkAccess": public_network,
+            "allowSharedKeyAccess": shared_key,
+            "isHnsEnabled": hns
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path(id.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(id.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": name})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+
+    let blob = json!({
+        "properties": {
+            "deleteRetentionPolicy": {
+                "enabled": soft_delete.is_some(),
+                "days": soft_delete.unwrap_or(0)
+            },
+            "isVersioningEnabled": versioning
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path(format!("{id}/blobServices/default")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(blob))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(format!("{id}/blobServices/default")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "default"})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// Mount `{scope}/providers/Microsoft.Authorization/permissions`.
+///
+/// When `can_write_role_assignments` the caller gets an Owner-shaped entry
+/// (`actions: ["*"]`); otherwise a Reader-shaped one plus an entry that
+/// grants the write via a wildcard but takes it back in `notActions` — so
+/// the exclusion path is exercised by the negative case too.
+pub async fn mount_permissions(server: &MockServer, scope: &str, can_write_role_assignments: bool) {
+    let value = if can_write_role_assignments {
+        json!([{"actions": ["*"], "notActions": [], "dataActions": [], "notDataActions": []}])
+    } else {
+        json!([
+            {"actions": ["*/read"], "notActions": [], "dataActions": [], "notDataActions": []},
+            {
+                "actions": ["Microsoft.Authorization/*"],
+                "notActions": ["Microsoft.Authorization/roleAssignments/write"],
+                "dataActions": [],
+                "notDataActions": []
+            }
+        ])
+    };
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{scope}/providers/Microsoft.Authorization/permissions"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": value})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// Mount `{scope}/providers/Microsoft.Authorization/roleAssignments`:
+/// a GET listing (`role_ids` assigned to `principal`, each carrying a
+/// `rigg:` description) and a PUT/DELETE recorder for assignment writes.
+pub async fn mount_role_assignments(
+    server: &MockServer,
+    scope: &str,
+    principal: &str,
+    role_ids: &[&str],
+) {
+    let sub = scope.split('/').nth(2).unwrap_or("sub");
+    let value: Vec<Value> = role_ids
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            json!({
+                "id": format!("{scope}/providers/Microsoft.Authorization/roleAssignments/ra-{i}"),
+                "name": format!("ra-{i}"),
+                "properties": {
+                    "roleDefinitionId": format!(
+                        "/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{r}"
+                    ),
+                    "principalId": principal,
+                    "principalType": "ServicePrincipal",
+                    "description": format!("rigg: env dev edge {i}")
+                }
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{scope}/providers/Microsoft.Authorization/roleAssignments"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": value})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path_regex(
+            r"^.*/providers/Microsoft\.Authorization/roleAssignments/[^/]+$",
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"name": "created"})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path_regex(
+            r"^.*/providers/Microsoft\.Authorization/roleAssignments/[^/]+$",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "deleted"})))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// Mount one Microsoft.CognitiveServices account at `id`.
+pub async fn mount_cognitive_account(server: &MockServer, id: &str, kind: &str, location: &str) {
+    let name = id.rsplit('/').next().unwrap_or("acct").to_string();
+    Mock::given(method("GET"))
+        .and(path(id.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": name,
+            "id": id,
+            "kind": kind,
+            "location": location,
+            "properties": {"endpoint": format!("https://{name}.cognitiveservices.azure.com/")}
+        })))
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
+
+/// Mount a `PUT userAssignedIdentities/{name}` responder that echoes the
+/// created identity with a principal id.
+pub async fn mount_create_uami(server: &MockServer, principal_id: &str) {
+    let principal_id = principal_id.to_string();
+    Mock::given(method("PUT"))
+        .and(path_regex(
+            r"^.*/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/[^/]+$",
+        ))
+        .respond_with(move |req: &Request| {
+            let id = req.url.path().to_string();
+            let name = id.rsplit('/').next().unwrap_or("uami").to_string();
+            ResponseTemplate::new(201).set_body_json(json!({
+                "name": name,
+                "id": id,
+                "location": "swedencentral",
+                "properties": {"principalId": principal_id, "clientId": "cid-new"}
+            }))
+        })
+        .with_priority(1)
+        .mount(server)
+        .await;
+}
