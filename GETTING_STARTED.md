@@ -80,13 +80,32 @@ rigg validate docs-rag
 
 ## 4. Wire Up Identities
 
-Identity-based access means your search service needs RBAC roles on your data — for blob, **Storage Blob Data Reader** on the storage account. Let rigg check and fix it:
+Identity-based access means the search service reaches your data as *itself*, with a managed identity, and Azure grants that identity access through RBAC roles — for blob, **Storage Blob Data Reader** on the storage account. Nothing in your files is a credential; the role assignment is the wiring.
+
+Let rigg work out which one you need:
 
 ```bash
-rigg auth doctor --fix
+rigg auth doctor -e dev
 ```
 
-`auth doctor` reads your workspace files, derives which identity needs which role where, and creates the missing role assignments (or prints the exact `az` commands). If your stack spans several services, prefer a shared user-assigned managed identity — role assignments survive service re-creation.
+It reads your files, resolves every infrastructure reference through the `docs` binding you just declared, and reports each requirement with its principal, role, ARM scope, the file and path that caused it, and the exact `az` command. It checks the settings a keyless connection depends on as well — that the service has a managed identity at all, that it accepts Entra tokens, whether the storage account's firewall would admit it — and your own rights, including whether you can create the assignments in the first place. Exit 0 means everything is in place; exit 4 means something is missing.
+
+Then let it fix what it owns:
+
+```bash
+rigg auth doctor -e dev --fix
+```
+
+`--fix` asks once for the whole batch and then creates the missing role assignments (tagged `rigg:<workspace>:<env>:<reason>`, so `rigg auth roles list -e dev` can show them and `rigg auth roles remove -e dev` can take them back), enables a system-assigned identity where there is none, turns on Entra token acceptance, and adjusts the storage firewall or blob soft delete where a file requires it. What it will *not* do is grant you your own rights — those are always reported with the `az` line for someone with User Access Administrator to run.
+
+You do not have to remember to run it: `rigg push` runs the same check over its own plan before it writes anything (§5).
+
+**System-assigned or user-assigned?** Stick with the search service's system-assigned identity unless you have a reason not to — it is the only identity Azure Storage's trusted-services exception accepts, and it needs no binding. If you want role assignments that survive re-creating the service, or one identity shared across environments, bind a user-assigned one and point the scaffold at it:
+
+```bash
+rigg env bind dev shared-mi identity:<your-managed-identity>
+rigg new data-source docs-ds -p docs-rag --type azureblob --identity shared-mi
+```
 
 ## 5. Push and Verify
 
@@ -95,14 +114,22 @@ rigg push docs-rag --dry-run    # review the dependency-ordered plan
 rigg push docs-rag
 ```
 
-rigg creates the resources in dependency order, then fetches each one back and normalizes your local files against what Azure actually stored — so `rigg diff` stays clean.
+Before the first write, push runs the same identity check as §4 over exactly the resources in this plan: anything only a human may grant stops the push there with the `az` command, and anything rigg may grant is applied — after you have confirmed the plan — and waited out until Azure reports it. `--dry-run` shows the whole remediation and changes nothing.
 
-Run the indexer once from the portal (or wait for its schedule), then check:
+rigg then creates the resources in dependency order, fetches each one back, and normalizes your local files against what Azure actually stored — so `rigg diff` stays clean.
 
 ```bash
 rigg status docs-rag            # everything should be "in sync"
 rigg diff docs-rag              # no differences
 ```
+
+To prove it actually works rather than merely exists, ask rigg to run it:
+
+```bash
+rigg verify docs-rag            # run every indexer to completion, retrieve, ask
+```
+
+`rigg push docs-rag --verify` does the same as part of a push. It is not free — indexer runs cost ingestion, skill and embedding time — but it is the difference between "the configuration is there" and "the pipeline produces answers". A failure that looks like an authorization problem is attributed to the identity edge that would explain it.
 
 ## 6. Expose the Index for Agentic Retrieval
 
@@ -166,7 +193,8 @@ Ground the agent on your knowledge base by giving its MCP tool an `x-rigg-ref` a
 rigg validate docs-rag
 rigg push docs-rag --dry-run
 rigg push docs-rag
-rigg auth doctor --fix          # re-check: the agent layer added new edges
+rigg auth doctor -e dev --fix   # re-check: the agent layer added new edges
+rigg verify docs-rag            # prove the whole stack answers
 rigg describe docs-rag          # the full dependency graph, agent to data source
 ```
 

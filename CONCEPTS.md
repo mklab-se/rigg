@@ -328,6 +328,220 @@ the routine "apply N changes?" prompt, and scripts reach for it reflexively;
 if it also cleared this gate, a protected environment would be no safer than
 an ordinary one.
 
+## How rigg handles authentication
+
+rigg is identity-first: **no file rigg writes ever contains a credential**,
+and `rigg validate` rejects one that does. Every connection it manages is
+made with a managed identity, which means the wiring that used to be a
+connection string is now a *role assignment* — something rigg can derive
+from your files, check against Azure, and, where it is allowed to, create
+for you.
+
+### The principals
+
+Four kinds of identity show up in a rigg workspace:
+
+| Principal | What it is | Where rigg finds it |
+|---|---|---|
+| `search-system` | the Search service's **system-assigned** managed identity — the default for every Search-side connection | ARM, on the service named by the environment's `search` target |
+| `search-user:<binding>` | a **user-assigned** managed identity a file names in an `identity` / `authIdentity` / `cognitiveServices.identity` field | the environment's `identity` binding of that name |
+| `foundry-project` | the Foundry **project's** system-assigned managed identity — what an agent uses to reach a knowledge base | ARM, on `<account>/projects/<project>` |
+| `operator` | **you** — your `az login` user, or the service principal a CI job runs as | the access token's own claims |
+
+The system-assigned identity is the default on purpose. It is the only
+identity Azure Storage's trusted-services exception accepts (see
+[below](#the-trusted-services-caveat)), and it needs no binding. Use a
+user-assigned identity when you want role assignments to survive re-creating
+the service, or one identity shared across environments: bind it
+(`rigg env bind dev shared-mi identity:<name>`) and point a scaffold at it
+with `rigg new <kind> <name> --identity shared-mi` (`data-source` and
+`skillset`; other kinds get their identities from `pull` or `rigg env bind
+--learn`, not from a fresh scaffold).
+
+### The requirement graph
+
+rigg reads every file in an environment's tree, extracts each infrastructure
+reference the registry knows about, resolves it through the environment's
+[bindings](#dependencies-and-bindings), and produces two things:
+
+- **Edges** — "this principal needs this role at this ARM scope, because of
+  this field in this file". An edge carries its evidence: the resource, the
+  JSON path, and a sentence saying why.
+- **Checks** — the settings and network conditions that are not roles but
+  still gate the connection.
+
+What the files imply, today:
+
+| File evidence | Principal | Role |
+|---|---|---|
+| Data source `credentials.connectionString` (blob) | the data source's identity | Storage Blob Data Reader |
+| Knowledge source `azureBlobParameters.connectionString` | its ingestion identity | Storage Blob Data Reader |
+| Knowledge source `…assetStore.connectionString` | same | Storage Blob Data Contributor |
+| Skillset `knowledgeStore.storageConnectionString` | the knowledge store's identity | Storage Blob Data Contributor (plus Storage Table Data Contributor and Reader and Data Access when it has table projections) |
+| An embedding `resourceUri` (index vectorizer, AzureOpenAIEmbeddingSkill, knowledge-source embedding model) | that element's `authIdentity`, else system | Cognitive Services OpenAI User |
+| A chat-completion `resourceUri` (knowledge-base `models[]`, knowledge-source verbalization) | same | Cognitive Services User |
+| Skillset `cognitiveServices` with an `AIServicesByIdentity` `subdomainUrl` | its `identity`, else system | Cognitive Services User (the account must be of kind `AIServices`) |
+| Skillset WebApiSkill with `authResourceId` | that skill's `authIdentity`, else system | *not a role* — the app must accept the audience (see [Easy Auth](#easy-auth-the-edge-rbac-cannot-cover)) |
+| Agent `tools[].project_connection_id` on an MCP tool whose connection uses `ProjectManagedIdentity` | `foundry-project` | Search Index Data Reader, on the search service |
+| `encryptionKey.keyVaultUri` with no explicit credential | `search-system` | Key Vault Crypto Service Encryption User |
+
+And the checks, alongside them: the Search SKU (Free has no managed
+identity; knowledge bases need Basic or higher), whether the service has an
+identity at all, whether it accepts Entra tokens (`authOptions.aadOrApiKey`
+or `disableLocalAuth`), the storage firewall, blob soft delete when a data
+source uses `NativeBlobSoftDeleteDeletionDetectionPolicy`, whether shared-key
+access is disabled (reported for context — identity-based access works
+either way), the AI Services account kind, a function app's access
+restrictions and its Easy Auth settings, and each model deployment's
+availability and quota.
+
+The **operator's** own edges come from the plan rather than from a single
+field: Search Service Contributor on the search service for any Search
+resource, Azure AI User on the Foundry *project* for agents (Owner and
+Contributor do not cover it), Azure AI Project Manager on the account for
+connections, and Azure AI Account Owner (or Cognitive Services Contributor)
+for deployments and guardrails — plus, for every edge rigg might have to
+grant, whether you can create a role assignment at that scope at all. A push
+that will also read the data plane (`push --verify`) adds Search Index Data
+Reader to its own preflight.
+
+### Where the graph is used
+
+The same graph runs in three places, so the answer never depends on which
+command you happened to run:
+
+```bash
+rigg auth doctor -e dev                 # the whole environment, verified
+rigg auth doctor -e dev --fix           # …and repair what rigg owns
+rigg auth doctor -e dev --plan          # only what a push would create/update
+rigg auth doctor -e dev --live          # …plus each indexer's last run
+rigg auth doctor -e dev --principal <object-id>   # a CI identity's rights, not yours
+rigg status --auth                      # one identity line per environment
+rigg push my-rag                        # plan-scoped preflight, before the first write
+rigg verify my-rag                      # proof, after the fact
+```
+
+- **`rigg auth doctor`** reports every edge and check — `✓` in place, `✗` a
+  missing role, `!` a setting or network condition that does not hold, `?`
+  something it could not judge, `-` deliberately checked elsewhere — each
+  with its principal, role, scope, reason, the file and path that require it,
+  and the exact `az` command.
+  Exit **0** when everything is in place, **4** when anything is missing or
+  could not be judged, **6** when `--fix` needs a confirmation it cannot ask
+  for (a script, or `--output json`). `--output json` prints
+  `{env, edges[], checks[], operator[], summary}`.
+- **`rigg push`** runs `doctor --plan` against exactly the documents it is
+  about to send, before the first mutation. Anything only a human may grant
+  refuses right there (exit 4, with the `az` line); what rigg may grant is
+  applied only after every gate has been cleared, and then **waited out** —
+  rigg polls until the assignment is visible before it continues. `--dry-run`
+  reports the whole remediation and refuses nothing. `--skip-auth-preflight`
+  opts out entirely, for a caller who knows the wiring is fine and cannot
+  read ARM.
+- **`rigg verify <project>`** (also `rigg push --verify`) is the proof a
+  green doctor is not: every indexer is run and watched to completion, every
+  knowledge base gets a retrieve, every agent a one-turn question. A failure
+  that looks like an authorization problem is attributed to the edge that
+  would explain it. It exits 1 on any failure — and because indexer runs cost
+  money, a protected environment gates it like any other mutation.
+
+### What rigg grants, and what it never grants
+
+`rigg auth doctor --fix` (and push's preflight) will, after one confirmation
+for the whole batch:
+
+- create role assignments **for service identities**, stamped with
+  `description: "rigg:<workspace>:<env>:<reason>"` and an explicit
+  `principalType`;
+- enable a system-assigned identity on a service that has none;
+- turn on Entra token acceptance on the search service;
+- add the `AzureServices` firewall bypass or a resource-instance rule on a
+  storage account, and enable blob soft delete where a policy requires it.
+
+Because every assignment rigg makes is tagged, rigg can also take them back:
+
+```bash
+rigg auth roles list -e dev       # exactly the assignments rigg created here
+rigg auth roles remove -e dev     # …and remove them (env remove --clean-roles does this too)
+```
+
+Two things rigg will **never** do:
+
+- **Grant you your own rights.** An operator edge is always reported, never
+  fixed — if `--fix` could grant the caller their own access, anyone able to
+  run a push could escalate themselves. You get the `az` line and someone
+  with User Access Administrator runs it.
+- **Manage keys or passwords.** rigg never creates or rotates a credential,
+  never reads a storage account key, and never writes one to disk.
+
+### Easy Auth: the edge RBAC cannot cover
+
+A custom Web API skill calling your Azure Function is not an ARM role — the
+function app itself has to accept the search identity's token. `rigg auth
+easy-auth <function-app binding>` wires that end to end:
+
+```bash
+rigg auth easy-auth enrich-fn -e dev
+rigg auth easy-auth enrich-fn -e dev --client-id <existing app registration>
+```
+
+It registers (or reuses) an Entra application with `api://<app-id>` and a
+`Caller` app role, creates the enterprise application, and PUTs a **merged**
+`authsettingsV2` on the function app — other identity providers and unrelated
+settings are kept, `allowedAudiences` and `allowedApplications` are unioned,
+never replaced. The caller it admits is the search service's system-assigned
+identity, or the user-assigned identity a skillset declares in
+`authIdentity`. The merged document is shown as a diff and confirmed before
+anything is written. Every skillset in the environment that calls that app is
+then rewritten to be keyless on disk — `authResourceId` set, the `code=`
+parameter, the `x-functions-key` header and any `x-rigg-auth` carrier removed.
+Nothing is pushed: `rigg push` is still yours to run.
+
+### When Azure still wants a key
+
+A few things Azure has no keyless form for. Rather than storing the secret,
+name the **source** it should be fetched from, on the WebApiSkill:
+
+| Annotation | What push does |
+|---|---|
+| `"x-rigg-auth": "function-key"` | reads the key from ARM `listkeys` on the function app (function-level key first, host key as fallback) |
+| `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` | reads the secret from that vault's data plane with your own token (you need Key Vault Secrets User) |
+| neither, and `authResourceId` set | keyless — nothing is injected |
+
+Either way the value exists only in the outgoing request body: the file keeps
+`<redacted>`, and the key never reaches disk, stdout, or a log.
+`rigg push --refresh-credentials` re-injects for skillsets that are otherwise
+in sync.
+
+### The trusted-services caveat
+
+If a storage account's firewall is set to `defaultAction: Deny`, Azure AI
+Search reaches it in one of two ways: the trusted-services exception
+(`bypass` including `AzureServices`), or a resource-instance rule naming the
+search service. **The trusted-services exception works only with the search
+service's system-assigned identity** — a user-assigned identity cannot use
+it. rigg's doctor knows this: a user-assigned identity against firewalled
+storage is reported as unsupported, with the two ways out (switch that
+connection to the system identity, or add a resource-instance rule, which
+`--fix` can do). It is the main reason the system-assigned identity, not a
+shared user-assigned one, is rigg's default.
+
+### Tokens
+
+rigg acquires one token per (tenant, audience) — ARM, Search, the Foundry
+data plane, Cognitive Services, Key Vault, Microsoft Graph — and caches it
+for five minutes. The chain, highest first:
+
+1. `RIGG_ACCESS_TOKEN` — a pre-minted bearer token, honoured for **every**
+   audience. Intended for CI and test rigs.
+2. Service-principal environment variables — `AZURE_CLIENT_ID` and
+   `AZURE_TENANT_ID` plus either `AZURE_CLIENT_SECRET` or
+   `AZURE_FEDERATED_TOKEN_FILE` (OIDC). Tokens are minted directly from
+   Entra ID; the Azure CLI does not have to be installed.
+3. Your Azure CLI login (`az login`), per tenant. An environment that names
+   a `tenant` you are not signed in to says so, and names the
+   `az login --tenant <t>` that fixes it.
+
 ## Exit codes
 
 | Code | Meaning |

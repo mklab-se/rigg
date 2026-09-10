@@ -61,9 +61,18 @@ around that. No compatibility with 1.x workspaces.
   environment, whether or not anything is declared under `dependencies:`.
   `push` runs the same classification as a preflight and refuses before any
   mutation.
-- **`RIGG_ACCESS_TOKEN` is now used for ARM calls too**, not just the Search
-  and Foundry data planes — one static token covers binding resolution,
-  discovery and the `rigg az` commands (intended for CI and tests).
+- **`RIGG_ACCESS_TOKEN` is now honoured for every audience**, not just the
+  Search and Foundry data planes — one static token covers ARM (binding
+  resolution, discovery, RBAC reads), Cognitive Services, Key Vault,
+  Microsoft Graph and the `rigg az` commands (intended for CI and tests).
+- **Service-principal environment variables mint their own tokens.**
+  `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` plus either `AZURE_CLIENT_SECRET`
+  or `AZURE_FEDERATED_TOKEN_FILE` (OIDC) now go straight to Entra ID's
+  `oauth2/v2.0/token` endpoint per audience — the Azure CLI no longer has to
+  be installed in CI. Tokens are cached for five minutes per
+  `(tenant, audience)`; the Azure CLI login remains the fallback, and an
+  environment naming a `tenant` you are not signed in to says so and prints
+  the `az login --tenant <t>` that fixes it.
 - **`rigg.yaml` environments gain `tenant`, `subscription`, `dependencies`,
   and `policy.strict-bindings`.** `tenant`/`subscription` scope ARM discovery
   and token acquisition (optional; default is the Azure CLI's tenant and
@@ -75,6 +84,28 @@ around that. No compatibility with 1.x workspaces.
   infrastructure- and sibling-translation rules as existing resources.
   `x-rigg-pin` remains the per-file escape hatch for anything that still
   needs to be kept from the target.
+- **The Storage Blob Data Reader role GUID is corrected.** In 1.x the
+  constant labelled "Storage Blob Data Reader" carried the GUID of Storage
+  Blob Data **Contributor** (`ba92f5b4-…`), so every blob data source
+  `rigg auth doctor --fix` repaired was granted *write* access to the storage
+  account. Reader is `2a2b9908-6ea1-4ae2-8e65-a410df84e7d1`, and that is what
+  rigg now recommends and grants for a read-only blob connection
+  (Contributor is still used where it is genuinely needed: a knowledge
+  source's `assetStore` and a skillset's knowledge store). **If you ran 1.x's
+  `--fix`, you have an over-broad assignment to clean up**: `rigg auth roles
+  list -e <env>` shows the assignments rigg created, `rigg auth roles remove
+  -e <env>` removes them, and `rigg auth doctor -e <env> --fix` then grants
+  Reader instead.
+- **`rigg auth doctor`'s exit code is a verdict**: **0** when every edge and
+  check passes, **4** when anything is missing *or* could not be judged
+  (including after `--fix`, when something remains), **6** when a fix needs a
+  confirmation it cannot ask for (a script, `--non-interactive`, or
+  `--output json`). 1.x reported problems and exited 0.
+- **`rigg push` refuses on missing auth instead of failing mid-plan.** The
+  plan-scoped preflight runs before the first mutation: an operator right
+  only a human can grant ends the push with exit 4 and the exact `az` line,
+  having written nothing. `--skip-auth-preflight` is the opt-out for a caller
+  who knows the wiring is fine and cannot read ARM.
 
 ### Added
 
@@ -206,18 +237,19 @@ around that. No compatibility with 1.x workspaces.
   registers (or reuses) an application with `api://<app-id>` and a `Caller`
   app role — merged into what the application already publishes, so neither
   an existing app role nor an existing identifier URI is dropped — creates
-  the enterprise application, and PUTs a **merged** `authsettingsV2` — every other identity provider and unrelated setting is
-  kept, `allowedAudiences` and `allowedApplications` are unioned, never
-  replaced. The caller it admits is the search service's system-assigned
-  identity, or the user-assigned identity a skillset declares in
-  `authIdentity`. The merged document is shown as a diff and confirmed
-  (`auth.easyauth.<site>`, exit 6 non-interactively without `--yes`) before
-  anything is written. Every skillset in the environment whose WebApiSkill
-  calls that app then becomes keyless on disk — `authResourceId` set, the
-  `code=` parameter, `x-functions-key` header and `x-rigg-auth` carrier
-  removed — and rigg tells you to `rigg push`; it never pushes for you. The
-  same wiring is offered inline from push's Web API auth question
-  ("identity-based — set it up now").
+  the enterprise application, and PUTs a **merged** `authsettingsV2` — every
+  other identity provider and unrelated setting is kept, `allowedAudiences`
+  and `allowedApplications` are unioned, never replaced. The caller it
+  admits is the search service's system-assigned identity, or the
+  user-assigned identity a skillset declares in `authIdentity`. The merged
+  document is shown as a diff and confirmed (`auth.easyauth.<site>`, exit 6
+  non-interactively without `--yes`) before anything is written. Every
+  skillset in the environment whose WebApiSkill calls that app then becomes
+  keyless on disk — `authResourceId` set, the `code=` parameter,
+  `x-functions-key` header and `x-rigg-auth` carrier removed — and rigg
+  tells you to `rigg push`; it never pushes for you. The same wiring is
+  offered inline from push's Web API auth question ("identity-based — set it
+  up now").
 - **Key Vault as a key source**: `"x-rigg-auth": "key-vault:<secret>@<key-vault
   binding>"` on a WebApiSkill. At push time the secret is read from the
   vault's data plane with the operator's token and placed in the skill's own
@@ -239,6 +271,26 @@ around that. No compatibility with 1.x workspaces.
   Search requires alongside it — the scaffold passes `rigg validate` as
   written. Independent of `--describe` — both may be given, and the identity
   is applied after the AI draft.
+- **`rigg ci init` prints the roles the CI identity actually needs.** The
+  finishing steps no longer name a fixed trio of roles: the list is built
+  from the same `identity::operator_edges` graph `rigg auth doctor`
+  verifies, over the target environment's own tree, and every entry carries
+  the ARM scope to grant it at — resolved through the bindings cache, or
+  named as unresolved with the `rigg env bind <env> --learn` that would
+  resolve it. The scopes where the identity needs
+  `Microsoft.Authorization/roleAssignments/write` (so a push can grant the
+  service identities their own roles) are listed separately, with the
+  alternative of pre-granting them once and adding `--skip-auth-preflight`
+  to the deploy job. `rigg ci init` also honours `-e/--env` now, instead of
+  always baking in the default environment.
+- **Documentation**: CONCEPTS.md gains a *How rigg handles authentication*
+  chapter — the four principals, the requirement graph and the file evidence
+  behind each edge, where the graph runs (doctor, push preflight, verify),
+  what rigg grants and the two things it never does, Easy Auth, key sources,
+  the storage trusted-services caveat, and the token chain. README's
+  authentication section and GETTING_STARTED's identity step are rewritten
+  around it, and the MCP guide documents `rigg_verify` and `rigg_push`'s
+  `verify` / `skip_auth_preflight`.
 
 ### Removed (library API)
 

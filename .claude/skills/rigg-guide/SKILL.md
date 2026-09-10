@@ -92,13 +92,45 @@ Unbound/External are warnings that become errors under
   `answers`.
 - **Delete one resource**: delete its file, then push with `prune: true`.
 - **Delete a whole project remotely**: `rigg_delete` (preview → `force: true`).
-- **Identity/RBAC problems**: `rigg auth doctor` (add `--fix` to repair).
+- **Identity/RBAC**: `rigg auth doctor [-e env]` reports every role, setting
+  and network condition the environment's files require — for the service
+  identities *and* for the caller — each with principal, role, ARM scope,
+  file:path and the exact `az` command. Flags: `--fix` (apply what rigg
+  owns, one confirmation for the batch), `--plan` (only what a push would
+  create/update), `--live` (also read each indexer's last run), `--principal
+  <object-id>` (a CI identity's rights instead of your own). Exit 0 ok / 4
+  missing / 6 a fix needs an answer. `rigg status --auth` adds one identity
+  line per environment. `rigg auth roles list|remove [-e env]` lists and
+  undoes exactly the assignments rigg created (they carry
+  `description: rigg:<workspace>:<env>:<reason>`).
+- **Prove it works**: `rigg verify <project> [-e env]` (or `rigg push
+  --verify`) runs every indexer to completion, retrieves from every
+  knowledge base and asks every agent one turn; auth-shaped failures are
+  attributed to the identity edge that explains them. Exit 1 on failure, and
+  protected environments are gated — the runs cost money. MCP: `rigg_verify`,
+  and `rigg_push` takes `verify` / `skip_auth_preflight`.
+- **Keyless Web API skills**: `rigg auth easy-auth <function-app binding>
+  [-e env] [--client-id <app>]` registers/reuses an Entra app, merges Easy
+  Auth into the function app's `authsettingsV2` (never replacing what is
+  there), and rewrites the calling skillsets to be keyless on disk. It shows
+  a diff, asks, and does NOT push.
 
 ## Rules
 
 - NEVER put keys/secrets in resource files — validation rejects them. Data
   sources use `ResourceId=` connection strings + managed identity; grant roles
-  with `rigg auth doctor --fix`.
+  with `rigg auth doctor --fix`. Default to the search service's
+  system-assigned identity (the only one Azure Storage's trusted-services
+  firewall exception accepts); `rigg new <kind> <name> --identity <binding>`
+  points a `data-source` or `skillset` scaffold at a user-assigned one
+  instead. Where Azure still needs a runtime key, annotate the WebApiSkill
+  with a key *source* — `"x-rigg-auth": "function-key"` or
+  `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` — and rigg
+  fetches it at push time into the outgoing body only.
+- `rigg push` runs the identity graph over its own plan before the first
+  write: missing operator rights refuse (exit 4, with the `az` line), grants
+  rigg may make are applied after every gate and waited out.
+  `--skip-auth-preflight` opts out.
 - `x-rigg-*` keys are rigg-local annotations (stripped before push):
   `x-rigg-api: <spec>` links a WebApiSkill to `apis/<spec>.json` (validated);
   `x-rigg-ref: knowledge-bases/<kb>` on an agent tool injects the KB's MCP

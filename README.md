@@ -194,6 +194,8 @@ rigg push my-rag                # create/update, in dependency order
 rigg push my-rag --prune        # also delete remote resources whose files were removed
 rigg push my-rag --verify       # ...and then prove it works: run every indexer to completion,
                                 #   retrieve from every knowledge base, ask every agent
+rigg push my-rag --skip-auth-preflight   # skip the identity/RBAC check that runs before the
+                                #   first write (for a caller who cannot read ARM)
 rigg verify my-rag              # the same proof on its own, for a stack already pushed
 
 rigg migrate knowledge-source <name> --in-place       # convert a portal-created (azureBlob, ...)
@@ -210,6 +212,7 @@ rigg az agent ask <name> "Summarize..." # single-shot prompt to a Foundry agent
 rigg delete my-rag --remote     # delete the project's resources from Azure (files kept)
 rigg status                     # per-resource sync state, all projects & environments
 rigg status --env prod          # narrow to one environment
+rigg status --auth              # ...plus one identity line per environment
 ```
 
 After every successful push, rigg fetches the document back from Azure, normalizes it, and updates the local file and sync baseline — so server-side defaults never show up as false drift.
@@ -365,23 +368,37 @@ Without a terminal to prompt on, rigg prints a `needs-input` JSON document listi
 
 ### Authentication
 
-`rigg` is identity-first — no keys, no secrets in files, ever:
+`rigg` is identity-first — no keys, no secrets in files, ever. Every connection it manages is made with a managed identity, so the wiring that used to be a connection string is a *role assignment* — something rigg derives from your files, verifies against ARM, and repairs where it is allowed to. See the [How rigg handles authentication](CONCEPTS.md#how-rigg-handles-authentication) chapter of CONCEPTS.md for the full model.
 
 ```bash
-rigg auth login       # delegates to Azure CLI
+rigg auth login                       # delegates to Azure CLI
 rigg auth status
-rigg auth doctor      # verify service-to-service identities and RBAC
-rigg auth doctor --fix
-rigg auth easy-auth <function-app-binding>   # make a Web API skill keyless
+rigg auth doctor -e dev               # every role, setting and network condition this env needs
+rigg auth doctor -e dev --fix         # apply the repairs rigg owns (one confirmation for the batch)
+rigg auth doctor -e dev --plan        # only what a push would create or update
+rigg auth doctor -e dev --live        # …plus each indexer's last run, attributed to an edge
+rigg auth doctor -e dev --principal <object-id>   # a CI identity's rights instead of your own
+rigg auth roles list -e dev           # the role assignments rigg itself created here
+rigg auth roles remove -e dev         # …and remove them again
+rigg auth easy-auth <function-app-binding>        # make a Web API skill keyless
+rigg status --auth                    # one identity line per environment
 ```
 
-`auth doctor` derives the identity graph from your workspace files — data source connections, knowledge-base model wiring, agent-to-KB grounding — verifies managed identities and RBAC role assignments via ARM, and repairs them with `--fix` (or prints the exact `az` commands). For stacks spanning multiple services, prefer a shared **user-assigned managed identity** — role assignments survive service re-creation; `rigg new <kind> <name> --identity <binding>` points a scaffold at one.
+`auth doctor` derives the identity graph from your workspace files — blob connections, model wiring, knowledge-store projections, agent-to-KB grounding, encryption keys — and scopes every requirement through the environment's [bindings](#infrastructure-bindings), so each one names a real ARM id rather than a guessed default. It checks the settings a keyless connection depends on too (search SKU and managed identity, Entra token acceptance, storage firewall and soft delete, AI Services account kind, function-app access restrictions and Easy Auth), and **your own** rights — including whether you can create the role assignments `--fix` would need. Every finding names the principal, role, scope, the file and path that require it, and the exact `az` command. Exit codes: **0** all good, **4** anything missing or unjudgeable, **6** when a fix needs an answer it cannot ask for.
 
-`auth easy-auth` covers the one edge RBAC cannot: a custom skill calling your Azure Function. It registers an Entra application for the app, merges Microsoft authentication into its Easy Auth settings so it accepts `api://<app-id>` from your search identity, and rewrites the skillsets that call it to be keyless (`authResourceId`, no `code=`, no `x-functions-key`). It shows the merged settings as a diff and asks before writing, and leaves the push to you.
+Every assignment rigg creates is tagged (`description: "rigg:<workspace>:<env>:<reason>"`), which is what lets `rigg auth roles list|remove` find and undo exactly rigg's own grants and nothing anyone else made. Two things rigg never does: grant **you** your own rights (an operator edge is always reported, never fixed — otherwise anyone who can run a push could escalate themselves), and manage keys or passwords of any kind.
 
-Where Azure still insists on a runtime key, name a key source instead of storing one: `"x-rigg-auth": "function-key"` (fetched from ARM at push time) or `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` (read from the vault at push time). Either way the value only ever exists in the outgoing request body.
+**Before, not after.** `rigg push` runs the same graph over its own plan before the first write: anything only a human may grant refuses there (exit 4, with the `az` line), what rigg may grant is applied after every gate has been cleared and then waited out until ARM reports it. `--dry-run` reports the whole remediation and refuses nothing; `--skip-auth-preflight` opts out.
 
-In CI or automation, rigg also accepts service-principal environment variables (`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/…) or a static bearer token via `RIGG_ACCESS_TOKEN`. Sovereign clouds and test rigs can override the service endpoint with `endpoint:` on a connection in `rigg.yaml`.
+**Then prove it.** `rigg push --verify` — or `rigg verify <project>` on its own — runs every indexer to completion, retrieves from every knowledge base, and asks every agent a one-turn question. A failure that looks like an authorization problem is attributed to the identity edge that would explain it. It exits 1 on any failure, and gates protected environments like any other mutation, because indexer runs cost money.
+
+Default to the search service's **system-assigned** identity: it is the only identity Azure Storage's trusted-services exception accepts, and it needs no binding. Reach for a user-assigned managed identity when role assignments must survive re-creating the service or be shared across environments — bind it and point a scaffold at it with `rigg new <kind> <name> --identity <binding>` (`data-source` and `skillset`).
+
+`auth easy-auth` covers the one edge RBAC cannot: a custom skill calling your Azure Function. It registers (or reuses, with `--client-id`) an Entra application for the app, merges Microsoft authentication into its Easy Auth settings so it accepts `api://<app-id>` from your search identity, and rewrites the skillsets that call it to be keyless (`authResourceId`, no `code=`, no `x-functions-key`). It shows the merged settings as a diff and asks before writing, and leaves the push to you.
+
+Where Azure still insists on a runtime key, name a key source instead of storing one: `"x-rigg-auth": "function-key"` (fetched from ARM `listkeys` at push time) or `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` (read from the vault at push time). Either way the value only ever exists in the outgoing request body — the file keeps `<redacted>`.
+
+In CI or automation, rigg accepts service-principal environment variables (`AZURE_CLIENT_ID` + `AZURE_TENANT_ID` plus `AZURE_CLIENT_SECRET` or `AZURE_FEDERATED_TOKEN_FILE` for OIDC), minting tokens straight from Entra ID with no Azure CLI installed — or a static bearer token via `RIGG_ACCESS_TOKEN`, honoured for every audience. Sovereign clouds and test rigs can override the service endpoint with `endpoint:` on an environment's `search:` or `foundry:` target in `rigg.yaml`.
 
 ### CI/CD
 
@@ -397,7 +414,7 @@ This creates three workflows:
 - **Deploy on merge** — `rigg push --all --yes` on `main`, authenticated with OIDC federated login (no stored secrets)
 - **Nightly drift detection** — `rigg diff --all --exit-code --format markdown`; opens or updates a GitHub issue when the portal has drifted from Git
 
-The target environment is baked into the workflows at scaffold time (pass `--env`, or your default environment is used). Finish the setup by creating an Entra app registration with federated credentials and adding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as repository variables — `rigg ci init` prints the exact steps.
+The target environment is baked into the workflows at scaffold time (pass `-e/--env`, or your default environment is used). Finish the setup by creating an Entra app registration with federated credentials and adding `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as repository variables — `rigg ci init` prints the exact steps, including the roles that environment's own files require: each role with the ARM scope to grant it at, derived from the same identity graph `rigg auth doctor` verifies, plus the scopes the CI identity needs `Microsoft.Authorization/roleAssignments/write` on so a push can grant the service identities their roles. Check the result with `rigg auth doctor -e <env> --principal <the CI identity's object id>` — or pre-grant everything yourself once and add `--skip-auth-preflight` to the deploy job.
 
 Since a CI job can't sit at a prompt, a step that would otherwise ask a question (like a protected environment's confirmation) exits 6 with a `needs-input` JSON document instead of hanging. Pre-answer it in the workflow with `--answer <id>=<value>` (repeatable) or `--answers-file <path>` — e.g. `rigg push --all --yes --answer confirm.protected.prod=prod`.
 

@@ -2620,3 +2620,46 @@ fn describe_lists_infrastructure() {
         .success()
         .stdout(predicate::str::contains("Infrastructure:").and(predicate::str::contains("docs")));
 }
+
+/// `rigg ci init`'s role list comes from the identity graph, not from a
+/// canned paragraph: a bound storage dependency is named with its role AND
+/// the ARM scope the grant has to be made at, and a scope the bindings cache
+/// cannot resolve says so instead of being invented.
+#[test]
+fn ci_init_role_list_names_the_bound_storage_role_with_its_scope() {
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "dev", "docs-ds", "devacct");
+    rigg()
+        .current_dir(ws.path())
+        .env("RIGG_NON_INTERACTIVE", "1")
+        .args(["ci", "init"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Storage Blob Data Reader")
+                .and(predicate::str::contains(storage_id("devacct")))
+                .and(predicate::str::contains("Search Service Contributor"))
+                .and(predicate::str::contains("rigg env bind dev --learn")),
+        );
+}
+
+/// The environment is the one selected, not always the default one — the
+/// workflows bake it in, so `-e prod` must produce prod's scopes.
+#[test]
+fn ci_init_uses_the_selected_environment() {
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "prod", "docs-ds", "prodacct");
+    rigg()
+        .current_dir(ws.path())
+        .env("RIGG_NON_INTERACTIVE", "1")
+        .args(["ci", "init", "-e", "prod"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains(storage_id("prodacct"))
+                .and(predicate::str::contains(storage_id("devacct")).not()),
+        );
+    let deploy =
+        std::fs::read_to_string(ws.path().join(".github/workflows/rigg-deploy.yml")).unwrap();
+    assert!(deploy.contains("prod"), "deploy workflow targets prod");
+}

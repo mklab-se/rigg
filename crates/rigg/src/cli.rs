@@ -955,7 +955,7 @@ impl Cli {
             Commands::Auth { command } => commands::auth::run(&ctx, command).await,
             Commands::Ai { command } => commands::ai::run(command).await,
             Commands::Mcp(args) => commands::mcp_cmd::run(&ctx, args).await,
-            Commands::Ci { command } => commands::ci::run(&ctx, command),
+            Commands::Ci { command } => commands::ci::run(&ctx, command).await,
             Commands::Dev { command } => commands::dev::run(&ctx, command).await,
             Commands::Completion { shell } => commands::completion::run(shell),
             Commands::Version => {

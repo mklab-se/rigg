@@ -145,10 +145,10 @@ Push local project files to Azure in dependency order. Only semantically-changed
 | `confirm_env` | string? | Required when `env` is a protected environment: must equal its name. Ignored unless `force: true` |
 | `allow_replace` | bool? | Required when the plan contains a replace (delete + recreate, e.g. a knowledge-source kind change after `rigg migrate`): the replaced index is rebuilt from source data. Ignored unless `force: true` |
 | `verify` | bool? | After the push, prove the stack works (the `rigg_verify` checks). Ignored unless `force: true` |
-| `skip_auth_preflight` | bool? | Skip the identity/RBAC preflight that runs before anything is written |
+| `skip_auth_preflight` | bool? | Skip the identity/RBAC preflight entirely — in the preview too, where it otherwise reports what a real push would need |
 | `answers` | map? | Answers to questions a previous call returned as `needs-input` (id → value) |
 
-An identity/RBAC preflight runs before the first write: requirements rigg may grant itself are listed and — once every confirmation has been given — applied and waited out; anything only a human may grant fails with exit 4 and the exact `az role assignment create` line. A refusal happens before the protected-environment gate, the grants after it, so a push that is never confirmed changes nothing at all.
+An identity/RBAC preflight runs before the first write — the same graph `rigg auth doctor` verifies, scoped to exactly the documents this push would send. Requirements rigg may grant itself are listed and — once every confirmation has been given — applied and then *waited out* (rigg polls until Azure reports the assignment) before the first PUT; anything only a human may grant fails with exit 4 and the exact `az role assignment create` line, because rigg never grants the caller their own rights. A refusal happens before the protected-environment gate, the grants after it, so a push that is never confirmed changes nothing at all. Without `force`, the preview reports the whole remediation and refuses nothing.
 
 ### rigg_promote
 
