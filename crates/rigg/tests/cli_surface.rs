@@ -1616,12 +1616,12 @@ fn validate_warns_on_unbound_in_dev_but_errors_in_protected_prod() {
 }
 
 #[test]
-fn validate_verbose_lists_bound_and_shared() {
+fn validate_show_bindings_lists_bound_and_shared() {
     let ws = workspace_two_envs_with_bindings();
     write_ds(ws.path(), "dev", "ds", "devacct");
     rigg()
         .current_dir(ws.path())
-        .args(["validate", "--verbose"])
+        .args(["validate", "--show-bindings"])
         .assert()
         .success()
         .stdout(predicate::str::contains("bound 'docs'"));

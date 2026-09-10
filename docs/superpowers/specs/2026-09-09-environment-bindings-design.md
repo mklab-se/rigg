@@ -232,7 +232,7 @@ reference in every file:
 | Class | Meaning | Severity |
 |---|---|---|
 | Bound | matches a binding of this environment (or an implicit one) | ok |
-| Shared | bound here and also in other environments with the same value | ok (listed in `--verbose`) |
+| Shared | bound here and also in other environments with the same value | ok (listed in `--show-bindings`) |
 | Leak | bound in **another** environment, not in this one | **error** — the file points at another environment's infrastructure |
 | Unbound | matches no binding anywhere | warning; **error** when `policy.strict-bindings: true` (default `true` when `protected`) |
 | External | `api` form with no matching `api` binding | warning (same strictness as Unbound) |

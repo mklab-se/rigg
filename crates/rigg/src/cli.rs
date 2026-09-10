@@ -42,10 +42,7 @@ pub struct Cli {
     pub non_interactive: bool,
 
     /// Increase logging verbosity (-v, -vv)
-    ///
-    /// Long form intentionally omitted: `validate --verbose` is a distinct,
-    /// subcommand-local flag (shows bound/shared infra references).
-    #[arg(short, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
     /// Suppress non-error output
@@ -611,9 +608,9 @@ pub struct ValidateArgs {
     #[arg(long)]
     pub strict: bool,
 
-    /// Show bound/shared infrastructure references, not just problems
-    #[arg(long = "verbose", id = "validate_verbose")]
-    pub verbose: bool,
+    /// Also list bound and shared infrastructure references
+    #[arg(long)]
+    pub show_bindings: bool,
 }
 
 #[derive(Subcommand)]

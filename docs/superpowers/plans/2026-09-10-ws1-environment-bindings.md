@@ -419,11 +419,11 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 4: `rigg validate` classifies infrastructure references
 
 **Files:**
-- Modify: `crates/rigg/src/commands/validate.rs` (warnings vector; per-env classification), `crates/rigg/src/cli.rs` (`ValidateArgs`: `--verbose` shows Bound/Shared rows)
+- Modify: `crates/rigg/src/commands/validate.rs` (warnings vector; per-env classification), `crates/rigg/src/cli.rs` (`ValidateArgs`: `--show-bindings` shows Bound/Shared rows)
 - Test: `crates/rigg/tests/cli_surface.rs`
 
 **Interfaces:**
-- `validate` JSON: `{ "valid": bool, "problems": [..], "warnings": [..] }`; text prints `✗` problems, `!` warnings, and with `--verbose` `✓ bound` / `= shared (prod)` rows.
+- `validate` JSON: `{ "valid": bool, "problems": [..], "warnings": [..] }`; text prints `✗` problems, `!` warnings, and with `--show-bindings` `✓ bound` / `= shared (prod)` rows.
 - Messages (exact prefixes, tested):
   - Leak: `[<file>] <path> references storage 'X', which is bound in environment 'prod' as 'docs-storage' but not in 'dev' — bind it (rigg env bind dev docs-storage storage:X) or fix the file`
   - Unbound: `[<file>] <path> references function-app 'Y', which no environment binds — run \`rigg env bind dev --learn\` to record it`
@@ -467,10 +467,10 @@ fn validate_warns_on_unbound_in_dev_but_errors_in_protected_prod() {
 }
 
 #[test]
-fn validate_verbose_lists_bound_and_shared() {
+fn validate_show_bindings_lists_bound_and_shared() {
     let ws = workspace_two_envs_with_bindings();
     write_ds(ws.path(), "dev", "ds", "devacct");
-    rigg().current_dir(ws.path()).args(["validate", "--verbose"]).assert().success()
+    rigg().current_dir(ws.path()).args(["validate", "--show-bindings"]).assert().success()
         .stdout(predicate::str::contains("bound 'docs'"));
 }
 ```
@@ -482,7 +482,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-In `validate::run`, build `EnvBindings` for every environment in `ws.config.environments` once (with the cache), then per env/project/file: `infra::extract` + `infra::classify(this, others, refs)`; map classes to problems/warnings with the exact messages above (Unbound/External → problems when `env.policy.strict_bindings()`, else warnings). Keep every existing check. `--verbose` (a new `ValidateArgs` flag, not the global `-v`) prints `✓ bound 'docs' (storage devacct)` / `= shared 'docs' with prod` lines.
+In `validate::run`, build `EnvBindings` for every environment in `ws.config.environments` once (with the cache), then per env/project/file: `infra::extract` + `infra::classify(this, others, refs)`; map classes to problems/warnings with the exact messages above (Unbound/External → problems when `env.policy.strict_bindings()`, else warnings). Keep every existing check. `--show-bindings` (a new `ValidateArgs` flag, not the global `-v`) prints `✓ bound 'docs' (storage devacct)` / `= shared 'docs' with prod` lines.
 
 - [ ] **Step 4: Gate and commit**
 

@@ -1,5 +1,6 @@
 //! `rigg validate` — structural, referential, ownership, and no-secrets checks.
 //!
+//! Use `--show-bindings` to list bound and shared infrastructure references.
 //! Exit code 3 when any check fails.
 
 use anyhow::{Result, anyhow};
@@ -18,7 +19,7 @@ use rigg_core::workspace::{Project, Workspace};
 use crate::cli::ValidateArgs;
 use crate::commands::{CommandError, GlobalContext, load_workspace};
 
-/// One bound/shared infrastructure reference, surfaced with `--verbose`.
+/// One bound/shared infrastructure reference, surfaced with `--show-bindings`.
 /// JSON serializes only `{file, path, class, binding}`; `target`/`physical`/
 /// `shared_with` are kept for the text-mode `✓ bound` / `= shared` lines.
 #[derive(Debug, Clone, Serialize)]
@@ -138,7 +139,7 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
             "problems": problems,
             "warnings": warnings,
         });
-        if args.verbose {
+        if args.show_bindings {
             json["bindings"] = serde_json::to_value(&binding_rows)?;
         }
         println!("{}", serde_json::to_string_pretty(&json)?);
@@ -153,7 +154,7 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
                 println!("{} {w}", "!".yellow().bold());
             }
         }
-        if args.verbose {
+        if args.show_bindings {
             for row in &binding_rows {
                 match row.class.as_str() {
                     "bound" => println!(
