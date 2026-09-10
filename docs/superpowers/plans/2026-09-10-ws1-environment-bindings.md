@@ -56,7 +56,7 @@ fn ws_yaml_bindings() -> &'static str {
 environments:
   dev:
     default: true
-    tenant: 45943588-b4fb-4765-ae17-76638c45bb5c
+    tenant: 11111111-1111-1111-1111-111111111111
     subscription: 00000000-0000-0000-0000-000000000000
     search: { service: mklabsrch }
     foundry: { account: mklabaifndr, project: proj-default }
