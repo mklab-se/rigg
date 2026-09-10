@@ -62,14 +62,15 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
         )));
     }
 
-    // Identity guidance (spec §8.2): informational in 0.18, doctor lands in 0.19.
+    // Identity guidance: informational; `rigg auth doctor` verifies the wiring.
     println!();
     println!("{}", "Identity guidance".bold());
     println!(
         "  For stacks spanning services (search + storage + foundry), a USER-ASSIGNED managed\n\
          \x20 identity is recommended: one identity for the whole pipeline, role assignments\n\
          \x20 survive service re-creation, and it works across environments. Use system-assigned\n\
-         \x20 for simple single-service setups. `rigg auth doctor` (0.19) will verify the wiring."
+         \x20 for simple single-service setups. `rigg auth doctor` verifies the wiring; `rigg new\n\
+         \x20 <kind> <name> --identity <binding>` writes the identity into new resources."
     );
 
     // Write rigg.yaml
