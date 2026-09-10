@@ -244,7 +244,16 @@ fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a Bindi
         matches!(e.kind, BindingKind::Declared(BindingType::Api))
             && e.declared.as_ref().is_some_and(|b| {
                 let origin = b.value.trim_end_matches('/').to_ascii_lowercase();
-                !origin.is_empty() && ref_lower.starts_with(&origin)
+                if origin.is_empty() || !ref_lower.starts_with(&origin) {
+                    return false;
+                }
+                // The match must end at a URL boundary — `origin` prefixing
+                // `ref_lower` isn't enough, or `https://api.partner.example`
+                // would match `https://api.partner.example.evil.test/x`.
+                matches!(
+                    ref_lower.as_bytes().get(origin.len()),
+                    None | Some(b'/') | Some(b'?') | Some(b'#')
+                )
             })
     })
 }
@@ -255,7 +264,12 @@ fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a Bindi
 
 fn parse_storage(value: &Value) -> Option<PhysicalRef> {
     let s = value.as_str()?;
-    let body = s.strip_prefix("ResourceId=")?;
+    // Locate `ResourceId=` case-insensitively, anywhere in the connection
+    // string (aligned with `identity::parse_resource_id`) — it need not be
+    // the first key (e.g. `AccountName=x;ResourceId=...`).
+    let lower = s.to_ascii_lowercase();
+    let start = lower.find("resourceid=")? + "resourceid=".len();
+    let body = &s[start..];
     let arm_id = body.split(';').next().unwrap_or(body);
     if arm_id.contains('<') {
         return None;
@@ -478,7 +492,16 @@ fn render_kb_mcp(target: &RenderTarget) -> Result<Value, String> {
 
 fn as_url(value: &Value) -> Option<&str> {
     let s = value.as_str()?;
-    (s.starts_with("http://") || s.starts_with("https://")).then_some(s)
+    let looks_like_url = s.starts_with("http://") || s.starts_with("https://");
+    if !looks_like_url {
+        return None;
+    }
+    // Reject a placeholder host (e.g. `https://<account>.openai.azure.com`),
+    // same as the storage/identity forms — but only in the host, not the
+    // path/query, where a literal `<...>` can legitimately appear (e.g. a
+    // redacted secret: `?code=<redacted>`).
+    let (host, _tail) = host_and_tail(s);
+    (!host.contains('<')).then_some(s)
 }
 
 /// Split a URL into its host and the tail (path + query, including the
@@ -531,11 +554,12 @@ fn parse_host_suffix(
 }
 
 /// `constraint`'s last dot-segment (e.g. `"AzureOpenAIEmbeddingSkill"` from
-/// `"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"`) must be a suffix of
-/// `actual` — so any namespace ending in that skill type name matches.
+/// `"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"`) must equal
+/// `actual`'s last dot-segment — so any namespace ending in that exact skill
+/// type name matches, but a same-suffixed-but-different type (e.g.
+/// `MyAzureOpenAIEmbeddingSkill`) does not.
 fn odata_type_matches(constraint: &str, actual: &str) -> bool {
-    let tail = constraint.rsplit('.').next().unwrap_or(constraint);
-    actual.ends_with(tail)
+    actual.rsplit('.').next() == constraint.rsplit('.').next()
 }
 
 /// Walk `segments` (registry path syntax) from `v`, appending matched
@@ -567,7 +591,11 @@ fn walk_infra<'a>(
                         continue;
                     }
                 }
-                let new_prefix = format!("{prefix}{key}[{i}]");
+                let new_prefix = if prefix.is_empty() {
+                    format!("{key}[{i}]")
+                } else {
+                    format!("{prefix}.{key}[{i}]")
+                };
                 walk_infra(item, rest, new_prefix, only_odata_type, out);
             }
         }
@@ -885,5 +913,119 @@ mod tests {
         assert!(matches!(&out[2].class, Class::Bound(b) if b == "foundry"));
         assert!(matches!(out[3].class, Class::Unbound));
         assert!(matches!(out[4].class, Class::External));
+    }
+
+    #[test]
+    fn extract_builds_dotted_concrete_path_when_array_segment_is_not_first() {
+        // Regression: the `[]` segment in `vectorSearch.vectorizers[]...` is
+        // not the first path segment, so the concrete path must keep the `.`
+        // separator between `vectorSearch` and `vectorizers[0]`.
+        let index = json!({
+            "name": "idx",
+            "vectorSearch": {
+                "vectorizers": [
+                    {
+                        "kind": "azureOpenAI",
+                        "azureOpenAIParameters": {
+                            "resourceUri": "https://mklabaifndr.openai.azure.com"
+                        }
+                    }
+                ]
+            }
+        });
+        let refs = extract(ResourceKind::Index, &index);
+        let paths: Vec<&str> = refs.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["vectorSearch.vectorizers[0].azureOpenAIParameters.resourceUri"],
+            "{paths:?}"
+        );
+    }
+
+    #[test]
+    fn extract_finds_web_api_skill_auth_identity() {
+        // `skills[].authIdentity` is not gated on any particular skill type
+        // (the spec table has no skill-type annotation for that row), so a
+        // WebApiSkill's authIdentity must be found too, not just an
+        // AzureOpenAIEmbeddingSkill's.
+        let skillset = json!({"name": "ss", "skills": [
+            {
+                "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                "uri": "https://mklab.azurewebsites.net/api/x",
+                "authIdentity": {
+                    "@odata.type": "#Microsoft.Azure.Search.DataUserAssignedIdentity",
+                    "userAssignedIdentity": "/subscriptions/S/resourcegroups/RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/Rigg-Dev"
+                }
+            }
+        ]});
+        let refs = extract(ResourceKind::Skillset, &skillset);
+        let paths: Vec<&str> = refs.iter().map(|r| r.path.as_str()).collect();
+        assert!(paths.contains(&"skills[0].authIdentity"), "{paths:?}");
+    }
+
+    #[test]
+    fn odata_type_matches_requires_exact_last_segment_not_suffix() {
+        assert!(odata_type_matches(
+            "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
+            "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"
+        ));
+        // `MyAzureOpenAIEmbeddingSkill` ends with the constraint's tail but
+        // is not the same skill type — must not match.
+        assert!(!odata_type_matches(
+            "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
+            "#Contoso.Skills.MyAzureOpenAIEmbeddingSkill"
+        ));
+    }
+
+    #[test]
+    fn parse_storage_locates_resourceid_case_insensitively_anywhere() {
+        let v = json!(
+            "AccountName=x;ResourceId=/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/MKLabAcct"
+        );
+        assert_eq!(
+            parse(InfraForm::StorageResourceId, &v).unwrap().physical,
+            "mklabacct"
+        );
+        let lower = json!(
+            "resourceid=/subscriptions/S/resourceGroups/RG/providers/Microsoft.Storage/storageAccounts/MKLabAcct"
+        );
+        assert_eq!(
+            parse(InfraForm::StorageResourceId, &lower)
+                .unwrap()
+                .physical,
+            "mklabacct"
+        );
+    }
+
+    #[test]
+    fn url_forms_reject_placeholder_hosts() {
+        assert!(
+            parse(
+                InfraForm::OpenAiEndpoint,
+                &json!("https://<account>.openai.azure.com")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn find_api_binding_respects_url_boundary() {
+        let dev = EnvBindings::of_env(
+            "dev",
+            &env_with(
+                &[("api", BindingType::Api, "https://api.partner.example")],
+                "mklabsrch",
+                "mklabaifndr",
+            ),
+            None,
+        );
+        let refs = vec![found(
+            InfraForm::ApiUri,
+            "skills[0].uri",
+            Target::Api,
+            "api.partner.example.evil.test",
+        )];
+        let out = classify(&dev, &[], refs);
+        assert!(matches!(out[0].class, Class::External));
     }
 }

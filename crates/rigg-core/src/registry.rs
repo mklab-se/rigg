@@ -443,11 +443,7 @@ static KINDS: &[KindMeta] = &[
         domain: Domain::Search,
         collection_path: "indexers",
         dir_name: "indexers",
-        // `cache` (the indexer's incremental-enrichment cache, storage +
-        // identity) does not exist in the stable api-version — a stable GET
-        // silently omits it and a stable PUT cannot set it. Same reasoning
-        // as KnowledgeBase's preview channel below.
-        channel: Channel::Preview,
+        channel: Channel::Stable,
         volatile_fields: COMMON_VOLATILE,
         // GET /indexers('name') never returns status/lastResult/
         // executionHistory/limits — those live on the separate
@@ -789,7 +785,7 @@ static SKILLSET_INFRA: &[InfraRef] = &[
     InfraRef {
         path: "skills[].authIdentity",
         form: InfraForm::UserAssignedIdentity,
-        only_odata_type: Some("#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"),
+        only_odata_type: None,
     },
     InfraRef {
         path: "skills[].uri",
@@ -823,23 +819,14 @@ static SKILLSET_INFRA: &[InfraRef] = &[
     },
 ];
 
-static INDEXER_INFRA: &[InfraRef] = &[
-    InfraRef {
-        path: "cache.storageConnectionString",
-        form: InfraForm::StorageResourceId,
-        only_odata_type: None,
-    },
-    InfraRef {
-        path: "cache.identity",
-        form: InfraForm::UserAssignedIdentity,
-        only_odata_type: None,
-    },
-    InfraRef {
-        path: "encryptionKey.keyVaultUri",
-        form: InfraForm::KeyVaultUri,
-        only_odata_type: None,
-    },
-];
+// The indexer's incremental-enrichment cache (`cache.storageConnectionString`,
+// `cache.identity`) is preview-only and out of scope for rigg 2.0 — it is
+// deliberately not modelled here.
+static INDEXER_INFRA: &[InfraRef] = &[InfraRef {
+    path: "encryptionKey.keyVaultUri",
+    form: InfraForm::KeyVaultUri,
+    only_odata_type: None,
+}];
 
 static KNOWLEDGE_SOURCE_INFRA: &[InfraRef] = &[
     InfraRef {
@@ -1412,6 +1399,36 @@ mod tests {
             infra_refs(ResourceKind::Agent)[0].path,
             "tools[].server_url"
         );
+
+        let index: Vec<&str> = infra_refs(ResourceKind::Index)
+            .iter()
+            .map(|r| r.path)
+            .collect();
+        assert!(index.contains(&"vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri"));
+
+        let skillset: Vec<&str> = infra_refs(ResourceKind::Skillset)
+            .iter()
+            .map(|r| r.path)
+            .collect();
+        assert!(skillset.contains(&"skills[].uri"));
+
+        let kb: Vec<&str> = infra_refs(ResourceKind::KnowledgeBase)
+            .iter()
+            .map(|r| r.path)
+            .collect();
+        assert!(kb.contains(&"models[].azureOpenAIParameters.resourceUri"));
+
+        let connection: Vec<&str> = infra_refs(ResourceKind::Connection)
+            .iter()
+            .map(|r| r.path)
+            .collect();
+        assert!(connection.contains(&"properties.target"));
+
+        // Total row count across every kind, per the spec table — 31 rows
+        // minus the two preview-only Indexer `cache.*` rows this rigg 2.0
+        // scope deliberately does not model.
+        let total: usize = all_kinds().iter().map(|k| infra_refs(*k).len()).sum();
+        assert_eq!(total, 29);
     }
 
     #[test]
