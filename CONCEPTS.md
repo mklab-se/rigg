@@ -259,6 +259,10 @@ For each field, translation picks exactly one of:
 5. **Everything else** comes from `A` — that is the promotion.
 
 Resources that only exist in `B` are never touched, and nothing is deleted.
+The translated document is written exactly as translation produced it — a
+target-only `x-rigg-*` annotation other than `x-rigg-pin` is not carried
+over, because carrying anything over from the file being replaced would
+silently undo the translation.
 Sidecars are promoted as content (inline on read, extract on write). A→B and
 B→A are the same operation — you choose the direction with `--from`/`--to`,
 not a fixed "deploy" direction.
@@ -268,7 +272,8 @@ value that matches no binding in `A`, a binding that exists in `A` but not
 `B`, an external `api` URL with no `api` binding in either environment, or a
 new-in-`B` deployment that Azure reports as unavailable or short on quota in
 `B`'s region. Interactively these are asked inline (answers that create
-bindings are written to `rigg.yaml` immediately); non-interactively every
+bindings are written to `rigg.yaml` once the run proceeds past the preview —
+a run aborted at the confirmation loses them); non-interactively every
 pending question comes back as a `needs-input` document (exit 6, nothing
 written) — answer with `--answer <id>=<value>` (repeatable) or
 `--answers-file <path>`. `--yes` applies a plan that has no pending
@@ -286,7 +291,7 @@ instead of failing.
 (shared vs. changed, with reference counts), renamed siblings with the
 number of references rewritten, a resource summary (changed / new /
 unchanged / kept-only-in-target) with per-resource semantic diffs, and
-checks (deployment availability/quota, sidecar content changes). `--dry-run`
+checks (deployment availability/quota). `--dry-run`
 still runs the online checks — pass `--offline` too for a network-free
 preview, which may still ask questions from what's already on disk.
 `--output json` carries the same sections as documented keys: `targets`,

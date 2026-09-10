@@ -260,6 +260,19 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     }
     say!(ctx);
     say!(ctx, "Promoted {written} resource(s) into '{}'.", args.to);
+    // A promote can succeed having written a document that still points at
+    // the source environment (a skipped or unresolved binding). Exit 0 is
+    // right — push's preflight refuses a leak — but the run must say so
+    // rather than end on an unqualified success line.
+    let kept = kept_from_source(&checks, &args.from);
+    if kept > 0 {
+        say!(
+            ctx,
+            "! {kept} reference(s) kept from '{}' — run rigg validate {project_name} before \
+             pushing",
+            args.from
+        );
+    }
     say!(ctx, "hint: rigg validate {project_name}");
     say!(ctx, "      rigg auth doctor -e {}", args.to);
     say!(
@@ -269,6 +282,16 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     );
     say!(ctx, "      rigg push {project_name} -e {}", args.to);
     Ok(())
+}
+
+/// How many Checks report a reference the translation had to leave pointing
+/// at the source environment.
+fn kept_from_source(checks: &[Check], from: &str) -> usize {
+    let marker = format!("kept from '{from}'");
+    checks
+        .iter()
+        .filter(|c| c.message.contains(&marker))
+        .count()
 }
 
 /// How many of the plan's documents this run would actually write.
@@ -294,7 +317,10 @@ fn missing_env_message(ws: &Workspace, from: &str, to: &str) -> String {
             ));
         }
     }
-    format!("environment '{to}' does not exist — create it first: {command}")
+    format!(
+        "environment '{to}' does not exist — create it first: {command} (adjust the targets for \
+         '{to}')"
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -1913,7 +1939,7 @@ mod tests {
         assert!(
             message.contains(
                 "rigg env add staging --like dev --search-service s-dev --foundry-account a \
-                 --foundry-project p"
+                 --foundry-project p (adjust the targets for 'staging')"
             ),
             "{message}"
         );

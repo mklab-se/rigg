@@ -1068,6 +1068,10 @@ fn promote_x_rigg_pin_annotation_keeps_extra_path_and_itself() {
             "prod",
             "-y",
             "--offline",
+            // The target is an endpoint bound in neither environment:
+            // promote asks before keeping it verbatim.
+            "--answer",
+            "promote.external.dev-endpoint=yes",
         ])
         .assert()
         .success();
@@ -1079,8 +1083,8 @@ fn promote_x_rigg_pin_annotation_keeps_extra_path_and_itself() {
     );
     assert_eq!(
         merged["properties"]["target"], "https://dev-endpoint",
-        "2.0: nothing is pinned by kind — an endpoint that is not a \
-         recognized infrastructure reference promotes like any other field"
+        "2.0: nothing is pinned by kind — an external endpoint kept verbatim \
+         promotes like any other field"
     );
     assert_eq!(
         merged["properties"]["description"], "prod description — do not overwrite",
@@ -1360,6 +1364,51 @@ fn promote_missing_target_binding_emits_needs_input_non_interactively() {
 }
 
 #[test]
+fn promote_summarizes_references_kept_from_the_source() {
+    // A skipped binding leaves the written file pointing at dev's function
+    // app: the run succeeds, but must not end without saying so.
+    let ws = workspace_two_envs_with_bindings();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "fn", "function-app:mklab-dev"])
+        .assert()
+        .success();
+    write_skillset_with_webapi(
+        ws.path(),
+        "dev",
+        "ss",
+        "https://mklab-dev.azurewebsites.net/api/enrich",
+    );
+
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--offline",
+            "--answer",
+            "binding.prod.fn=skip",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 reference(s) kept from 'dev'"))
+        .stdout(predicate::str::contains("rigg validate"));
+    let written = std::fs::read_to_string(
+        ws.path()
+            .join("projects/demo/envs/prod/search/skillsets/ss.json"),
+    )
+    .unwrap();
+    assert!(
+        written.contains("mklab-dev"),
+        "the reference really is kept: {written}"
+    );
+}
+
+#[test]
 fn promote_into_unknown_env_non_interactive_points_at_env_add() {
     let ws = workspace_two_envs_with_bindings();
     rigg()
@@ -1367,7 +1416,10 @@ fn promote_into_unknown_env_non_interactive_points_at_env_add() {
         .args(["promote", "--from", "dev", "--to", "staging", "--yes"])
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("rigg env add staging --like dev"));
+        .stderr(predicate::str::contains("rigg env add staging --like dev"))
+        .stderr(predicate::str::contains(
+            "(adjust the targets for 'staging')",
+        ));
 }
 
 #[test]

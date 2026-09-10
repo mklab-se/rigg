@@ -107,6 +107,9 @@ pub struct Classified {
     pub class: Class,
 }
 
+/// The host suffix of every Azure AI Search data-plane endpoint.
+const SEARCH_HOST_SUFFIX: &str = ".search.windows.net";
+
 const OPENAI_HOST_SUFFIXES: &[&str] = &[
     "openai.azure.com",
     "cognitiveservices.azure.com",
@@ -125,6 +128,7 @@ pub fn parse(form: InfraForm, value: &Value) -> Option<PhysicalRef> {
         InfraForm::ApiUri => parse_api_uri(value),
         InfraForm::KeyVaultUri => parse_keyvault(value),
         InfraForm::SearchKbMcpUrl => parse_kb_mcp(value),
+        InfraForm::Endpoint => parse_endpoint(value),
     }
 }
 
@@ -140,6 +144,7 @@ pub fn render(form: InfraForm, original: &Value, target: &RenderTarget) -> Resul
         InfraForm::ApiUri => render_api_uri(original, target),
         InfraForm::KeyVaultUri => render_keyvault(original, target),
         InfraForm::SearchKbMcpUrl => render_kb_mcp(target),
+        InfraForm::Endpoint => render_endpoint(original, target),
     }
 }
 
@@ -383,7 +388,7 @@ fn parse_kb_mcp(value: &Value) -> Option<PhysicalRef> {
     let (host, tail) = host_and_tail(url);
     let svc = host
         .to_ascii_lowercase()
-        .strip_suffix(".search.windows.net")?
+        .strip_suffix(SEARCH_HOST_SUFFIX)?
         .to_string();
     let path_only = tail.split('?').next().unwrap_or(tail);
     let mut segs = path_only.split('/').filter(|s| !s.is_empty());
@@ -398,6 +403,33 @@ fn parse_kb_mcp(value: &Value) -> Option<PhysicalRef> {
         physical: svc,
         original: value.clone(),
         kb_name: Some(kb.to_string()),
+    })
+}
+
+/// The composite [`InfraForm::Endpoint`]: try each endpoint shape in turn,
+/// most specific first, and fall back to the `ApiUri` rules.
+fn parse_endpoint(value: &Value) -> Option<PhysicalRef> {
+    parse_kb_mcp(value)
+        .or_else(|| parse_host(value, Target::ModelHost))
+        .or_else(|| parse_search_endpoint(value))
+        .or_else(|| parse_api_uri(value))
+}
+
+/// A bare `https://X.search.windows.net[/…]` endpoint — the implicit
+/// `search` target with no knowledge base. (The KB-MCP shape is recognized
+/// first, by [`parse_kb_mcp`].)
+fn parse_search_endpoint(value: &Value) -> Option<PhysicalRef> {
+    let url = as_url(value)?;
+    let (host, _tail) = host_and_tail(url);
+    let svc = host
+        .to_ascii_lowercase()
+        .strip_suffix(SEARCH_HOST_SUFFIX)?
+        .to_string();
+    (!svc.is_empty()).then(|| PhysicalRef {
+        target: Target::SearchService,
+        physical: svc,
+        original: value.clone(),
+        kb_name: None,
     })
 }
 
@@ -531,6 +563,29 @@ fn render_kb_mcp(target: &RenderTarget) -> Result<Value, String> {
         "https://{}.search.windows.net/knowledgebases/{kb}/mcp?api-version={SEARCH_PREVIEW_API_VERSION}",
         target.physical
     )))
+}
+
+/// The composite [`InfraForm::Endpoint`]: rewrite `original` per the shape
+/// [`parse_endpoint`] recognizes it as.
+fn render_endpoint(original: &Value, target: &RenderTarget) -> Result<Value, String> {
+    let parsed = parse_endpoint(original)
+        .ok_or_else(|| format!("`{original}` is not a recognized endpoint"))?;
+    match (parsed.target, parsed.kb_name.is_some()) {
+        (Target::SearchService, true) => render_kb_mcp(target),
+        (Target::SearchService, false) => {
+            let url = original
+                .as_str()
+                .ok_or("Endpoint render requires a string value")?;
+            let (_, tail) = host_and_tail(url);
+            let scheme = url_scheme(url);
+            Ok(Value::String(format!(
+                "{scheme}://{}{SEARCH_HOST_SUFFIX}{tail}",
+                target.physical
+            )))
+        }
+        (Target::ModelHost, _) => render_host_swap(original, target, OPENAI_HOST_SUFFIXES),
+        _ => render_api_uri(original, target),
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1215,5 +1270,137 @@ mod tests {
         )];
         let out = classify(&dev, &[], refs);
         assert!(matches!(out[0].class, Class::External));
+    }
+
+    fn to(physical: &str) -> RenderTarget {
+        RenderTarget {
+            physical: physical.to_string(),
+            arm_id: None,
+            base_url: None,
+            kb_name: None,
+            source_base_url: None,
+        }
+    }
+
+    #[test]
+    fn endpoint_form_parses_and_renders_a_kb_mcp_url() {
+        let url = json!(format!(
+            "https://s-dev.search.windows.net/knowledgebases/kb-dev/mcp?api-version={SEARCH_PREVIEW_API_VERSION}"
+        ));
+        let p = parse(InfraForm::Endpoint, &url).unwrap();
+        assert_eq!(
+            (p.target, p.physical.as_str(), p.kb_name.as_deref()),
+            (Target::SearchService, "s-dev", Some("kb-dev"))
+        );
+        assert_eq!(
+            render(
+                InfraForm::Endpoint,
+                &url,
+                &RenderTarget {
+                    kb_name: Some("kb".into()),
+                    ..to("s-prod")
+                },
+            )
+            .unwrap(),
+            json!(format!(
+                "https://s-prod.search.windows.net/knowledgebases/kb/mcp?api-version={SEARCH_PREVIEW_API_VERSION}"
+            ))
+        );
+    }
+
+    #[test]
+    fn endpoint_form_parses_and_renders_a_model_host() {
+        for host in [
+            "https://acct-dev.openai.azure.com",
+            "https://acct-dev.cognitiveservices.azure.com/",
+            "https://acct-dev.services.ai.azure.com/api/projects/p",
+        ] {
+            let url = json!(host);
+            let p = parse(InfraForm::Endpoint, &url).unwrap();
+            assert_eq!(
+                (p.target, p.physical.as_str(), p.kb_name.as_deref()),
+                (Target::ModelHost, "acct-dev", None),
+                "{host}"
+            );
+            let rendered = render(InfraForm::Endpoint, &url, &to("acct-prod")).unwrap();
+            assert_eq!(
+                rendered,
+                json!(host.replace("acct-dev", "acct-prod")),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_form_parses_and_renders_a_bare_search_endpoint() {
+        let url = json!("https://s-dev.search.windows.net");
+        let p = parse(InfraForm::Endpoint, &url).unwrap();
+        assert_eq!(
+            (p.target, p.physical.as_str(), p.kb_name.as_deref()),
+            (Target::SearchService, "s-dev", None)
+        );
+        assert_eq!(
+            render(InfraForm::Endpoint, &url, &to("s-prod")).unwrap(),
+            json!("https://s-prod.search.windows.net")
+        );
+        // A path that is not the KB-MCP shape is kept as it is.
+        let indexes = json!("https://s-dev.search.windows.net/indexes/docs");
+        assert_eq!(
+            parse(InfraForm::Endpoint, &indexes).unwrap().target,
+            Target::SearchService
+        );
+        assert_eq!(
+            render(InfraForm::Endpoint, &indexes, &to("s-prod")).unwrap(),
+            json!("https://s-prod.search.windows.net/indexes/docs")
+        );
+    }
+
+    #[test]
+    fn endpoint_form_falls_back_to_the_api_uri_rules() {
+        let f = json!("https://fn-dev.azurewebsites.net/api/enrich");
+        let p = parse(InfraForm::Endpoint, &f).unwrap();
+        assert_eq!(
+            (p.target, p.physical.as_str()),
+            (Target::FunctionApp, "fn-dev")
+        );
+        assert_eq!(
+            render(InfraForm::Endpoint, &f, &to("fn-prod")).unwrap(),
+            json!("https://fn-prod.azurewebsites.net/api/enrich")
+        );
+
+        let x = json!("https://api.partner.example/v1/enrich");
+        assert_eq!(parse(InfraForm::Endpoint, &x).unwrap().target, Target::Api);
+        assert_eq!(
+            render(
+                InfraForm::Endpoint,
+                &x,
+                &RenderTarget {
+                    base_url: Some("https://api.partner-prod.example/v2".into()),
+                    source_base_url: Some("https://api.partner.example/v1".into()),
+                    ..to("api.partner-prod.example")
+                },
+            )
+            .unwrap(),
+            json!("https://api.partner-prod.example/v2/enrich")
+        );
+    }
+
+    #[test]
+    fn a_connection_target_naming_another_environments_search_service_is_a_leak() {
+        let dev = EnvBindings::of_env("dev", &env_with(&[], "s-dev", "f-dev"), None);
+        let prod = EnvBindings::of_env("prod", &env_with(&[], "s-prod", "f-prod"), None);
+        let connection = json!({
+            "name": "kb-conn",
+            "properties": {"category": "CognitiveSearch", "target": "https://s-dev.search.windows.net"}
+        });
+        let refs = extract(ResourceKind::Connection, &connection);
+        assert_eq!(refs.len(), 1, "{refs:?}");
+        assert_eq!(refs[0].path, "properties.target");
+        let out = classify(&prod, &[dev], refs);
+        assert!(
+            matches!(&out[0].class, Class::Leak { binding, envs } if binding == "search" && envs == &vec!["dev".to_string()]),
+            "{:?}",
+            out[0].class
+        );
     }
 }

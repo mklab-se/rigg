@@ -725,6 +725,14 @@ pub enum InfraForm {
     /// implicit `search` target, plus a sibling reference to
     /// `knowledge-bases/<kb>`.
     SearchKbMcpUrl,
+    /// A composite endpoint field that may hold any endpoint shape — a
+    /// connection's `properties.target`, an agent tool's `server_url`.
+    /// Recognized in order: the [`InfraForm::SearchKbMcpUrl`] shape, an
+    /// OpenAI / AI-services host ([`InfraForm::OpenAiEndpoint`]), a bare
+    /// `https://X.search.windows.net[/…]` endpoint (the implicit `search`
+    /// target, with no knowledge base), then the [`InfraForm::ApiUri`]
+    /// rules (function app, else external `api`).
+    Endpoint,
 }
 
 /// An infrastructure-reference field: `path` (registry path syntax, `a.b[].c`)
@@ -894,15 +902,20 @@ static KNOWLEDGE_BASE_INFRA: &[InfraRef] = &[
     },
 ];
 
+// An agent tool's `server_url` and a connection's `properties.target` are
+// not knowledge-base MCP URLs only: they hold whatever endpoint the tool or
+// connection category calls for (a search service, a model host, a function,
+// an external API). `Endpoint` recognizes each shape, so all of them are
+// visible to translation, `validate` and push's preflight.
 static AGENT_INFRA: &[InfraRef] = &[InfraRef {
     path: "tools[].server_url",
-    form: InfraForm::SearchKbMcpUrl,
+    form: InfraForm::Endpoint,
     only_odata_type: None,
 }];
 
 static CONNECTION_INFRA: &[InfraRef] = &[InfraRef {
     path: "properties.target",
-    form: InfraForm::SearchKbMcpUrl,
+    form: InfraForm::Endpoint,
     only_odata_type: None,
 }];
 
@@ -949,6 +962,9 @@ pub const X_RIGG_PIN: &str = "x-rigg-pin";
 /// URI or an `x-functions-key` header is the carrier). Environment-specific:
 /// it authorizes ONE environment's function app and never crosses a promote.
 pub const X_RIGG_AUTH: &str = "x-rigg-auth";
+/// The [`X_RIGG_AUTH`] value meaning "a function key is the carrier": the
+/// key itself lives in ARM, never on disk.
+pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
 
 /// Mutable counterpart of [`collect_path`]: visit every value at `path`.
 fn collect_path_mut(v: &mut Value, path: &str, f: &mut dyn FnMut(&mut Value)) {

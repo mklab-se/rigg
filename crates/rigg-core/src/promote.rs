@@ -37,11 +37,14 @@ use crate::binding::{
     BindingEntry, BindingKind, BindingType, BindingValue, EnvBindings, RESERVED_BINDING_NAMES,
 };
 use crate::infra::{self, RenderTarget, Target};
-use crate::registry::{self, X_RIGG_AUTH, X_RIGG_PIN, X_RIGG_REF};
+use crate::registry::{self, X_RIGG_AUTH, X_RIGG_AUTH_FUNCTION_KEY, X_RIGG_PIN, X_RIGG_REF};
 use crate::resources::ResourceKind;
 
 /// The `x-functions-key` header a WebApiSkill uses to carry a function key.
 const FUNCTION_KEY_HEADER: &str = "x-functions-key";
+/// The placeholder Azure itself returns in place of a redacted key — and
+/// what a file records for a key that lives in ARM, never on disk.
+const REDACTED_KEY: &str = "<redacted>";
 
 /// Where one infrastructure reference or binding is used:
 /// `(kind, file stem, path within the document)`.
@@ -409,6 +412,23 @@ fn has_code_param(uri: &str) -> bool {
         .is_some_and(|(_, query)| query.split('&').any(is_code_param))
 }
 
+/// Put `key` into the uri's `code` query parameter, replacing any existing
+/// one. The inverse of [`strip_code_param`]; shared with the CLI's
+/// credential plumbing so a key lands the same way everywhere.
+pub fn set_code_param(uri: &str, key: &str) -> String {
+    let (base, query) = match uri.split_once('?') {
+        Some((b, q)) => (b, q),
+        None => (uri, ""),
+    };
+    let mut params: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && !is_code_param(p))
+        .map(str::to_string)
+        .collect();
+    params.push(format!("code={key}"));
+    format!("{base}?{}", params.join("&"))
+}
+
 fn strip_code_param(uri: &str) -> String {
     let Some((base, query)) = uri.split_once('?') else {
         return uri.to_string();
@@ -642,9 +662,11 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
     let mut out = Vec::new();
 
     // Collect every reference value at a CONCRETE path first, across all of
-    // the kind's reference fields: `rename_reference` rewrites every field
-    // pointing at the same kind at once, so reading after the first rename
-    // would miss the values it already changed.
+    // the kind's reference fields, then write each one back at its own path.
+    // Every value is mapped by what it was BEFORE any rewrite: a whole-
+    // document rename pass would corrupt a swap (dev `a` = `ks-1`, `b` =
+    // `ks-2`; prod the other way round) by rewriting `ks-1` to `ks-2` and
+    // then that same value back to `ks-1`.
     let mut hits: Vec<(String, ResourceKind, String)> = Vec::new();
     for field in registry::meta(kind).reference_fields {
         collect_concrete(merged, field.path, &mut |path, value| {
@@ -655,35 +677,30 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
             }
         });
     }
-    // One record per rewritten value, not per (field, name) pair.
-    for (path, to, old) in &hits {
-        if let Some((new, stem)) = renames.get(*to, old) {
-            out.push(Renamed {
-                path: path.clone(),
-                kind: *to,
-                stem: stem.to_string(),
-                from: old.clone(),
-                to: new.to_string(),
-            });
-        }
-    }
-    let mut applied: BTreeSet<(ResourceKind, String)> = BTreeSet::new();
-    for (_, to, old) in &hits {
-        if !applied.insert((*to, old.clone())) {
+    // One record per rewritten value, at the path it was rewritten at.
+    for (path, to, old) in hits {
+        let Some((new, stem)) = renames.get(to, &old) else {
+            continue;
+        };
+        let (new, stem) = (new.to_string(), stem.to_string());
+        if !set_path(merged, &path, Value::String(new.clone())) {
             continue;
         }
-        if let Some((new, _)) = renames.get(*to, old) {
-            let new = new.to_string();
-            registry::rename_reference(kind, merged, *to, old, &new);
-        }
+        out.push(Renamed {
+            path,
+            kind: to,
+            stem,
+            from: old,
+            to: new,
+        });
     }
 
-    let mut annotations = Vec::new();
-    collect_x_rigg_refs(merged, &mut annotations);
-    annotations.sort();
-    annotations.dedup();
-    for annotation in annotations {
-        let Some((dir, old)) = annotation.split_once('/') else {
+    // `x-rigg-ref` annotations follow the same rule, at their own concrete
+    // paths — one record per annotation, not one per distinct value.
+    let mut annotations: Vec<(String, String)> = Vec::new();
+    collect_x_rigg_refs(merged, "", &mut annotations);
+    for (path, value) in annotations {
+        let Some((dir, old)) = value.split_once('/') else {
             continue;
         };
         let Some(referenced) = ResourceKind::from_directory_name(dir) else {
@@ -693,9 +710,11 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
             continue;
         };
         let (new, stem) = (new.to_string(), stem.to_string());
-        registry::rename_x_rigg_ref(merged, dir, old, &new);
+        if !set_path(merged, &path, Value::String(format!("{dir}/{new}"))) {
+            continue;
+        }
         out.push(Renamed {
-            path: X_RIGG_REF.to_string(),
+            path,
             kind: referenced,
             stem,
             from: old.to_string(),
@@ -739,22 +758,29 @@ fn collect_concrete(root: &Value, path: &str, f: &mut dyn FnMut(&str, &Value)) {
     walk(root, &segments, String::new(), f);
 }
 
-fn collect_x_rigg_refs(v: &Value, out: &mut Vec<String>) {
+/// Every `x-rigg-ref` annotation in `v`, as `(concrete path, value)` —
+/// `tools[0].x-rigg-ref`, the shape [`set_path`] understands.
+fn collect_x_rigg_refs(v: &Value, prefix: &str, out: &mut Vec<(String, String)>) {
     match v {
         Value::Object(map) => {
             for (key, value) in map {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
                 if key == X_RIGG_REF {
                     if let Some(s) = value.as_str() {
-                        out.push(s.to_string());
+                        out.push((path, s.to_string()));
                     }
                 } else {
-                    collect_x_rigg_refs(value, out);
+                    collect_x_rigg_refs(value, &path, out);
                 }
             }
         }
         Value::Array(items) => {
-            for item in items {
-                collect_x_rigg_refs(item, out);
+            for (i, item) in items.iter().enumerate() {
+                collect_x_rigg_refs(item, &format!("{prefix}[{i}]"), out);
             }
         }
         _ => {}
@@ -846,7 +872,23 @@ fn keep_target_auth(merged: &mut Value, target: &Value) -> Vec<AuthCarrier> {
             skill.insert("authResourceId".to_string(), value);
         }
         if let Some(value) = carrier.annotation {
+            let function_key = value.as_str() == Some(X_RIGG_AUTH_FUNCTION_KEY);
             skill.insert(X_RIGG_AUTH.to_string(), value);
+            // The target authenticates with a key in the uri, but the
+            // translated uri carries none (the source's was stripped): leave
+            // the placeholder `rigg push`'s auth gate reads, or the skill
+            // looks like an anonymous endpoint and the key is never resolved.
+            if function_key {
+                let uri = skill.get("uri").and_then(Value::as_str).unwrap_or_default();
+                let header = skill
+                    .get("httpHeaders")
+                    .and_then(|h| h.get(FUNCTION_KEY_HEADER))
+                    .is_some();
+                if !uri.is_empty() && !header && !has_code_param(uri) {
+                    let uri = set_code_param(uri, REDACTED_KEY);
+                    skill.insert("uri".to_string(), Value::String(uri));
+                }
+            }
         }
         if let Some(value) = carrier.key_header {
             let headers = skill
@@ -1304,7 +1346,7 @@ mod tests {
             agent
                 .renamed
                 .iter()
-                .any(|r| r.path == "x-rigg-ref" && r.from == "kb-dev" && r.to == "kb"),
+                .any(|r| r.path == "tools[0].x-rigg-ref" && r.from == "kb-dev" && r.to == "kb"),
             "{:?}",
             agent.renamed
         );
@@ -2179,5 +2221,281 @@ mod tests {
             json!("Regulus"),
             "a new-in-target agent keeps the source's name"
         );
+    }
+
+    #[test]
+    fn sibling_names_swapped_between_environments_are_not_collapsed() {
+        // dev `a` = `ks-1`, `b` = `ks-2`; prod has them the other way round.
+        // Each reference must be mapped by the value it had BEFORE any
+        // rewrite — a whole-document rename pass would rewrite `ks-1` to
+        // `ks-2` and then that same value back to `ks-1`.
+        let ks = |stem: &str, name: &str| {
+            doc(
+                ResourceKind::KnowledgeSource,
+                stem,
+                json!({"name": name, "kind": "searchIndex"}),
+            )
+        };
+        let kb = |first: &str, second: &str| {
+            doc(
+                ResourceKind::KnowledgeBase,
+                "kb",
+                json!({
+                    "name": "kb",
+                    "knowledgeSources": [{"name": first}, {"name": second}]
+                }),
+            )
+        };
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![ks("a", "ks-1"), ks("b", "ks-2"), kb("ks-1", "ks-2")],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![ks("a", "ks-2"), ks("b", "ks-1"), kb("ks-2", "ks-1")],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let kb = item(&plan, ResourceKind::KnowledgeBase, "kb");
+        assert_eq!(
+            kb.merged["knowledgeSources"],
+            json!([{"name": "ks-2"}, {"name": "ks-1"}]),
+            "each reference follows its OWN sibling across the swap"
+        );
+        let renamed: Vec<(&str, &str, &str, &str)> = kb
+            .renamed
+            .iter()
+            .map(|r| {
+                (
+                    r.path.as_str(),
+                    r.stem.as_str(),
+                    r.from.as_str(),
+                    r.to.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            renamed,
+            vec![
+                ("knowledgeSources[0].name", "a", "ks-1", "ks-2"),
+                ("knowledgeSources[1].name", "b", "ks-2", "ks-1"),
+            ]
+        );
+        assert_eq!(kb.change(), Change::Unchanged);
+    }
+
+    #[test]
+    fn a_chain_of_sibling_renames_maps_each_value_by_its_own_source_name() {
+        // dev x/y/z → prod y/z/w: applied as whole-document passes, `x`
+        // would be rewritten to `y`, then to `z`, then to `w`.
+        let ks = |stem: &str, name: &str| {
+            doc(
+                ResourceKind::KnowledgeSource,
+                stem,
+                json!({"name": name, "kind": "searchIndex"}),
+            )
+        };
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                ks("a", "x"),
+                ks("b", "y"),
+                ks("c", "z"),
+                doc(
+                    ResourceKind::KnowledgeBase,
+                    "kb",
+                    json!({
+                        "name": "kb",
+                        "knowledgeSources": [{"name": "x"}, {"name": "y"}, {"name": "z"}]
+                    }),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![ks("a", "y"), ks("b", "z"), ks("c", "w")],
+        };
+
+        let plan = translate(&src, &tgt);
+        let kb = item(&plan, ResourceKind::KnowledgeBase, "kb");
+        assert_eq!(
+            kb.merged["knowledgeSources"],
+            json!([{"name": "y"}, {"name": "z"}, {"name": "w"}])
+        );
+    }
+
+    #[test]
+    fn a_kept_function_key_carrier_leaves_a_redacted_code_placeholder() {
+        // The target authenticates with a key in the URI: promote keeps the
+        // annotation, and the translated URI must carry the placeholder the
+        // auth gate looks for — not read as an anonymous endpoint.
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env(
+                "dev",
+                "s-dev",
+                "f-dev",
+                &[("enrich-fn", BindingType::FunctionApp, "fn-dev")],
+            ),
+            docs: vec![doc(
+                ResourceKind::Skillset,
+                "sk",
+                json!({
+                    "name": "sk",
+                    "skills": [{
+                        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                        "name": "enrich",
+                        "uri": "https://fn-dev.azurewebsites.net/api/enrich?code=<redacted>",
+                        "x-rigg-auth": "function-key",
+                        "inputs": [],
+                        "outputs": []
+                    }]
+                }),
+            )],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env(
+                "prod",
+                "s-prod",
+                "f-prod",
+                &[("enrich-fn", BindingType::FunctionApp, "fn-prod")],
+            ),
+            docs: vec![doc(
+                ResourceKind::Skillset,
+                "sk",
+                json!({
+                    "name": "sk",
+                    "skills": [{
+                        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                        "name": "enrich",
+                        "uri": "https://fn-prod.azurewebsites.net/api/enrich?code=<redacted>",
+                        "x-rigg-auth": "function-key",
+                        "inputs": [],
+                        "outputs": []
+                    }]
+                }),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        let item = &plan.items[0];
+        assert_eq!(
+            item.merged["skills"][0]["x-rigg-auth"],
+            json!("function-key")
+        );
+        assert_eq!(
+            item.merged["skills"][0]["uri"],
+            json!("https://fn-prod.azurewebsites.net/api/enrich?code=<redacted>"),
+            "the kept key carrier leaves the placeholder the auth gate reads"
+        );
+        assert_eq!(item.change(), Change::Unchanged, "{:?}", item.merged);
+    }
+
+    #[test]
+    fn connection_targets_that_are_not_kb_mcp_urls_are_rewired_too() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                doc(
+                    ResourceKind::Connection,
+                    "search",
+                    json!({
+                        "name": "search",
+                        "properties": {
+                            "category": "CognitiveSearch",
+                            "authType": "AAD",
+                            "target": "https://s-dev.search.windows.net"
+                        }
+                    }),
+                ),
+                doc(
+                    ResourceKind::Connection,
+                    "aoai",
+                    json!({
+                        "name": "aoai",
+                        "properties": {
+                            "category": "AzureOpenAI",
+                            "authType": "AAD",
+                            "target": "https://f-dev.openai.azure.com/"
+                        }
+                    }),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+
+        let search = item(&plan, ResourceKind::Connection, "search");
+        assert_eq!(
+            search.merged["properties"]["target"],
+            json!("https://s-prod.search.windows.net")
+        );
+        assert_eq!(search.rewired[0].binding, "search");
+        assert_eq!(search.rewired[0].target, Target::SearchService);
+        assert_eq!(search.rewired[0].to, "s-prod");
+
+        let aoai = item(&plan, ResourceKind::Connection, "aoai");
+        assert_eq!(
+            aoai.merged["properties"]["target"],
+            json!("https://f-prod.openai.azure.com/"),
+            "a model-host target rewires through the implicit foundry binding"
+        );
+        assert_eq!(aoai.rewired[0].binding, "foundry");
+        assert_eq!(aoai.rewired[0].target, Target::ModelHost);
+    }
+
+    #[test]
+    fn an_agent_tool_server_url_that_is_a_function_endpoint_is_rewired() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env(
+                "dev",
+                "s-dev",
+                "f-dev",
+                &[("tools-fn", BindingType::FunctionApp, "fn-dev")],
+            ),
+            docs: vec![doc(
+                ResourceKind::Agent,
+                "regulus",
+                json!({
+                    "name": "Regulus",
+                    "model": "gpt-5-mini",
+                    "tools": [{"type": "mcp", "server_url": "https://fn-dev.azurewebsites.net/runtime/webhooks/mcp"}]
+                }),
+            )],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env(
+                "prod",
+                "s-prod",
+                "f-prod",
+                &[("tools-fn", BindingType::FunctionApp, "fn-prod")],
+            ),
+            docs: vec![],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let agent = item(&plan, ResourceKind::Agent, "regulus");
+        assert_eq!(
+            agent.merged["tools"][0]["server_url"],
+            json!("https://fn-prod.azurewebsites.net/runtime/webhooks/mcp")
+        );
+        assert_eq!(agent.rewired[0].binding, "tools-fn");
+        assert_eq!(agent.rewired[0].target, Target::FunctionApp);
     }
 }

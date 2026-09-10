@@ -292,9 +292,9 @@ pub fn print_ai_services_rbac_hint(account: &str) {
 
 /// Rigg-local annotation marking a Web API skill whose function key is
 /// resolved through ARM at push time (never stored on disk). Kept in the
-/// file, stripped before any PUT like every `x-rigg-*` key.
-pub const X_RIGG_AUTH: &str = "x-rigg-auth";
-pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
+/// file, stripped before any PUT like every `x-rigg-*` key. Defined once,
+/// in the registry — the table every `x-rigg-*` key belongs to.
+pub use rigg_core::registry::{X_RIGG_AUTH, X_RIGG_AUTH_FUNCTION_KEY};
 
 /// Indices of Web API skills whose auth was lost to redaction: the URI
 /// carries Azure's `code=<redacted>` placeholder and the skill has neither
@@ -381,19 +381,9 @@ pub fn parse_function_uri(uri: &str) -> Option<(String, String)> {
 }
 
 /// Replace (or append) the `code` query parameter of a URI.
-pub fn set_code_param(uri: &str, key: &str) -> String {
-    let (base, query) = match uri.split_once('?') {
-        Some((b, q)) => (b, q),
-        None => (uri, ""),
-    };
-    let mut params: Vec<String> = query
-        .split('&')
-        .filter(|p| !p.is_empty() && !p.starts_with("code="))
-        .map(str::to_string)
-        .collect();
-    params.push(format!("code={key}"));
-    format!("{base}?{}", params.join("&"))
-}
+/// Put a real function key into the uri's `code` parameter. Defined in
+/// core, next to the promote-side stripping that is its inverse.
+pub use rigg_core::promote::set_code_param;
 
 /// Remove the `code` query parameter from a URI.
 pub fn strip_code_param(uri: &str) -> String {
