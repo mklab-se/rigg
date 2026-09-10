@@ -404,7 +404,7 @@ impl Fix {
                 uami_id,
                 ..
             } => format!(
-                "az search service identity assign --ids \"{resource_id}\" --user-identities \"{uami_id}\""
+                "az resource update --ids \"{resource_id}\" --set identity.type=SystemAssigned,UserAssigned --set 'identity.userAssignedIdentities.\"{uami_id}\"={{}}'"
             ),
             Fix::EnableRbac { search_id } => format!(
                 "az search service update --ids \"{search_id}\" --aad-auth-failure-mode http401WithBearerChallenge --auth-options aadOrApiKey"

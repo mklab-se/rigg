@@ -93,7 +93,7 @@ Operator edges (always, per environment, scoped to what the plan touches):
 | `rigg az` query / KB ask / `--verify` | Search Index Data Reader (or Contributor) | search service |
 | Search accepts bearer tokens | setting: `authOptions.aadOrApiKey` or `disableLocalAuth: true` (ARM 2025-05-01) | search service |
 | create/update agents | Foundry User `53ca6127-db72-4b80-b1b0-d745d6d5456d` (Owner/Contributor do **not** suffice) | Foundry project |
-| create project connections | Foundry Project Manager `eadc314b-1a2d-4efa-be10-5d325db5065e` | Foundry account |
+| create project connections | Foundry Project Manager `eadc314b-1a2d-4efa-be10-5d325db5065e` or Cognitive Services Contributor `25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68` (a control-plane write; Owner/Contributor cover it via effective permissions) | Foundry account |
 | create model deployments | Foundry Account Owner `e47c6f54-e4a2-4754-9501-8e0985b135e1` or Cognitive Services Contributor `25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68` | Foundry account |
 | grant a missing role | `Microsoft.Authorization/roleAssignments/write` at the edge's scope (ARM `permissions` list, wildcard-matched) | each edge scope |
 | Easy Auth wiring | Graph: Application Developer suffices to create the application and its service principal; Cloud Application Administrator (or Application Administrator) is needed to PATCH an application the user does not own and for app-role assignments | tenant |

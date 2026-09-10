@@ -16,6 +16,7 @@ use rigg_client::arm::ArmClient;
 use rigg_core::binding::{BindingCache, BindingType};
 use rigg_core::workspace::{ResolvedEnv, Workspace};
 
+use crate::commands::CommandError;
 use crate::commands::ask::Question;
 use crate::commands::interactive;
 
@@ -718,11 +719,11 @@ pub async fn resolve_webapi_auth(
 fn key_vault_annotation(answer: &str) -> Result<String> {
     let annotation = format!("{X_RIGG_AUTH_KEY_VAULT_PREFIX}{}", answer.trim());
     if parse_key_vault_auth(&annotation).is_none() {
-        anyhow::bail!(
+        return Err(anyhow::anyhow!(CommandError::Usage(format!(
             "'{}' is not a '<secret>@<key-vault binding>' reference — e.g. \
              `fn-key@secrets`, where `secrets` is a `key-vault` dependency of this environment",
             answer.trim()
-        );
+        ))));
     }
     Ok(annotation)
 }
