@@ -5,6 +5,8 @@ pub mod ai;
 pub mod ai_assist;
 pub mod ask;
 pub mod auth;
+pub mod auth_engine;
+pub mod auth_roles;
 pub mod az;
 pub mod bindings;
 pub mod ci;

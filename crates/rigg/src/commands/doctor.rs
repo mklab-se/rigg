@@ -1,268 +1,180 @@
-//! `rigg auth doctor [--fix]` — verify (and repair) the service-to-service
-//! identity graph the workspace requires (spec §8.2).
+//! `rigg auth doctor` (spec §4.1) — verify, explain and repair the identity
+//! graph an environment needs. Thin over [`super::auth_engine`]: the
+//! verification, the rendering and the fixes are shared with `rigg push`'s
+//! auth preflight and `rigg status --auth`.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, anyhow};
 use colored::Colorize;
-
 use rigg_client::arm::ArmClient;
-use rigg_client::arm_resources::resolve_account_scope;
-use rigg_core::binding::{BindingCache, BindingType, EnvBindings};
-use rigg_core::identity::{Edge, EdgeKind, Principal, Scope, graph_for_docs};
-use rigg_core::registry::Provider;
-use rigg_core::resources::ResourceKind;
-use rigg_core::store::Store;
-use rigg_core::workspace::Workspace;
-use serde_json::Value;
 
-use crate::commands::{GlobalContext, load_workspace, resolve_env};
+use crate::commands::ask::Question;
+use crate::commands::auth_engine::{self, Status, VerifyOpts, VerifyScope};
+use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
+use crate::say;
 
-/// Every document in the environment's tree, as `graph_for_docs` wants them.
-fn env_documents(ws: &Workspace, env: &str) -> Vec<(ResourceKind, String, Value)> {
-    let mut docs = Vec::new();
-    for project in &ws.projects {
-        let store = Store::new(project, env);
-        let Ok(files) = store.list() else { continue };
-        for (r, _) in files {
-            if let Ok(value) = store.read(&r) {
-                docs.push((r.kind, r.name.clone(), value));
-            }
-        }
-    }
-    docs
-}
-
-pub async fn run(ctx: &GlobalContext, fix: bool) -> Result<()> {
+/// `rigg auth doctor [--fix] [--principal <id>] [--plan] [--live]`.
+pub async fn run(
+    ctx: &GlobalContext,
+    fix: bool,
+    principal: Option<String>,
+    plan: bool,
+    live: bool,
+) -> Result<()> {
     let ws = load_workspace()?;
     let env = resolve_env(&ws, ctx)?;
-    let cache = BindingCache::load(&ws, &env.name);
-    let bindings = EnvBindings::of_env(&env.name, &env.env, Some(&cache));
-    let edges = graph_for_docs(&bindings, &env_documents(&ws, &env.name)).edges;
-    if edges.is_empty() {
+
+    let scope = if plan {
+        VerifyScope::Plan(auth_engine::plan_documents(&ws, &env).await?)
+    } else {
+        VerifyScope::EnvTree
+    };
+    let report = auth_engine::verify(
+        ctx,
+        &ws,
+        &env,
+        scope,
+        VerifyOpts {
+            principal,
+            verify_roles: false,
+            live,
+        },
+    )
+    .await?;
+
+    let fixes = if fix { report.fixes() } else { Vec::new() };
+
+    // The confirmation is one question for the whole batch (spec §4.2's "one
+    // confirmation per fix class, not per edge", taken to its conclusion —
+    // the list is right there in the report).
+    //
+    // In text mode the report is printed first, so a human sees what they
+    // are agreeing to. In `--output json` it must come *after*: an
+    // unanswered question emits the `needs-input` document on stdout, and
+    // stdout may carry only one JSON document per run.
+    let confirm = |ctx: &GlobalContext| -> Result<bool> {
+        if fixes.is_empty() {
+            return Ok(true);
+        }
+        // Printed whether or not an answer is needed: `--yes` should still
+        // say what it is about to change.
+        say!(ctx);
+        say!(ctx, "{} rigg can fix:", fixes.len());
+        for f in &fixes {
+            say!(ctx, "  - {}", f.describe());
+        }
+        if ctx.yes {
+            return Ok(true);
+        }
+        let mut asker = ctx.asker(
+            "auth doctor --fix",
+            serde_json::json!({"env": env.name, "fixes": fixes.len()}),
+        );
+        Ok(asker
+            .ask(&Question::confirm(
+                "auth.fix.all",
+                format!("Apply {} fix(es)?", fixes.len()),
+                true,
+            ))?
+            .as_bool()
+            == Some(true))
+    };
+
+    let approved = if ctx.json() {
+        let approved = confirm(ctx)?;
         println!(
-            "{} no service-to-service identity requirements found in this workspace",
+            "{}",
+            serde_json::to_string_pretty(&auth_engine::to_json(&report))?
+        );
+        approved
+    } else {
+        auth_engine::render_text(&report, fix);
+        confirm(ctx)?
+    };
+
+    if !fix || fixes.is_empty() {
+        return verdict(ctx, &report, &env.name).await;
+    }
+    if !approved {
+        say!(ctx, "no changes made");
+        return verdict(ctx, &report, &env.name).await;
+    }
+
+    let arm = ArmClient::for_tenant(env.env.tenant.as_deref())
+        .map_err(|e| anyhow!(CommandError::AuthDenied(format!("{e}"))))?;
+    let results = auth_engine::apply(ctx, &arm, &fixes).await?;
+    let failed: Vec<String> = results
+        .iter()
+        .filter_map(|(f, r)| r.as_ref().err().map(|e| format!("{}: {e}", f.describe())))
+        .collect();
+
+    say!(ctx);
+    let applied = results.len() - failed.len();
+    say!(ctx, "{applied} fix(es) applied, {} failed", failed.len());
+    let unfixable = report.unfixable();
+    let unresolved = report.unresolved();
+    for item in unfixable.iter().chain(unresolved.iter()) {
+        say!(ctx, "  {} {} — {}", "✗".red(), item.headline(), item.detail);
+    }
+    if failed.is_empty() && unfixable.is_empty() && unresolved.is_empty() {
+        say!(
+            ctx,
+            "{} re-run `rigg auth doctor` to confirm (role assignments take a moment to \
+             propagate)",
             "✓".green().bold()
         );
         return Ok(());
     }
-
-    println!(
-        "{} {} identity edge(s) derived from workspace files (env: {})",
-        "Doctor".bold(),
-        edges.len(),
-        env.name
-    );
-
-    let arm = ArmClient::new().context("auth doctor needs ARM access (az login)")?;
-
-    // Resolve principal identities once.
-    let search_conn = env.search();
-    let foundry_conn = env.foundry();
-
-    let mut search_identity = None;
-    let mut search_service_id = None;
-    if let Some(conn) = search_conn {
-        let id = arm.find_search_service_id(&conn.service).await?;
-        search_identity = arm.get_resource_identity(&id, Provider::SearchArm).await?;
-        search_service_id = Some(id);
-    }
-    let mut foundry_identity = None;
-    let mut foundry_project_id = None;
-    if let Some(conn) = foundry_conn {
-        let scope = resolve_account_scope(&arm, &conn.account).await?;
-        let account_id = format!(
-            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.CognitiveServices/accounts/{}",
-            scope.subscription_id, scope.resource_group, scope.account
-        );
-        let project_id = format!("{account_id}/projects/{}", conn.project);
-        foundry_identity = arm
-            .get_resource_identity(&project_id, Provider::CognitiveServicesArm)
-            .await
-            .ok()
-            .flatten();
-        foundry_project_id = Some(project_id);
-    }
-
-    let mut failures: Vec<String> = Vec::new();
-    let mut report = Vec::new();
-
-    for edge in &edges {
-        // Resolve principal + scope for this edge.
-        let (identity, principal_desc, identity_resource, identity_api) = match &edge.principal {
-            Principal::SearchSystem | Principal::SearchUser { .. } => (
-                search_identity.as_ref(),
-                search_conn
-                    .map(|c| format!("search service '{}'", c.service))
-                    .unwrap_or_else(|| "search service (no connection configured)".into()),
-                search_service_id.clone(),
-                Provider::SearchArm,
-            ),
-            Principal::FoundryProject => (
-                foundry_identity.as_ref(),
-                foundry_conn
-                    .map(|c| format!("foundry project '{}/{}'", c.account, c.project))
-                    .unwrap_or_else(|| "foundry project (no connection configured)".into()),
-                foundry_project_id.clone(),
-                Provider::CognitiveServicesArm,
-            ),
-            other => {
-                println!("  {} {other} — {}", "ⓘ".blue(), edge.reason);
-                report.push((edge, "informational".to_string()));
-                continue;
-            }
-        };
-        let target = edge.scope.describe();
-        // Unbound Cognitive Services accounts (skillset enrichment) are still
-        // resolvable by name through ARM — any Cognitive Services kind, not
-        // just Foundry's AIServices accounts.
-        let scope = match &edge.scope {
-            Scope::Resolved(id) => Some(id.clone()),
-            Scope::Unresolved {
-                kind: Some(BindingType::AiServices),
-                physical,
-                ..
-            } => match arm.find_cognitive_account_id(physical).await {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    println!(
-                        "  {} could not resolve AI services account '{physical}' via ARM: {e}",
-                        "?".yellow()
-                    );
-                    None
-                }
-            },
-            Scope::Unresolved { .. } => None,
-        };
-
-        if edge.kind != EdgeKind::Rbac {
-            println!("  {} {} — {}", "ⓘ".blue(), edge.role.name, edge.reason);
-            report.push((edge, "informational".to_string()));
-            continue;
-        }
-
-        let Some(scope) = scope else {
-            println!(
-                "  {} {} → {} — cannot resolve target scope (bind it in rigg.yaml, then \
-                 `rigg env resolve`)",
-                "?".yellow().bold(),
-                principal_desc,
-                target
-            );
-            failures.push(format!("unresolved scope for {}", edge.reason));
-            continue;
-        };
-
-        // Ensure the principal has an identity.
-        let principal_ids: Vec<String> = identity
-            .map(|i| i.principal_ids().iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default();
-        if principal_ids.is_empty() {
-            if fix && let Some(resource) = &identity_resource {
-                println!(
-                    "  {} enabling system-assigned identity on {principal_desc}...",
-                    "fix".cyan().bold()
-                );
-                arm.enable_system_identity(resource, identity_api).await?;
-                println!(
-                    "    identity enabled — rerun `rigg auth doctor` to verify role assignments"
-                );
-                failures.push(format!(
-                    "identity newly enabled for {principal_desc}; rerun doctor"
-                ));
-                continue;
-            }
-            println!(
-                "  {} {principal_desc} has no managed identity — run with --fix or:\n      az search service update ... --identity-type SystemAssigned",
-                "✗".red().bold()
-            );
-            failures.push(format!("{principal_desc} has no managed identity"));
-            continue;
-        }
-
-        // Check role assignments.
-        let mut assigned = false;
-        for pid in &principal_ids {
-            let roles = arm.list_role_assignments(&scope, pid).await?;
-            if roles.iter().any(|r| r.ends_with(edge.role.id)) {
-                assigned = true;
-                break;
-            }
-        }
-
-        if assigned {
-            println!(
-                "  {} {} → {} ({})",
-                "✓".green().bold(),
-                principal_desc,
-                target,
-                edge.role.name
-            );
-            report.push((edge, "ok".to_string()));
-        } else if fix {
-            println!(
-                "  {} assigning '{}' to {} at {}...",
-                "fix".cyan().bold(),
-                edge.role.name,
-                principal_desc,
-                scope
-            );
-            arm.create_role_assignment(&scope, &principal_ids[0], edge.role.id)
-                .await?;
-            println!("    {} assigned", "✓".green());
-            report.push((edge, "fixed".to_string()));
-        } else {
-            println!(
-                "  {} {} lacks '{}' on {}\n      reason: {}\n      fix:    az role assignment create --assignee {} --role \"{}\" --scope \"{}\"",
-                "✗".red().bold(),
-                principal_desc,
-                edge.role.name,
-                target,
-                edge.reason,
-                principal_ids[0],
-                edge.role.name,
-                scope
-            );
-            failures.push(edge.reason.clone());
-            report.push((edge, "missing".to_string()));
-        }
-    }
-
-    if ctx.json() {
-        let value: Vec<_> = report
+    // Anything rigg could not fix — or could not judge in the first place,
+    // which a fix does not turn into a verdict — keeps the exit code at 4.
+    Err(anyhow!(CommandError::AuthDenied(format!(
+        "{} problem(s) remain after --fix (re-run `rigg auth doctor -e {}` to re-verify): {}",
+        failed.len() + unfixable.len() + unresolved.len(),
+        env.name,
+        failed
             .iter()
-            .map(|(e, status)| serde_json::json!({"edge": e, "status": status}))
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&value)?);
-    }
+            .cloned()
+            .chain(
+                unfixable
+                    .iter()
+                    .chain(unresolved.iter())
+                    .map(|i| i.headline())
+            )
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))))
+}
 
+/// Exit 0 when everything is in place, 4 otherwise (spec §4.1.7).
+async fn verdict(ctx: &GlobalContext, report: &auth_engine::Report, env: &str) -> Result<()> {
+    if report.summary.clean() {
+        say!(ctx, "{} identity wiring is complete", "✓".green().bold());
+        return Ok(());
+    }
+    // Optional ailloy commentary on what the failures have in common.
+    let failures: Vec<String> = report
+        .items
+        .iter()
+        .chain(report.operator.iter())
+        .filter(|i| matches!(i.status, Status::Missing | Status::Unresolved))
+        .map(|i| format!("{} — {}", i.headline(), i.detail))
+        .collect();
     if !failures.is_empty()
         && crate::commands::ai_assist::ai_on(ctx)
         && let Ok(advice) = crate::commands::ai_assist::explain_doctor(&failures).await
     {
-        println!();
-        println!("AI advice (ailloy):");
+        say!(ctx);
+        say!(ctx, "AI advice (ailloy):");
         for line in advice.lines() {
-            println!("  {line}");
+            say!(ctx, "  {line}");
         }
     }
-
-    if failures.is_empty() {
-        println!();
-        println!("{} identity wiring looks good", "✓".green().bold());
-        Ok(())
-    } else if fix {
-        println!();
-        bail!(
-            "{} identity problem(s) rigg could not fix automatically (see the lines above for what each one needs — unresolvable targets must be corrected in the files; role assignments need Owner/User Access Administrator rights)",
-            failures.len()
-        )
+    let hint = if report.fixes().is_empty() {
+        format!("run the printed az commands (env: {env})")
     } else {
-        println!();
-        bail!(
-            "{} identity problem(s) found — rerun with --fix (requires rights to assign roles) or run the printed az commands",
-            failures.len()
-        )
-    }
+        format!("re-run with --fix, or run the printed az commands (env: {env})")
+    };
+    Err(anyhow!(CommandError::AuthDenied(format!(
+        "{} missing, {} unresolved — {hint}",
+        report.summary.missing, report.summary.unresolved
+    ))))
 }
-
-#[allow(unused)]
-fn _keep(_: &Edge) {}

@@ -13,6 +13,7 @@ use rigg_core::store::{ProjectState, Store, SyncClass};
 use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 
 use crate::cli::StatusArgs;
+use crate::commands::auth_engine::{self, Summary};
 use crate::commands::remote::Remote;
 use crate::commands::{CommandError, GlobalContext, is_auth_error, load_workspace, resolve_env};
 
@@ -22,6 +23,8 @@ struct EnvReport {
     name: String,
     is_default: bool,
     outcome: Result<Vec<ProjectRows>>,
+    /// `--auth`: the identity graph's verdict for this environment.
+    identity: Option<Summary>,
 }
 
 pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
@@ -46,6 +49,22 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
             name: env.name.clone(),
             is_default: Some(env.name.as_str()) == default_name.as_deref(),
             outcome: env_report(&ws, env, &projects).await,
+            // The identity graph is the same verification `rigg auth doctor`
+            // runs, without the fixes — one line per environment here, the
+            // full report there.
+            identity: match args.auth {
+                true => auth_engine::verify(
+                    ctx,
+                    &ws,
+                    env,
+                    auth_engine::VerifyScope::EnvTree,
+                    auth_engine::VerifyOpts::default(),
+                )
+                .await
+                .ok()
+                .map(|r| r.summary),
+                false => None,
+            },
         }
     }))
     .await;
@@ -162,6 +181,15 @@ fn is_auth(err: &anyhow::Error) -> bool {
     })
 }
 
+/// The `--auth` summary for one environment, or `null` when `--auth` was
+/// not asked for (or the verification itself could not run).
+fn identity_json(rep: &EnvReport) -> serde_json::Value {
+    match &rep.identity {
+        Some(s) => json!({"ok": s.ok, "missing": s.missing, "unresolved": s.unresolved}),
+        None => serde_json::Value::Null,
+    }
+}
+
 fn render_json(reports: &[EnvReport]) -> Result<()> {
     let value = json!(
         reports
@@ -171,6 +199,7 @@ fn render_json(reports: &[EnvReport]) -> Result<()> {
                     "env": rep.name,
                     "default": rep.is_default,
                     "error": serde_json::Value::Null,
+                    "identity": identity_json(rep),
                     "projects": projects.iter().map(|(name, rows, unmanaged)| json!({
                         "project": name,
                         "resources": rows.iter().map(|(r, c)| json!({
@@ -184,6 +213,7 @@ fn render_json(reports: &[EnvReport]) -> Result<()> {
                     "env": rep.name,
                     "default": rep.is_default,
                     "error": format!("{e:#}"),
+                    "identity": identity_json(rep),
                     "projects": [],
                 }),
             })
@@ -246,6 +276,21 @@ fn render_text(reports: &[EnvReport]) {
                         );
                     }
                 }
+            }
+        }
+        if let Some(identity) = &rep.identity {
+            if identity.clean() {
+                println!("  identity: {}", "ok".green());
+            } else {
+                println!(
+                    "  identity: {} — rigg auth doctor -e {}",
+                    format!(
+                        "{} missing, {} unresolved",
+                        identity.missing, identity.unresolved
+                    )
+                    .yellow(),
+                    rep.name
+                );
             }
         }
         println!();

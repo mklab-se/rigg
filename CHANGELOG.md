@@ -146,6 +146,34 @@ around that. No compatibility with 1.x workspaces.
   MCP tool `rigg_promote` (`project?`, `from`, `to`, `force?`, `offline?`,
   `answers?`) follows the same preview/force pattern as
   `rigg_push`/`rigg_pull`.
+- **`rigg auth doctor` v2**: the report is now built from the environment's
+  *bindings*, so every scope is a real ARM id rather than a guessed default,
+  and it covers three things 1.x never did — the settings and network
+  conditions a keyless connection depends on (search SKU, managed identity,
+  `authOptions`, storage firewall/bypass/resource-instance rules, blob soft
+  delete, AI Services account kind, function-app access restrictions and
+  Easy Auth), the **operator's own** rights (including whether you can
+  create the role assignments `--fix` would need), and the exact `az`
+  command for every gap. New flags: `--principal <object-id>` (check
+  operator rights for a CI identity instead of your own), `--plan` (only
+  what a push would create or update), `--live` (read each indexer's last
+  run and attribute auth-shaped failures to the edge that explains them).
+  `--fix` asks once for the whole batch (`auth.fix.all`) and applies role
+  assignments, system-assigned identities, search auth options, the storage
+  firewall bypass or resource-instance rule and blob soft delete; exit 0
+  when everything is in place, 4 when anything is missing or could not be
+  judged, 6 when a fix needs an answer non-interactively. `--output json`
+  carries `{env, edges[], checks[], operator[], summary}`.
+- **Role assignments rigg creates are tagged** with
+  `description: "rigg:<workspace>:<env>:<reason>"` and an explicit
+  `principalType`, so **`rigg auth roles list|remove`** can find and undo
+  exactly rigg's own grants at every scope the environment's graph knows —
+  and nothing anyone else made. `rigg env remove <name> --clean-roles`
+  removes them as the environment goes away.
+- **`rigg status --auth`** adds one identity line per environment
+  (`identity: ok` / `identity: N missing — rigg auth doctor -e <env>`), from
+  the same verification `auth doctor` runs; `--output json` gains an
+  `identity` object per environment.
 
 ### Removed (library API)
 

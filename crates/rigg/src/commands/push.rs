@@ -642,7 +642,7 @@ async fn push_project(
         if interactive::confirm_default_yes(
             "Verify and grant the roles these connections need now (runs auth doctor --fix)?",
             ctx.no_color,
-        )? && let Err(e) = crate::commands::doctor::run(ctx, true).await
+        )? && let Err(e) = crate::commands::doctor::run(ctx, true, None, false, false).await
         {
             say!(
                 ctx,

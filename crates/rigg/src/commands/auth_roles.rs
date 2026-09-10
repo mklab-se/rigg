@@ -1,0 +1,212 @@
+//! `rigg auth roles list|remove` (spec §4.4) — the role assignments rigg
+//! itself created, found by the description prefix it stamps on them
+//! (`rigg:<workspace>:<env>`) at every scope the environment's identity
+//! graph knows about.
+//!
+//! `rigg env remove --clean-roles` calls [`remove`] before dropping the
+//! environment, so tearing an environment down does not leave orphaned
+//! assignments behind on shared infrastructure.
+
+use std::collections::BTreeSet;
+
+use anyhow::{Result, anyhow};
+use colored::Colorize;
+use serde_json::json;
+
+use rigg_client::arm::ArmClient;
+use rigg_client::arm_reads::RoleAssignmentInfo;
+use rigg_core::identity::{Scope, graph_for_docs, operator_edges};
+use rigg_core::resources::ResourceKind;
+use rigg_core::workspace::{ResolvedEnv, Workspace};
+
+use crate::commands::ask::Question;
+use crate::commands::auth_engine;
+use crate::commands::{CommandError, GlobalContext, load_workspace, resolve_env};
+use crate::say;
+
+/// One rigg-created assignment, with where it lives.
+struct Found {
+    scope: String,
+    assignment: RoleAssignmentInfo,
+}
+
+/// Every distinct resolved scope the environment's graph mentions — the
+/// places rigg could ever have created an assignment.
+fn scopes_of(
+    ws: &Workspace,
+    env: &ResolvedEnv,
+    bindings: &rigg_core::binding::EnvBindings,
+) -> Vec<String> {
+    let docs = auth_engine::env_documents(ws, &env.name);
+    let graph = graph_for_docs(bindings, &docs);
+    let kinds: Vec<ResourceKind> = docs.iter().map(|(k, ..)| *k).collect();
+    let (operator, _) = operator_edges(bindings, &kinds, true, &[], None);
+
+    let mut scopes: BTreeSet<String> = BTreeSet::new();
+    let from_scope = |s: &Scope| s.arm_id().map(str::to_string);
+    for edge in graph.edges.iter().chain(operator.iter()) {
+        if let Some(id) = from_scope(&edge.scope) {
+            scopes.insert(id);
+        }
+    }
+    for check in &graph.checks {
+        if let Some(id) = auth_engine::check_scope(check).and_then(from_scope) {
+            scopes.insert(id);
+        }
+    }
+    scopes.into_iter().collect()
+}
+
+async fn find(
+    ctx: &GlobalContext,
+    remove: bool,
+) -> Result<(Vec<Found>, ArmClient, String, String)> {
+    let ws = load_workspace()?;
+    let env = resolve_env(&ws, ctx)?;
+    let arm = ArmClient::for_tenant(env.env.tenant.as_deref())
+        .map_err(|e| anyhow!(CommandError::AuthDenied(format!("{e}"))))?;
+    let bindings = auth_engine::bindings_for(&ws, &env, Some(&arm)).await;
+    let prefix = auth_engine::description_prefix(&ws, &env.name);
+
+    let scopes = scopes_of(&ws, &env, &bindings);
+    if !remove {
+        say!(
+            ctx,
+            "{} assignments described '{prefix}:…' across {} scope(s) (env: {})",
+            "auth roles".bold(),
+            scopes.len(),
+            env.name
+        );
+    }
+    let mut found = Vec::new();
+    for scope in scopes {
+        match arm.list_rigg_role_assignments(&scope, &prefix).await {
+            Ok(list) => found.extend(list.into_iter().map(|assignment| Found {
+                scope: scope.clone(),
+                assignment,
+            })),
+            Err(e) => say!(ctx, "  {} {scope}: {e}", "?".yellow()),
+        }
+    }
+    Ok((found, arm, prefix, env.name))
+}
+
+/// `rigg auth roles list`.
+pub async fn list(ctx: &GlobalContext) -> Result<()> {
+    let (found, ..) = find(ctx, false).await?;
+    if ctx.json() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!(
+                found
+                    .iter()
+                    .map(|f| json!({
+                        "scope": f.scope,
+                        "id": f.assignment.id,
+                        "role": f.assignment.role_guid(),
+                        "description": f.assignment.description,
+                    }))
+                    .collect::<Vec<_>>()
+            ))?
+        );
+        return Ok(());
+    }
+    if found.is_empty() {
+        println!("  (rigg has not created any role assignments here)");
+        return Ok(());
+    }
+    for f in &found {
+        println!("  {} {}", "•".dimmed(), f.assignment.description);
+        println!("      role:  {}", f.assignment.role_guid());
+        println!("      scope: {}", f.scope);
+    }
+    println!();
+    println!(
+        "{} assignment(s) — remove them with `rigg auth roles remove`",
+        found.len()
+    );
+    Ok(())
+}
+
+/// `rigg auth roles remove`.
+pub async fn remove(ctx: &GlobalContext) -> Result<()> {
+    let (found, arm, prefix, env) = find(ctx, true).await?;
+    if found.is_empty() {
+        say!(ctx, "no rigg-created role assignments in '{env}'");
+        if ctx.json() {
+            println!("{}", serde_json::to_string_pretty(&json!({"removed": []}))?);
+        }
+        return Ok(());
+    }
+    say!(
+        ctx,
+        "{} {} assignment(s) described '{prefix}:…' (env: {env}):",
+        "auth roles remove".bold(),
+        found.len()
+    );
+    for f in &found {
+        say!(ctx, "  {} @ {}", f.assignment.role_guid(), f.scope);
+    }
+    if !ctx.yes {
+        let mut asker = ctx.asker(
+            "auth roles remove",
+            json!({"env": env, "assignments": found.len()}),
+        );
+        let answer = asker.ask(&Question::confirm(
+            "auth.roles.remove",
+            format!("Remove {} role assignment(s)?", found.len()),
+            false,
+        ))?;
+        if answer.as_bool() != Some(true) {
+            say!(ctx, "no changes made");
+            return Ok(());
+        }
+    }
+    let mut removed = Vec::new();
+    let mut failed = Vec::new();
+    for f in &found {
+        match arm.delete_role_assignment(&f.assignment.id).await {
+            Ok(()) => removed.push(f.assignment.id.clone()),
+            Err(e) => failed.push(format!("{}: {e}", f.assignment.id)),
+        }
+    }
+    if ctx.json() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"removed": removed, "failed": failed}))?
+        );
+    } else {
+        println!("{} removed, {} failed", removed.len(), failed.len());
+        for e in &failed {
+            println!("  {} {e}", "✗".red());
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(CommandError::AuthDenied(format!(
+            "{} role assignment(s) could not be removed",
+            failed.len()
+        ))))
+    }
+}
+
+/// `rigg env remove --clean-roles`: remove `env`'s rigg-created assignments
+/// before the environment itself goes away. Reported, never fatal — the
+/// environment must still be removable when the caller has no rights on the
+/// scopes any more.
+pub async fn clean_for_env(ctx: &GlobalContext, env: &str) -> Result<()> {
+    let mut scoped = ctx.clone();
+    scoped.env = Some(env.to_string());
+    // `--clean-roles` is itself the consent: the flag names the removal, and
+    // asking again from inside `env remove` would only strand the caller on
+    // exit 6 in a script that already said what it wanted.
+    scoped.yes = true;
+    match remove(&scoped).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            say!(ctx, "  (could not clean role assignments: {e:#})");
+            Ok(())
+        }
+    }
+}

@@ -606,6 +606,11 @@ pub struct StatusArgs {
     /// Project to check (default: all)
     #[arg(add = ArgValueCandidates::new(complete::projects))]
     pub project: Option<String>,
+
+    /// Also verify the identity graph per environment (one line per env;
+    /// `rigg auth doctor` for the detail)
+    #[arg(long)]
+    pub auth: bool,
 }
 
 #[derive(Args)]
@@ -682,7 +687,13 @@ pub enum EnvCommands {
         skip: Vec<String>,
     },
     /// Remove an environment
-    Remove { name: String },
+    Remove {
+        name: String,
+        /// Also remove the role assignments rigg created for it (the flag
+        /// is the confirmation — they are deleted without a further prompt)
+        #[arg(long)]
+        clean_roles: bool,
+    },
     /// Declare a dependency binding for an environment
     ///
     ///   rigg env bind dev docs storage:mklabstorageacc
@@ -726,12 +737,40 @@ pub enum AuthCommands {
     Status,
     /// Log out
     Logout,
-    /// Verify service-to-service identities and RBAC for the workspace
+    /// Verify service-to-service identities, settings and RBAC for an environment
+    ///
+    /// Reports every role, setting and network condition this environment's
+    /// files require — for the service identities and for you — with the
+    /// exact `az` command for each gap. `--fix` applies the ones rigg owns.
     Doctor {
-        /// Attempt to fix missing role assignments / identities
+        /// Apply the fixes rigg can make (role assignments, identities,
+        /// search auth options, storage firewall/soft delete)
         #[arg(long)]
         fix: bool,
+        /// Check operator rights for this object id instead of your own
+        /// (e.g. the CI service principal)
+        #[arg(long, value_name = "OBJECT_ID")]
+        principal: Option<String>,
+        /// Only the resources a push would create or update
+        #[arg(long)]
+        plan: bool,
+        /// Also read each indexer's last run and attribute auth failures
+        #[arg(long)]
+        live: bool,
     },
+    /// Manage the role assignments rigg created
+    Roles {
+        #[command(subcommand)]
+        command: RolesCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RolesCommands {
+    /// List the role assignments rigg created for this environment
+    List,
+    /// Remove the role assignments rigg created for this environment
+    Remove,
 }
 
 #[derive(Subcommand)]

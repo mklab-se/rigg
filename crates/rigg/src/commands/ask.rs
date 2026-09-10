@@ -31,6 +31,7 @@ pub const KNOWN_ID_PREFIXES: &[&str] = &[
     "env.",
     "learn.",
     "promote.",
+    "auth.",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1051,11 +1051,19 @@ fn search_checks(b: &mut Builder<'_>) {
 ///
 /// `verify` covers the data-plane reads `rigg push --verify`, `rigg query`
 /// and `rigg ask` perform.
+///
+/// `foundry_project_id` is the ARM id of the environment's Foundry *project*
+/// (`<account id>/projects/<project>`), which the binding table does not
+/// carry — the caller resolves it. Azure AI User is scoped there (spec
+/// §3.2); the account-level roles stay on the account. Without it the
+/// project-scoped edge falls back to the account, where an `atScope()` check
+/// would miss a project-only assignment.
 pub fn operator_edges(
     env: &EnvBindings,
     kinds_in_plan: &[ResourceKind],
     verify: bool,
     needs_grants: &[&Edge],
+    foundry_project_id: Option<&str>,
 ) -> (Vec<Edge>, Vec<Check>) {
     let mut edges = Vec::new();
     let has = |k: ResourceKind| kinds_in_plan.contains(&k);
@@ -1085,8 +1093,12 @@ pub fn operator_edges(
         );
     }
     if has(ResourceKind::Agent) {
+        let scope = match foundry_project_id {
+            Some(id) => Scope::Resolved(id.to_string()),
+            None => foundry_scope(env),
+        };
         edges.push(
-            Edge::rbac(Principal::Operator, roles::FOUNDRY_USER, foundry_scope(env)).because(
+            Edge::rbac(Principal::Operator, roles::FOUNDRY_USER, scope).because(
                 "create and update Foundry agents on the project (Owner/Contributor do not \
                  suffice)",
             ),
@@ -1800,14 +1812,14 @@ mod tests {
     #[test]
     fn operator_edges_follow_the_plan_contents() {
         let env = env();
-        let (edges, checks) = operator_edges(&env, &[ResourceKind::Index], false, &[]);
+        let (edges, checks) = operator_edges(&env, &[ResourceKind::Index], false, &[], None);
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].role, roles::SEARCH_SERVICE_CONTRIBUTOR);
         assert_eq!(edges[0].principal, Principal::Operator);
         assert_eq!(edges[0].scope, Scope::Resolved(SEARCH_ID.into()));
         assert!(checks.is_empty());
 
-        let (verify, _) = operator_edges(&env, &[ResourceKind::Index], true, &[]);
+        let (verify, _) = operator_edges(&env, &[ResourceKind::Index], true, &[], None);
         let reader = verify
             .iter()
             .find(|e| e.role == roles::SEARCH_INDEX_DATA_READER)
@@ -1826,6 +1838,7 @@ mod tests {
             ],
             false,
             &[],
+            None,
         );
         let used: Vec<&str> = foundry.iter().map(|e| e.role.name).collect();
         assert_eq!(
@@ -1847,9 +1860,33 @@ mod tests {
             vec![roles::COGNITIVE_SERVICES_CONTRIBUTOR]
         );
 
-        let (guardrail, _) = operator_edges(&env, &[ResourceKind::Guardrail], false, &[]);
+        let (guardrail, _) = operator_edges(&env, &[ResourceKind::Guardrail], false, &[], None);
         assert_eq!(guardrail.len(), 1);
         assert_eq!(guardrail[0].role, roles::FOUNDRY_ACCOUNT_OWNER);
+    }
+
+    #[test]
+    fn azure_ai_user_is_scoped_at_the_foundry_project_when_one_is_given() {
+        let env = env();
+        let project = format!("{FOUNDRY_ID}/projects/p");
+        let (edges, _) = operator_edges(
+            &env,
+            &[ResourceKind::Agent, ResourceKind::Connection],
+            false,
+            &[],
+            Some(&project),
+        );
+        let user = edges
+            .iter()
+            .find(|e| e.role == roles::FOUNDRY_USER)
+            .expect("agents need Azure AI User");
+        assert_eq!(user.scope, Scope::Resolved(project));
+        // The account-level role stays on the account.
+        let manager = edges
+            .iter()
+            .find(|e| e.role == roles::FOUNDRY_PROJECT_MANAGER)
+            .expect("connections need Azure AI Project Manager");
+        assert_eq!(manager.scope, Scope::Resolved(FOUNDRY_ID.into()));
     }
 
     #[test]
@@ -1877,7 +1914,7 @@ mod tests {
         ]);
         let missing: Vec<&Edge> = g.edges.iter().collect();
         assert_eq!(missing.len(), 2);
-        let (_, checks) = operator_edges(&env, &[ResourceKind::Index], false, &missing);
+        let (_, checks) = operator_edges(&env, &[ResourceKind::Index], false, &missing, None);
         assert_eq!(checks.len(), 2);
         assert!(
             checks
@@ -1892,7 +1929,7 @@ mod tests {
         assert!(checks.iter().all(|c| !c.sources.is_empty()));
 
         let same: Vec<&Edge> = vec![missing[0], missing[0]];
-        let (_, deduped) = operator_edges(&env, &[], false, &same);
+        let (_, deduped) = operator_edges(&env, &[], false, &same, None);
         assert_eq!(deduped.len(), 1);
     }
 

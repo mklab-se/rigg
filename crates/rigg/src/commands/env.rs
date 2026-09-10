@@ -52,7 +52,7 @@ pub async fn run(ctx: &GlobalContext, cmd: EnvCommands) -> Result<()> {
             )
             .await
         }
-        EnvCommands::Remove { name } => remove(&name),
+        EnvCommands::Remove { name, clean_roles } => remove(ctx, &name, clean_roles).await,
         EnvCommands::Bind {
             env,
             name,
@@ -764,7 +764,13 @@ async fn ask_like_bindings(
     Ok(out)
 }
 
-fn remove(name: &str) -> Result<()> {
+/// Remove an environment. `clean_roles` first deletes the role assignments
+/// rigg created for it (spec §4.4) — otherwise they outlive the environment
+/// that explains them, on infrastructure other environments may share.
+async fn remove(ctx: &GlobalContext, name: &str, clean_roles: bool) -> Result<()> {
+    if clean_roles {
+        crate::commands::auth_roles::clean_for_env(ctx, name).await?;
+    }
     edit_workspace_yaml(|doc| {
         let envs = envs_mut(doc)?;
         if envs.remove(name).is_none() {

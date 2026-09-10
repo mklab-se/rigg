@@ -27,6 +27,14 @@ impl Remote {
     /// Build for a project in an environment. Connections are optional; using
     /// a kind whose connection is missing yields a clear error.
     pub fn for_project(env: &ResolvedEnv, _project: &Project) -> Remote {
+        Remote::for_env(env)
+    }
+
+    /// Build for an environment alone — the project has never mattered here
+    /// (targets are environment-level), and callers without one (the auth
+    /// engine, which reports across every project) should not have to invent
+    /// a `Project` to reach the connections.
+    pub fn for_env(env: &ResolvedEnv) -> Remote {
         Remote {
             search_conn: env.search().cloned(),
             foundry_conn: env.foundry().cloned(),

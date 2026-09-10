@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use rigg_client::auth::{AzCliAuth, EnvAuth};
 
-use crate::cli::AuthCommands;
+use crate::cli::{AuthCommands, RolesCommands};
 use crate::commands::GlobalContext;
 
 pub async fn run(ctx: &GlobalContext, cmd: AuthCommands) -> Result<()> {
@@ -15,7 +15,16 @@ pub async fn run(ctx: &GlobalContext, cmd: AuthCommands) -> Result<()> {
         } => login(service_principal, identity).await,
         AuthCommands::Status => status().await,
         AuthCommands::Logout => logout().await,
-        AuthCommands::Doctor { fix } => crate::commands::doctor::run(ctx, fix).await,
+        AuthCommands::Doctor {
+            fix,
+            principal,
+            plan,
+            live,
+        } => crate::commands::doctor::run(ctx, fix, principal, plan, live).await,
+        AuthCommands::Roles { command } => match command {
+            RolesCommands::List => crate::commands::auth_roles::list(ctx).await,
+            RolesCommands::Remove => crate::commands::auth_roles::remove(ctx).await,
+        },
     }
 }
 
