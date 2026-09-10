@@ -210,6 +210,52 @@ async fn promote_sets_entra_auth_when_target_function_app_has_easy_auth() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn promote_dry_run_runs_the_online_phase_and_writes_nothing() {
+    // `--dry-run` (without `--offline`) is a preview, not a network-free
+    // mode: the online checks are part of what it previews, so the Entra
+    // decision must show up here too — and nothing gets written.
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &["sub-a"],
+        &[
+            ("sites", "mklab-dev", "rg", "swedencentral"),
+            ("sites", "mklab-prod", "rg", "swedencentral"),
+        ],
+    )
+    .await;
+    arm_fake::mount_easy_auth(&server, "mklab-prod", true, "client-1").await;
+
+    let ws = promote_workspace();
+    bind_function_apps(ws.path(), &server.uri());
+    write_keyed_skillset(
+        ws.path(),
+        "https://mklab-dev.azurewebsites.net/api/enrich?code=<redacted>",
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Entra").and(predicate::str::contains("dry run")));
+
+    assert!(
+        !ws.path()
+            .join("projects/demo/envs/prod/search/skillsets/ss.json")
+            .exists(),
+        "dry-run must not write anything"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn promote_keeps_function_key_annotation_when_easy_auth_is_off_and_source_used_a_key() {
     let server = MockServer::start().await;
     mount_arm_fake(

@@ -10,11 +10,17 @@
 //! 2. turn everything the engine left [`Pending`] into a question, apply the
 //!    answers as bindings IN MEMORY, and re-translate (up to [`MAX_ROUNDS`]
 //!    times, so a question that does not settle cannot loop);
-//! 3. show the rewiring preview — what points where after the translation,
-//!    which sibling references were renamed, and what changes per resource;
-//! 4. run the [`online_phase`], which asks the TARGET's Azure what only it
-//!    can answer (a Web API skill's auth carrier, a deployment's model
-//!    availability and quota) and folds the answers into the documents;
+//! 3. run the [`online_phase`] (unless `--offline`), which asks the TARGET's
+//!    Azure what only it can answer (a Web API skill's auth carrier, a
+//!    deployment's model availability and quota), folds the answers into the
+//!    documents, and appends its decisions to the Checks — they are part of
+//!    the plan, not a side note after it;
+//! 4. show the preview — what points where after the translation, which
+//!    sibling references were renamed, what changes per resource, and the
+//!    Checks (now including the online decisions). `--dry-run` stops here:
+//!    it still ran the online phase, so it may itself exit 6 on an
+//!    unanswered deployment question — a question is part of the plan, and
+//!    this happens before anything is written;
 //! 5. once the run proceeds, persist the answered bindings to `rigg.yaml`
 //!    and write the merged documents through the target environment's
 //!    `Store`.
@@ -23,7 +29,9 @@
 //! `needs-input` exit all leave the workspace file exactly as they found it.
 //!
 //! Nothing is deleted and resources that exist only in the target are never
-//! touched. `--dry-run` stops after the preview.
+//! touched. `--dry-run` is preview only, but it is not offline: it runs the
+//! online phase like any other promote (pass `--offline` too for a
+//! network-free preview) and stops after the preview is printed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -126,8 +134,24 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     let store_to = Store::new(project, &args.to);
     let targets = Targets::of(&ws, &args);
     let mut checks = checks(&plan, &args, &settled);
+    let offered = pending_writes(&plan);
 
-    // Scoped: the online phase below mutates what the preview borrows.
+    // Everything that needs the TARGET's Azure to decide, folded into the
+    // Checks BEFORE the preview is built: the online decisions are part of
+    // the plan, not a side note after it, so `--dry-run` previews them too
+    // (and may itself exit 6 on an unanswered deployment question — a
+    // question is part of the plan, and this happens before anything is
+    // written). A document whose ONLY difference is a missing auth carrier
+    // is `Unchanged` until this phase derives one, and skipping it would
+    // leave that to `rigg push`'s auth gate forever. The phase itself
+    // returns before it builds an ARM client when there is nothing to
+    // check, so an ordinary no-op promote still touches no network.
+    if !args.offline {
+        online_phase(ctx, &ws, &args, &project_name, &mut plan, &mut checks).await?;
+    }
+
+    // Scoped: nothing below this point needs the plan or checks by
+    // reference any more before they are consumed by the write loop.
     {
         let preview = Preview {
             project: &project_name,
@@ -148,25 +172,6 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
                 println!("(dry run — nothing written)");
             }
             return Ok(());
-        }
-    }
-
-    // Everything that needs the TARGET's Azure to decide, before the
-    // "nothing to promote" exit: a document whose ONLY difference is a
-    // missing auth carrier is `Unchanged` until this phase derives one, and
-    // exiting first would leave it to `rigg push`'s auth gate forever. The
-    // phase itself returns before it builds an ARM client when there is
-    // nothing to check, so an ordinary no-op promote still touches no
-    // network. A question it raises leaves as exit 6 with the workspace and
-    // the project tree untouched.
-    let online_from = checks.len();
-    let offered = pending_writes(&plan);
-    if !args.offline {
-        online_phase(ctx, &ws, &args, &project_name, &mut plan, &mut checks).await?;
-        if !ctx.json() && checks.len() > online_from {
-            println!();
-            println!("{}", "Online checks".bold());
-            print_checks(&checks[online_from..]);
         }
     }
 
@@ -694,11 +699,13 @@ fn apply_answers(
 /// The one thing that does stop the run is an unanswered question (exit 6),
 /// which by construction happens before anything is written.
 ///
-/// It runs before the "nothing to promote" exit, because a document whose
-/// only difference from the target's is a missing auth carrier is
-/// `Unchanged` until this phase supplies one. To keep an ordinary no-op
-/// promote off the network, it returns here — before building an ARM client
-/// — whenever there is nothing to check.
+/// It runs before the preview is built — and so before both the `--dry-run`
+/// stop and the "nothing to promote" exit — because a document whose only
+/// difference from the target's is a missing auth carrier is `Unchanged`
+/// until this phase supplies one, and its Checks belong in the one preview
+/// the run shows. To keep an ordinary no-op promote off the network, it
+/// returns here — before building an ARM client — whenever there is nothing
+/// to check.
 async fn online_phase(
     ctx: &GlobalContext,
     ws: &Workspace,

@@ -423,7 +423,9 @@ pub struct PromoteArgs {
     #[arg(long)]
     pub to: String,
 
-    /// Preview only; write nothing
+    /// Preview only; write nothing. Still runs the online checks (pass
+    /// `--offline` too for a network-free preview), so it may still ask
+    /// questions
     #[arg(long)]
     pub dry_run: bool,
 
