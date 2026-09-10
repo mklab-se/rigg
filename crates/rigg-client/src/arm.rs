@@ -297,6 +297,10 @@ fn deterministic_uuid(input: &str) -> String {
 #[derive(Debug, Deserialize)]
 struct ArmListResponse<T> {
     value: Vec<T>,
+    /// The absolute URL of the next page, when ARM pages the collection. It
+    /// already carries its own `api-version` and must be used verbatim.
+    #[serde(rename = "nextLink", default)]
+    next_link: Option<String>,
 }
 
 impl ArmClient {
@@ -1158,32 +1162,60 @@ impl ArmClient {
             .await
     }
 
+    /// Both regional listings page: a busy region offers far more models
+    /// than one response carries, and a truncated list would report an
+    /// available model as missing. Follows `nextLink` verbatim, with the same
+    /// cycle and page cap guard the Search data-plane `list` uses so a server
+    /// that repeats its link cannot hang the caller.
     async fn list_location(
         &self,
         subscription_id: &str,
         location: &str,
         collection: &str,
     ) -> Result<Vec<Value>, ClientError> {
-        let url = self.url(
+        const MAX_LIST_PAGES: usize = 1000;
+
+        let mut url = self.url(
             &format!(
                 "/subscriptions/{subscription_id}/providers/Microsoft.CognitiveServices/locations/{location}/{collection}"
             ),
             Provider::CognitiveServicesArm,
         );
-        debug!("Listing {collection} in {location}: {url}");
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .send()
-            .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await?;
-            return Err(ClientError::from_response(status.as_u16(), &body));
+        let mut items: Vec<Value> = Vec::new();
+        let mut pages = 0usize;
+        loop {
+            debug!("Listing {collection} in {location}: {url}");
+            let response = self
+                .http
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .send()
+                .await?;
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await?;
+                return Err(ClientError::from_response(status.as_u16(), &body));
+            }
+            let result: ArmListResponse<Value> = response.json().await?;
+            items.extend(result.value);
+            pages += 1;
+            match result.next_link {
+                Some(next) if !next.is_empty() => {
+                    if next == url || pages >= MAX_LIST_PAGES {
+                        return Err(ClientError::Api {
+                            status: 502,
+                            message: format!(
+                                "listing {collection} in {location} did not terminate: Azure kept \
+                                 returning a next page link after {pages} pages ({url})"
+                            ),
+                        });
+                    }
+                    url = next;
+                }
+                _ => break,
+            }
         }
-        let result: ArmListResponse<Value> = response.json().await?;
-        Ok(result.value)
+        Ok(items)
     }
 
     /// List model deployments for an AI Services account.

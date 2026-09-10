@@ -442,10 +442,15 @@ pub fn easy_auth_audience_of(settings: &Value) -> Option<String> {
 }
 
 /// [`easy_auth_audience_of`] for the site at `site_id` (a Microsoft.Web
-/// site's ARM resource id, from [`ArmClient::find_web_site_id`]). An ARM
-/// failure is indistinguishable from "no Entra auth" here on purpose: every
-/// caller treats both as "cannot use `authResourceId`", and the caller that
-/// needs to tell the app apart from its auth state looks the site up itself.
+/// site's ARM resource id, from [`ArmClient::find_web_site_id`]).
+///
+/// An ARM failure collapses into `None` here, which is only safe because the
+/// one caller — the interactive [`resolve_webapi_auth`] — offers the user a
+/// choice either way and never records a decision on the strength of a
+/// `None`. A caller that would WRITE something on "no Entra auth" must call
+/// [`ArmClient::site_auth_settings`] itself and keep the `Err` apart from an
+/// `Ok` document that says the app is anonymous — promote's online phase
+/// does exactly that.
 pub async fn easy_auth_audience(arm: &ArmClient, site_id: &str) -> Option<String> {
     easy_auth_audience_of(&arm.site_auth_settings(site_id).await.ok()?)
 }

@@ -183,7 +183,11 @@ async fn promote_sets_entra_auth_when_target_function_app_has_easy_auth() {
         .args(["promote", "demo", "--from", "dev", "--to", "prod", "--yes"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Entra"));
+        // Exactly one line per skill: the online decision, not a preview
+        // placeholder followed by it.
+        .stdout(
+            predicate::str::contains("Entra").and(predicate::str::contains("auth carrier").not()),
+        );
 
     let prod = read_json(
         &ws.path()
@@ -360,6 +364,27 @@ async fn promote_asks_when_a_deployment_model_is_unavailable_in_the_target_regio
             .is_file(),
         "the available deployment is promoted"
     );
+
+    // Once `emb` matches, skipping `gpt5` again leaves nothing to write —
+    // which is not the same as the two environments already matching.
+    rigg(ws.path(), &server.uri())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--answer",
+            "promote.deployment.gpt5=skip",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Nothing written into 'prod'.")
+                .and(predicate::str::contains("already matches").not()),
+        );
 }
 
 #[test]
@@ -401,4 +426,278 @@ fn promote_offline_reports_unresolved_carriers() {
         !skill["uri"].as_str().unwrap().contains("code="),
         "the source's key never crosses: {prod}"
     );
+}
+
+/// One `locations/{l}/models` entry, in the shape ARM returns.
+fn model_entry(name: &str, version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "OpenAI",
+        "model": {
+            "format": "OpenAI",
+            "name": name,
+            "version": version,
+            "skus": [{
+                "name": "GlobalStandard",
+                "usageName": format!("OpenAI.GlobalStandard.{name}")
+            }]
+        }
+    })
+}
+
+/// One `locations/{l}/usages` entry.
+fn usage_entry(name: &str, current: f64, limit: f64) -> serde_json::Value {
+    serde_json::json!({"name": {"value": name}, "currentValue": current, "limit": limit})
+}
+
+/// A dev deployment of `model`, asking for `capacity`.
+fn write_deployment(ws: &std::path::Path, stem: &str, model: &str, version: &str, capacity: i64) {
+    write_json(
+        &ws.join(format!(
+            "projects/demo/envs/dev/foundry/deployments/{stem}.json"
+        )),
+        &serde_json::json!({
+            "name": model,
+            "sku": {"name": "GlobalStandard", "capacity": capacity},
+            "properties": {"model": {"format": "OpenAI", "name": model, "version": version}}
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn promote_reports_unresolved_when_the_auth_settings_call_fails() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &["sub-a"],
+        &[
+            ("sites", "mklab-dev", "rg", "swedencentral"),
+            ("sites", "mklab-prod", "rg", "swedencentral"),
+        ],
+    )
+    .await;
+    // The caller may read the site but not its auth settings.
+    arm_fake::mount_easy_auth_failure(&server, "mklab-prod", 403).await;
+
+    let ws = promote_workspace();
+    bind_function_apps(ws.path(), &server.uri());
+    write_keyed_skillset(
+        ws.path(),
+        "https://mklab-dev.azurewebsites.net/api/enrich?code=<redacted>",
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "--yes"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("auth carrier unresolved")
+                .and(predicate::str::contains("resolved on push")),
+        );
+
+    let prod = read_json(
+        &ws.path()
+            .join("projects/demo/envs/prod/search/skillsets/ss.json"),
+    );
+    let skill = &prod["skills"][0];
+    assert!(
+        skill.get("authResourceId").is_none(),
+        "an ARM failure is not evidence of anonymous auth: {prod}"
+    );
+    assert!(
+        skill.get("x-rigg-auth").is_none() && !skill["uri"].as_str().unwrap().contains("code="),
+        "and it invents no key carrier either: {prod}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn promote_derives_a_carrier_when_it_is_the_only_difference() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &["sub-a"],
+        &[
+            ("sites", "mklab-dev", "rg", "swedencentral"),
+            ("sites", "mklab-prod", "rg", "swedencentral"),
+        ],
+    )
+    .await;
+    arm_fake::mount_easy_auth(&server, "mklab-prod", true, "client-1").await;
+
+    let ws = promote_workspace();
+    bind_function_apps(ws.path(), &server.uri());
+    write_keyed_skillset(
+        ws.path(),
+        "https://mklab-dev.azurewebsites.net/api/enrich?code=<redacted>",
+    );
+
+    // Offline first: prod lands carrier-less, so the only difference a second
+    // promote can find is the carrier the online phase derives.
+    rigg(ws.path(), &server.uri())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--offline",
+        ])
+        .assert()
+        .success();
+    let prod_path = ws
+        .path()
+        .join("projects/demo/envs/prod/search/skillsets/ss.json");
+    assert!(
+        read_json(&prod_path)["skills"][0]
+            .get("authResourceId")
+            .is_none(),
+        "the offline promote derives nothing"
+    );
+
+    rigg(ws.path(), &server.uri())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "--yes"])
+        .assert()
+        .success();
+    let prod = read_json(&prod_path);
+    assert_eq!(
+        prod["skills"][0]["authResourceId"], "api://client-1",
+        "a carrier-only difference still reaches the online phase: {prod}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn promote_finds_a_model_on_a_later_page_of_the_region_listing() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &["sub-a"],
+        &[("accounts", "fndr-prod", "rg", "swedencentral")],
+    )
+    .await;
+    arm_fake::mount_models_paged(
+        &server,
+        "sub-a",
+        "swedencentral",
+        vec![
+            vec![model_entry("gpt-5-mini", "2026-01-01")],
+            vec![model_entry("text-embedding-3-large", "1")],
+        ],
+        vec![usage_entry(
+            "OpenAI.GlobalStandard.text-embedding-3-large",
+            10.0,
+            100.0,
+        )],
+    )
+    .await;
+
+    let ws = promote_workspace();
+    write_deployment(ws.path(), "emb", "text-embedding-3-large", "1", 10);
+
+    rigg(ws.path(), &server.uri())
+        .args(["promote", "demo", "--from", "dev", "--to", "prod", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("quota ok"));
+    assert!(
+        ws.path()
+            .join("projects/demo/envs/prod/foundry/deployments/emb.json")
+            .is_file(),
+        "a model listed on page 2 is available, not a question"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn promote_capacity_answer_writes_the_new_capacity() {
+    let server = MockServer::start().await;
+    mount_arm_fake(
+        &server,
+        &["sub-a"],
+        &[("accounts", "fndr-prod", "rg", "swedencentral")],
+    )
+    .await;
+    arm_fake::mount_models(
+        &server,
+        "sub-a",
+        "swedencentral",
+        vec![model_entry("text-embedding-3-large", "1")],
+        // 2 of 100 free — the deployment asks for 10.
+        vec![usage_entry(
+            "OpenAI.GlobalStandard.text-embedding-3-large",
+            98.0,
+            100.0,
+        )],
+    )
+    .await;
+
+    let ws = promote_workspace();
+    write_deployment(ws.path(), "emb", "text-embedding-3-large", "1", 10);
+
+    // The answer is matched case-insensitively, like `continue` and `skip`.
+    rigg(ws.path(), &server.uri())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--answer",
+            "promote.deployment.emb=Capacity:2",
+        ])
+        .assert()
+        .success();
+    let prod = read_json(
+        &ws.path()
+            .join("projects/demo/envs/prod/foundry/deployments/emb.json"),
+    );
+    assert_eq!(
+        prod["sku"]["capacity"], 2,
+        "the answered capacity is what gets written: {prod}"
+    );
+    assert_eq!(
+        prod["sku"]["name"], "GlobalStandard",
+        "the sku itself stays"
+    );
+
+    // A capacity that is not a positive integer is a usage error (exit 2).
+    let ws2 = promote_workspace();
+    write_deployment(ws2.path(), "emb", "text-embedding-3-large", "1", 10);
+    rigg(ws2.path(), &server.uri())
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--answer",
+            "promote.deployment.emb=capacity:0",
+        ])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn promote_offline_says_deployments_were_not_checked() {
+    let ws = promote_workspace();
+    write_deployment(ws.path(), "emb", "text-embedding-3-large", "1", 10);
+    rigg(ws.path(), "http://127.0.0.1:9")
+        .args([
+            "promote",
+            "demo",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--offline",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "deployments/emb: availability and quota not checked (--offline)",
+        ));
 }

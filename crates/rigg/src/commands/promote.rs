@@ -12,11 +12,14 @@
 //!    times, so a question that does not settle cannot loop);
 //! 3. show the rewiring preview — what points where after the translation,
 //!    which sibling references were renamed, and what changes per resource;
-//! 4. once the run proceeds, persist the answered bindings to `rigg.yaml`
+//! 4. run the [`online_phase`], which asks the TARGET's Azure what only it
+//!    can answer (a Web API skill's auth carrier, a deployment's model
+//!    availability and quota) and folds the answers into the documents;
+//! 5. once the run proceeds, persist the answered bindings to `rigg.yaml`
 //!    and write the merged documents through the target environment's
 //!    `Store`.
 //!
-//! Answers reach `rigg.yaml` only in step 4: `--dry-run`, an abort and the
+//! Answers reach `rigg.yaml` only in step 5: `--dry-run`, an abort and the
 //! `needs-input` exit all leave the workspace file exactly as they found it.
 //!
 //! Nothing is deleted and resources that exist only in the target are never
@@ -124,12 +127,6 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     let targets = Targets::of(&ws, &args);
     let mut checks = checks(&plan, &args, &settled);
 
-    let pending_writes = plan
-        .items
-        .iter()
-        .filter(|i| i.change() != Change::Unchanged)
-        .count();
-
     // Scoped: the online phase below mutates what the preview borrows.
     {
         let preview = Preview {
@@ -152,23 +149,57 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
             }
             return Ok(());
         }
+    }
 
-        if pending_writes == 0 {
-            // The run reached its end without aborting, so the answers are
-            // worth keeping even though no document changed — otherwise the
-            // same question comes back on every run.
-            answered.persist()?;
-            if ctx.json() {
-                println!("{}", preview.to_json(false));
+    // Everything that needs the TARGET's Azure to decide, before the
+    // "nothing to promote" exit: a document whose ONLY difference is a
+    // missing auth carrier is `Unchanged` until this phase derives one, and
+    // exiting first would leave it to `rigg push`'s auth gate forever. The
+    // phase itself returns before it builds an ARM client when there is
+    // nothing to check, so an ordinary no-op promote still touches no
+    // network. A question it raises leaves as exit 6 with the workspace and
+    // the project tree untouched.
+    let online_from = checks.len();
+    let offered = pending_writes(&plan);
+    if !args.offline {
+        online_phase(ctx, &ws, &args, &project_name, &mut plan, &mut checks).await?;
+        if !ctx.json() && checks.len() > online_from {
+            println!();
+            println!("{}", "Online checks".bold());
+            print_checks(&checks[online_from..]);
+        }
+    }
+
+    // Recomputed: the online phase both adds changes (a derived auth
+    // carrier) and takes items away (a declined deployment).
+    if pending_writes(&plan) == 0 {
+        // The run reached its end without aborting, so the answers are worth
+        // keeping even though no document changed — otherwise the same
+        // question comes back on every run.
+        answered.persist()?;
+        if ctx.json() {
+            let preview = Preview {
+                project: &project_name,
+                args: &args,
+                plan: &plan,
+                checks: &checks,
+                targets: &targets,
+            };
+            println!("{}", preview.to_json(false));
+        } else {
+            println!();
+            if offered > 0 {
+                // The preview offered changes; the online phase declined
+                // every one of them. That is not "already matches".
+                println!("Nothing written into '{}'.", args.to);
             } else {
-                println!();
                 println!(
                     "nothing to promote — '{}' already matches '{}'",
                     args.to, args.from
                 );
             }
-            return Ok(());
         }
+        return Ok(());
     }
 
     if ctx.interactive() {
@@ -180,20 +211,6 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         return Err(anyhow!(CommandError::Usage(
             "non-interactive promote requires --yes".to_string()
         )));
-    }
-
-    // Everything that needs the TARGET's Azure to decide, after the go-ahead
-    // and before the first byte is written: a question it raises still leaves
-    // the workspace untouched (exit 6), and its decisions land in the files
-    // this run writes.
-    let online_from = checks.len();
-    if !args.offline {
-        online_phase(ctx, &ws, &args, &project_name, &mut plan, &mut checks).await?;
-        if !ctx.json() && checks.len() > online_from {
-            println!();
-            println!("{}", "Online checks".bold());
-            print_checks(&checks[online_from..]);
-        }
     }
 
     // The bindings the questions produced belong to the workspace before its
@@ -237,11 +254,6 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         println!("{}", preview.to_json(false));
     }
     say!(ctx);
-    if written == 0 {
-        // Everything the preview offered was declined in the online phase.
-        say!(ctx, "Nothing written into '{}'.", args.to);
-        return Ok(());
-    }
     say!(ctx, "Promoted {written} resource(s) into '{}'.", args.to);
     say!(ctx, "hint: rigg validate {project_name}");
     say!(ctx, "      rigg auth doctor -e {}", args.to);
@@ -252,6 +264,14 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     );
     say!(ctx, "      rigg push {project_name} -e {}", args.to);
     Ok(())
+}
+
+/// How many of the plan's documents this run would actually write.
+fn pending_writes(plan: &Plan) -> usize {
+    plan.items
+        .iter()
+        .filter(|i| i.change() != Change::Unchanged)
+        .count()
 }
 
 /// The exact command that creates the missing target environment, filled in
@@ -673,6 +693,12 @@ fn apply_answers(
 /// files, and every skipped decision is reported and left to `rigg push`.
 /// The one thing that does stop the run is an unanswered question (exit 6),
 /// which by construction happens before anything is written.
+///
+/// It runs before the "nothing to promote" exit, because a document whose
+/// only difference from the target's is a missing auth carrier is
+/// `Unchanged` until this phase supplies one. To keep an ordinary no-op
+/// promote off the network, it returns here — before building an ARM client
+/// — whenever there is nothing to check.
 async fn online_phase(
     ctx: &GlobalContext,
     ws: &Workspace,
@@ -699,10 +725,7 @@ async fn online_phase(
         .items
         .iter()
         .enumerate()
-        .filter(|(_, item)| item.kind == ResourceKind::Deployment)
-        .filter(|(_, item)| {
-            item.is_new || capacity_of(&item.merged) > item.before.as_ref().and_then(capacity_of)
-        })
+        .filter(|(_, item)| needs_capacity_check(item))
         .map(|(i, _)| i)
         .collect();
     if carriers.is_empty() && deployments.is_empty() {
@@ -754,6 +777,14 @@ async fn online_phase(
     .await
 }
 
+/// A deployment the target does not have yet, or one whose `sku.capacity`
+/// this promote raises: the only two cases that ask the target region for
+/// anything it is not already giving.
+fn needs_capacity_check(item: &Item) -> bool {
+    item.kind == ResourceKind::Deployment
+        && (item.is_new || capacity_of(&item.merged) > item.before.as_ref().and_then(capacity_of))
+}
+
 /// The target's own carrier for this skill was kept ([`AuthCarrier::Kept`]),
 /// so there is nothing to re-derive — the file already says how the target
 /// authenticates.
@@ -790,6 +821,10 @@ async fn rederive_auth(
             })
         };
         let Some(index) = skill_index(path) else {
+            report(
+                false,
+                "auth carrier unresolved — unrecognized skill path: resolved on push".to_string(),
+            );
             continue;
         };
         let pointer = format!("/skills/{index}");
@@ -818,8 +853,24 @@ async fn rederive_auth(
                 continue;
             }
         };
-        let audience = credentials::easy_auth_audience(arm, &site_id).await;
+        // An ARM failure here is NOT evidence: a caller who may read the site
+        // but not its `authsettingsV2` would otherwise be told the app is
+        // anonymous. Only a document ARM actually returned decides anything.
+        let audience = match arm.site_auth_settings(&site_id).await {
+            Ok(settings) => credentials::easy_auth_audience_of(&settings),
+            Err(e) => {
+                report(
+                    false,
+                    format!("auth carrier unresolved — '{site}' ({e}): resolved on push"),
+                );
+                continue;
+            }
+        };
         let Some(skill) = plan.items[*item].merged.pointer_mut(&pointer) else {
+            report(
+                false,
+                format!("auth carrier unresolved — no '{path}' in the target document"),
+            );
             continue;
         };
         match audience {
@@ -867,6 +918,39 @@ struct DeploymentAsk {
 const CONTINUE: &str = "continue";
 /// Answer prefix that overrides the deployment's capacity: `capacity:20`.
 const CAPACITY: &str = "capacity:";
+
+/// What one answer to a `promote.deployment.<stem>` question says.
+enum DeploymentAnswer {
+    /// Promote the deployment as it is.
+    Continue,
+    /// Leave it out of this promote.
+    Skip,
+    /// Promote it with this `sku.capacity` instead.
+    Capacity(i64),
+}
+
+/// Parse one answer. All three forms are matched case-insensitively — the
+/// answer may come from a person typing or from a script echoing a candidate
+/// back — and a capacity must be a whole number of units, at least one.
+/// `None` is a usage error, never a silent fallback.
+fn parse_deployment_answer(raw: &str) -> Option<DeploymentAnswer> {
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case(SKIP) {
+        return Some(DeploymentAnswer::Skip);
+    }
+    if raw.eq_ignore_ascii_case(CONTINUE) {
+        return Some(DeploymentAnswer::Continue);
+    }
+    let (prefix, rest) = raw.split_at_checked(CAPACITY.len())?;
+    if !prefix.eq_ignore_ascii_case(CAPACITY) {
+        return None;
+    }
+    rest.trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|n| *n >= 1)
+        .map(DeploymentAnswer::Capacity)
+}
 
 /// Check every new (or capacity-raising) deployment against what the TARGET
 /// account's region actually offers, and ask about the ones that do not fit.
@@ -965,7 +1049,13 @@ async fn check_deployments(
     let mut asks: Vec<DeploymentAsk> = Vec::new();
     for item in deployments {
         let deployment = &plan.items[*item];
-        match verdict(&deployment.merged, &models, &usages, &location) {
+        match verdict(
+            &deployment.merged,
+            deployment.before.as_ref(),
+            &models,
+            &usages,
+            &location,
+        ) {
             Ok(message) => checks.push(Check {
                 ok: true,
                 message: format!("{}: {message}", deployment.label()),
@@ -1016,36 +1106,33 @@ async fn check_deployments(
         let raw = answer.as_str().unwrap_or_default().trim().to_string();
         let label = plan.items[ask.item].label();
         let reason = &ask.reason;
-        if raw.eq_ignore_ascii_case(SKIP) {
-            skipped.push(ask.item);
-            checks.push(Check {
-                ok: false,
-                message: format!("{label}: skipped ({reason})"),
-            });
-        } else if raw.eq_ignore_ascii_case(CONTINUE) {
-            checks.push(Check {
-                ok: false,
-                message: format!("{label}: promoted anyway ({reason})"),
-            });
-        } else if let Some(rest) = raw.strip_prefix(CAPACITY) {
-            let capacity: i64 = rest.trim().parse().map_err(|_| {
-                anyhow!(CommandError::Usage(format!(
-                    "invalid answer for 'promote.deployment.{}': '{raw}' — expected \
-                     '{CAPACITY}<number>'",
-                    plan.items[ask.item].stem
-                )))
-            })?;
-            set_capacity(&mut plan.items[ask.item].merged, capacity);
-            checks.push(Check {
-                ok: true,
-                message: format!("{label}: capacity set to {capacity} ({reason})"),
-            });
-        } else {
+        let Some(parsed) = parse_deployment_answer(&raw) else {
             return Err(anyhow!(CommandError::Usage(format!(
                 "invalid answer for 'promote.deployment.{}': '{raw}' — expected \
-                 '{CONTINUE}', '{SKIP}' or '{CAPACITY}<number>'",
+                 '{CONTINUE}', '{SKIP}' or '{CAPACITY}<number>' (a whole number of units, \
+                 at least 1)",
                 plan.items[ask.item].stem
             ))));
+        };
+        match parsed {
+            DeploymentAnswer::Skip => {
+                skipped.push(ask.item);
+                checks.push(Check {
+                    ok: false,
+                    message: format!("{label}: skipped ({reason})"),
+                });
+            }
+            DeploymentAnswer::Continue => checks.push(Check {
+                ok: false,
+                message: format!("{label}: promoted anyway ({reason})"),
+            }),
+            DeploymentAnswer::Capacity(capacity) => {
+                set_capacity(&mut plan.items[ask.item].merged, capacity);
+                checks.push(Check {
+                    ok: true,
+                    message: format!("{label}: capacity set to {capacity} ({reason})"),
+                });
+            }
         }
     }
     // A skipped deployment leaves the write set entirely: it is not promoted,
@@ -1084,8 +1171,13 @@ fn set_capacity(doc: &mut Value, capacity: i64) {
 
 /// What the target region says about one deployment: `Ok` is a line for the
 /// Checks section, `Err` is the reason to ask about it.
+///
+/// `before` is the target's current document, when it has one: raising a
+/// deployment from 50 to 55 units asks the region's quota for the five it
+/// does not already hold, not for all 55.
 fn verdict(
     doc: &Value,
+    before: Option<&Value>,
     models: &[Value],
     usages: &[Value],
     location: &str,
@@ -1118,6 +1210,9 @@ fn verdict(
             "{named} available in {location} (no quota to check)"
         ));
     };
+    // Only the increase is new demand; what the target already runs is
+    // already counted in `currentValue`.
+    let demand = (capacity - before.and_then(capacity_of).unwrap_or(0.0)).max(0.0);
     let Some(usage) = usages
         .iter()
         .find(|u| u.pointer("/name/value").and_then(Value::as_str) == Some(usage_name.as_str()))
@@ -1135,14 +1230,14 @@ fn verdict(
             .get("currentValue")
             .and_then(Value::as_f64)
             .unwrap_or_default();
-    if free >= capacity {
+    if free >= demand {
         Ok(format!(
-            "{named} available in {location}, quota ok ({free} of {limit} free, asks for {capacity})"
+            "{named} available in {location}, quota ok ({free} of {limit} free, asks for {demand})"
         ))
     } else {
         Err(format!(
             "quota '{usage_name}' in {location} has {free} of {limit} free and the deployment asks \
-             for {capacity}"
+             for {demand}"
         ))
     }
 }
@@ -1205,31 +1300,39 @@ fn print_checks(checks: &[Check]) {
 fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
     let mut out = Vec::new();
 
-    for item in &plan.items {
-        for carrier in &item.auth {
-            // A carrier the target already had is kept, not re-derived —
-            // the file itself says how '{to}' authenticates.
-            let AuthCarrier::Stripped { path, .. } = carrier else {
-                continue;
-            };
-            if target_kept_carrier(item, path) {
-                continue;
+    // Only `--offline` reports carriers and deployments here: online, the
+    // phase that actually decides them reports each exactly once, and a
+    // placeholder line above its verdict would say the same thing twice.
+    if args.offline {
+        for item in &plan.items {
+            for carrier in &item.auth {
+                // A carrier the target already had is kept, not re-derived —
+                // the file itself says how '{to}' authenticates.
+                let AuthCarrier::Stripped { path, .. } = carrier else {
+                    continue;
+                };
+                if target_kept_carrier(item, path) {
+                    continue;
+                }
+                out.push(Check {
+                    ok: false,
+                    message: format!(
+                        "{} {path}: Web API auth carrier unresolved (it authorizes '{}') — \
+                         resolved against '{}' on push",
+                        item.label(),
+                        args.from,
+                        args.to
+                    ),
+                });
             }
-            let what = if args.offline {
-                format!(
-                    "auth carrier unresolved (it authorizes '{}') — resolved against '{}' on push",
-                    args.from, args.to
-                )
-            } else {
-                format!(
-                    "auth carrier not carried over (it authorizes '{}') — re-derived from '{}' \
-                     below",
-                    args.from, args.to
-                )
-            };
+        }
+        for item in plan.items.iter().filter(|i| needs_capacity_check(i)) {
             out.push(Check {
                 ok: false,
-                message: format!("{} {path}: Web API {what}", item.label()),
+                message: format!(
+                    "{}: availability and quota not checked (--offline)",
+                    item.label()
+                ),
             });
         }
     }
@@ -1619,6 +1722,7 @@ mod tests {
         )];
         let reason = verdict(
             &deployment("gpt-5-nano", "2026-01-01", 10),
+            None,
             &models,
             &[],
             "swedencentral",
@@ -1632,6 +1736,7 @@ mod tests {
         // Same model, a version the region does not have.
         let reason = verdict(
             &deployment("gpt-5-mini", "2025-01-01", 10),
+            None,
             &models,
             &[],
             "swedencentral",
@@ -1643,6 +1748,7 @@ mod tests {
         assert!(
             verdict(
                 &deployment("gpt-5-mini", "", 10),
+                None,
                 &models,
                 &[],
                 "swedencentral"
@@ -1659,17 +1765,37 @@ mod tests {
             "OpenAI.GlobalStandard.gpt-5-mini",
         )];
         let usages = vec![usage("OpenAI.GlobalStandard.gpt-5-mini", 90.0, 100.0)];
-        let reason =
-            verdict(&deployment("gpt-5-mini", "1", 50), &models, &usages, "swe").unwrap_err();
+        let reason = verdict(
+            &deployment("gpt-5-mini", "1", 50),
+            None,
+            &models,
+            &usages,
+            "swe",
+        )
+        .unwrap_err();
         assert!(
             reason.contains("10 of 100 free") && reason.contains("asks for 50"),
             "{reason}"
         );
         // Exactly the headroom fits.
-        let ok = verdict(&deployment("gpt-5-mini", "1", 10), &models, &usages, "swe").unwrap();
+        let ok = verdict(
+            &deployment("gpt-5-mini", "1", 10),
+            None,
+            &models,
+            &usages,
+            "swe",
+        )
+        .unwrap();
         assert!(ok.contains("quota ok"), "{ok}");
         // A quota the region does not report is not a question.
-        let ok = verdict(&deployment("gpt-5-mini", "1", 10), &models, &[], "swe").unwrap();
+        let ok = verdict(
+            &deployment("gpt-5-mini", "1", 10),
+            None,
+            &models,
+            &[],
+            "swe",
+        )
+        .unwrap();
         assert!(ok.contains("not reported"), "{ok}");
     }
 
@@ -1690,6 +1816,58 @@ mod tests {
             Some("OpenAI.GlobalStandard.m")
         );
         assert_eq!(usage_name_of(&offered, "ProvisionedManaged"), None);
+    }
+
+    #[test]
+    fn a_capacity_increase_only_demands_the_delta_over_what_is_deployed() {
+        let models = vec![offered(
+            "gpt-5-mini",
+            "1",
+            "OpenAI.GlobalStandard.gpt-5-mini",
+        )];
+        let usages = vec![usage("OpenAI.GlobalStandard.gpt-5-mini", 90.0, 100.0)];
+        // 50 → 55 is five more units, not fifty: the target already holds 50.
+        let before = deployment("gpt-5-mini", "1", 50);
+        let ok = verdict(
+            &deployment("gpt-5-mini", "1", 55),
+            Some(&before),
+            &models,
+            &usages,
+            "swe",
+        )
+        .unwrap();
+        assert!(ok.contains("asks for 5"), "{ok}");
+        // The same document as a NEW deployment demands all of it.
+        let reason = verdict(
+            &deployment("gpt-5-mini", "1", 55),
+            None,
+            &models,
+            &usages,
+            "swe",
+        )
+        .unwrap_err();
+        assert!(reason.contains("asks for 55"), "{reason}");
+    }
+
+    #[test]
+    fn deployment_answers_are_case_insensitive_and_capacity_must_be_positive() {
+        assert!(matches!(
+            parse_deployment_answer("Continue"),
+            Some(DeploymentAnswer::Continue)
+        ));
+        assert!(matches!(
+            parse_deployment_answer("SKIP"),
+            Some(DeploymentAnswer::Skip)
+        ));
+        assert!(matches!(
+            parse_deployment_answer("Capacity: 20"),
+            Some(DeploymentAnswer::Capacity(20))
+        ));
+        assert!(parse_deployment_answer("capacity:0").is_none());
+        assert!(parse_deployment_answer("capacity:-3").is_none());
+        assert!(parse_deployment_answer("capacity:2.5").is_none());
+        assert!(parse_deployment_answer("capacity:").is_none());
+        assert!(parse_deployment_answer("maybe").is_none());
     }
 
     #[test]

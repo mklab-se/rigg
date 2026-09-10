@@ -142,6 +142,21 @@ pub async fn mount_easy_auth(server: &MockServer, site: &str, enabled: bool, cli
         .await;
 }
 
+/// Mount one site's `authsettingsV2` action as a failure (403, 500, …) —
+/// what an unauthorized caller gets. Promote must report this as a skipped
+/// decision, never as a verdict.
+pub async fn mount_easy_auth_failure(server: &MockServer, site: &str, status: u16) {
+    Mock::given(method("POST"))
+        .and(path_regex(format!(
+            r"^.*/sites/{site}/config/authsettingsV2/list$"
+        )))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+            "error": {"code": "AuthorizationFailed", "message": "no permission to read auth settings"}
+        })))
+        .mount(server)
+        .await;
+}
+
 /// Mount `Microsoft.CognitiveServices/locations/{location}/models` and
 /// `.../usages` for one subscription — what the deployment availability and
 /// quota checks read.
@@ -152,13 +167,46 @@ pub async fn mount_models(
     models: Vec<Value>,
     usages: Vec<Value>,
 ) {
+    mount_models_paged(server, sub, location, vec![models], usages).await;
+}
+
+/// Like [`mount_models`], but serves the models listing across several pages
+/// linked by `nextLink` — page `i > 0` lives at `models-page{i}`, and the
+/// last page has no link.
+pub async fn mount_models_paged(
+    server: &MockServer,
+    sub: &str,
+    location: &str,
+    pages: Vec<Vec<Value>>,
+    usages: Vec<Value>,
+) {
     let base =
         format!("/subscriptions/{sub}/providers/Microsoft.CognitiveServices/locations/{location}");
-    Mock::given(method("GET"))
-        .and(path(format!("{base}/models")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": models})))
-        .mount(server)
-        .await;
+    let last = pages.len().saturating_sub(1);
+    for (i, page) in pages.into_iter().enumerate() {
+        let mut body = json!({"value": page});
+        if i < last {
+            // ARM's own next link is absolute and carries its own query; the
+            // client must follow it verbatim rather than rebuild it. The
+            // marker below stands in for the real api-version, which would
+            // trip the registry's no-version-literals guard.
+            body["nextLink"] = json!(format!(
+                "{}{base}/models-page{}?api-version=from-the-next-link",
+                server.uri(),
+                i + 1
+            ));
+        }
+        let at = if i == 0 {
+            format!("{base}/models")
+        } else {
+            format!("{base}/models-page{i}")
+        };
+        Mock::given(method("GET"))
+            .and(path(at))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
     Mock::given(method("GET"))
         .and(path(format!("{base}/usages")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": usages})))
