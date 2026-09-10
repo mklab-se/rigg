@@ -323,6 +323,20 @@ fn resolve_walk(search_service: &str, value: &mut Value) -> Result<()> {
                     .find(|f| map.contains_key(*f))
                     .unwrap_or("server_url");
                 map.insert(field.to_string(), Value::String(mcp_url));
+                // Foundry rejects an MCP tool without a `server_label`, and
+                // the label is not environment-specific — derive it from the
+                // same annotation rather than making every agent file carry
+                // a hand-written copy of its knowledge base's name.
+                if !map
+                    .get("server_label")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty())
+                {
+                    map.insert(
+                        "server_label".to_string(),
+                        Value::String(kb.replace(['-', '.'], "_")),
+                    );
+                }
             }
             for (_, v) in map.iter_mut() {
                 resolve_walk(search_service, v)?;
@@ -362,5 +376,28 @@ mod tests {
                 rigg_core::registry::SEARCH_PREVIEW_API_VERSION
             )
         );
+    }
+
+    /// Foundry rejects an MCP tool with no `server_label`, so a tool that
+    /// only carries `x-rigg-ref` gets one derived from the same annotation
+    /// (Foundry labels take `[A-Za-z0-9_]`). A label the author wrote is
+    /// left alone.
+    #[test]
+    fn an_mcp_tool_gets_a_server_label_from_its_x_rigg_ref() {
+        let search = SearchConnection {
+            service: "svc".to_string(),
+            ..Default::default()
+        };
+        let mut body = serde_json::json!({
+            "name": "agent",
+            "tools": [
+                {"type": "mcp", "x-rigg-ref": "knowledge-bases/docs-kb", "server_url": ""},
+                {"type": "mcp", "x-rigg-ref": "knowledge-bases/docs-kb", "server_label": "mine"}
+            ]
+        });
+        resolve_cross_service_refs(Some(&search), &mut body).unwrap();
+        assert_eq!(body["tools"][0]["server_label"], "docs_kb");
+        assert_eq!(body["tools"][1]["server_label"], "mine");
+        assert_eq!(body["tools"][0]["server_url"], kb_mcp_url("svc", "docs-kb"));
     }
 }
