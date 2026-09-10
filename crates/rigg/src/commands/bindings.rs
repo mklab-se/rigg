@@ -239,7 +239,16 @@ pub fn learn(ws: &Workspace, env_name: &str, env_bindings: &EnvBindings) -> Resu
                     continue;
                 };
                 let value = proposed_value(kind, &found);
-                let source = (path.display().to_string(), found.path.clone());
+                // Report the file the way every other command names it:
+                // relative to the workspace root, not as an absolute path
+                // that makes the proposal table unreadable.
+                let source = (
+                    path.strip_prefix(&ws.root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                    found.path.clone(),
+                );
                 grouped
                     .entry((kind, value.to_lowercase()))
                     .or_insert_with(|| Proposal {

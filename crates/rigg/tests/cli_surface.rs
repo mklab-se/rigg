@@ -2702,3 +2702,30 @@ fn validate_strict_accepts_builtin_guardrail_references() {
         .code(3)
         .stdout(predicate::str::contains("guardrails/house-policy"));
 }
+
+/// The proposal table names files the way the rest of the CLI does —
+/// relative to the workspace root. An absolute path makes the table
+/// unreadable and leaks the operator's home directory into transcripts.
+#[test]
+fn learned_bindings_name_files_relative_to_the_workspace() {
+    let ws = workspace();
+    let dir = ws.path().join("projects/demo/envs/dev/search/skillsets");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("s.json"),
+        r##"{"name": "s", "skills": [{"@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+             "name": "enrich", "context": "/document",
+             "uri": "https://docs-enrich.azurewebsites.net/api/enrich",
+             "inputs": [], "outputs": []}]}"##,
+    )
+    .unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "--learn", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "projects/demo/envs/dev/search/skillsets/s.json:skills[0].uri",
+        ))
+        .stdout(predicate::str::contains(ws.path().display().to_string().as_str()).not());
+}
