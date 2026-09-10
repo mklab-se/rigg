@@ -13,7 +13,7 @@ use rigg_core::store::{ProjectState, Store, assert_exclusive_ownership};
 use crate::cli::AdoptArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
-    CommandError, GlobalContext, interactive, load_workspace, new, resolve_env_or_choose,
+    CommandError, GlobalContext, bindings, interactive, load_workspace, new, resolve_env_or_choose,
 };
 
 /// What the user asked to adopt.
@@ -409,6 +409,9 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     }
     state.save(&ws, &env.name, &project.name)?;
     report(ctx, &env.name, &to_adopt, &skipped, &dep_keys, false)?;
+    if !to_adopt.is_empty() {
+        bindings::offer_to_learn(ctx, &ws, &env)?;
+    }
 
     // ---- teach the scriptable form ----
     if wizard && !wizard_chosen.is_empty() && !args.dry_run {

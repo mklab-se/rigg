@@ -644,6 +644,35 @@ async fn adopt_all_selector_adopts_everything_unmanaged() {
 }
 
 #[tokio::test]
+async fn adopt_offers_to_learn_bindings_non_interactively_as_a_hint() {
+    let server = MockServer::start().await;
+    mount_empty_lists_except(&server, "datasources").await;
+    Mock::given(method("GET"))
+        .and(path("/datasources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [{
+            "name": "ds",
+            "type": "azureblob",
+            "credentials": {
+                "connectionString": "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct;"
+            },
+            "container": {"name": "c"}
+        }]})))
+        .mount(&server)
+        .await;
+    let ws = workspace(&server.uri());
+    rigg(ws.path())
+        .args(["adopt", "demo", "all", "--yes"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rigg env bind dev --learn"));
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert!(
+        !yaml.contains("dependencies"),
+        "non-interactive adopt does not write bindings"
+    );
+}
+
+#[tokio::test]
 async fn adopt_dry_run_writes_nothing() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

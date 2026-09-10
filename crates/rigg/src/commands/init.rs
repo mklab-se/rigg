@@ -89,15 +89,29 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     yaml.push_str(&format!("  {}:\n", args.env_name));
     yaml.push_str("    default: true\n");
     // Tenant/subscription are informational context, not required for rigg
-    // to function — write them only when `az` tells us, and write neither
-    // if the user isn't logged in.
-    if let Ok(status) = rigg_client::auth::AzCliAuth::check_status() {
-        if let Some(tenant) = &status.tenant_id {
-            yaml.push_str(&format!("    tenant: {tenant}\n"));
-        }
-        if let Some(subscription) = &status.subscription_id {
-            yaml.push_str(&format!("    subscription: {subscription}\n"));
-        }
+    // to function. `--tenant`/`--subscription` always win; otherwise fall
+    // back to what `az` tells us, writing neither when the user isn't
+    // logged in (or an empty account field slips through).
+    let az_status = (args.tenant.is_none() || args.subscription.is_none())
+        .then(|| rigg_client::auth::AzCliAuth::check_status().ok())
+        .flatten();
+    let tenant = args.tenant.clone().or_else(|| {
+        az_status
+            .as_ref()
+            .and_then(|s| s.tenant_id.clone())
+            .filter(|s| !s.is_empty())
+    });
+    let subscription = args.subscription.clone().or_else(|| {
+        az_status
+            .as_ref()
+            .and_then(|s| s.subscription_id.clone())
+            .filter(|s| !s.is_empty())
+    });
+    if let Some(tenant) = &tenant {
+        yaml.push_str(&format!("    tenant: {tenant}\n"));
+    }
+    if let Some(subscription) = &subscription {
+        yaml.push_str(&format!("    subscription: {subscription}\n"));
     }
     if let Some(service) = &search {
         yaml.push_str(&format!("    search: {{ service: {service} }}\n"));

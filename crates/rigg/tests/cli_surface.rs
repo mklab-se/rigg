@@ -550,6 +550,29 @@ fn init_with_folder_keeps_workspace_in_cwd_and_stores_files_there() {
 }
 
 #[test]
+fn init_records_tenant_and_subscription_flags() {
+    let tmp = tempfile::tempdir().unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args([
+            "init",
+            "--search-service",
+            "s",
+            "--tenant",
+            "t-1",
+            "--subscription",
+            "sub-1",
+        ])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(tmp.path().join("rigg.yaml")).unwrap();
+    assert!(
+        yaml.contains("tenant: t-1") && yaml.contains("subscription: sub-1"),
+        "{yaml}"
+    );
+}
+
+#[test]
 fn crate_concepts_doc_matches_repo_root_copy() {
     // `rigg concepts` embeds crates/rigg/CONCEPTS.md because cargo publish
     // cannot package files outside the crate; the repo-root CONCEPTS.md is
@@ -1665,6 +1688,55 @@ fn env_bind_and_unbind_edit_rigg_yaml() {
 }
 
 #[test]
+fn env_bind_on_an_already_bound_name_replaces_it() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:acct-a"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:acct-b"])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert_eq!(
+        yaml.matches("docs:").count(),
+        1,
+        "rebinding 'docs' replaces the entry rather than duplicating it: {yaml}"
+    );
+    assert!(
+        yaml.contains("storage: acct-b") && !yaml.contains("acct-a"),
+        "{yaml}"
+    );
+}
+
+#[test]
+fn env_bind_preserves_the_environments_other_fields() {
+    // edit_workspace_yaml round-trip: writing a binding must not drop the
+    // environment's tenant/subscription/policy fields.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("rigg.yaml"),
+        "environments:\n  dev:\n    default: true\n    tenant: t-1\n    subscription: s-1\n    policy: { protected: true }\n    search: { service: unit-test-svc }\n",
+    )
+    .unwrap();
+    let proj = tmp.path().join("projects").join("demo");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("project.yaml"), "{}\n").unwrap();
+    rigg()
+        .current_dir(tmp.path())
+        .args(["env", "bind", "dev", "docs", "storage:x"])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(tmp.path().join("rigg.yaml")).unwrap();
+    assert!(yaml.contains("tenant: t-1"), "{yaml}");
+    assert!(yaml.contains("subscription: s-1"), "{yaml}");
+    assert!(yaml.contains("protected: true"), "{yaml}");
+}
+
+#[test]
 fn env_bind_learn_proposes_from_files_and_writes_with_yes() {
     let ws = workspace();
     write_ds(ws.path(), "dev", "ds", "mklabstorageacc");
@@ -1830,6 +1902,20 @@ fn env_add_like_skip_drops_a_binding_and_unknown_same_is_a_usage_error() {
         ])
         .assert()
         .code(2);
+}
+
+#[test]
+fn env_add_like_with_no_bindings_and_no_targets_is_a_usage_error() {
+    // `dev` here has no dependencies at all, so `--like dev` alone gives
+    // `env add` nothing to write — that must fail loudly, not silently
+    // create a target-less, binding-less environment.
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "add", "empty", "--like", "dev"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("nothing to add"));
 }
 
 #[test]

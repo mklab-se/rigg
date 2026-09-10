@@ -59,7 +59,7 @@ pub async fn run(ctx: &GlobalContext, cmd: EnvCommands) -> Result<()> {
             value,
             learn,
         } => bind(ctx, &env, name, value, learn),
-        EnvCommands::Unbind { env, name } => unbind(&env, &name),
+        EnvCommands::Unbind { env, name } => unbind(ctx, &env, &name),
     }
 }
 
@@ -245,6 +245,7 @@ fn env_json(
             "value": binding.value,
             "physical_name": binding.physical_name(),
             "arm_id": cache.get(bname).and_then(|r| r.arm_id.clone()),
+            "location": cache.get(bname).and_then(|r| r.location.clone()),
             "shared_with": shared_with(&others, binding),
             "error": errors.get(bname),
         })).collect::<Vec<_>>(),
@@ -300,16 +301,21 @@ fn bind(
     validate_binding_name(&name).map_err(|e| anyhow!(CommandError::Usage(e)))?;
     let binding = bindings::parse_binding(&spec)?;
     bindings::write_binding(env_name, &name, &binding)?;
-    println!(
+    say!(
+        ctx,
         "Bound '{name}' in environment '{env_name}': {} {}",
-        binding.kind, binding.value
+        binding.kind,
+        binding.value
     );
     Ok(())
 }
 
-fn unbind(env_name: &str, name: &str) -> Result<()> {
+fn unbind(ctx: &GlobalContext, env_name: &str, name: &str) -> Result<()> {
     bindings::remove_binding(env_name, name)?;
-    println!("Removed binding '{name}' from environment '{env_name}'.");
+    say!(
+        ctx,
+        "Removed binding '{name}' from environment '{env_name}'."
+    );
     Ok(())
 }
 
@@ -428,53 +434,45 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
         ))));
     }
 
-    // Bindings: copied from `--like` (minus `--skip`), then overridden by
-    // `--bind`. `--same` is the default for everything, and is accepted as
-    // an explicit statement of intent (it must name a real binding).
-    let mut deps: BTreeMap<String, Binding> = BTreeMap::new();
-    if let Some(source_name) = &like {
-        let source = ws.config.environments.get(source_name).ok_or_else(|| {
-            anyhow!(CommandError::Usage(format!(
-                "unknown environment '{source_name}' (--like)"
-            )))
-        })?;
-        for flag in same.iter().chain(skip.iter()) {
-            if !source.dependencies.contains_key(flag) {
+    // Validate `--like`/`--same`/`--skip` and build the (unasked) copy set
+    // up front — cheap, and needed below to tell a deliberately target-less
+    // environment (bindings given) from one with nothing to add at all.
+    // `--same` is the default for everything, and is accepted as an
+    // explicit statement of intent (it must name a real binding).
+    let like_copy: Option<BTreeMap<String, Binding>> = match &like {
+        Some(source_name) => {
+            let source = ws.config.environments.get(source_name).ok_or_else(|| {
+                anyhow!(CommandError::Usage(format!(
+                    "unknown environment '{source_name}' (--like)"
+                )))
+            })?;
+            for flag in same.iter().chain(skip.iter()) {
+                if !source.dependencies.contains_key(flag) {
+                    return Err(anyhow!(CommandError::Usage(format!(
+                        "environment '{source_name}' has no binding '{flag}'"
+                    ))));
+                }
+            }
+            if let Some(both) = same.iter().find(|s| skip.contains(s)) {
                 return Err(anyhow!(CommandError::Usage(format!(
-                    "environment '{source_name}' has no binding '{flag}'"
+                    "'{both}' is named by both --same and --skip"
                 ))));
             }
-        }
-        if let Some(both) = same.iter().find(|s| skip.contains(s)) {
-            return Err(anyhow!(CommandError::Usage(format!(
-                "'{both}' is named by both --same and --skip"
-            ))));
-        }
-        let copy: BTreeMap<String, Binding> = source
-            .dependencies
-            .iter()
-            .filter(|(bname, _)| !skip.contains(bname))
-            .map(|(bname, b)| (bname.clone(), b.clone()))
-            .collect();
-        if ctx.interactive() {
-            deps = ask_like_bindings(
-                ctx,
-                &name,
-                source_name,
-                copy,
-                &overrides,
-                tenant.as_deref(),
-                subscription.as_deref(),
+            Some(
+                source
+                    .dependencies
+                    .iter()
+                    .filter(|(bname, _)| !skip.contains(bname))
+                    .map(|(bname, b)| (bname.clone(), b.clone()))
+                    .collect(),
             )
-            .await?;
-        } else {
-            deps = copy;
         }
-    }
-    for (bname, binding) in overrides {
-        deps.insert(bname, binding);
-    }
+        None => None,
+    };
+    let has_something_to_bind =
+        !overrides.is_empty() || like_copy.as_ref().is_some_and(|c| !c.is_empty());
 
+    // Targets before dependencies before `protected` (spec §3 order).
     // Explicit target flags skip the wizard entirely (non-interactive-
     // friendly, scriptable). With neither flag: a TTY runs the interactive
     // wizard (ARM discovery, same as `rigg init`); anything else is a usage
@@ -485,8 +483,14 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
         (search_service, foundry_account.zip(foundry_project))
     } else if ctx.interactive() {
         discovery::discover_interactive(ctx.no_color).await?
-    } else if like.is_some() || !deps.is_empty() {
+    } else if has_something_to_bind {
         (None, None)
+    } else if like.is_some() {
+        return Err(anyhow!(CommandError::Usage(
+            "nothing to add: pass --search-service/--foundry-account or use --like with an \
+             environment that has bindings"
+                .to_string()
+        )));
     } else {
         return Err(anyhow!(CommandError::Usage(
             "in non-interactive mode pass --search-service and/or \
@@ -495,6 +499,33 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
                 .to_string()
         )));
     };
+
+    // Dependencies: copied from `--like` (minus `--skip`, and minus `--same`
+    // — those are a stated intent, kept as-is with no question asked), then
+    // asked about interactively for the rest, then overridden by `--bind`.
+    let mut deps: BTreeMap<String, Binding> = BTreeMap::new();
+    if let (Some(source_name), Some(copy)) = (&like, like_copy) {
+        if ctx.interactive() {
+            deps = ask_like_bindings(
+                ctx,
+                copy,
+                LikeAskContext {
+                    new_env: &name,
+                    source_env: source_name,
+                    overrides: &overrides,
+                    same: &same,
+                    tenant: tenant.as_deref(),
+                    subscription: subscription.as_deref(),
+                },
+            )
+            .await?;
+        } else {
+            deps = copy;
+        }
+    }
+    for (bname, binding) in overrides {
+        deps.insert(bname, binding);
+    }
 
     let protected = if protected {
         true
@@ -577,26 +608,53 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
     Ok(())
 }
 
+/// Fixed context for [`ask_like_bindings`] — grouped to keep the function's
+/// argument count sane.
+struct LikeAskContext<'a> {
+    new_env: &'a str,
+    source_env: &'a str,
+    overrides: &'a [(String, Binding)],
+    same: &'a [String],
+    tenant: Option<&'a str>,
+    subscription: Option<&'a str>,
+}
+
 /// One question per copied binding: keep the source's value, pick another
 /// resource of the same type from ARM, or skip it. Bindings already named
-/// by `--bind` are not asked about.
+/// by `--bind` are not asked about, and neither are ones named by `--same`
+/// — that flag is itself the answer ("keep the source's value"), stated
+/// up front, so it's honored silently rather than asked about again.
 async fn ask_like_bindings(
     ctx: &GlobalContext,
-    new_env: &str,
-    source_env: &str,
     copy: BTreeMap<String, Binding>,
-    overrides: &[(String, Binding)],
-    tenant: Option<&str>,
-    subscription: Option<&str>,
+    args: LikeAskContext<'_>,
 ) -> Result<BTreeMap<String, Binding>> {
     use crate::commands::ask::{Candidate, Question};
+    let LikeAskContext {
+        new_env,
+        source_env,
+        overrides,
+        same,
+        tenant,
+        subscription,
+    } = args;
 
+    let mut out: BTreeMap<String, Binding> = BTreeMap::new();
     let asked: Vec<(String, Binding)> = copy
         .into_iter()
-        .filter(|(name, _)| !overrides.iter().any(|(o, _)| o == name))
+        .filter(|(name, binding)| {
+            if overrides.iter().any(|(o, _)| o == name) {
+                return false;
+            }
+            if same.contains(name) {
+                out.insert(name.clone(), binding.clone());
+                return false;
+            }
+            true
+        })
         .collect();
     if asked.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(out);
     }
 
     let mut questions = Vec::with_capacity(asked.len());
@@ -630,7 +688,6 @@ async fn ask_like_bindings(
 
     let mut asker = ctx.asker("env add", json!({"env": new_env, "like": source_env}));
     let answers = asker.ask_all(&questions)?;
-    let mut out = BTreeMap::new();
     for ((name, binding), answer) in asked.into_iter().zip(answers) {
         match answer.as_str().unwrap_or_default() {
             "same" => {

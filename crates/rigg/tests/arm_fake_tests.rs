@@ -165,6 +165,55 @@ async fn resolve_binding_skips_subscriptions_that_cannot_be_listed() {
     assert_eq!(r.subscription.as_deref(), Some("sub-ok"));
 }
 
+/// One subscription is denied, the other lists fine but has no match: the
+/// result is a genuine "not found", not the unrelated 403.
+#[tokio::test]
+async fn resolve_binding_not_found_when_one_subscription_denied_and_other_has_no_match() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "value": [
+                {"subscriptionId": "sub-denied", "displayName": "denied", "state": "Enabled"},
+                {"subscriptionId": "sub-ok", "displayName": "ok", "state": "Enabled"},
+            ]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/sub-denied/providers/Microsoft.Storage/storageAccounts",
+        ))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .set_body_string("{\"error\":{\"code\":\"AuthorizationFailed\"}}"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/subscriptions/sub-ok/providers/Microsoft.Storage/storageAccounts",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [{
+            "name": "unrelated",
+            "location": "swedencentral",
+            "id": "/subscriptions/sub-ok/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/unrelated",
+            "properties": {}
+        }]})))
+        .mount(&server)
+        .await;
+
+    let arm = ArmClient::with_token_and_base("t".into(), server.uri());
+    let err = arm
+        .resolve_binding(BindingType::Storage, "acct", None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not found") && err.to_string().contains("acct"),
+        "expected a not-found error naming 'acct', got: {err}"
+    );
+}
+
 /// …but when every subscription fails, the error surfaces instead of a
 /// misleading "not found".
 #[tokio::test]

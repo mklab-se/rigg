@@ -6,18 +6,18 @@
 //! `rigg promote` all go through the helpers here so there is exactly one
 //! place that writes a binding.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
 use serde_yaml::Value as Yaml;
 
-use rigg_core::binding::{Binding, BindingType, EnvBindings, validate_binding_name};
+use rigg_core::binding::{Binding, BindingCache, BindingType, EnvBindings, validate_binding_name};
 use rigg_core::infra::{self, Class, Target};
 use rigg_core::store::Store;
-use rigg_core::workspace::{WORKSPACE_FILE, Workspace};
+use rigg_core::workspace::{ResolvedEnv, WORKSPACE_FILE, Workspace};
 
 use super::ask::{Answer, Asker, Question};
-use super::{CommandError, load_workspace};
+use super::{CommandError, GlobalContext, load_workspace};
 
 /// The answer that means "don't bind this" in a `learn` question.
 pub const SKIP_ANSWER: &str = "skip";
@@ -332,12 +332,18 @@ pub fn answers_to_bindings(
     answers: &[Answer],
 ) -> Result<Vec<(String, Binding)>> {
     let mut out = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for (p, answer) in proposals.iter().zip(answers) {
         let raw = answer.as_str().unwrap_or_default().trim();
         if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP_ANSWER) {
             continue;
         }
         validate_binding_name(raw).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+        if !seen.insert(raw.to_string()) {
+            return Err(anyhow!(CommandError::Usage(format!(
+                "two proposals were both renamed to '{raw}' — bindings need distinct names"
+            ))));
+        }
         out.push((
             raw.to_string(),
             Binding {
@@ -361,6 +367,68 @@ pub fn resolve_proposals(
     let questions = proposals_to_questions(env, proposals);
     let answers = asker.ask_all(&questions)?;
     answers_to_bindings(proposals, &answers)
+}
+
+/// Offer to record any bindings [`learn`] finds newly learnable in `env`,
+/// e.g. after `rigg adopt` or `rigg pull` write new project files.
+///
+/// Interactively: print the proposal table and ask whether to record them
+/// (default yes); a "no" leaves `rigg.yaml` untouched. Non-interactively
+/// (including `--output json`, where stdout must stay clean of prose): a
+/// one-line hint on stderr pointing at `rigg env bind <env> --learn`.
+pub fn offer_to_learn(ctx: &GlobalContext, ws: &Workspace, env: &ResolvedEnv) -> Result<()> {
+    let cache = BindingCache::load(ws, &env.name);
+    let table = EnvBindings::of_env(&env.name, &env.env, Some(&cache));
+    let proposals = learn(ws, &env.name, &table)?;
+    if proposals.is_empty() {
+        return Ok(());
+    }
+
+    if ctx.interactive() {
+        println!();
+        println!("Infrastructure references not yet bound in '{}':", env.name);
+        println!("  {:<20} {:<12} value", "name", "type");
+        for p in &proposals {
+            let source = p
+                .sources
+                .first()
+                .map(|(file, path)| format!("  (from {file}:{path})"))
+                .unwrap_or_default();
+            println!("  {:<20} {:<12} {}{source}", p.name, p.kind, p.value);
+        }
+        let mut asker = ctx.asker("learn", serde_json::json!({"env": env.name}));
+        let record = asker
+            .ask(&Question::confirm(
+                format!("learn.{}.record", env.name),
+                "Record these bindings in rigg.yaml?",
+                true,
+            ))?
+            .as_bool()
+            .unwrap_or(false);
+        if record {
+            let to_write: Vec<(String, Binding)> = proposals
+                .iter()
+                .map(|p| {
+                    (
+                        p.name.clone(),
+                        Binding {
+                            kind: p.kind,
+                            value: p.value.clone(),
+                        },
+                    )
+                })
+                .collect();
+            write_bindings(&env.name, &to_write)?;
+        }
+    } else {
+        eprintln!(
+            "hint: {} infrastructure reference(s) are not bound in '{}' — run `rigg env bind {} --learn` to record them",
+            proposals.len(),
+            env.name,
+            env.name
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -422,5 +490,29 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, "docs");
         assert_eq!(out[0].1.value, "acct");
+    }
+
+    #[test]
+    fn answers_rejects_two_proposals_renamed_to_the_same_name() {
+        let proposals = vec![
+            Proposal {
+                name: "acct".into(),
+                kind: BindingType::Storage,
+                value: "acct".into(),
+                sources: vec![],
+            },
+            Proposal {
+                name: "other".into(),
+                kind: BindingType::AiServices,
+                value: "other".into(),
+                sources: vec![],
+            },
+        ];
+        let err = answers_to_bindings(
+            &proposals,
+            &[Answer::Text("docs".into()), Answer::Text("docs".into())],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("docs"), "{err}");
     }
 }

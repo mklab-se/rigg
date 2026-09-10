@@ -21,7 +21,8 @@ use rigg_core::workspace::{Project, ResolvedEnv, Workspace};
 use crate::cli::PullArgs;
 use crate::commands::remote::{Remote, ensure_any_connection};
 use crate::commands::{
-    CommandError, GlobalContext, interactive, load_workspace, resolve_env, select_projects,
+    CommandError, GlobalContext, bindings, interactive, load_workspace, resolve_env,
+    select_projects,
 };
 
 pub async fn run(ctx: &GlobalContext, args: PullArgs) -> Result<()> {
@@ -54,6 +55,10 @@ async fn pull_once(ctx: &GlobalContext, args: &PullArgs) -> Result<()> {
     for project in projects {
         any_conflict |= pull_project(ctx, &ws, &env, project, &owned_by_any).await?;
     }
+    // Once per pull (not per project): `bindings::learn` already scans every
+    // project of `env`, so offering per project would re-ask about the same
+    // proposals against a `ws` that doesn't see bindings just written.
+    bindings::offer_to_learn(ctx, &ws, &env)?;
     if any_conflict {
         return Err(anyhow!(CommandError::DriftOrConflict(
             "conflicts detected during pull; resolve interactively or with --yes".to_string()

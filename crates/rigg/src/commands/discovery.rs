@@ -155,8 +155,8 @@ pub(crate) async fn binding_candidates(
                 }
             }
             BindingType::FunctionApp => {
-                if let Ok(items) = arm.list_web_sites().await {
-                    names.extend(items);
+                if let Ok(items) = arm.list_web_sites_subscription(sub).await {
+                    names.extend(items.into_iter().map(|a| a.name));
                 }
             }
             BindingType::Identity => {

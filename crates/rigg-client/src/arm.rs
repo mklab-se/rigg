@@ -798,6 +798,22 @@ impl ArmClient {
         Ok(out)
     }
 
+    /// Microsoft.Web sites (function apps / web apps) within one
+    /// subscription only — the per-subscription counterpart to
+    /// [`Self::list_web_sites`], used by the binding fan-out so
+    /// `--subscription` narrows the search instead of being ignored.
+    pub async fn list_web_sites_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<ArmResource>, ClientError> {
+        Ok(self
+            .list_provider_resources(subscription_id, "Microsoft.Web/sites", Provider::WebArm)
+            .await?
+            .iter()
+            .map(|v| arm_resource_from_value(v, None))
+            .collect())
+    }
+
     /// Find a Microsoft.Web site (function app / web app) by name across
     /// all visible subscriptions; returns its ARM resource id.
     pub async fn find_web_site_id(&self, name: &str) -> Result<String, ClientError> {
@@ -1299,12 +1315,7 @@ impl ArmClient {
                     endpoint: a.properties.endpoint,
                 })
                 .collect()),
-            BindingType::FunctionApp => Ok(self
-                .list_provider_resources(subscription_id, "Microsoft.Web/sites", Provider::WebArm)
-                .await?
-                .iter()
-                .map(|v| arm_resource_from_value(v, None))
-                .collect()),
+            BindingType::FunctionApp => self.list_web_sites_subscription(subscription_id).await,
             BindingType::Identity => self.list_user_assigned_identities(subscription_id).await,
             BindingType::KeyVault => self.list_key_vaults(subscription_id).await,
             BindingType::Api => Ok(Vec::new()),
@@ -1447,8 +1458,11 @@ impl ArmClient {
                 // provider) must not sink the whole lookup — the resource
                 // usually lives in one of the others. Remember the first
                 // failure so an all-denied fan-out reports *that* instead of
-                // a misleading "not found".
+                // a misleading "not found"; but once at least one
+                // subscription listed successfully, a zero-match result is a
+                // genuine "not found", not that earlier failure.
                 let mut first_error: Option<ClientError> = None;
+                let mut any_listed_ok = false;
                 for sub in &subs {
                     let items = match self.list_resources_for_kind(kind, sub).await {
                         Ok(items) => items,
@@ -1458,6 +1472,7 @@ impl ArmClient {
                             continue;
                         }
                     };
+                    any_listed_ok = true;
                     matches.extend(
                         items
                             .into_iter()
@@ -1465,10 +1480,17 @@ impl ArmClient {
                     );
                 }
                 match matches.len() {
-                    0 => Err(first_error.unwrap_or(ClientError::NotFound {
-                        kind: kind.to_string(),
-                        name,
-                    })),
+                    0 => Err(if any_listed_ok {
+                        ClientError::NotFound {
+                            kind: kind.to_string(),
+                            name,
+                        }
+                    } else {
+                        first_error.unwrap_or(ClientError::NotFound {
+                            kind: kind.to_string(),
+                            name,
+                        })
+                    }),
                     1 => self.resolve_arm_id(kind, &matches[0].id).await,
                     _ => Err(ClientError::Api {
                         status: 409,

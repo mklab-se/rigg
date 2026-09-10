@@ -237,6 +237,16 @@ pub struct InitArgs {
     #[arg(long, default_value = "dev")]
     pub env_name: String,
 
+    /// Azure AD tenant id for the initial environment (default: read from
+    /// `az account show` when logged in)
+    #[arg(long)]
+    pub tenant: Option<String>,
+
+    /// Azure subscription id for the initial environment (default: read
+    /// from `az account show` when logged in)
+    #[arg(long)]
+    pub subscription: Option<String>,
+
     /// Skip ARM discovery even when logged in
     #[arg(long)]
     pub no_discovery: bool,
