@@ -297,6 +297,24 @@ impl<'w> Store<'w> {
     /// operations (pull/adopt capture cloud reality mid-run) robust instead
     /// of failing, while `locate` keeps lookups correct regardless of stem.
     pub fn write(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
+        self.write_inner(r, value, CarryOver::Yes)
+    }
+
+    /// Like [`Store::write`], but writes the document EXACTLY as given: no
+    /// write-only carry-over and no `x-rigg-*` carry-over from the file being
+    /// replaced.
+    ///
+    /// This is what `rigg promote` needs. Its merged document already carries
+    /// the target environment's pins and annotations deliberately, and the
+    /// write-only fields are precisely what it translated (a data source's
+    /// `credentials.connectionString` is rewritten to point at the target's
+    /// storage account) — carrying the old file's values back over would
+    /// silently undo the translation and promote would never converge.
+    pub fn write_exact(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
+        self.write_inner(r, value, CarryOver::No)
+    }
+
+    fn write_inner(&self, r: &ResourceRef, value: &Value, carry: CarryOver) -> Result<bool> {
         // Defense in depth: a physical name containing '/', '\' or '..' would
         // otherwise build a path escaping the kind directory — and land where
         // `list()`'s non-recursive scan never sees it.
@@ -315,8 +333,10 @@ impl<'w> Store<'w> {
         if path.is_file()
             && let Ok(existing) = self.read_path(&path)
         {
-            carry_over_x_rigg(&existing, &mut normalized);
-            carry_over_write_only(r.kind, &existing, &mut normalized);
+            if carry == CarryOver::Yes {
+                carry_over_x_rigg(&existing, &mut normalized);
+                carry_over_write_only(r.kind, &existing, &mut normalized);
+            }
             // semantic_eq excludes write-only fields (the server never
             // echoes them) — compare them separately so a credentials
             // change alone still lands on disk.
@@ -356,6 +376,22 @@ impl<'w> Store<'w> {
     /// name matches, it behaves like `write` (update in place, same
     /// x-rigg-*/write-only carry-over and semantic-no-op short circuit).
     pub fn write_at(&self, stem: &str, kind: ResourceKind, value: &Value) -> Result<bool> {
+        self.write_at_inner(stem, kind, value, CarryOver::Yes)
+    }
+
+    /// [`Store::write_at`] with [`Store::write_exact`]'s rule: the document
+    /// lands exactly as given, with no carry-over from the file it replaces.
+    pub fn write_at_exact(&self, stem: &str, kind: ResourceKind, value: &Value) -> Result<bool> {
+        self.write_at_inner(stem, kind, value, CarryOver::No)
+    }
+
+    fn write_at_inner(
+        &self,
+        stem: &str,
+        kind: ResourceKind,
+        value: &Value,
+        carry: CarryOver,
+    ) -> Result<bool> {
         validate_resource_name(stem).map_err(|e| StoreError::BadName {
             path: self.kind_dir(kind).join(format!("{stem}.json")),
             message: e.to_string(),
@@ -382,8 +418,10 @@ impl<'w> Store<'w> {
                     new_name,
                 });
             }
-            carry_over_x_rigg(&existing, &mut normalized);
-            carry_over_write_only(kind, &existing, &mut normalized);
+            if carry == CarryOver::Yes {
+                carry_over_x_rigg(&existing, &mut normalized);
+                carry_over_write_only(kind, &existing, &mut normalized);
+            }
             if crate::normalize::semantic_eq(kind, &existing, &normalized)
                 && write_only_eq(kind, &existing, &normalized)
             {
@@ -471,6 +509,16 @@ fn write_only_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
         .write_only_fields
         .iter()
         .all(|spec| values_at(a, spec) == values_at(b, spec))
+}
+
+/// Whether a write may take values from the file it replaces. Every write
+/// that merges a REMOTE document into a local file carries over
+/// ([`CarryOver::Yes`]); `rigg promote`, whose document is already the
+/// finished local file, does not ([`CarryOver::No`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CarryOver {
+    Yes,
+    No,
 }
 
 /// Preserve write-only fields (server never echoes them) from the existing
@@ -847,6 +895,98 @@ mod tests {
         let read = store.read(&r).unwrap();
         assert_eq!(read["skills"][0]["x-rigg-api"], json!("enrich"));
         assert!(!rewritten, "annotation-only delta is not a semantic change");
+    }
+
+    #[test]
+    fn write_exact_replaces_a_write_only_field_instead_of_carrying_it_over() {
+        // `rigg promote` translates a data source's connection string into
+        // the TARGET environment's storage account. `write` would copy the
+        // old (source-pointing) string back over it — `write_exact` must
+        // land the document exactly as given.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let r = ResourceRef::new(ResourceKind::DataSource, "ds");
+        let ds = |account: &str| {
+            json!({
+                "name": "ds",
+                "type": "azureblob",
+                "credentials": {"connectionString": format!("ResourceId=/{account};")},
+                "container": {"name": "c"},
+            })
+        };
+        assert!(store.write(&r, &ds("devacct")).unwrap());
+        assert!(
+            store.write_exact(&r, &ds("prodacct")).unwrap(),
+            "the rewired connection string is a change"
+        );
+        let read = store.read(&r).unwrap();
+        assert_eq!(
+            read["credentials"]["connectionString"],
+            json!("ResourceId=/prodacct;"),
+            "write_exact must not resurrect the previous write-only value"
+        );
+        assert!(
+            !store.write_exact(&r, &ds("prodacct")).unwrap(),
+            "write_exact is still a no-op when nothing changed"
+        );
+    }
+
+    #[test]
+    fn write_exact_does_not_carry_over_x_rigg_annotations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "dev");
+        let r = ResourceRef::new(ResourceKind::Skillset, "sk");
+        store
+            .write(
+                &r,
+                &json!({"name": "sk", "description": "old", "x-rigg-pin": ["a"], "skills": []}),
+            )
+            .unwrap();
+        assert!(
+            store
+                .write_exact(
+                    &r,
+                    &json!({"name": "sk", "description": "new", "skills": []})
+                )
+                .unwrap()
+        );
+        let read = store.read(&r).unwrap();
+        assert!(
+            read.get("x-rigg-pin").is_none(),
+            "write_exact writes the document as given: {read}"
+        );
+    }
+
+    #[test]
+    fn write_at_exact_replaces_a_write_only_field_instead_of_carrying_it_over() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = ws_with_projects(tmp.path(), &["p"]);
+        let store = Store::new(ws.project("p").unwrap(), "prod");
+        let ds = |account: &str| {
+            json!({
+                "name": "ds",
+                "type": "azureblob",
+                "credentials": {"connectionString": format!("ResourceId=/{account};")},
+                "container": {"name": "c"},
+            })
+        };
+        store
+            .write_at("docs", ResourceKind::DataSource, &ds("devacct"))
+            .unwrap();
+        assert!(
+            store
+                .write_at_exact("docs", ResourceKind::DataSource, &ds("prodacct"))
+                .unwrap()
+        );
+        let dir = store.kind_dir(ResourceKind::DataSource);
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("docs.json")).unwrap()).unwrap();
+        assert_eq!(
+            on_disk["credentials"]["connectionString"],
+            json!("ResourceId=/prodacct;")
+        );
     }
 
     #[test]

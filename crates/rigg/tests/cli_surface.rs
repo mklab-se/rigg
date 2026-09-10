@@ -1171,6 +1171,121 @@ fn promote_writes_translated_files_with_yes() {
 }
 
 #[test]
+fn promote_rewires_a_data_source_that_already_exists_in_the_target() {
+    // The write-only `credentials.connectionString` is exactly what promote
+    // translates; writing it must not carry the target's old (dev-pointing)
+    // value back over, or promote would never converge.
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "dev", "ds", "devacct");
+    write_ds(ws.path(), "prod", "ds", "devacct");
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--offline",
+        ])
+        .assert()
+        .success();
+    let prod = read_json(
+        &ws.path()
+            .join("projects/demo/envs/prod/search/data-sources/ds.json"),
+    );
+    assert!(
+        prod["credentials"]["connectionString"]
+            .as_str()
+            .unwrap()
+            .contains("prodacct"),
+        "the existing prod file is rewired to prod's binding: {prod}"
+    );
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--yes",
+            "--offline",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to promote"));
+}
+
+#[test]
+fn promote_dry_run_does_not_record_answered_bindings() {
+    let ws = workspace_two_envs_with_bindings();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "fn", "function-app:mklab-dev"])
+        .assert()
+        .success();
+    write_skillset_with_webapi(
+        ws.path(),
+        "dev",
+        "ss",
+        "https://mklab-dev.azurewebsites.net/api/enrich",
+    );
+    let before = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--dry-run",
+            "--offline",
+            "--answer",
+            "binding.prod.fn=same",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap(),
+        before,
+        "--dry-run must leave rigg.yaml untouched"
+    );
+}
+
+#[test]
+fn promote_needs_input_exit_does_not_record_answered_bindings() {
+    // One question is answered, a second one it uncovers is not: the run
+    // exits 6 and must not have written the first answer to rigg.yaml.
+    let ws = workspace_two_envs_with_bindings();
+    write_ds(ws.path(), "dev", "ds", "otheracct");
+    let before = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "promote",
+            "--from",
+            "dev",
+            "--to",
+            "prod",
+            "--offline",
+            "--output",
+            "json",
+            "--answer",
+            "promote.bind.dev.otheracct=other",
+        ])
+        .assert()
+        .code(6);
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap(),
+        before,
+        "an exit-6 run must leave rigg.yaml untouched"
+    );
+}
+
+#[test]
 fn promote_missing_target_binding_emits_needs_input_non_interactively() {
     let ws = workspace_two_envs_with_bindings();
     // a dev-only binding, and a file using it

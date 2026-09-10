@@ -7,12 +7,17 @@
 //!
 //! 1. load both environments (bindings + documents, correlated by LOGICAL
 //!    id — the file stem — never by physical name);
-//! 2. turn everything the engine left [`Pending`] into a question, write the
-//!    answers into `rigg.yaml` as bindings, and re-translate (up to
-//!    [`MAX_ROUNDS`] times, so a question that does not settle cannot loop);
+//! 2. turn everything the engine left [`Pending`] into a question, apply the
+//!    answers as bindings IN MEMORY, and re-translate (up to [`MAX_ROUNDS`]
+//!    times, so a question that does not settle cannot loop);
 //! 3. show the rewiring preview — what points where after the translation,
 //!    which sibling references were renamed, and what changes per resource;
-//! 4. write the merged documents through the target environment's `Store`.
+//! 4. once the run proceeds, persist the answered bindings to `rigg.yaml`
+//!    and write the merged documents through the target environment's
+//!    `Store`.
+//!
+//! Answers reach `rigg.yaml` only in step 4: `--dry-run`, an abort and the
+//! `needs-input` exit all leave the workspace file exactly as they found it.
 //!
 //! Nothing is deleted and resources that exist only in the target are never
 //! touched. `--dry-run` stops after the preview.
@@ -41,7 +46,7 @@ use crate::commands::{
 };
 use crate::say;
 
-/// How many times the question loop may re-translate. Each round writes the
+/// How many times the question loop may re-translate. Each round applies the
 /// answers it got as bindings, so a well-formed answer settles its question;
 /// the cap only catches an answer that keeps the same question open (e.g. a
 /// binding value that still matches no resource).
@@ -84,11 +89,12 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
 
     // --- translate, asking about anything it cannot decide ---------------
     let mut settled = Settled::default();
+    let mut answered = AnsweredBindings::default();
     let mut round = 0usize;
     let plan = loop {
         let (source, target) = load_sides(&ws, &project_name, &args)?;
         let plan = translate(&source, &target);
-        let asks = build_asks(ctx, &args, &ws, &plan, &source, &settled).await;
+        let asks = build_asks(&args, &ws, &plan, &source, &settled).await;
         if asks.is_empty() {
             break plan;
         }
@@ -104,9 +110,12 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
             "promote",
             json!({"project": project_name, "from": args.from, "to": args.to}),
         );
+        // An unanswered question leaves here as `NeedsInput` (exit 6) —
+        // nothing has been written to `rigg.yaml` at this point, and
+        // nothing will be.
         let answers = asker.ask_all(&questions)?;
-        apply_answers(&args, &asks, &answers, &mut settled)?;
-        ws = load_workspace()?;
+        apply_answers(&args, &asks, &answers, &mut settled, &mut answered)?;
+        answered.apply_to(&mut ws.config);
     };
 
     let project = select_one_project(&ws, args.project.as_deref())?;
@@ -142,6 +151,10 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     }
 
     if pending_writes == 0 {
+        // The run reached its end without aborting, so the answers are worth
+        // keeping even though no document changed — otherwise the same
+        // question comes back on every run.
+        answered.persist()?;
         if ctx.json() {
             println!("{}", preview.to_json(false));
         } else {
@@ -165,11 +178,21 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         )));
     }
 
+    // The bindings the questions produced belong to the workspace before its
+    // files start referring to them.
+    answered.persist()?;
+
+    // `write_exact`, not `write`: the merged document is already the finished
+    // target file — it carries the target's own pins and annotations
+    // deliberately, and its write-only fields (a data source's translated
+    // `credentials.connectionString`) are exactly what promote rewired.
+    // Carrying anything over from the file being replaced would silently
+    // undo the translation.
     for item in &plan.items {
         match item.change() {
             Change::Unchanged => {}
             Change::Changed => {
-                store_to.write(
+                store_to.write_exact(
                     &ResourceRef::new(item.kind, item.target_name.clone()),
                     &item.merged,
                 )?;
@@ -177,7 +200,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
             // A new resource lands at the SOURCE's stem: that is the logical
             // id the two trees correlate by.
             Change::New => {
-                store_to.write_at(&item.stem, item.kind, &item.merged)?;
+                store_to.write_at_exact(&item.stem, item.kind, &item.merged)?;
             }
         }
     }
@@ -286,6 +309,50 @@ struct Settled {
     external_kept: BTreeSet<String>,
 }
 
+/// The bindings the questions produced, held in memory until the run
+/// actually proceeds.
+///
+/// Each round applies them to the loaded [`Workspace`]'s config so the next
+/// translation sees them, and only [`AnsweredBindings::persist`] — called
+/// after the preview, once the user has said yes — writes them to
+/// `rigg.yaml`. That is what keeps `--dry-run`, an aborted confirmation and
+/// the `needs-input` (exit 6) path from editing the workspace file. An
+/// aborted interactive run loses its answers; that is the trade.
+#[derive(Default)]
+struct AnsweredBindings(Vec<(String, String, Binding)>);
+
+impl AnsweredBindings {
+    fn record(&mut self, env: &str, name: &str, binding: Binding) {
+        self.0.push((env.to_string(), name.to_string(), binding));
+    }
+
+    /// Make the answers visible to the next round's translation.
+    fn apply_to(&self, config: &mut rigg_core::workspace::WorkspaceConfig) {
+        for (env, name, binding) in &self.0 {
+            if let Some(environment) = config.environments.get_mut(env) {
+                environment
+                    .dependencies
+                    .insert(name.clone(), binding.clone());
+            }
+        }
+    }
+
+    /// Write them to `rigg.yaml`, one edit per environment.
+    fn persist(&self) -> Result<()> {
+        let mut per_env: BTreeMap<&str, Vec<(String, Binding)>> = BTreeMap::new();
+        for (env, name, binding) in &self.0 {
+            per_env
+                .entry(env.as_str())
+                .or_default()
+                .push((name.clone(), binding.clone()));
+        }
+        for (env, bindings) in per_env {
+            bindings::write_bindings(env, &bindings)?;
+        }
+        Ok(())
+    }
+}
+
 /// One question, plus what to do with its answer.
 struct Ask {
     question: Question,
@@ -310,7 +377,6 @@ enum Action {
 }
 
 async fn build_asks(
-    ctx: &GlobalContext,
     args: &PromoteArgs,
     ws: &Workspace,
     plan: &Plan,
@@ -376,7 +442,7 @@ async fn build_asks(
                     label: format!("same as {}: {source_value} (shared)", args.from),
                 }];
                 candidates.extend(
-                    arm_candidates(ctx, args, ws, binding_type, &source_value)
+                    arm_candidates(args, ws, binding_type, &source_value)
                         .await
                         .into_iter()
                         .map(|name| Candidate {
@@ -467,17 +533,18 @@ fn declared_value(ws: &Workspace, env: &str, name: &str) -> Option<String> {
 }
 
 /// Resources of `kind` visible in the target environment's subscription, as
-/// extra candidates. Only fetched for an interactive pick-list: a scripted
-/// caller answers with any name or id it likes (the question `allow_other`s),
-/// and a promote that is only translating files should not depend on ARM.
+/// extra candidates. Gated on `--offline` alone: a scripted caller reading
+/// the `needs-input` document deserves the same pick-list a person gets, and
+/// `--offline` is the one flag that says "do not talk to Azure". Best-effort
+/// — [`discovery::binding_candidates`] returns an empty list when ARM is not
+/// reachable.
 async fn arm_candidates(
-    ctx: &GlobalContext,
     args: &PromoteArgs,
     ws: &Workspace,
     kind: BindingType,
     source_value: &str,
 ) -> Vec<String> {
-    if args.offline || !ctx.interactive() {
+    if args.offline {
         return Vec::new();
     }
     let Some(env) = ws.config.environments.get(&args.to) else {
@@ -500,6 +567,7 @@ fn apply_answers(
     asks: &[Ask],
     answers: &[Answer],
     settled: &mut Settled,
+    answered: &mut AnsweredBindings,
 ) -> Result<()> {
     for (ask, answer) in asks.iter().zip(answers) {
         match &ask.action {
@@ -509,19 +577,24 @@ fn apply_answers(
                 value,
             } => {
                 let raw = answer.as_str().unwrap_or_default().trim().to_string();
+                // `skip` is therefore not a name a binding can be given here
+                // — declining always wins over naming.
                 if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP) {
                     settled.unbound_skipped.insert(physical.clone());
                     continue;
                 }
+                // Checked here rather than at `persist` time: a bad name must
+                // not reach the in-memory binding table the next round
+                // translates with.
                 validate_binding_name(&raw).map_err(|e| anyhow!(CommandError::Usage(e)))?;
-                bindings::write_binding(
+                answered.record(
                     &args.from,
                     &raw,
-                    &Binding {
+                    Binding {
                         kind: *kind,
                         value: value.clone(),
                     },
-                )?;
+                );
             }
             Action::Missing {
                 binding,
@@ -538,7 +611,7 @@ fn apply_answers(
                 } else {
                     raw
                 };
-                bindings::write_binding(&args.to, binding, &Binding { kind: *kind, value })?;
+                answered.record(&args.to, binding, Binding { kind: *kind, value });
             }
             Action::External { host } => {
                 if answer.as_bool().unwrap_or(false) {
@@ -590,14 +663,32 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
 
     for pending in &plan.pending {
         match pending {
-            Pending::UnresolvedTarget { binding, .. } => out.push(Check {
-                ok: false,
-                message: format!(
-                    "binding '{binding}' in '{}' is declared by name only — run `rigg env show \
-                     {} --refresh` (or declare the full ARM id)",
-                    args.to, args.to
-                ),
-            }),
+            Pending::UnresolvedTarget {
+                binding, used_by, ..
+            } => {
+                out.push(Check {
+                    ok: false,
+                    message: format!(
+                        "binding '{binding}' in '{}' is declared by name only — run `rigg env \
+                         show {} --refresh` (or declare the full ARM id)",
+                        args.to, args.to
+                    ),
+                });
+                // Say which files it left pointing at the source, the same
+                // way a skipped binding does.
+                for (kind, stem, path) in used_by {
+                    out.push(Check {
+                        ok: false,
+                        message: format!(
+                            "{}/{stem} {path}: kept from '{}' (binding '{binding}' unresolved in \
+                             '{}')",
+                            kind.directory_name(),
+                            args.from,
+                            args.to
+                        ),
+                    });
+                }
+            }
             Pending::MissingInTarget {
                 binding,
                 binding_type,
@@ -957,6 +1048,7 @@ mod tests {
             &asks,
             &[Answer::Confirm(false)],
             &mut Settled::default(),
+            &mut AnsweredBindings::default(),
         )
         .unwrap_err();
         let message = format!("{err}");
@@ -969,6 +1061,7 @@ mod tests {
     #[test]
     fn skip_answers_are_remembered_instead_of_written() {
         let mut settled = Settled::default();
+        let mut answered = AnsweredBindings::default();
         let asks = vec![
             Ask {
                 question: Question::text("promote.bind.dev.acct", "?"),
@@ -995,9 +1088,70 @@ mod tests {
                 Answer::Choice(SKIP.to_string()),
             ],
             &mut settled,
+            &mut answered,
         )
         .expect("skipping writes nothing, so no workspace is touched");
         assert!(settled.unbound_skipped.contains("acct"));
         assert!(settled.binding_skipped.contains("docs"));
+        assert!(
+            answered.0.is_empty(),
+            "a declined question records no binding"
+        );
+    }
+
+    #[test]
+    fn answers_are_recorded_in_memory_and_batched_per_environment_on_persist() {
+        let mut answered = AnsweredBindings::default();
+        let asks = vec![
+            Ask {
+                question: Question::text("promote.bind.dev.acct", "?"),
+                action: Action::Bind {
+                    physical: "acct".to_string(),
+                    kind: BindingType::Storage,
+                    value: "acct".to_string(),
+                },
+            },
+            Ask {
+                question: Question::choice("binding.prod.docs", "?", Vec::new()),
+                action: Action::Missing {
+                    binding: "docs".to_string(),
+                    kind: BindingType::Storage,
+                    source_value: "devacct".to_string(),
+                },
+            },
+        ];
+        apply_answers(
+            &args("dev", "prod"),
+            &asks,
+            &[
+                Answer::Text("blobs".to_string()),
+                Answer::Choice(SAME.to_string()),
+            ],
+            &mut Settled::default(),
+            &mut answered,
+        )
+        .expect("nothing is written until the run proceeds");
+        assert_eq!(
+            answered
+                .0
+                .iter()
+                .map(|(env, name, b)| (env.as_str(), name.as_str(), b.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("dev", "blobs", "acct"), ("prod", "docs", "devacct")],
+        );
+
+        // They are visible to the next round's translation without touching
+        // `rigg.yaml`.
+        let mut config: rigg_core::workspace::WorkspaceConfig =
+            serde_yaml::from_str("environments:\n  dev: {}\n  prod: {}\n").unwrap();
+        answered.apply_to(&mut config);
+        assert_eq!(
+            config.environments["dev"].dependencies["blobs"].value,
+            "acct"
+        );
+        assert_eq!(
+            config.environments["prod"].dependencies["docs"].value,
+            "devacct"
+        );
     }
 }
