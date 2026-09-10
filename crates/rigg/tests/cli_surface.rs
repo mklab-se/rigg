@@ -1626,3 +1626,232 @@ fn validate_show_bindings_lists_bound_and_shared() {
         .success()
         .stdout(predicate::str::contains("bound 'docs'"));
 }
+
+#[test]
+fn env_bind_and_unbind_edit_rigg_yaml() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:mklabstorageacc"])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert!(
+        yaml.contains("docs:") && yaml.contains("storage: mklabstorageacc"),
+        "{yaml}"
+    );
+    // reserved binding name
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "search", "storage:x"])
+        .assert()
+        .code(2);
+    // unknown binding type
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "cosmos:x"])
+        .assert()
+        .code(2);
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "unbind", "dev", "docs"])
+        .assert()
+        .success();
+    assert!(
+        !std::fs::read_to_string(ws.path().join("rigg.yaml"))
+            .unwrap()
+            .contains("docs:")
+    );
+}
+
+#[test]
+fn env_bind_learn_proposes_from_files_and_writes_with_yes() {
+    let ws = workspace();
+    write_ds(ws.path(), "dev", "ds", "mklabstorageacc");
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "--learn", "--yes"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("mklabstorageacc").and(predicate::str::contains("storage")),
+        );
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert!(yaml.contains("storage: mklabstorageacc"), "{yaml}");
+
+    // non-interactive without --yes: needs-input with learn.dev.otheracct
+    write_ds(ws.path(), "dev", "ds2", "otheracct");
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "--learn", "--output", "json"])
+        .assert()
+        .code(6)
+        .stdout(predicate::str::contains("learn.dev.otheracct"));
+    // …and answering it writes the binding under the given name
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "bind",
+            "dev",
+            "--learn",
+            "--answer",
+            "learn.dev.otheracct=archive",
+        ])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert!(
+        yaml.contains("archive:") && yaml.contains("storage: otheracct"),
+        "{yaml}"
+    );
+}
+
+#[test]
+fn env_bind_learn_skips_a_proposal_answered_with_skip() {
+    let ws = workspace();
+    write_ds(ws.path(), "dev", "ds", "otheracct");
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "bind",
+            "dev",
+            "--learn",
+            "--answer",
+            "learn.dev.otheracct=skip",
+        ])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert!(!yaml.contains("otheracct"), "{yaml}");
+}
+
+#[test]
+fn env_add_with_like_flags_copies_and_overrides_bindings() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:devacct"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "fn", "function-app:mklab"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "add",
+            "prod",
+            "--search-service",
+            "s-prod",
+            "--like",
+            "dev",
+            "--same",
+            "fn",
+            "--bind",
+            "docs=storage:prodacct",
+            "--protected",
+        ])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "show", "prod"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("docs")
+                .and(predicate::str::contains("prodacct"))
+                .and(predicate::str::contains("fn"))
+                .and(predicate::str::contains("shared with: dev"))
+                .and(predicate::str::contains("protected: true")),
+        );
+}
+
+#[test]
+fn env_add_like_skip_drops_a_binding_and_unknown_same_is_a_usage_error() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:devacct"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "add",
+            "prod",
+            "--search-service",
+            "s-prod",
+            "--like",
+            "dev",
+            "--skip",
+            "docs",
+        ])
+        .assert()
+        .success();
+    let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
+    assert_eq!(
+        yaml.matches("devacct").count(),
+        1,
+        "only dev keeps the binding: {yaml}"
+    );
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "add",
+            "stage",
+            "--search-service",
+            "s",
+            "--like",
+            "dev",
+            "--same",
+            "nope",
+        ])
+        .assert()
+        .code(2);
+    // --same/--skip without --like is a usage error
+    rigg()
+        .current_dir(ws.path())
+        .args([
+            "env",
+            "add",
+            "other",
+            "--search-service",
+            "s",
+            "--skip",
+            "docs",
+        ])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn describe_lists_infrastructure() {
+    let ws = workspace();
+    rigg()
+        .current_dir(ws.path())
+        .args(["env", "bind", "dev", "docs", "storage:devacct"])
+        .assert()
+        .success();
+    rigg()
+        .current_dir(ws.path())
+        .args(["describe", "--output", "json"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"infrastructure\"").and(predicate::str::contains("devacct")),
+        );
+    rigg()
+        .current_dir(ws.path())
+        .args(["describe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Infrastructure:").and(predicate::str::contains("docs")));
+}

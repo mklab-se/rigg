@@ -7,6 +7,7 @@
 use anyhow::{Result, anyhow};
 
 use rigg_client::arm::ArmClient;
+use rigg_core::binding::BindingType;
 
 use crate::commands::interactive;
 
@@ -116,4 +117,62 @@ fn pick(label: &str, options: &[String], plain: bool) -> Result<Option<String>> 
 fn optional(answer: String) -> Option<String> {
     let trimmed = answer.trim().to_string();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Names of every resource of `kind` visible in `subscription` (or every
+/// enabled subscription when `None`) — the pick-list `rigg env add --like`
+/// offers per binding. Best-effort: any ARM failure yields an empty list so
+/// the caller falls back to free-form entry.
+pub(crate) async fn binding_candidates(
+    kind: BindingType,
+    tenant: Option<&str>,
+    subscription: Option<&str>,
+) -> Vec<String> {
+    let Ok(arm) = ArmClient::for_tenant(tenant) else {
+        return Vec::new();
+    };
+    if kind == BindingType::Api {
+        return Vec::new(); // URLs, not ARM resources
+    }
+    let subs: Vec<String> = match subscription {
+        Some(s) => vec![s.to_string()],
+        None => match arm.list_subscriptions().await {
+            Ok(subs) => subs.into_iter().map(|s| s.subscription_id).collect(),
+            Err(_) => return Vec::new(),
+        },
+    };
+    let mut names: Vec<String> = Vec::new();
+    for sub in &subs {
+        match kind {
+            BindingType::Storage => {
+                if let Ok(items) = arm.list_storage_accounts_subscription(sub).await {
+                    names.extend(items.into_iter().map(|a| a.name));
+                }
+            }
+            BindingType::AiServices => {
+                if let Ok(items) = arm.list_cognitive_accounts(sub).await {
+                    names.extend(items.into_iter().map(|a| a.name));
+                }
+            }
+            BindingType::FunctionApp => {
+                if let Ok(items) = arm.list_web_sites().await {
+                    names.extend(items);
+                }
+            }
+            BindingType::Identity => {
+                if let Ok(items) = arm.list_user_assigned_identities(sub).await {
+                    names.extend(items.into_iter().map(|r| r.name));
+                }
+            }
+            BindingType::KeyVault => {
+                if let Ok(items) = arm.list_key_vaults(sub).await {
+                    names.extend(items.into_iter().map(|r| r.name));
+                }
+            }
+            BindingType::Api => {}
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }

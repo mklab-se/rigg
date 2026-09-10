@@ -1,0 +1,426 @@
+//! Dependency bindings: editing `rigg.yaml`'s `dependencies` maps, and
+//! *learning* bindings from the infrastructure references already present in
+//! a project's files.
+//!
+//! `rigg env bind/unbind`, `rigg env add --like` and (workstream 2)
+//! `rigg promote` all go through the helpers here so there is exactly one
+//! place that writes a binding.
+
+use std::collections::BTreeMap;
+
+use anyhow::{Result, anyhow, bail};
+use serde_yaml::Value as Yaml;
+
+use rigg_core::binding::{Binding, BindingType, EnvBindings, validate_binding_name};
+use rigg_core::infra::{self, Class, Target};
+use rigg_core::store::Store;
+use rigg_core::workspace::{WORKSPACE_FILE, Workspace};
+
+use super::ask::{Answer, Asker, Question};
+use super::{CommandError, load_workspace};
+
+/// The answer that means "don't bind this" in a `learn` question.
+pub const SKIP_ANSWER: &str = "skip";
+
+/// A binding `learn` suggests for an environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Proposal {
+    /// Proposed binding name (lower-kebab of the physical name).
+    pub name: String,
+    pub kind: BindingType,
+    /// The value to record: the physical name, an ARM id when the file
+    /// carries a bare one, or an origin (`https://host`) for `api`.
+    pub value: String,
+    /// Where the reference was found: `(file, json path)`.
+    pub sources: Vec<(String, String)>,
+}
+
+/// Edit `rigg.yaml` in place. Comments outside the edited block survive;
+/// comments inside `environments:` do not (serde_yaml re-serializes).
+pub fn edit_workspace_yaml(edit: impl FnOnce(&mut Yaml) -> Result<()>) -> Result<()> {
+    let ws = load_workspace()?;
+    let path = ws.root.join(WORKSPACE_FILE);
+    let text = std::fs::read_to_string(&path)?;
+    let mut doc: Yaml = serde_yaml::from_str(&text)?;
+    edit(&mut doc)?;
+    std::fs::write(&path, serde_yaml::to_string(&doc)?)?;
+    Ok(())
+}
+
+/// The `environments:` mapping, created when missing.
+pub fn envs_mut(doc: &mut Yaml) -> Result<&mut serde_yaml::Mapping> {
+    let map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow!("invalid rigg.yaml"))?;
+    let envs = map
+        .entry("environments".into())
+        .or_insert_with(|| Yaml::Mapping(Default::default()));
+    envs.as_mapping_mut()
+        .ok_or_else(|| anyhow!("`environments` must be a mapping"))
+}
+
+/// The YAML shape of one binding: `{ "<type>": "<value>" }`.
+pub fn binding_yaml(binding: &Binding) -> Yaml {
+    let mut map = serde_yaml::Mapping::new();
+    map.insert(
+        Yaml::String(binding.kind.to_string()),
+        Yaml::String(binding.value.clone()),
+    );
+    Yaml::Mapping(map)
+}
+
+/// Add (or replace) `env`'s `<name>` binding in `rigg.yaml`.
+pub fn write_binding(env: &str, name: &str, binding: &Binding) -> Result<()> {
+    write_bindings(env, &[(name.to_string(), binding.clone())])
+}
+
+/// Add (or replace) several bindings in one `rigg.yaml` edit.
+pub fn write_bindings(env: &str, bindings: &[(String, Binding)]) -> Result<()> {
+    for (name, _) in bindings {
+        validate_binding_name(name).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+    }
+    edit_workspace_yaml(|doc| {
+        let envs = envs_mut(doc)?;
+        let env_map = envs
+            .get_mut(env)
+            .ok_or_else(|| anyhow!(CommandError::Usage(format!("unknown environment '{env}'"))))?
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow!("environment '{env}' is not a mapping"))?;
+        let deps = env_map
+            .entry("dependencies".into())
+            .or_insert_with(|| Yaml::Mapping(Default::default()))
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow!("`dependencies` must be a mapping"))?;
+        for (name, binding) in bindings {
+            deps.insert(Yaml::String(name.clone()), binding_yaml(binding));
+        }
+        Ok(())
+    })
+}
+
+/// Remove `env`'s `<name>` binding, dropping an empty `dependencies:` key.
+pub fn remove_binding(env: &str, name: &str) -> Result<()> {
+    edit_workspace_yaml(|doc| {
+        let envs = envs_mut(doc)?;
+        let env_map = envs
+            .get_mut(env)
+            .ok_or_else(|| anyhow!(CommandError::Usage(format!("unknown environment '{env}'"))))?
+            .as_mapping_mut()
+            .ok_or_else(|| anyhow!("environment '{env}' is not a mapping"))?;
+        let empty = {
+            let deps = env_map
+                .get_mut("dependencies")
+                .and_then(Yaml::as_mapping_mut)
+                .ok_or_else(|| {
+                    anyhow!(CommandError::Usage(format!(
+                        "environment '{env}' has no binding '{name}'"
+                    )))
+                })?;
+            if deps.remove(name).is_none() {
+                bail!(CommandError::Usage(format!(
+                    "environment '{env}' has no binding '{name}'"
+                )));
+            }
+            deps.is_empty()
+        };
+        if empty {
+            env_map.remove("dependencies");
+        }
+        Ok(())
+    })
+}
+
+/// Parse a `<type>:<value>` binding argument.
+pub fn parse_binding(spec: &str) -> Result<Binding> {
+    let (kind, value) = spec.split_once(':').ok_or_else(|| {
+        anyhow!(CommandError::Usage(format!(
+            "invalid binding '{spec}': expected <type>:<value>, e.g. storage:mklabstorageacc"
+        )))
+    })?;
+    let kind: BindingType = kind
+        .trim()
+        .parse()
+        .map_err(|e: String| anyhow!(CommandError::Usage(e)))?;
+    let value = value.trim();
+    if value.is_empty() {
+        bail!(CommandError::Usage(format!(
+            "invalid binding '{spec}': the value is empty"
+        )));
+    }
+    Ok(Binding {
+        kind,
+        value: value.to_string(),
+    })
+}
+
+/// Parse a `--bind <name>=<type>:<value>` flag.
+pub fn parse_bind_flag(flag: &str) -> Result<(String, Binding)> {
+    let (name, spec) = flag.split_once('=').ok_or_else(|| {
+        anyhow!(CommandError::Usage(format!(
+            "invalid --bind '{flag}': expected <name>=<type>:<value>"
+        )))
+    })?;
+    validate_binding_name(name).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+    Ok((name.to_string(), parse_binding(spec)?))
+}
+
+/// The [`BindingType`] a found infrastructure reference would bind to, or
+/// `None` for targets that are not `dependencies` (the search service is the
+/// environment's own implicit target).
+fn binding_type_for(target: Target) -> Option<BindingType> {
+    match target {
+        Target::Storage => Some(BindingType::Storage),
+        Target::Identity => Some(BindingType::Identity),
+        Target::ModelHost | Target::AiServices => Some(BindingType::AiServices),
+        Target::FunctionApp => Some(BindingType::FunctionApp),
+        Target::Api => Some(BindingType::Api),
+        Target::KeyVault => Some(BindingType::KeyVault),
+        Target::SearchService => None,
+    }
+}
+
+/// Lower-kebab a physical name or host: everything outside `[a-z0-9]`
+/// becomes `-`, repeats collapse, leading/trailing `-` are trimmed.
+fn kebab(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// The origin (`scheme://host[:port]`) of a URL, for `api` proposals.
+fn origin(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let host = rest.split('/').next().unwrap_or(rest);
+            format!("{scheme}://{host}")
+        }
+        None => url.to_string(),
+    }
+}
+
+/// Propose bindings for every infrastructure reference in `env`'s files
+/// that no binding of this environment already covers.
+///
+/// Names are the physical name lower-kebabed (for `api`, the host's first
+/// label); a name that would collide with an existing binding of another
+/// type or value — or with an earlier proposal — gets a `-2`, `-3`, … suffix.
+pub fn learn(ws: &Workspace, env_name: &str, env_bindings: &EnvBindings) -> Result<Vec<Proposal>> {
+    let mut grouped: BTreeMap<(BindingType, String), Proposal> = BTreeMap::new();
+
+    for project in &ws.projects {
+        if !Store::envs_of(project).contains(&env_name.to_string()) {
+            continue;
+        }
+        let store = Store::new(project, env_name);
+        let Ok(list) = store.list() else { continue };
+        for (r, path) in list {
+            let Ok(value) = store.read(&r) else { continue };
+            let refs = infra::extract(r.kind, &value);
+            if refs.is_empty() {
+                continue;
+            }
+            for classified in infra::classify(env_bindings, &[], refs) {
+                // Bound/Shared: already covered here. Leak can't occur —
+                // no other environments are passed in.
+                if !matches!(classified.class, Class::Unbound | Class::External) {
+                    continue;
+                }
+                let found = classified.found;
+                let Some(kind) = binding_type_for(found.physical.target) else {
+                    continue;
+                };
+                let value = proposed_value(kind, &found);
+                let source = (path.display().to_string(), found.path.clone());
+                grouped
+                    .entry((kind, value.to_lowercase()))
+                    .or_insert_with(|| Proposal {
+                        name: String::new(),
+                        kind,
+                        value,
+                        sources: Vec::new(),
+                    })
+                    .sources
+                    .push(source);
+            }
+        }
+    }
+
+    let mut taken: Vec<String> = env_bindings.iter().map(|e| e.name.clone()).collect();
+    let mut proposals: Vec<Proposal> = Vec::new();
+    for ((kind, _), mut proposal) in grouped {
+        let base = match kind {
+            // `api` values are origins; name after the host's first label.
+            BindingType::Api => kebab(
+                origin(&proposal.value)
+                    .split_once("://")
+                    .map(|(_, host)| host)
+                    .unwrap_or(&proposal.value)
+                    .split('.')
+                    .next()
+                    .unwrap_or_default(),
+            ),
+            _ => kebab(&physical_of(&proposal)),
+        };
+        let base = if base.is_empty() {
+            kind.to_string()
+        } else {
+            base
+        };
+        let mut name = base.clone();
+        let mut n = 1;
+        while validate_binding_name(&name).is_err() || taken.contains(&name) {
+            n += 1;
+            name = format!("{base}-{n}");
+        }
+        taken.push(name.clone());
+        proposal.name = name;
+        proposals.push(proposal);
+    }
+    Ok(proposals)
+}
+
+/// The physical name a proposal points at (its value, or the ARM id's last
+/// segment when the value is an id).
+fn physical_of(proposal: &Proposal) -> String {
+    Binding {
+        kind: proposal.kind,
+        value: proposal.value.clone(),
+    }
+    .physical_name()
+}
+
+/// What to record as a proposal's value: a bare ARM id straight from the
+/// file when there is one, an origin for `api`, else the physical name.
+fn proposed_value(kind: BindingType, found: &infra::FoundRef) -> String {
+    if kind == BindingType::Api {
+        return origin(found.physical.original.as_str().unwrap_or_default());
+    }
+    match found.physical.original.as_str() {
+        Some(s) if s.starts_with("/subscriptions/") => s.to_string(),
+        _ => found.physical.physical.clone(),
+    }
+}
+
+/// One `learn.<env>.<name>` question per proposal: a text answer naming the
+/// binding (defaulting to the proposed name), or `skip`.
+pub fn proposals_to_questions(env: &str, proposals: &[Proposal]) -> Vec<Question> {
+    proposals
+        .iter()
+        .map(|p| {
+            Question::text(
+                format!("learn.{env}.{}", p.name),
+                format!(
+                    "Name for the {} '{}' (or '{SKIP_ANSWER}'):",
+                    p.kind, p.value
+                ),
+            )
+            .with_default(p.name.clone())
+        })
+        .collect()
+}
+
+/// Turn the answers to [`proposals_to_questions`] into the bindings to
+/// write, dropping every proposal answered `skip` (or with an empty name).
+pub fn answers_to_bindings(
+    proposals: &[Proposal],
+    answers: &[Answer],
+) -> Result<Vec<(String, Binding)>> {
+    let mut out = Vec::new();
+    for (p, answer) in proposals.iter().zip(answers) {
+        let raw = answer.as_str().unwrap_or_default().trim();
+        if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP_ANSWER) {
+            continue;
+        }
+        validate_binding_name(raw).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+        out.push((
+            raw.to_string(),
+            Binding {
+                kind: p.kind,
+                value: p.value.clone(),
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// Ask `asker` about every proposal and return the bindings to write.
+pub fn resolve_proposals(
+    asker: &mut dyn Asker,
+    env: &str,
+    proposals: &[Proposal],
+) -> Result<Vec<(String, Binding)>> {
+    if proposals.is_empty() {
+        return Ok(Vec::new());
+    }
+    let questions = proposals_to_questions(env, proposals);
+    let answers = asker.ask_all(&questions)?;
+    answers_to_bindings(proposals, &answers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kebab_and_origin_shape_proposal_names() {
+        assert_eq!(kebab("MKLab_Storage.01"), "mklab-storage-01");
+        assert_eq!(kebab("--weird--"), "weird");
+        assert_eq!(
+            origin("https://api.partner.example/v1/x"),
+            "https://api.partner.example"
+        );
+        assert_eq!(origin("nonsense"), "nonsense");
+    }
+
+    #[test]
+    fn parse_binding_accepts_urls_and_rejects_unknown_types() {
+        let b = parse_binding("api:https://api.partner.example/v1").unwrap();
+        assert_eq!(b.kind, BindingType::Api);
+        assert_eq!(b.value, "https://api.partner.example/v1");
+        assert!(parse_binding("cosmos:x").is_err());
+        assert!(parse_binding("storage:").is_err());
+        assert!(parse_binding("storage").is_err());
+        let (name, b) = parse_bind_flag("docs=storage:acct").unwrap();
+        assert_eq!(name, "docs");
+        assert_eq!(b.value, "acct");
+        assert!(parse_bind_flag("search=storage:acct").is_err());
+    }
+
+    #[test]
+    fn answers_skip_and_rename_proposals() {
+        let proposals = vec![
+            Proposal {
+                name: "acct".into(),
+                kind: BindingType::Storage,
+                value: "acct".into(),
+                sources: vec![],
+            },
+            Proposal {
+                name: "other".into(),
+                kind: BindingType::Storage,
+                value: "other".into(),
+                sources: vec![],
+            },
+        ];
+        let qs = proposals_to_questions("dev", &proposals);
+        assert_eq!(qs[0].id, "learn.dev.acct");
+        assert_eq!(qs[0].default.as_deref(), Some("acct"));
+        let out = answers_to_bindings(
+            &proposals,
+            &[
+                Answer::Text("docs".into()),
+                Answer::Text(SKIP_ANSWER.into()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, "docs");
+        assert_eq!(out[0].1.value, "acct");
+    }
+}

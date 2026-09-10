@@ -1,26 +1,65 @@
 //! Environment management commands.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Result, anyhow, bail};
 use colored::Colorize;
+use serde_json::json;
 use serde_yaml::Value as Yaml;
 
-use rigg_core::workspace::{Environment, WORKSPACE_FILE};
+use rigg_client::arm::ArmClient;
+use rigg_core::binding::{Binding, BindingCache, EnvBindings, Wanted, validate_binding_name};
+use rigg_core::workspace::{Environment, Workspace};
 
 use crate::cli::EnvCommands;
-use crate::commands::{CommandError, GlobalContext, discovery, interactive, load_workspace};
+use crate::commands::bindings::{edit_workspace_yaml, envs_mut};
+use crate::commands::{CommandError, GlobalContext, bindings, discovery, load_workspace};
+use crate::say;
 
 pub async fn run(ctx: &GlobalContext, cmd: EnvCommands) -> Result<()> {
     match cmd {
         EnvCommands::List => list(ctx),
-        EnvCommands::Show { name } => show(ctx, name.as_deref()),
+        EnvCommands::Show { name, refresh } => show(ctx, name.as_deref(), refresh).await,
         EnvCommands::SetDefault { name } => set_default(&name),
         EnvCommands::Add {
             name,
+            tenant,
+            subscription,
             search_service,
             foundry_account,
             foundry_project,
-        } => add(ctx, &name, search_service, foundry_account, foundry_project).await,
+            protected,
+            bind,
+            like,
+            same,
+            skip,
+        } => {
+            add(
+                ctx,
+                AddOptions {
+                    name,
+                    tenant,
+                    subscription,
+                    search_service,
+                    foundry_account,
+                    foundry_project,
+                    protected,
+                    bind,
+                    like,
+                    same,
+                    skip,
+                },
+            )
+            .await
+        }
         EnvCommands::Remove { name } => remove(&name),
+        EnvCommands::Bind {
+            env,
+            name,
+            value,
+            learn,
+        } => bind(ctx, &env, name, value, learn),
+        EnvCommands::Unbind { env, name } => unbind(&env, &name),
     }
 }
 
@@ -31,17 +70,7 @@ fn list(ctx: &GlobalContext) -> Result<()> {
             .config
             .environments
             .iter()
-            .map(|(name, env)| {
-                serde_json::json!({
-                    "name": name,
-                    "default": env.default,
-                    "protected": env.policy.protected,
-                    "tenant": env.tenant,
-                    "subscription": env.subscription,
-                    "search": env.search.as_ref().map(|s| &s.service),
-                    "foundry": env.foundry.as_ref().map(|f| format!("{}/{}", f.account, f.project)),
-                })
-            })
+            .map(|(name, env)| env_json(&ws, name, env, &BTreeMap::new()))
             .collect();
         println!("{}", serde_json::to_string_pretty(&entries)?);
         return Ok(());
@@ -49,20 +78,101 @@ fn list(ctx: &GlobalContext) -> Result<()> {
     for (name, env) in &ws.config.environments {
         let marker = if env.default { " (default)" } else { "" };
         println!("{}{}", name.bold(), marker.dimmed());
-        print_env(env, "  ");
+        print_env(&ws, name, env, "  ", &BTreeMap::new());
     }
     Ok(())
 }
 
-fn show(ctx: &GlobalContext, name: Option<&str>) -> Result<()> {
+async fn show(ctx: &GlobalContext, name: Option<&str>, refresh: bool) -> Result<()> {
     let ws = load_workspace()?;
     let resolved = ws.resolve_env(name.or(ctx.env.as_deref()))?;
+    let mut errors: BTreeMap<String, String> = BTreeMap::new();
+    if refresh {
+        errors = refresh_bindings(ctx, &ws, &resolved.name, &resolved.env).await?;
+    }
+    if ctx.json() {
+        let value = env_json(&ws, &resolved.name, &resolved.env, &errors);
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
     println!("{}", resolved.name.bold());
-    print_env(&resolved.env, "  ");
+    print_env(&ws, &resolved.name, &resolved.env, "  ", &errors);
     Ok(())
 }
 
-fn print_env(env: &Environment, indent: &str) {
+/// Re-resolve every declared binding of `env` against ARM and save the
+/// cache. A binding that cannot be resolved is reported (and dropped from
+/// the cache) rather than failing the command — `env show` must still print
+/// everything else it knows.
+async fn refresh_bindings(
+    ctx: &GlobalContext,
+    ws: &Workspace,
+    env_name: &str,
+    env: &Environment,
+) -> Result<BTreeMap<String, String>> {
+    let mut errors = BTreeMap::new();
+    if env.dependencies.is_empty() {
+        return Ok(errors);
+    }
+    let arm = match ArmClient::for_tenant(env.tenant.as_deref()) {
+        Ok(arm) => arm,
+        Err(e) => {
+            let e = anyhow::Error::from(e);
+            say!(ctx, "  (could not reach Azure Resource Manager: {e:#})");
+            return Ok(errors);
+        }
+    };
+    let mut cache = BindingCache::load(ws, env_name);
+    for (name, binding) in &env.dependencies {
+        match arm
+            .resolve_binding(binding.kind, &binding.value, env.subscription.as_deref())
+            .await
+        {
+            Ok(mut resolved) => {
+                resolved.name = name.clone();
+                cache.bindings.insert(name.clone(), resolved);
+            }
+            Err(e) => {
+                cache.bindings.remove(name);
+                errors.insert(name.clone(), format!("{e}"));
+            }
+        }
+    }
+    cache.save(ws, env_name)?;
+    Ok(errors)
+}
+
+/// Environments other than `env_name`, as binding tables — for the
+/// "shared with" column.
+fn other_env_bindings(ws: &Workspace, env_name: &str) -> Vec<EnvBindings> {
+    ws.config
+        .environments
+        .iter()
+        .filter(|(name, _)| name.as_str() != env_name)
+        .map(|(name, env)| EnvBindings::of_env(name, env, None))
+        .collect()
+}
+
+/// The environments that bind the same physical resource under the same
+/// binding type.
+fn shared_with(others: &[EnvBindings], binding: &Binding) -> Vec<String> {
+    others
+        .iter()
+        .filter(|o| {
+            o.find_physical(Wanted::Type(binding.kind), &binding.physical_name())
+                .is_some()
+        })
+        .map(|o| o.env.clone())
+        .collect()
+}
+
+fn print_env(
+    ws: &Workspace,
+    env_name: &str,
+    env: &Environment,
+    indent: &str,
+    errors: &BTreeMap<String, String>,
+) {
     println!("{indent}protected: {}", env.policy.protected);
     if let Some(tenant) = &env.tenant {
         println!("{indent}tenant: {tenant}");
@@ -87,34 +197,58 @@ fn print_env(env: &Environment, indent: &str) {
             f.url()
         );
     }
+    if env.dependencies.is_empty() {
+        return;
+    }
+    let cache = BindingCache::load(ws, env_name);
+    let others = other_env_bindings(ws, env_name);
+    println!("{indent}dependencies:");
     for (name, binding) in &env.dependencies {
-        println!("{indent}{name}: {} ({})", binding.value, binding.kind);
+        let mut row = format!("{indent}  {name}  {}  {}", binding.kind, binding.value);
+        if let Some(err) = errors.get(name) {
+            row.push_str(&format!("  {} {err}", "?".yellow()));
+        } else if let Some(resolved) = cache.get(name) {
+            let id = resolved
+                .arm_id
+                .as_deref()
+                .or(resolved.endpoint.as_deref())
+                .unwrap_or(&resolved.physical_name);
+            row.push_str(&format!(" → {}", id.dimmed()));
+        }
+        let shared = shared_with(&others, binding);
+        if !shared.is_empty() {
+            row.push_str(&format!(" (shared with: {})", shared.join(", ")));
+        }
+        println!("{row}");
     }
 }
 
-/// Edit rigg.yaml preserving comments is not possible with serde; env mutations
-/// re-serialize the file. Comments in rigg.yaml are preserved only outside the
-/// `environments:` block if the user runs these commands; editing the file
-/// directly is always supported.
-fn edit_workspace_yaml(edit: impl FnOnce(&mut Yaml) -> Result<()>) -> Result<()> {
-    let ws = load_workspace()?;
-    let path = ws.root.join(WORKSPACE_FILE);
-    let text = std::fs::read_to_string(&path)?;
-    let mut doc: Yaml = serde_yaml::from_str(&text)?;
-    edit(&mut doc)?;
-    std::fs::write(&path, serde_yaml::to_string(&doc)?)?;
-    Ok(())
-}
-
-fn envs_mut(doc: &mut Yaml) -> Result<&mut serde_yaml::Mapping> {
-    let map = doc
-        .as_mapping_mut()
-        .ok_or_else(|| anyhow::anyhow!("invalid rigg.yaml"))?;
-    let envs = map
-        .entry("environments".into())
-        .or_insert_with(|| Yaml::Mapping(Default::default()));
-    envs.as_mapping_mut()
-        .ok_or_else(|| anyhow::anyhow!("`environments` must be a mapping"))
+fn env_json(
+    ws: &Workspace,
+    name: &str,
+    env: &Environment,
+    errors: &BTreeMap<String, String>,
+) -> serde_json::Value {
+    let cache = BindingCache::load(ws, name);
+    let others = other_env_bindings(ws, name);
+    json!({
+        "name": name,
+        "default": env.default,
+        "protected": env.policy.protected,
+        "tenant": env.tenant,
+        "subscription": env.subscription,
+        "search": env.search.as_ref().map(|s| &s.service),
+        "foundry": env.foundry.as_ref().map(|f| format!("{}/{}", f.account, f.project)),
+        "dependencies": env.dependencies.iter().map(|(bname, binding)| json!({
+            "name": bname,
+            "type": binding.kind.to_string(),
+            "value": binding.value,
+            "physical_name": binding.physical_name(),
+            "arm_id": cache.get(bname).and_then(|r| r.arm_id.clone()),
+            "shared_with": shared_with(&others, binding),
+            "error": errors.get(bname),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn set_default(name: &str) -> Result<()> {
@@ -140,49 +274,264 @@ fn set_default(name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn add(
+/// Declare (or replace) one binding, or learn a whole set from the files.
+fn bind(
     ctx: &GlobalContext,
-    name: &str,
+    env_name: &str,
+    name: Option<String>,
+    value: Option<String>,
+    learn: bool,
+) -> Result<()> {
+    if learn {
+        if name.is_some() || value.is_some() {
+            return Err(anyhow!(CommandError::Usage(
+                "`--learn` proposes bindings from the files; don't also pass a name and value"
+                    .to_string()
+            )));
+        }
+        return learn_bindings(ctx, env_name);
+    }
+    let (Some(name), Some(spec)) = (name, value) else {
+        return Err(anyhow!(CommandError::Usage(
+            "usage: rigg env bind <env> <name> <type>:<value> (or `rigg env bind <env> --learn`)"
+                .to_string()
+        )));
+    };
+    validate_binding_name(&name).map_err(|e| anyhow!(CommandError::Usage(e)))?;
+    let binding = bindings::parse_binding(&spec)?;
+    bindings::write_binding(env_name, &name, &binding)?;
+    println!(
+        "Bound '{name}' in environment '{env_name}': {} {}",
+        binding.kind, binding.value
+    );
+    Ok(())
+}
+
+fn unbind(env_name: &str, name: &str) -> Result<()> {
+    bindings::remove_binding(env_name, name)?;
+    println!("Removed binding '{name}' from environment '{env_name}'.");
+    Ok(())
+}
+
+fn learn_bindings(ctx: &GlobalContext, env_name: &str) -> Result<()> {
+    let ws = load_workspace()?;
+    let env = ws.config.environments.get(env_name).ok_or_else(|| {
+        anyhow!(CommandError::Usage(format!(
+            "unknown environment '{env_name}'"
+        )))
+    })?;
+    let cache = BindingCache::load(&ws, env_name);
+    let table = EnvBindings::of_env(env_name, env, Some(&cache));
+    let proposals = bindings::learn(&ws, env_name, &table)?;
+    if proposals.is_empty() {
+        say!(
+            ctx,
+            "No unbound infrastructure references found in '{env_name}'."
+        );
+        return Ok(());
+    }
+    say!(
+        ctx,
+        "Found {} unbound infrastructure reference(s) in '{env_name}':",
+        proposals.len()
+    );
+    for p in &proposals {
+        say!(
+            ctx,
+            "  {}  {}  {}  ({} reference(s), e.g. {})",
+            p.name,
+            p.kind,
+            p.value,
+            p.sources.len(),
+            p.sources
+                .first()
+                .map(|(file, path)| format!("{file}:{path}"))
+                .unwrap_or_default()
+        );
+    }
+
+    let to_write = if ctx.yes {
+        proposals
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    Binding {
+                        kind: p.kind,
+                        value: p.value.clone(),
+                    },
+                )
+            })
+            .collect()
+    } else {
+        let mut asker = ctx.asker("env bind --learn", json!({"env": env_name}));
+        bindings::resolve_proposals(asker.as_mut(), env_name, &proposals)?
+    };
+
+    if to_write.is_empty() {
+        say!(ctx, "Nothing bound.");
+        return Ok(());
+    }
+    bindings::write_bindings(env_name, &to_write)?;
+    for (name, binding) in &to_write {
+        say!(
+            ctx,
+            "Bound '{name}' in environment '{env_name}': {} {}",
+            binding.kind,
+            binding.value
+        );
+    }
+    Ok(())
+}
+
+struct AddOptions {
+    name: String,
+    tenant: Option<String>,
+    subscription: Option<String>,
     search_service: Option<String>,
     foundry_account: Option<String>,
     foundry_project: Option<String>,
-) -> Result<()> {
+    protected: bool,
+    bind: Vec<String>,
+    like: Option<String>,
+    same: Vec<String>,
+    skip: Vec<String>,
+}
+
+async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
+    let AddOptions {
+        name,
+        tenant,
+        subscription,
+        search_service,
+        foundry_account,
+        foundry_project,
+        protected,
+        bind,
+        like,
+        same,
+        skip,
+    } = opts;
+
     if foundry_account.is_some() != foundry_project.is_some() {
         bail!("--foundry-account and --foundry-project must be given together");
     }
+    let overrides: Vec<(String, Binding)> = bind
+        .iter()
+        .map(|flag| bindings::parse_bind_flag(flag))
+        .collect::<Result<_>>()?;
 
-    // Explicit flags skip the wizard entirely (non-interactive-friendly,
-    // scriptable). With neither flag: a TTY runs the interactive wizard
-    // (ARM discovery, same as `rigg init`); anything else is a usage error
-    // that points at the wizard.
-    let has_flags = search_service.is_some() || foundry_account.is_some();
-    let (search, foundry, protected) = if has_flags {
-        (search_service, foundry_account.zip(foundry_project), false)
-    } else if !ctx.interactive() {
+    let ws = load_workspace()?;
+    if ws.config.environments.contains_key(&name) {
+        return Err(anyhow!(CommandError::Usage(format!(
+            "environment '{name}' already exists"
+        ))));
+    }
+
+    // Bindings: copied from `--like` (minus `--skip`), then overridden by
+    // `--bind`. `--same` is the default for everything, and is accepted as
+    // an explicit statement of intent (it must name a real binding).
+    let mut deps: BTreeMap<String, Binding> = BTreeMap::new();
+    if let Some(source_name) = &like {
+        let source = ws.config.environments.get(source_name).ok_or_else(|| {
+            anyhow!(CommandError::Usage(format!(
+                "unknown environment '{source_name}' (--like)"
+            )))
+        })?;
+        for flag in same.iter().chain(skip.iter()) {
+            if !source.dependencies.contains_key(flag) {
+                return Err(anyhow!(CommandError::Usage(format!(
+                    "environment '{source_name}' has no binding '{flag}'"
+                ))));
+            }
+        }
+        if let Some(both) = same.iter().find(|s| skip.contains(s)) {
+            return Err(anyhow!(CommandError::Usage(format!(
+                "'{both}' is named by both --same and --skip"
+            ))));
+        }
+        let copy: BTreeMap<String, Binding> = source
+            .dependencies
+            .iter()
+            .filter(|(bname, _)| !skip.contains(bname))
+            .map(|(bname, b)| (bname.clone(), b.clone()))
+            .collect();
+        if ctx.interactive() {
+            deps = ask_like_bindings(
+                ctx,
+                &name,
+                source_name,
+                copy,
+                &overrides,
+                tenant.as_deref(),
+                subscription.as_deref(),
+            )
+            .await?;
+        } else {
+            deps = copy;
+        }
+    }
+    for (bname, binding) in overrides {
+        deps.insert(bname, binding);
+    }
+
+    // Explicit target flags skip the wizard entirely (non-interactive-
+    // friendly, scriptable). With neither flag: a TTY runs the interactive
+    // wizard (ARM discovery, same as `rigg init`); anything else is a usage
+    // error that points at the wizard — unless bindings were given, which
+    // makes a target-less environment a deliberate choice.
+    let has_targets = search_service.is_some() || foundry_account.is_some();
+    let (search, foundry) = if has_targets {
+        (search_service, foundry_account.zip(foundry_project))
+    } else if ctx.interactive() {
+        discovery::discover_interactive(ctx.no_color).await?
+    } else if like.is_some() || !deps.is_empty() {
+        (None, None)
+    } else {
         return Err(anyhow!(CommandError::Usage(
             "in non-interactive mode pass --search-service and/or \
              --foundry-account/--foundry-project (or run `rigg env add <name>` on a terminal \
              for the interactive wizard)"
                 .to_string()
         )));
-    } else {
-        let plain = ctx.no_color;
-        let (search, foundry) = discovery::discover_interactive(plain).await?;
-        let protected = interactive::confirm_default_no(
-            "Protect this environment (require typed confirmation for cloud changes)?",
-            plain,
-        )?;
-        (search, foundry, protected)
     };
 
+    let protected = if protected {
+        true
+    } else if ctx.interactive() {
+        let mut asker = ctx.asker("env add", json!({"env": name}));
+        asker
+            .ask(&crate::commands::ask::Question::confirm(
+                format!("env.{name}.protected"),
+                "Protect this environment (require typed confirmation for cloud changes)?",
+                false,
+            ))?
+            .as_bool()
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    // `--like` copies bindings, not placement: a second environment usually
+    // lives in another subscription (often another tenant), and guessing it
+    // from the source would send every by-name resolution to the wrong
+    // place. Pass --tenant/--subscription when they really are shared.
+
+    let deps_for_print = deps.clone();
     edit_workspace_yaml(|doc| {
         let envs = envs_mut(doc)?;
-        if envs.contains_key(name) {
+        if envs.contains_key(&name) {
             bail!("environment '{name}' already exists");
         }
         let mut env = serde_yaml::Mapping::new();
         if envs.is_empty() {
             env.insert("default".into(), Yaml::Bool(true));
+        }
+        if let Some(tenant) = &tenant {
+            env.insert("tenant".into(), Yaml::String(tenant.clone()));
+        }
+        if let Some(subscription) = &subscription {
+            env.insert("subscription".into(), Yaml::String(subscription.clone()));
         }
         if let Some(service) = &search {
             let mut s = serde_yaml::Mapping::new();
@@ -200,7 +549,14 @@ async fn add(
             p.insert("protected".into(), Yaml::Bool(true));
             env.insert("policy".into(), Yaml::Mapping(p));
         }
-        envs.insert(name.into(), Yaml::Mapping(env));
+        if !deps.is_empty() {
+            let mut d = serde_yaml::Mapping::new();
+            for (bname, binding) in &deps {
+                d.insert(Yaml::String(bname.clone()), bindings::binding_yaml(binding));
+            }
+            env.insert("dependencies".into(), Yaml::Mapping(d));
+        }
+        envs.insert(name.clone().into(), Yaml::Mapping(env));
         Ok(())
     })?;
 
@@ -214,8 +570,85 @@ async fn add(
     if protected {
         println!("  protected: true");
     }
+    for (bname, binding) in &deps_for_print {
+        println!("  {bname}:  {} {}", binding.kind, binding.value);
+    }
     println!("Set as default with: rigg env set-default {name}");
     Ok(())
+}
+
+/// One question per copied binding: keep the source's value, pick another
+/// resource of the same type from ARM, or skip it. Bindings already named
+/// by `--bind` are not asked about.
+async fn ask_like_bindings(
+    ctx: &GlobalContext,
+    new_env: &str,
+    source_env: &str,
+    copy: BTreeMap<String, Binding>,
+    overrides: &[(String, Binding)],
+    tenant: Option<&str>,
+    subscription: Option<&str>,
+) -> Result<BTreeMap<String, Binding>> {
+    use crate::commands::ask::{Candidate, Question};
+
+    let asked: Vec<(String, Binding)> = copy
+        .into_iter()
+        .filter(|(name, _)| !overrides.iter().any(|(o, _)| o == name))
+        .collect();
+    if asked.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut questions = Vec::with_capacity(asked.len());
+    for (name, binding) in &asked {
+        let mut candidates = vec![Candidate {
+            value: "same".into(),
+            label: format!("same as {source_env} ({})", binding.value),
+        }];
+        for found in discovery::binding_candidates(binding.kind, tenant, subscription).await {
+            if found.eq_ignore_ascii_case(&binding.value) {
+                continue;
+            }
+            candidates.push(Candidate {
+                value: found.clone(),
+                label: found,
+            });
+        }
+        candidates.push(Candidate {
+            value: bindings::SKIP_ANSWER.into(),
+            label: "skip (leave unbound)".into(),
+        });
+        questions.push(
+            Question::choice(
+                format!("binding.{new_env}.{name}"),
+                format!("{name} ({}) in '{new_env}':", binding.kind),
+                candidates,
+            )
+            .allow_other(),
+        );
+    }
+
+    let mut asker = ctx.asker("env add", json!({"env": new_env, "like": source_env}));
+    let answers = asker.ask_all(&questions)?;
+    let mut out = BTreeMap::new();
+    for ((name, binding), answer) in asked.into_iter().zip(answers) {
+        match answer.as_str().unwrap_or_default() {
+            "same" => {
+                out.insert(name, binding);
+            }
+            v if v.eq_ignore_ascii_case(bindings::SKIP_ANSWER) || v.is_empty() => {}
+            v => {
+                out.insert(
+                    name,
+                    Binding {
+                        kind: binding.kind,
+                        value: v.to_string(),
+                    },
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn remove(name: &str) -> Result<()> {

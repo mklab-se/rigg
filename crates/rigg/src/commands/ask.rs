@@ -25,15 +25,12 @@ use super::{CommandError, interactive};
 /// Id prefixes every `--answer <id>=<value>` is validated against at
 /// startup. Later tasks and workstreams append their own prefixes
 /// (`binding.`, `env.`, `promote.`, `auth.`, `new.`, …).
-pub const KNOWN_ID_PREFIXES: &[&str] = &["confirm.protected."];
+pub const KNOWN_ID_PREFIXES: &[&str] = &["confirm.protected.", "binding.", "env.", "learn."];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionKind {
-    #[allow(dead_code)] // wired into choice questions by guided flows in follow-up tasks
     Choice,
-    #[allow(dead_code)] // wired into text questions by guided flows in follow-up tasks
     Text,
-    #[allow(dead_code)] // wired into confirm questions by guided flows in follow-up tasks
     Confirm,
     ConfirmEnv,
 }
@@ -66,7 +63,6 @@ pub struct Question {
 }
 
 impl Question {
-    #[allow(dead_code)] // wired into choice-question guided flows in follow-up tasks
     pub fn choice(
         id: impl Into<String>,
         prompt: impl Into<String>,
@@ -82,7 +78,6 @@ impl Question {
         }
     }
 
-    #[allow(dead_code)] // wired into text-question guided flows in follow-up tasks
     pub fn text(id: impl Into<String>, prompt: impl Into<String>) -> Self {
         Question {
             id: id.into(),
@@ -94,7 +89,6 @@ impl Question {
         }
     }
 
-    #[allow(dead_code)] // wired into confirm-question guided flows in follow-up tasks
     pub fn confirm(id: impl Into<String>, prompt: impl Into<String>, default_yes: bool) -> Self {
         Question {
             id: id.into(),
@@ -121,13 +115,11 @@ impl Question {
         }
     }
 
-    #[allow(dead_code)] // wired into guided flows that offer a defaulted text answer in follow-up tasks
     pub fn with_default(mut self, d: impl Into<String>) -> Self {
         self.default = Some(d.into());
         self
     }
 
-    #[allow(dead_code)] // wired into guided flows that offer a free-form choice in follow-up tasks
     pub fn allow_other(mut self) -> Self {
         self.allow_other = true;
         self
@@ -170,7 +162,6 @@ pub enum Answer {
 }
 
 impl Answer {
-    #[allow(dead_code)] // read by choice/text-question guided flows in follow-up tasks
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Answer::Choice(s) | Answer::Text(s) => Some(s.as_str()),
@@ -188,7 +179,6 @@ impl Answer {
 
 pub trait Asker {
     fn ask(&mut self, q: &Question) -> Result<Answer>;
-    #[allow(dead_code)] // batch asking for multi-question guided flows in follow-up tasks; confirm_protected_env asks one question at a time
     fn ask_all(&mut self, qs: &[Question]) -> Result<Vec<Answer>>;
 }
 

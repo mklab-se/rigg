@@ -617,13 +617,27 @@ pub struct ValidateArgs {
 pub enum EnvCommands {
     /// List configured environments
     List,
-    /// Show environment details
-    Show { name: Option<String> },
+    /// Show environment details: targets, policy, and dependency bindings
+    Show {
+        /// Environment to show (default: the selected one)
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
+        name: Option<String>,
+        /// Re-resolve every binding against Azure and refresh the cache
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Set the default environment
     SetDefault { name: String },
     /// Add a new environment
     Add {
+        /// Name for the new environment
         name: String,
+        /// Azure AD tenant the environment's resources live in
+        #[arg(long)]
+        tenant: Option<String>,
+        /// Azure subscription the environment's resources live in
+        #[arg(long)]
+        subscription: Option<String>,
         /// Azure AI Search service name
         #[arg(long)]
         search_service: Option<String>,
@@ -633,9 +647,51 @@ pub enum EnvCommands {
         /// Foundry project name
         #[arg(long)]
         foundry_project: Option<String>,
+        /// Require typed confirmation for cloud changes in this environment
+        #[arg(long)]
+        protected: bool,
+        /// Declare a dependency binding (repeatable): --bind <name>=<type>:<value>
+        #[arg(long = "bind", value_name = "NAME=TYPE:VALUE")]
+        bind: Vec<String>,
+        /// Model the new environment on an existing one, copying its bindings
+        #[arg(long, value_name = "ENV", add = ArgValueCandidates::new(complete::envs))]
+        like: Option<String>,
+        /// With --like: copy this binding verbatim (repeatable; the default
+        /// for every binding not named by --bind or --skip)
+        #[arg(long = "same", value_name = "NAME", requires = "like")]
+        same: Vec<String>,
+        /// With --like: do not copy this binding (repeatable)
+        #[arg(long = "skip", value_name = "NAME", requires = "like")]
+        skip: Vec<String>,
     },
     /// Remove an environment
     Remove { name: String },
+    /// Declare a dependency binding for an environment
+    ///
+    ///   rigg env bind dev docs storage:mklabstorageacc
+    ///   rigg env bind dev --learn        # propose bindings from the files
+    #[command(verbatim_doc_comment)]
+    Bind {
+        /// Environment to bind in
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
+        env: String,
+        /// Binding name (omit with --learn)
+        name: Option<String>,
+        /// <type>:<value>, e.g. storage:mklabstorageacc or api:https://x/v1
+        value: Option<String>,
+        /// Propose bindings from the infrastructure references in this
+        /// environment's files instead of taking one on the command line
+        #[arg(long)]
+        learn: bool,
+    },
+    /// Remove a dependency binding from an environment
+    Unbind {
+        /// Environment to remove the binding from
+        #[arg(add = ArgValueCandidates::new(complete::envs))]
+        env: String,
+        /// Binding name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]

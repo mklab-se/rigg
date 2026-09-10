@@ -6,6 +6,7 @@ pub mod ai_assist;
 pub mod ask;
 pub mod auth;
 pub mod az;
+pub mod bindings;
 pub mod ci;
 pub mod completion;
 pub mod concepts;
