@@ -57,7 +57,7 @@ environments:
   dev:
     default: true
     tenant: 45943588-b4fb-4765-ae17-76638c45bb5c
-    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a
+    subscription: 00000000-0000-0000-0000-000000000000
     search: { service: mklabsrch }
     foundry: { account: mklabaifndr, project: proj-default }
     dependencies:
@@ -79,7 +79,7 @@ fn parses_targets_tenant_subscription_and_dependencies() {
     let dev = ws.resolve_env(Some("dev")).unwrap();
     assert_eq!(dev.search().unwrap().service, "mklabsrch");
     assert_eq!(dev.foundry().unwrap().project, "proj-default");
-    assert_eq!(dev.env.subscription.as_deref(), Some("fa354123-c4ee-4b2e-a700-bf01decf803a"));
+    assert_eq!(dev.env.subscription.as_deref(), Some("00000000-0000-0000-0000-000000000000"));
     let b = &dev.env.dependencies["docs-storage"];
     assert_eq!(b.kind, BindingType::Storage);
     assert_eq!(b.value, "mklabstorageacc");

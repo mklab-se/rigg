@@ -91,8 +91,8 @@ declared under `environments:` in `rigg.yaml`:
 environments:
   dev:
     default: true
-    tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47        # optional: az login's default tenant
-    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a  # optional: discovery scope
+    tenant: 11111111-1111-1111-1111-111111111111        # optional: az login's default tenant
+    subscription: 00000000-0000-0000-0000-000000000000  # optional: discovery scope
     search:  { service: my-search-dev }
     foundry: { account: my-foundry, project: my-project-dev }
     policy:  { protected: false }

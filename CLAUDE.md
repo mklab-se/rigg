@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `rigg` is a configuration-as-code CLI for Azure AI Search and Microsoft Foundry. A **workspace** (`rigg.yaml`) holds environments — each with its targets, dependencies and policy; **projects** (`projects/<name>/`) own resource definitions as JSON files — indexes, indexers, data sources, skillsets, synonym maps, aliases, knowledge sources, knowledge bases (Search), agents, model deployments, connections, guardrails (Foundry). Pull/push/diff operate on whole projects, enabling Git-based versioning of the entire Agentic RAG stack.
 
-The 1.0 design spec lives at `docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md`. Phases: 0.18 (core re-architecture — done), 0.19 (auth doctor, ci init, api watchdog), 0.20 (OpenAPI spec validation, AI features), 1.0.0 (samples, e2e, docs).
+The current line is **2.0** — a breaking release: environments are targets + `dependencies` + `policy`, infrastructure references resolve through bindings, `promote` translates a whole project tree between environments, `auth doctor` verifies and repairs the identity graph, `verify` proves a pushed stack works, and the question protocol (exit 6 + `--answer`) makes every guided flow scriptable. Scope and principles: `docs/superpowers/specs/2026-09-09-rigg-2.0-scope-and-principles-design.md`; the per-workstream specs and plans sit beside it under `docs/superpowers/`.
 
 ## Session start
 
@@ -48,11 +48,15 @@ rigg-diff  (used by rigg-core & rigg)
 - `registry.rs` — THE central declarative table: per-kind API paths, api-version channel, volatile/read-only/secret fields, reference extractors, data-source type validity. Updating rigg for a new Azure API version mostly means editing this file.
 - `workspace.rs` — `rigg.yaml` + `project.yaml` model, environment resolution (flag > `RIGG_ENV` > `default: true`).
 - `store.rs` — project file store (read/write/list with sidecar handling), exclusive-ownership check, `ProjectState` baselines (`.rigg/<env>/<project>/state.json`), `SyncClass` classification (InSync/LocalAhead/RemoteAhead/Conflict/…). Checksums are order-canonical and null-insensitive.
-- `normalize.rs` — `normalize_for_disk` (strip volatile+read-only), `normalize_for_push` (also strip `x-rigg-*`), `semantic_eq`.
+- `normalize.rs` — `normalize_for_disk` (strip volatile+read-only), `normalize_for_push` (also strip `x-rigg-*`), `normalize_for_compare` (also strip write-only fields Azure redacts on read — what `status` and `diff` compare with), `semantic_eq`.
 - `graph.rs` — reference-graph push/delete ordering (Kahn's algorithm over registry-extracted references).
 - `sidecar.rs` — `{"$file": "x.md"}` inline/extract for long text fields.
 - `scaffold.rs` — identity-first starter definitions for all 12 kinds, `scaffold_pipeline`, `scaffold_api_spec` (WebApiSkill contract).
 - `schema.rs` — pinned-version OpenAPI schema fixtures; `unknown_top_level_fields` is the pull/adopt API-drift canary.
+- `binding.rs` — `Binding`/`BindingType` (a `dependencies` entry), the implicit `search`/`foundry` bindings, and `EnvBindings` (per-environment resolution + ARM cache).
+- `infra.rs` — infrastructure references: `parse` a registry `InfraRef` value into a `PhysicalRef`, `render` it for a different physical resource.
+- `identity.rs` — the identity graph: which role assignments and settings a configuration requires, on which scopes, derived from the documents and scoped through the bindings.
+- `promote.rs` — `translate`, the pure engine behind `rigg promote`: two environments' bindings + documents in, the target's documents out (correlated by logical id).
 
 **rigg-client** — Azure REST:
 - `client.rs` — Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-08-01-preview`).
@@ -60,7 +64,12 @@ rigg-diff  (used by rigg-core & rigg)
 - `arm_resources.rs` — generic ARM CRUD for deployments/connections/RAI policies (api-version `2026-05-01`) with LRO polling; `arm.rs` — typed ARM discovery.
 - `auth.rs` — chain: `RIGG_ACCESS_TOKEN` static > service-principal env vars > Azure CLI; per-domain token scoping.
 
-**rigg** — clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0/1/2/3/4/5), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands. `commands/dev.rs` — `rigg dev api-check`, the watchdog that verifies pinned Azure API versions are current; `commands/dev_spec.rs` — `rigg dev api-diff` / `api-fixture`, fetching and diffing OpenAPI documents from azure-rest-api-specs.
+**rigg** — clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0 success, 1 error, 2 usage, 3 validation, 4 auth, 5 drift/conflict, 6 needs input), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands. `commands/dev.rs` — `rigg dev api-check`, the watchdog that verifies pinned Azure API versions are current; `commands/dev_spec.rs` — `rigg dev api-diff` / `api-fixture`, fetching and diffing OpenAPI documents from azure-rest-api-specs. Also:
+- `commands/auth_engine.rs` — the auth verification engine (identity graph → verified report → fixes → text/JSON); `commands/doctor.rs` (`rigg auth doctor`) and `push`'s auth preflight are both thin over it.
+- `commands/easy_auth.rs` — `rigg auth easy-auth <function-app binding>`: Entra authentication on a bound function app so Web API skills can be keyless.
+- `commands/promote.rs` — `rigg promote`, the CLI around `rigg_core::promote::translate`.
+- `commands/verify.rs` — `rigg verify` / `push --verify`: run every indexer to completion, retrieve from every knowledge base, ask every agent.
+- `commands/docgen.rs` — the generated `docs/reference/cli.md` and InfraRef table; `commands/docs_check.rs` — `rigg dev docs-check`.
 
 ## Key invariants
 
@@ -73,7 +82,7 @@ rigg-diff  (used by rigg-core & rigg)
 ## Workspace layout on disk
 
 ```
-rigg.yaml                     # workspace: environments, connections (YAML)
+rigg.yaml                     # workspace: environments = targets + dependencies + policy (YAML)
 apis/<name>.json              # shared OpenAPI specs (WebApiSkill contract)
 projects/<name>/
   project.yaml                # metadata only; directory contents = membership
@@ -90,6 +99,9 @@ projects/<name>/
 - Unit tests inline per module (registry, graph, store, normalize, sidecar, workspace).
 - `crates/rigg/tests/cli_surface.rs` — assert_cmd against temp workspaces, no network.
 - `crates/rigg/tests/sync.rs` — wiremock fake Azure via `endpoint:` override + `RIGG_ACCESS_TOKEN`; covers pull normalization, push ordering/canonicalization, prune, conflicts (exit 5), diff formats, status classification.
+- `crates/rigg/tests/docs_guards.rs` — the generated pages match the binary, and `rigg dev docs-check` reports ok for the repository.
+- `crates/rigg/tests/auth_fake.rs` — `rigg auth doctor` / `auth roles` / `status --auth` against the wiremock ARM fake (`arm_fake.rs`).
+- `crates/rigg/tests/env_arm.rs` — `rigg env show --refresh` resolution and the binding cache it writes, against the same fake.
 - Live testing uses `mklabsrch` (Search) and `mklabaifndr`/`proj-default` (Foundry) — create resources inside them freely, always delete afterwards, keep SKUs/capacity minimal.
 
 ## Keeping docs current
@@ -125,5 +137,6 @@ MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (set by Ailloy 2.x
 ## AI Agent Integration
 
 - MCP server: `rigg mcp serve` — 14 stdio tools: 9 config-plane (`rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_diff`, `rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) + 5 runtime (`rigg_indexer_run`, `rigg_indexer_status`, `rigg_query`, `rigg_ask`, `rigg_verify`). Mutating tools use the preview/`force: true` pattern. Tools shell out to `rigg --output json` subprocesses (stdout stays JSON-RPC clean).
-- Skills in `.claude/skills/` (`rigg-guide` + slash commands) — being rewritten for the project model in the 1.0 phase.
-- `rigg ai …` manages ailloy-powered features (explanations; conflict merge/NL scaffolding land in 0.20). `rigg new <kind> <name> --describe "…"` drafts definitions via AI when ailloy is enabled.
+- Skills in `.claude/skills/` (`rigg-guide`, `rigg-status`/`rigg-pull`/`rigg-push`, `api-watchdog`, `release`, `test-complete-enduser-experience`); `docs-check` parses each `SKILL.md`, so they cannot name a command that does not exist.
+- `rigg ai skill --emit` writes a portable skill file; `rigg ai skill --reference` prints the CLI tree and MCP tool table generated from the binary itself (`commands/skill.rs`) — never a hand-written copy.
+- `rigg ai …` manages ailloy-powered features (explanations, `rigg new <kind> <name> --describe "…"` drafting) when ailloy is enabled; `--no-ai` disables them per invocation.

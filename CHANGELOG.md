@@ -348,6 +348,35 @@ around that. No compatibility with 1.x workspaces.
   around it, and the MCP guide documents `rigg_verify` and `rigg_push`'s
   `verify` / `skip_auth_preflight`.
 
+### Fixed
+
+- **`rigg diff` no longer reports phantom drift on data-source connection
+  strings.** Azure redacts `credentials.connectionString` to null on every
+  GET, and `diff` compared both sides with `normalize_for_push`, which keeps
+  write-only fields — so `status` said "in sync" while `diff` reported the
+  connection string as drift on every data source, forever. `diff` now
+  normalizes the way `semantic_eq` and the baselines already did.
+- **`validate --strict` accepts built-in `Microsoft.*` guardrails.** Every
+  scaffolded model deployment names Azure's built-in RAI policy
+  (`Microsoft.DefaultV2`), a platform resource that can never be a workspace
+  file. Strict mode — which a protected environment turns on by default —
+  counted it as a dangling reference and rejected rigg's own scaffold output
+  with exit 3.
+- **An agent's MCP tool gets its `server_label` from `x-rigg-ref`.** Foundry
+  rejects an agent whose MCP tool has no `server_label`, so an agent file
+  carrying only `x-rigg-ref` and an empty `server_url` — the documented
+  shape — could not be pushed. The label is derived from the same annotation
+  that supplies `server_url`; an explicit label is left alone.
+- **A scaffolded knowledge base carries a `models` block.** Azure refuses to
+  answer from a knowledge base with no model, so every scaffold — including
+  the one `rigg new pipeline` writes — was dead on arrival. The block ships
+  with placeholders, like the data source's connection string.
+- **`rigg adopt` and `rigg env bind --learn` name proposal sources relative
+  to the workspace.** Absolute paths wrapped the proposal table past
+  readability and put the operator's home directory into every transcript.
+
+<!-- write-only push fix bullet added by controller -->
+
 ### Docs
 
 - **A `docs/` tree replaces the wall of README prose.** Four runnable

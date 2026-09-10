@@ -433,7 +433,7 @@ environments:
   dev:
     default: true
     tenant: 45943588-b4fb-4765-ae17-76638c45bb5c
-    subscription: fa354123-c4ee-4b2e-a700-bf01decf803a
+    subscription: 00000000-0000-0000-0000-000000000000
     search: { service: mklabsrch }
     foundry: { account: mklabaifndr, project: proj-default }
     dependencies:
@@ -484,7 +484,7 @@ environments:
         assert_eq!(dev.foundry().unwrap().project, "proj-default");
         assert_eq!(
             dev.env.subscription.as_deref(),
-            Some("fa354123-c4ee-4b2e-a700-bf01decf803a")
+            Some("00000000-0000-0000-0000-000000000000")
         );
         let b = &dev.env.dependencies["docs-storage"];
         assert_eq!(b.kind, BindingType::Storage);

@@ -31,7 +31,7 @@ For tools that don't discover `.claude/skills/` directories, rigg can emit its s
 
 ```bash
 rigg ai skill --emit > ~/.claude/skills/rigg.md   # or your tool's equivalent path
-rigg ai skill --reference                          # full command reference document
+rigg ai skill --reference                          # generated command and MCP tool reference
 ```
 
 ## See Also

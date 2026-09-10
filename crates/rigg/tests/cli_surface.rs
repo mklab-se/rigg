@@ -2729,3 +2729,35 @@ fn learned_bindings_name_files_relative_to_the_workspace() {
         ))
         .stdout(predicate::str::contains(ws.path().display().to_string().as_str()).not());
 }
+
+/// `rigg ai skill` is what an AI agent reads to learn rigg, so it must not
+/// teach commands the binary does not have. Both halves are written into a
+/// scratch docs tree and run through `rigg dev docs-check`, the same
+/// mechanical honesty check the repository's own pages pass: every `rigg …`
+/// line in a fence parses through clap and every link resolves.
+#[test]
+fn ai_skill_output_passes_docs_check() {
+    let tmp = tempfile::tempdir().unwrap();
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+
+    for (args, name) in [
+        (vec!["ai", "skill"], "ai-skill-guide.md"),
+        (vec!["ai", "skill", "--emit"], "ai-skill.md"),
+        (vec!["ai", "skill", "--reference"], "ai-reference.md"),
+    ] {
+        let out = rigg().args(&args).assert().success();
+        std::fs::write(docs.join(name), &out.get_output().stdout).unwrap();
+    }
+
+    let out = rigg()
+        .args(["dev", "docs-check", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).expect("UTF-8");
+    assert!(
+        stdout.trim_end().ends_with("docs-check: ok"),
+        "docs-check did not report ok:\n{stdout}"
+    );
+}

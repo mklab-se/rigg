@@ -738,7 +738,7 @@ pub enum EnvCommands {
     },
     /// Declare a dependency binding for an environment
     ///
-    ///   rigg env bind dev docs storage:mklabstorageacc
+    ///   rigg env bind dev docs storage:contosodocs
     ///   rigg env bind dev --learn        # propose bindings from the files
     #[command(verbatim_doc_comment)]
     Bind {
@@ -747,7 +747,7 @@ pub enum EnvCommands {
         env: String,
         /// Binding name (omit with --learn)
         name: Option<String>,
-        /// <type>:<value>, e.g. storage:mklabstorageacc or api:https://x/v1
+        /// <type>:<value>, e.g. storage:contosodocs or api:https://x/v1
         value: Option<String>,
         /// Propose bindings from the infrastructure references in this
         /// environment's files instead of taking one on the command line

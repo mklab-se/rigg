@@ -140,7 +140,11 @@ fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
     );
     say!(ctx, "  2. Shape the index fields for your data");
     say!(ctx, "  3. Adjust or remove the skillset, wire the indexer");
-    say!(ctx, "  4. Push step by step: rigg push {}", project.name);
+    say!(
+        ctx,
+        "  4. Point the knowledge base's models[0] at an existing deployment"
+    );
+    say!(ctx, "  5. Push step by step: rigg push {}", project.name);
     Ok(())
 }
 

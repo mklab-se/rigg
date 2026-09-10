@@ -698,7 +698,7 @@ Also accepts the [global options](#global-options).
 
 Declare a dependency binding for an environment
 
-  rigg env bind dev docs storage:mklabstorageacc
+  rigg env bind dev docs storage:contosodocs
   rigg env bind dev --learn        # propose bindings from the files
 
 `Usage: rigg env bind [OPTIONS] <ENV> [NAME] [VALUE]`
@@ -709,7 +709,7 @@ Declare a dependency binding for an environment
 |---|---|---|
 | `<ENV>` | yes | Environment to bind in |
 | `[NAME]` | no | Binding name (omit with --learn) |
-| `[VALUE]` | no | &lt;type&gt;:&lt;value&gt;, e.g. storage:mklabstorageacc or api:https://x/v1 |
+| `[VALUE]` | no | &lt;type&gt;:&lt;value&gt;, e.g. storage:contosodocs or api:https://x/v1 |
 
 ### Options
 
