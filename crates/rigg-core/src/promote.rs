@@ -100,8 +100,9 @@ pub struct Renamed {
 /// What happened to one skill's Web API auth carrier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthCarrier {
-    /// The target's existing carrier was kept.
-    Kept,
+    /// The target's existing carrier was kept, on the merged document's
+    /// `skills[i]` named by `path`.
+    Kept { path: String },
     /// The source's carrier was removed (it authorizes the source
     /// environment's function app). `used_key` records that the source
     /// authenticated with a function key, so the target's carrier can be
@@ -131,7 +132,10 @@ pub struct Item {
     pub rewired: Vec<Rewire>,
     pub renamed: Vec<Renamed>,
     pub auth: Vec<AuthCarrier>,
-    /// Paths restored from the target document.
+    /// The paths the target's own `x-rigg-pin` asked to keep, restored from
+    /// its document (sorted, de-duplicated). The target's `name` and the
+    /// annotation itself are always kept and are not listed here — this is
+    /// the user's pin list, not rigg's.
     pub pinned: Vec<String>,
 }
 
@@ -181,9 +185,10 @@ pub enum Pending {
     /// The target binding exists but is declared by name only (or otherwise
     /// lacks what the value's shape needs, e.g. a full ARM id or a base URL):
     /// `rigg env show <to> --refresh`, or declare the ARM id.
+    /// `binding_type` is `None` for the implicit `search`/`foundry` targets.
     UnresolvedTarget {
         binding: String,
-        binding_type: BindingType,
+        binding_type: Option<BindingType>,
         used_by: Vec<Usage>,
     },
     /// An external endpoint bound in neither environment.
@@ -236,9 +241,8 @@ pub fn translate(source: &EnvDocs, target: &EnvDocs) -> Plan {
 
     let mut items = Vec::with_capacity(ordered.len());
     for doc in ordered {
-        let before = target_docs
-            .get(&(doc.kind, doc.stem.as_str()))
-            .map(|d| &d.body);
+        let target_doc = target_docs.get(&(doc.kind, doc.stem.as_str())).copied();
+        let before = target_doc.map(|d| &d.body);
         let mut merged = doc.body.clone();
         // The annotation lives in the TARGET's file; a source-side copy must
         // not leak. The target's own is restored by `keep_from_target`.
@@ -250,20 +254,25 @@ pub fn translate(source: &EnvDocs, target: &EnvDocs) -> Plan {
             rewire_infra(doc, &mut merged, source, target, &renames, &mut pending);
         renamed.extend(rename_siblings(doc.kind, &mut merged, &renames));
         let mut pinned = Vec::new();
-        if let Some(before) = before {
-            pinned = keep_from_target(&mut merged, before);
-            auth.extend(keep_target_auth(&mut merged, before));
+        if let Some(target_doc) = target_doc {
+            pinned = keep_from_target(&mut merged, target_doc);
+            auth.extend(keep_target_auth(&mut merged, &target_doc.body));
         }
-        let target_name = merged
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(&doc.stem)
-            .to_string();
+        // The target's physical identity always wins; only a brand-new
+        // resource is named by the source (or, failing that, by its stem).
+        let target_name = match target_doc {
+            Some(target_doc) => target_doc.physical.clone(),
+            None => merged
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or(&doc.stem)
+                .to_string(),
+        };
         items.push(Item {
             kind: doc.kind,
             stem: doc.stem.clone(),
             target_name,
-            is_new: before.is_none(),
+            is_new: target_doc.is_none(),
             before: before.cloned(),
             merged,
             rewired,
@@ -438,10 +447,18 @@ fn rewire_infra(
         let physical = found.physical.physical.clone();
         let usage: Usage = (doc.kind, doc.stem.clone(), found.path.clone());
 
-        let Some(src_entry) = source
-            .bindings
-            .find_physical(infra::wanted_for(kind_of_target), &physical)
-        else {
+        // `Api` references are matched by URL prefix, exactly as
+        // `infra::classify` matches them — never by host equality, or a
+        // binding scoped to `https://api.x/v1` would claim `…/v2/enrich`.
+        let src_binding = if kind_of_target == Target::Api {
+            let ref_url = found.physical.original.as_str().unwrap_or_default();
+            infra::find_api_binding(&source.bindings, ref_url)
+        } else {
+            source
+                .bindings
+                .find_physical(infra::wanted_for(kind_of_target), &physical)
+        };
+        let Some(src_entry) = src_binding else {
             if kind_of_target == Target::Api {
                 pending.note_external(&physical, usage);
             } else {
@@ -488,12 +505,18 @@ fn rewire_infra(
         let Ok(value) = infra::render(found.form, &found.physical.original, &render_target) else {
             // The target binding is known, but not well enough to rewrite
             // this value's shape (no ARM id, no base URL).
-            if let Some(binding_type) = infra::binding_type_for(kind_of_target) {
-                pending.note_unresolved(&tgt_entry.name, binding_type, usage);
-            }
+            pending.note_unresolved(
+                &tgt_entry.name,
+                infra::binding_type_for(kind_of_target),
+                usage,
+            );
             continue;
         };
-        set_path(merged, &found.path, value);
+        if !set_path(merged, &found.path, value) {
+            // Nothing was written — never claim a rewiring that did not
+            // happen.
+            continue;
+        }
         rewired.push(Rewire {
             path: found.path.clone(),
             binding: src_entry.name.clone(),
@@ -545,25 +568,28 @@ fn base_url_of(entry: &BindingEntry) -> Option<String> {
 }
 
 /// Set `value` at a CONCRETE path (`a.b[2].c`) — the shape
-/// [`infra::extract`] reports, so every segment already exists.
-fn set_path(root: &mut Value, path: &str, value: Value) {
-    fn walk(v: &mut Value, segments: &[(&str, Option<usize>)], value: Value) {
+/// [`infra::extract`] reports, so every segment already exists. Returns
+/// whether the write actually happened.
+fn set_path(root: &mut Value, path: &str, value: Value) -> bool {
+    fn walk(v: &mut Value, segments: &[(&str, Option<usize>)], value: Value) -> bool {
         let Some(((key, index), rest)) = segments.split_first() else {
             *v = value;
-            return;
+            return true;
         };
-        let Some(next) = v.get_mut(key) else { return };
+        let Some(next) = v.get_mut(key) else {
+            return false;
+        };
         let next = match index {
             Some(i) => match next.get_mut(*i) {
                 Some(item) => item,
-                None => return,
+                None => return false,
             },
             None => next,
         };
-        walk(next, rest, value);
+        walk(next, rest, value)
     }
     let segments: Vec<(&str, Option<usize>)> = path.split('.').map(split_index).collect();
-    walk(root, &segments, value);
+    walk(root, &segments, value)
 }
 
 /// `skills[2]` → `("skills", Some(2))`; `uri` → `("uri", None)`.
@@ -614,28 +640,41 @@ impl Renames {
 
 fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) -> Vec<Renamed> {
     let mut out = Vec::new();
+
+    // Collect every reference value at a CONCRETE path first, across all of
+    // the kind's reference fields: `rename_reference` rewrites every field
+    // pointing at the same kind at once, so reading after the first rename
+    // would miss the values it already changed.
+    let mut hits: Vec<(String, ResourceKind, String)> = Vec::new();
     for field in registry::meta(kind).reference_fields {
-        let mut current: Vec<String> = Vec::new();
-        registry::collect_path(merged, field.path, &mut |v| {
-            if let Some(s) = v.as_str() {
-                current.push(s.to_string());
+        collect_concrete(merged, field.path, &mut |path, value| {
+            if let Some(name) = value.as_str()
+                && !name.is_empty()
+            {
+                hits.push((path.to_string(), field.to, name.to_string()));
             }
         });
-        current.sort();
-        current.dedup();
-        for old in current {
-            let Some((new, stem)) = renames.get(field.to, &old) else {
-                continue;
-            };
-            let (new, stem) = (new.to_string(), stem.to_string());
-            registry::rename_reference(kind, merged, field.to, &old, &new);
+    }
+    // One record per rewritten value, not per (field, name) pair.
+    for (path, to, old) in &hits {
+        if let Some((new, stem)) = renames.get(*to, old) {
             out.push(Renamed {
-                path: field.path.to_string(),
-                kind: field.to,
-                stem,
-                from: old,
-                to: new,
+                path: path.clone(),
+                kind: *to,
+                stem: stem.to_string(),
+                from: old.clone(),
+                to: new.to_string(),
             });
+        }
+    }
+    let mut applied: BTreeSet<(ResourceKind, String)> = BTreeSet::new();
+    for (_, to, old) in &hits {
+        if !applied.insert((*to, old.clone())) {
+            continue;
+        }
+        if let Some((new, _)) = renames.get(*to, old) {
+            let new = new.to_string();
+            registry::rename_reference(kind, merged, *to, old, &new);
         }
     }
 
@@ -666,6 +705,40 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
     out
 }
 
+/// Visit every value at a registry `path` (`key[]` descends into arrays)
+/// with its CONCRETE path — `indexProjections.selectors[1].targetIndexName`.
+/// The read-only counterpart of the paths [`set_path`] understands.
+fn collect_concrete(root: &Value, path: &str, f: &mut dyn FnMut(&str, &Value)) {
+    fn walk(v: &Value, segments: &[&str], prefix: String, f: &mut dyn FnMut(&str, &Value)) {
+        let Some((head, rest)) = segments.split_first() else {
+            f(&prefix, v);
+            return;
+        };
+        if let Some(key) = head.strip_suffix("[]") {
+            let target = if key.is_empty() { Some(v) } else { v.get(key) };
+            if let Some(Value::Array(items)) = target {
+                for (i, item) in items.iter().enumerate() {
+                    let next = if prefix.is_empty() {
+                        format!("{key}[{i}]")
+                    } else {
+                        format!("{prefix}.{key}[{i}]")
+                    };
+                    walk(item, rest, next, f);
+                }
+            }
+        } else if let Some(next) = v.get(*head) {
+            let path = if prefix.is_empty() {
+                (*head).to_string()
+            } else {
+                format!("{prefix}.{head}")
+            };
+            walk(next, rest, path, f);
+        }
+    }
+    let segments: Vec<&str> = path.split('.').collect();
+    walk(root, &segments, String::new(), f);
+}
+
 fn collect_x_rigg_refs(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Object(map) => {
@@ -693,60 +766,89 @@ fn collect_x_rigg_refs(v: &Value, out: &mut Vec<String>) {
 // ---------------------------------------------------------------------
 
 /// Restore the target's physical identity and pinned paths into `merged`,
-/// returning the paths restored.
-fn keep_from_target(merged: &mut Value, target: &Value) -> Vec<String> {
-    let mut pinned = Vec::new();
-    if target.get("name").is_some() {
-        registry::restore_path(merged, target, "name");
-        pinned.push("name".to_string());
+/// returning the paths its `x-rigg-pin` asked for.
+///
+/// Identity is unconditional: the promoted document is named
+/// [`Doc::physical`] — never the source's name. When the target's file
+/// carries no `name` key at all (its identity is the file stem) the key is
+/// removed instead, so the target keeps its shape as well as its name.
+fn keep_from_target(merged: &mut Value, target: &Doc) -> Vec<String> {
+    if let Some(map) = merged.as_object_mut() {
+        if target.body.get("name").is_none() && target.physical == target.stem {
+            map.remove("name");
+        } else {
+            map.insert("name".to_string(), Value::String(target.physical.clone()));
+        }
     }
-    if let Some(paths) = target.get(X_RIGG_PIN).and_then(Value::as_array) {
+
+    let mut pinned = Vec::new();
+    if let Some(paths) = target.body.get(X_RIGG_PIN).and_then(Value::as_array) {
         for path in paths.iter().filter_map(Value::as_str) {
-            registry::restore_path(merged, target, path);
+            registry::restore_path(merged, &target.body, path);
             pinned.push(path.to_string());
         }
     }
-    if target.get(X_RIGG_PIN).is_some() {
-        registry::restore_path(merged, target, X_RIGG_PIN);
-        pinned.push(X_RIGG_PIN.to_string());
+    if target.body.get(X_RIGG_PIN).is_some() {
+        registry::restore_path(merged, &target.body, X_RIGG_PIN);
     }
+    pinned.sort();
     pinned.dedup();
     pinned
 }
 
-/// Re-apply the target's own Web API auth carriers, matched by skill index.
+/// Re-apply the target's own Web API auth carriers. A carrier authorizes ONE
+/// skill's endpoint, so the target's skill is matched to a merged skill by
+/// `name`, then by (already translated) `uri`, and only then — when the two
+/// skill lists have the same length, so position still means something — by
+/// index. Matched by nothing: the carrier is not re-applied and nothing is
+/// recorded, rather than landing on a skill it does not authorize.
 fn keep_target_auth(merged: &mut Value, target: &Value) -> Vec<AuthCarrier> {
     let mut out = Vec::new();
-    let Some(count) = merged.get("skills").and_then(Value::as_array).map(Vec::len) else {
+    let (Some(target_skills), Some(merged_skills)) = (
+        target.get("skills").and_then(Value::as_array),
+        merged.get("skills").and_then(Value::as_array),
+    ) else {
         return out;
     };
-    for i in 0..count {
-        let Some(target_skill) = target.pointer(&format!("/skills/{i}")) else {
-            continue;
+    let same_length = target_skills.len() == merged_skills.len();
+
+    // Read every carrier out of the target first: applying them needs a
+    // mutable borrow of the same document `merged_skills` is read from.
+    let mut carriers: Vec<Carrier> = Vec::new();
+    for (j, target_skill) in target_skills.iter().enumerate() {
+        let carrier = Carrier {
+            skill: 0,
+            auth_resource_id: target_skill.get("authResourceId").cloned(),
+            annotation: target_skill.get(X_RIGG_AUTH).cloned(),
+            key_header: target_skill
+                .pointer(&format!("/httpHeaders/{FUNCTION_KEY_HEADER}"))
+                .cloned(),
         };
-        let auth_resource_id = target_skill.get("authResourceId").cloned();
-        let annotation = target_skill.get(X_RIGG_AUTH).cloned();
-        let key_header = target_skill
-            .pointer(&format!("/httpHeaders/{FUNCTION_KEY_HEADER}"))
-            .cloned();
-        if auth_resource_id.is_none() && annotation.is_none() && key_header.is_none() {
+        if carrier.is_empty() {
             continue;
         }
+        let Some(skill) = match_skill(merged_skills, target_skill, j, same_length) else {
+            continue;
+        };
+        carriers.push(Carrier { skill, ..carrier });
+    }
+
+    for carrier in carriers {
         let Some(skill) = merged
             .get_mut("skills")
             .and_then(Value::as_array_mut)
-            .and_then(|skills| skills.get_mut(i))
+            .and_then(|skills| skills.get_mut(carrier.skill))
             .and_then(Value::as_object_mut)
         else {
             continue;
         };
-        if let Some(value) = auth_resource_id {
+        if let Some(value) = carrier.auth_resource_id {
             skill.insert("authResourceId".to_string(), value);
         }
-        if let Some(value) = annotation {
+        if let Some(value) = carrier.annotation {
             skill.insert(X_RIGG_AUTH.to_string(), value);
         }
-        if let Some(value) = key_header {
+        if let Some(value) = carrier.key_header {
             let headers = skill
                 .entry("httpHeaders".to_string())
                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
@@ -754,9 +856,49 @@ fn keep_target_auth(merged: &mut Value, target: &Value) -> Vec<AuthCarrier> {
                 map.insert(FUNCTION_KEY_HEADER.to_string(), value);
             }
         }
-        out.push(AuthCarrier::Kept);
+        out.push(AuthCarrier::Kept {
+            path: format!("skills[{}]", carrier.skill),
+        });
     }
     out
+}
+
+/// One target skill's Web API auth carrier, and the merged `skills[i]` it
+/// belongs to.
+struct Carrier {
+    skill: usize,
+    auth_resource_id: Option<Value>,
+    annotation: Option<Value>,
+    key_header: Option<Value>,
+}
+
+impl Carrier {
+    fn is_empty(&self) -> bool {
+        self.auth_resource_id.is_none() && self.annotation.is_none() && self.key_header.is_none()
+    }
+}
+
+/// Which merged skill `target_skill` is: by `name`, else by `uri`, else by
+/// position when both lists have the same length.
+fn match_skill(
+    merged_skills: &[Value],
+    target_skill: &Value,
+    index: usize,
+    same_length: bool,
+) -> Option<usize> {
+    let by = |key: &str| {
+        target_skill
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(|wanted| {
+                merged_skills
+                    .iter()
+                    .position(|s| s.get(key).and_then(Value::as_str) == Some(wanted))
+            })
+    };
+    by("name")
+        .or_else(|| by("uri"))
+        .or_else(|| (same_length && index < merged_skills.len()).then_some(index))
 }
 
 // ---------------------------------------------------------------------
@@ -799,7 +941,7 @@ impl PendingSet {
         }
     }
 
-    fn note_unresolved(&mut self, binding: &str, binding_type: BindingType, usage: Usage) {
+    fn note_unresolved(&mut self, binding: &str, binding_type: Option<BindingType>, usage: Usage) {
         let entry = self
             .unresolved
             .entry(binding.to_string())
@@ -1317,7 +1459,7 @@ mod tests {
                 used_by,
             } => {
                 assert_eq!(binding, "docs");
-                assert_eq!(*binding_type, BindingType::Storage);
+                assert_eq!(*binding_type, Some(BindingType::Storage));
                 assert_eq!(used_by.len(), 1);
                 assert_eq!(used_by[0].1, "ds");
             }
@@ -1395,11 +1537,8 @@ mod tests {
         );
         assert_eq!(
             item.pinned,
-            vec![
-                "name".to_string(),
-                "tools[].server_url".to_string(),
-                X_RIGG_PIN.to_string()
-            ]
+            vec!["tools[].server_url".to_string()],
+            "`pinned` is the user's pin list — not `name`, not the annotation"
         );
 
         // No target at all: the source's own annotation still never leaks.
@@ -1506,7 +1645,13 @@ mod tests {
             "the target's own auth carrier survives the promote"
         );
         assert!(item.merged["skills"][0].get("x-rigg-auth").is_none());
-        assert!(item.auth.contains(&AuthCarrier::Kept), "{:?}", item.auth);
+        assert!(
+            item.auth.contains(&AuthCarrier::Kept {
+                path: "skills[0]".to_string()
+            }),
+            "{:?}",
+            item.auth
+        );
         assert!(
             item.auth
                 .iter()
@@ -1552,6 +1697,487 @@ mod tests {
         assert_eq!(
             plan.kept_only_in_to,
             vec![(ResourceKind::SynonymMap, "syn".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_target_document_without_a_name_key_never_takes_the_source_identity() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![doc(
+                ResourceKind::Agent,
+                "regulus",
+                json!({"name": "Regulus-dev", "model": "gpt-5-mini"}),
+            )],
+        };
+        // The target's file has no `name` at all — its identity is the stem.
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![doc(
+                ResourceKind::Agent,
+                "regulus",
+                json!({"model": "gpt-4o-old"}),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        let item = &plan.items[0];
+        assert!(
+            item.merged.get("name").is_none(),
+            "the target's shape is kept, and `Regulus-dev` never crosses: {:?}",
+            item.merged
+        );
+        assert_eq!(item.target_name, "regulus");
+        assert_eq!(item.merged["model"], json!("gpt-5-mini"));
+    }
+
+    #[test]
+    fn a_target_documents_own_name_always_wins_over_the_sources() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![doc(
+                ResourceKind::Index,
+                "docs-index",
+                json!({"name": "docs-index-dev", "fields": []}),
+            )],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![doc(
+                ResourceKind::Index,
+                "docs-index",
+                json!({"name": "docs-index-prod", "fields": []}),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert_eq!(plan.items[0].merged["name"], json!("docs-index-prod"));
+        assert_eq!(plan.items[0].target_name, "docs-index-prod");
+    }
+
+    #[test]
+    fn a_kept_auth_carrier_follows_the_named_skill_not_the_position() {
+        // The source inserts a skill BEFORE the WebApiSkill, so the target's
+        // `skills[0]` and the merged document's `skills[0]` are different
+        // skills: matching by position would authorize the wrong one.
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env(
+                "dev",
+                "s-dev",
+                "f-dev",
+                &[("enrich-fn", BindingType::FunctionApp, "fn-dev")],
+            ),
+            docs: vec![doc(
+                ResourceKind::Skillset,
+                "sk",
+                json!({
+                    "name": "sk",
+                    "skills": [
+                        {"@odata.type": "#Microsoft.Skills.Text.SplitSkill", "name": "split",
+                         "inputs": [], "outputs": []},
+                        {"@odata.type": "#Microsoft.Skills.Custom.WebApiSkill", "name": "enrich",
+                         "uri": "https://fn-dev.azurewebsites.net/api/enrich",
+                         "inputs": [], "outputs": []}
+                    ]
+                }),
+            )],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env(
+                "prod",
+                "s-prod",
+                "f-prod",
+                &[("enrich-fn", BindingType::FunctionApp, "fn-prod")],
+            ),
+            docs: vec![doc(
+                ResourceKind::Skillset,
+                "sk",
+                json!({
+                    "name": "sk",
+                    "skills": [
+                        {"@odata.type": "#Microsoft.Skills.Custom.WebApiSkill", "name": "enrich",
+                         "uri": "https://fn-prod.azurewebsites.net/api/enrich",
+                         "authResourceId": "api://prod-app",
+                         "inputs": [], "outputs": []}
+                    ]
+                }),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        let item = &plan.items[0];
+        assert!(
+            item.merged["skills"][0].get("authResourceId").is_none(),
+            "the split skill is not the one the carrier authorizes: {:?}",
+            item.merged["skills"][0]
+        );
+        assert_eq!(
+            item.merged["skills"][1]["authResourceId"],
+            json!("api://prod-app")
+        );
+        assert_eq!(
+            item.auth,
+            vec![AuthCarrier::Kept {
+                path: "skills[1]".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_api_reference_outside_the_bindings_prefix_is_external() {
+        let skillset = |uri: &str| {
+            doc(
+                ResourceKind::Skillset,
+                "sk",
+                json!({
+                    "name": "sk",
+                    "skills": [{
+                        "@odata.type": "#Microsoft.Skills.Custom.WebApiSkill",
+                        "name": "enrich", "uri": uri, "inputs": [], "outputs": []
+                    }]
+                }),
+            )
+        };
+        let dev = |docs: Vec<Doc>| EnvDocs {
+            env: "dev".into(),
+            bindings: env(
+                "dev",
+                "s-dev",
+                "f-dev",
+                &[("partner", BindingType::Api, "https://api.x/v1")],
+            ),
+            docs,
+        };
+        let prod = EnvDocs {
+            env: "prod".into(),
+            bindings: env(
+                "prod",
+                "s-prod",
+                "f-prod",
+                &[("partner", BindingType::Api, "https://api.y/v2")],
+            ),
+            docs: vec![],
+        };
+
+        // Same host, different path scope: the binding does not cover it.
+        let plan = translate(&dev(vec![skillset("https://api.x/v2/enrich")]), &prod);
+        assert_eq!(plan.pending.len(), 1, "{:?}", plan.pending);
+        match &plan.pending[0] {
+            Pending::External { host, used_by } => {
+                assert_eq!(host, "api.x");
+                assert_eq!(used_by.len(), 1);
+                assert_eq!(used_by[0].2, "skills[0].uri");
+            }
+            other => panic!("expected External, got {other:?}"),
+        }
+        assert!(plan.items[0].rewired.is_empty());
+        assert_eq!(
+            plan.items[0].merged["skills"][0]["uri"],
+            json!("https://api.x/v2/enrich"),
+            "an unbound reference is left exactly as it was"
+        );
+
+        // Inside the binding's prefix: rewired onto the target's base URL.
+        let plan = translate(&dev(vec![skillset("https://api.x/v1/enrich")]), &prod);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        assert_eq!(
+            plan.items[0].merged["skills"][0]["uri"],
+            json!("https://api.y/v2/enrich")
+        );
+        assert_eq!(plan.items[0].rewired[0].binding, "partner");
+        assert_eq!(plan.items[0].rewired[0].target, Target::Api);
+    }
+
+    #[test]
+    fn every_rewritten_reference_value_is_recorded_at_its_own_concrete_path() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                doc(
+                    ResourceKind::Index,
+                    "docs-index",
+                    json!({"name": "docs-index-dev", "fields": []}),
+                ),
+                doc(
+                    ResourceKind::Skillset,
+                    "sk",
+                    json!({
+                        "name": "sk",
+                        "skills": [],
+                        "indexProjections": {"selectors": [
+                            {"targetIndexName": "docs-index-dev", "parentKeyFieldName": "p"},
+                            {"targetIndexName": "docs-index-dev", "parentKeyFieldName": "q"}
+                        ]}
+                    }),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![doc(
+                ResourceKind::Index,
+                "docs-index",
+                json!({"name": "docs-index", "fields": []}),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        let skillset = item(&plan, ResourceKind::Skillset, "sk");
+        let paths: Vec<&str> = skillset.renamed.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "indexProjections.selectors[0].targetIndexName",
+                "indexProjections.selectors[1].targetIndexName"
+            ],
+            "one record per value rewritten, at its concrete path"
+        );
+        for selector in skillset.merged["indexProjections"]["selectors"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(selector["targetIndexName"], json!("docs-index"));
+        }
+    }
+
+    #[test]
+    fn knowledge_source_storage_and_embedding_host_are_rewired() {
+        let ks = |acct: &str, host: &str| {
+            doc(
+                ResourceKind::KnowledgeSource,
+                "docs-ks",
+                json!({
+                    "name": "docs-ks",
+                    "kind": "azureBlob",
+                    "azureBlobParameters": {
+                        "connectionString": conn_string(acct),
+                        "containerName": "c",
+                        "ingestionParameters": {
+                            "embeddingModel": {"azureOpenAIParameters": {
+                                "resourceUri": format!("https://{host}.openai.azure.com"),
+                                "deploymentId": "embed"
+                            }}
+                        }
+                    }
+                }),
+            )
+        };
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env(
+                "dev",
+                "s-dev",
+                "f-dev",
+                &[("docs", BindingType::Storage, DEV_ACCT)],
+            ),
+            docs: vec![ks(DEV_ACCT, "f-dev")],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env(
+                "prod",
+                "s-prod",
+                "f-prod",
+                &[("docs", BindingType::Storage, PROD_ACCT)],
+            ),
+            docs: vec![],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let item = &plan.items[0];
+        assert_eq!(
+            item.merged["azureBlobParameters"]["connectionString"],
+            json!(conn_string(PROD_ACCT))
+        );
+        assert_eq!(
+            item.merged["azureBlobParameters"]["ingestionParameters"]["embeddingModel"]["azureOpenAIParameters"]
+                ["resourceUri"],
+            json!("https://f-prod.openai.azure.com")
+        );
+        let bindings: Vec<&str> = item.rewired.iter().map(|r| r.binding.as_str()).collect();
+        assert_eq!(bindings, vec!["docs", "foundry"], "{:?}", item.rewired);
+    }
+
+    #[test]
+    fn knowledge_base_models_are_rewired_and_its_sources_follow_the_rename() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                doc(
+                    ResourceKind::KnowledgeSource,
+                    "docs-ks",
+                    json!({"name": "docs-ks-dev", "kind": "searchIndex"}),
+                ),
+                doc(
+                    ResourceKind::KnowledgeBase,
+                    "kb",
+                    json!({
+                        "name": "kb",
+                        "knowledgeSources": [{"name": "docs-ks-dev", "kind": "searchIndex"}],
+                        "models": [{"azureOpenAIParameters": {
+                            "resourceUri": "https://f-dev.openai.azure.com",
+                            "deploymentId": "chat"
+                        }}]
+                    }),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![doc(
+                ResourceKind::KnowledgeSource,
+                "docs-ks",
+                json!({"name": "docs-ks", "kind": "searchIndex"}),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let kb = item(&plan, ResourceKind::KnowledgeBase, "kb");
+        assert_eq!(
+            kb.merged["models"][0]["azureOpenAIParameters"]["resourceUri"],
+            json!("https://f-prod.openai.azure.com")
+        );
+        assert_eq!(kb.rewired[0].binding, "foundry");
+        assert_eq!(kb.rewired[0].target, Target::ModelHost);
+        assert_eq!(kb.merged["knowledgeSources"][0]["name"], json!("docs-ks"));
+        assert_eq!(kb.renamed.len(), 1, "{:?}", kb.renamed);
+        assert_eq!(kb.renamed[0].path, "knowledgeSources[0].name");
+        assert_eq!(kb.renamed[0].kind, ResourceKind::KnowledgeSource);
+        assert_eq!(kb.renamed[0].from, "docs-ks-dev");
+        assert_eq!(kb.renamed[0].to, "docs-ks");
+    }
+
+    #[test]
+    fn connection_target_url_is_rewired_to_the_target_search_service() {
+        let mcp = |svc: &str, kb: &str| {
+            format!(
+                "https://{svc}.search.windows.net/knowledgebases/{kb}/mcp?api-version={SEARCH_PREVIEW_API_VERSION}"
+            )
+        };
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                doc(ResourceKind::KnowledgeBase, "kb", json!({"name": "kb-dev"})),
+                doc(
+                    ResourceKind::Connection,
+                    "kb-conn",
+                    json!({
+                        "name": "kb-conn",
+                        "properties": {
+                            "category": "CustomKeys",
+                            "authType": "AAD",
+                            "target": mcp("s-dev", "kb-dev")
+                        }
+                    }),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![doc(
+                ResourceKind::KnowledgeBase,
+                "kb",
+                json!({"name": "kb"}),
+            )],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let conn = item(&plan, ResourceKind::Connection, "kb-conn");
+        assert_eq!(
+            conn.merged["properties"]["target"],
+            json!(mcp("s-prod", "kb")),
+            "both the search service and the renamed knowledge base follow"
+        );
+        assert_eq!(conn.rewired.len(), 1);
+        assert_eq!(conn.rewired[0].path, "properties.target");
+        assert_eq!(conn.rewired[0].binding, "search");
+        assert_eq!(conn.rewired[0].target, Target::SearchService);
+        assert_eq!(conn.rewired[0].to, "s-prod");
+    }
+
+    #[test]
+    fn agent_model_and_connection_references_follow_the_target_names() {
+        let src = EnvDocs {
+            env: "dev".into(),
+            bindings: env("dev", "s-dev", "f-dev", &[]),
+            docs: vec![
+                doc(
+                    ResourceKind::Agent,
+                    "regulus",
+                    json!({
+                        "name": "Regulus",
+                        "model": "gpt-5-mini-dev",
+                        "tools": [{"type": "azure_ai_search", "project_connection_id": "aoai-dev"}]
+                    }),
+                ),
+                doc(
+                    ResourceKind::Deployment,
+                    "chat",
+                    json!({"name": "gpt-5-mini-dev", "properties": {"model": {"name": "gpt-5-mini"}}}),
+                ),
+                doc(
+                    ResourceKind::Connection,
+                    "aoai",
+                    json!({"name": "aoai-dev", "properties": {"category": "AzureOpenAI"}}),
+                ),
+            ],
+        };
+        let tgt = EnvDocs {
+            env: "prod".into(),
+            bindings: env("prod", "s-prod", "f-prod", &[]),
+            docs: vec![
+                doc(
+                    ResourceKind::Deployment,
+                    "chat",
+                    json!({"name": "gpt-5-mini", "properties": {"model": {"name": "gpt-5-mini"}}}),
+                ),
+                doc(
+                    ResourceKind::Connection,
+                    "aoai",
+                    json!({"name": "aoai", "properties": {"category": "AzureOpenAI"}}),
+                ),
+            ],
+        };
+
+        let plan = translate(&src, &tgt);
+        assert!(plan.pending.is_empty(), "{:?}", plan.pending);
+        let agent = item(&plan, ResourceKind::Agent, "regulus");
+        assert_eq!(agent.merged["model"], json!("gpt-5-mini"));
+        assert_eq!(
+            agent.merged["tools"][0]["project_connection_id"],
+            json!("aoai")
+        );
+        let renamed: Vec<(&str, &str, &str)> = agent
+            .renamed
+            .iter()
+            .map(|r| (r.path.as_str(), r.from.as_str(), r.to.as_str()))
+            .collect();
+        assert_eq!(
+            renamed,
+            vec![
+                ("model", "gpt-5-mini-dev", "gpt-5-mini"),
+                ("tools[0].project_connection_id", "aoai-dev", "aoai")
+            ]
+        );
+        assert_eq!(
+            agent.merged["name"],
+            json!("Regulus"),
+            "a new-in-target agent keeps the source's name"
         );
     }
 }

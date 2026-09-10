@@ -265,7 +265,12 @@ fn find_wanted<'a>(
     }
 }
 
-fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a BindingEntry> {
+/// The declared `api` binding whose base URL prefixes `ref_url`, matched at a
+/// URL boundary (`/`, `?`, `#`, or the end of the URL). The rule
+/// [`classify`] applies to [`Target::Api`] references — `rigg promote` uses
+/// it too, so "which binding does this URL belong to" answers the same
+/// everywhere.
+pub fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a BindingEntry> {
     let ref_lower = ref_url.to_ascii_lowercase();
     env.iter().find(|e| {
         matches!(e.kind, BindingKind::Declared(BindingType::Api))
