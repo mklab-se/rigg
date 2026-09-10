@@ -439,6 +439,45 @@ async fn pull_conflict_fails_non_interactive_with_rigg_diff_pointer() {
     assert_eq!(v["fields"][0]["name"], "local-change");
 }
 
+/// A data source's connection string is write-only: Azure redacts it to
+/// null on every GET, so comparing it against the local file would report
+/// drift forever. `status` already ignores write-only fields; `diff` must
+/// agree with it.
+#[tokio::test]
+async fn diff_ignores_a_write_only_connection_string() {
+    let server = MockServer::start().await;
+    mock_empty_lists(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/datasources/ds"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "@odata.etag": "\"0x1\"",
+            "name": "ds",
+            "type": "azureblob",
+            "credentials": {"connectionString": null},
+            "container": {"name": "docs"}
+        })))
+        .mount(&server)
+        .await;
+
+    let ws = workspace(&server.uri());
+    write_resource(
+        ws.path(),
+        "data-sources",
+        "ds",
+        &json!({
+            "name": "ds",
+            "type": "azureblob",
+            "credentials": {"connectionString": "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/acct;"},
+            "container": {"name": "docs"}
+        }),
+    );
+    rigg(ws.path())
+        .args(["diff", "demo", "--exit-code"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("connectionString").not());
+}
+
 #[tokio::test]
 async fn diff_reports_drift_with_exit_code_and_markdown() {
     let server = MockServer::start().await;

@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use rigg_core::normalize::normalize_for_push;
+use rigg_core::normalize::normalize_for_compare;
 use rigg_core::resources::{ResourceKind, ResourceRef};
 use rigg_core::store::Store;
 use rigg_core::workspace::{Project, Workspace};
@@ -213,11 +213,15 @@ async fn diff_project(
                 ));
             }
         }
+        // Compare the way `status` does: `normalize_for_compare` also strips
+        // write-only fields (a data source's connection string), which the
+        // server never echoes back — comparing them would report drift on
+        // every data source forever.
         let left_n = left
-            .map(|v| normalize_for_push(r.kind, &v))
+            .map(|v| normalize_for_compare(r.kind, &v))
             .unwrap_or(Value::Null);
         let right_n = right
-            .map(|v| normalize_for_push(r.kind, &v))
+            .map(|v| normalize_for_compare(r.kind, &v))
             .unwrap_or(Value::Null);
         // diff(old=remote/right, new=local/left): report what pushing would change
         let result = rigg_diff::semantic::diff(&right_n, &left_n, "name");
