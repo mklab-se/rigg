@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -83,6 +83,6 @@ regex-lite = "0.1"
 ailloy = { version = "2.1", default-features = false, features = ["config-tui"] }
 
 # Internal crates
-rigg-core = { version = "2.0.0", path = "crates/rigg-core" }
-rigg-client = { version = "2.0.0", path = "crates/rigg-client" }
-rigg-diff = { version = "2.0.0", path = "crates/rigg-diff" }
+rigg-core = { version = "2.0.1", path = "crates/rigg-core" }
+rigg-client = { version = "2.0.1", path = "crates/rigg-client" }
+rigg-diff = { version = "2.0.1", path = "crates/rigg-diff" }
