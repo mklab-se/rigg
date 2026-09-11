@@ -3,11 +3,22 @@
 `rigg.yaml` is the workspace file. It sits at the root of your repository and
 declares **environments** — named deployments, each with one Azure AI Search
 target, one Microsoft Foundry target, a policy, and a table of *dependency
-bindings* naming the supporting Azure resources (storage accounts, function
-apps, key vaults, identities) that this environment's resource definitions
-point at. It holds no resource definitions of its own and never any secrets;
-finding `rigg.yaml` is also how rigg decides it is inside a workspace at all
-(every command walks up from the current directory until it finds one).
+bindings* naming the supporting Azure resources its definitions point at. It
+holds no resource definitions of its own and never any secrets, and finding it
+is how rigg knows it is inside a workspace: every command walks up from the
+current directory until it finds one.
+
+## Contents
+
+- [Complete example](#complete-example)
+- [Top level](#top-level)
+- [Environments](#environments) — [resolution](#environment-resolution),
+  [`search`](#the-search-target), [`foundry`](#the-foundry-target)
+- [Policy](#policy)
+- [Dependencies](#dependencies) — [implicit bindings](#implicit-bindings),
+  [managing them from the CLI](#managing-bindings-from-the-cli)
+- [Multi-subscription and multi-tenant workspaces](#multi-subscription-and-multi-tenant-workspaces)
+- [Common mistakes](#common-mistakes)
 
 ## Complete example
 
@@ -55,12 +66,16 @@ environments:
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `name` | string | no | — | A label for the workspace. Cosmetic. |
-| `root` | string | no | alongside `rigg.yaml` | Subdirectory (relative to `rigg.yaml`) that holds `projects/`, `apis/` and `.rigg/`. Set by `rigg init <folder>` when you keep rigg's trees in a subfolder of a larger repository. |
-| `environments` | map | no | `{}` | Environment name → [environment](#environments). |
+| `root` | string | no | alongside `rigg.yaml` | Subdirectory holding `projects/`, `apis/` and `.rigg/` |
+| `environments` | map | no | `{}` | Environment name → [environment](#environments) |
 
-Unknown keys are rejected: every struct in `rigg.yaml` is parsed with
-`deny_unknown_fields`, so a typo is a load error naming the accepted keys
-rather than a silently ignored setting.
+**`root`** is relative to `rigg.yaml`. `rigg init <folder>` sets it when you
+keep rigg's trees in a subfolder of a larger repository.
+
+> [!NOTE]
+> Unknown keys are rejected: every struct in `rigg.yaml` is parsed with
+> `deny_unknown_fields`, so a typo is a load error naming the accepted keys
+> rather than a silently ignored setting.
 
 ## Environments
 
@@ -69,13 +84,24 @@ An environment is one deployment target. Its name is the map key (`dev`,
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `default` | bool | no | `false` | Marks this environment as the one used when no selection is made. At most one environment should set it. |
-| `tenant` | string (GUID or domain) | no | the Azure CLI's current tenant | Entra ID tenant the environment's resources live in. Tokens are minted for this tenant; a tenant you are not signed in to produces an error naming the `az login --tenant <t>` that fixes it. |
-| `subscription` | string (GUID) | no | discovered | Azure subscription the environment's resources live in. Used to scope ARM lookups (binding resolution, role assignments, deployments, connections). |
-| `search` | map | no | — | The [Azure AI Search target](#the-search-target). Omit it for a Foundry-only environment. |
-| `foundry` | map | no | — | The [Foundry target](#the-foundry-target). Omit it for a Search-only environment. |
-| `policy` | map | no | `{}` | [Policy gates](#policy). |
-| `dependencies` | map | no | `{}` | [Dependency bindings](#dependencies). |
+| `default` | bool | no | `false` | Use this environment when no selection is made |
+| `tenant` | string (GUID or domain) | no | the Azure CLI's current tenant | Entra ID tenant the resources live in |
+| `subscription` | string (GUID) | no | discovered | Azure subscription the resources live in |
+| `search` | map | no | — | The [Azure AI Search target](#the-search-target) |
+| `foundry` | map | no | — | The [Foundry target](#the-foundry-target) |
+| `policy` | map | no | `{}` | [Policy gates](#policy) |
+| `dependencies` | map | no | `{}` | [Dependency bindings](#dependencies) |
+
+**`default`** — at most one environment should set it.
+
+**`tenant`** — tokens are minted for this tenant. A tenant you are not signed
+in to produces an error naming the `az login --tenant <t>` that fixes it.
+
+**`subscription`** — scopes every ARM lookup: binding resolution, role
+assignments, deployments, connections.
+
+**`search` / `foundry`** — omit `search` for a Foundry-only environment, and
+`foundry` for a Search-only one.
 
 ### Environment resolution
 
@@ -87,22 +113,22 @@ Exactly one environment is selected per invocation, in this order:
 
 If none of the three yields a name:
 
-```
+```text
 Error: no default environment configured; pass --env or set `default: true` on one environment
 ```
 
 A name that is not in the file:
 
-```
+```text
 Error: unknown environment 'staging' (available: dev, prod)
 ```
 
-One command deliberately does **not** accept `default: true` as good enough,
+**One command deliberately does not accept `default: true` as good enough**,
 because adopting into the wrong environment is expensive to undo. `rigg adopt`
 requires an explicit `--env` / `RIGG_ENV` when the workspace has more than one
-environment — interactively it asks which one, otherwise:
+environment. Interactively it asks which one; otherwise it says:
 
-```
+```text
 Error: multiple environments configured (dev, prod); pass --env <name> (or set RIGG_ENV) to say which one to adopt from
 ```
 
@@ -110,29 +136,36 @@ Error: multiple environments configured (dev, prod); pass --env <name> (or set R
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `service` | string | **yes** | — | Azure AI Search service name. |
+| `service` | string | **yes** | — | Azure AI Search service name |
 | `name` | string | no | — | A label for the target. Cosmetic. |
-| `endpoint` | string (URL) | no | `https://{service}.search.windows.net` | Full base URL override — sovereign clouds, and the wiremock fake used by rigg's own tests. |
-| `api-version` | string | no | `2026-04-01` | Override for the stable data-plane api-version. |
-| `preview-api-version` | string | no | `2026-08-01-preview` | Override for the preview data-plane api-version (knowledge bases require the preview channel). |
+| `endpoint` | string (URL) | no | `https://{service}.search.windows.net` | Full base URL override |
+| `api-version` | string | no | `2026-04-01` | Override for the stable data-plane api-version |
+| `preview-api-version` | string | no | `2026-08-01-preview` | Override for the preview data-plane api-version |
 
-Change an api-version only when you know why. rigg's registry pins the pair
-it has schema fixtures for; `rigg dev api-check` reports when Azure has moved
-on.
+**`endpoint`** exists for sovereign clouds, and for the wiremock fake used by
+rigg's own tests.
+
+**`preview-api-version`** is the channel knowledge bases require.
+
+> [!WARNING]
+> Change an api-version only when you know why. rigg's registry pins the pair
+> it has schema fixtures for; `rigg dev api-check` reports when Azure has
+> moved on.
 
 ### The `foundry` target
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `account` | string | **yes** | — | Foundry (Azure AI Services) account name. |
-| `project` | string | **yes** | — | Foundry project name, e.g. `proj-default`. |
+| `account` | string | **yes** | — | Foundry (Azure AI Services) account name |
+| `project` | string | **yes** | — | Foundry project name, e.g. `proj-default` |
 | `name` | string | no | — | A label for the target. Cosmetic. |
-| `endpoint` | string (URL) | no | `https://{account}.services.ai.azure.com` | Full base URL override. |
-| `api-version` | string | no | `v1` | Override for the Foundry data-plane api-version. |
+| `endpoint` | string (URL) | no | `https://{account}.services.ai.azure.com` | Full base URL override |
+| `api-version` | string | no | `v1` | Override for the Foundry data-plane api-version |
 
-Model deployments, connections and guardrails are ARM resources under the
-same account and use the `Microsoft.CognitiveServices` api-version pinned in
-the registry (`2026-05-01`), not this one.
+> [!NOTE]
+> Model deployments, connections and guardrails are ARM resources under the
+> same account. They use the `Microsoft.CognitiveServices` api-version pinned
+> in the registry (`2026-05-01`), not this one.
 
 ## Policy
 
@@ -140,10 +173,16 @@ Per-environment gates. Omit the block entirely for an unguarded environment.
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `protected` | bool | no | `false` | Every cloud-mutating operation against this environment (`push` apply, `push --prune`, `delete --remote`, `az indexer run`/`reset`) requires the environment's name to be typed back. |
-| `strict-bindings` | bool | no | the value of `protected` | Every infrastructure reference in the environment's files must resolve to a declared `dependencies` binding before push. When false, an unbound reference is a warning. |
+| `protected` | bool | no | `false` | Every cloud-mutating operation needs the environment's name typed back |
+| `strict-bindings` | bool | no | the value of `protected` | Every infrastructure reference must resolve to a declared binding |
 
-`--yes` deliberately does **not** satisfy the protected gate. `--yes` exists
+**`protected`** covers `push` apply, `push --prune`, `delete --remote` and
+`az indexer run` / `reset`.
+
+**`strict-bindings`** is checked before push. When it is false, an unbound
+reference is a warning instead.
+
+**`--yes` deliberately does not satisfy the protected gate.** `--yes` exists
 to skip the routine "apply N change(s)?" prompt and scripts reach for it
 reflexively; if it also unlocked protection, a protected environment would be
 no safer than an unprotected one. The confirmation must be given per
@@ -187,9 +226,10 @@ shape:
 
 **Binding names** must be lowercase kebab-case: ASCII letters, digits and
 single hyphens, no leading or trailing hyphen, no double hyphen. `search` and
-`foundry` are reserved — they already name the environment's own targets:
+`foundry` are reserved — they already name the environment's own targets.
+Anything else is a load error:
 
-```
+```text
 Error: rigg.yaml found at /repo/rigg.yaml but could not be read: environment 'dev' has an invalid dependency binding name 'Docs_Storage': binding name 'Docs_Storage' must be lowercase kebab-case (letters, digits, single hyphens; no leading/trailing hyphen)
 ```
 
@@ -204,10 +244,11 @@ Every environment has two bindings you do not declare:
 
 They appear in `rigg env show` alongside the declared ones, and an
 infrastructure reference pointing at the search service or the Foundry
-account resolves through them without any `dependencies` entry. An
-`ai-services` binding and the implicit `foundry` binding compete for the same
-role (both can host a model deployment), which is why an environment may
-legitimately bind both to the same account.
+account resolves through them without any `dependencies` entry.
+
+An `ai-services` binding and the implicit `foundry` binding compete for the
+same role — both can host a model deployment — which is why an environment
+may legitimately bind both to the same account.
 
 ### Managing bindings from the CLI
 
@@ -224,32 +265,38 @@ rigg env set-default dev
 rigg env remove staging
 ```
 
-`rigg env add` writes a new environment block. `rigg env bind` adds or
-replaces one `dependencies` entry; `--learn` instead scans the environment's
-resource files for infrastructure references that no binding covers and
-proposes a name for each (question ids `learn.<env>.<proposed-name>`, then
-`learn.<env>.record` to write them). `rigg env show --refresh` re-resolves
-every binding against Azure and rewrites the [bindings
-cache](state.md#bindings-cache); it never edits `rigg.yaml`.
+**`rigg env add`** writes a new environment block. **`rigg env bind`** adds or
+replaces one `dependencies` entry.
 
-**Every command that edits `rigg.yaml` rewrites the whole file, and comments
-do not survive.** The file is parsed, changed and re-serialized, so the
-hand-written comments in the example above — and any others you add — are
-gone after the first `rigg env add` / `bind` / `unbind` / `set-default` /
-`remove`. Only the header block `rigg init` writes is regenerated. If you
-annotate `rigg.yaml`, either keep the annotations somewhere else or edit the
-file by hand instead of through `rigg env`.
+**`--learn`** instead scans the environment's resource files for
+infrastructure references that no binding covers and proposes a name for each
+(question ids `learn.<env>.<proposed-name>`, then `learn.<env>.record` to
+write them).
 
-`rigg env` is not the only writer: **`rigg promote` can edit `rigg.yaml`
+**`rigg env show --refresh`** re-resolves every binding against Azure and
+rewrites the [bindings cache](state.md#bindings-cache). It never edits
+`rigg.yaml`.
+
+> [!WARNING]
+> **Every command that edits `rigg.yaml` rewrites the whole file, and comments
+> do not survive.** The file is parsed, changed and re-serialized, so the
+> hand-written comments in the example above — and any others you add — are
+> gone after the first `rigg env add` / `bind` / `unbind` / `set-default` /
+> `remove`. Only the header block `rigg init` writes is regenerated. If you
+> annotate `rigg.yaml`, either keep the annotations somewhere else or edit the
+> file by hand instead of through `rigg env`.
+
+**`rigg env` is not the only writer: `rigg promote` can edit `rigg.yaml`
 too.** The binding answers a promote collects — `binding.<to-env>.<name>` for
 a binding the target environment lacks, `promote.bind.<from-env>.<physical>`
 for a physical resource the source has never bound — are held in memory while
 the run works out what it would do, and written into the named environment's
-`dependencies` only once the preview has been confirmed. So `--dry-run`, an
-aborted confirmation and the `needs-input` (exit 6) path all leave the
-workspace file untouched, while a promote that runs to the end records what
-you told it, in the source environment, the target environment, or both. The
-same comment loss applies.
+`dependencies` only once the preview has been confirmed.
+
+So `--dry-run`, an aborted confirmation and the `needs-input` (exit 6) path
+all leave the workspace file untouched, while a promote that runs to the end
+records what you told it, in the source environment, the target environment,
+or both. The same comment loss applies.
 
 ## Multi-subscription and multi-tenant workspaces
 
@@ -285,7 +332,7 @@ want to design out.
 **A key on the wrong level.** Every block rejects unknown fields, and the
 error names the ones it accepts:
 
-```
+```text
 Error: rigg.yaml found at /repo/rigg.yaml but could not be read: failed to parse /repo/rigg.yaml: environments.dev.search: unknown field `protected`, expected one of `name`, `service`, `endpoint`, `api-version`, `preview-api-version` at line 7 column 7
 ```
 
@@ -308,7 +355,7 @@ second service as a second environment.
 **No environment marked default, and no `--env`.** Every command that touches
 a target needs one:
 
-```
+```text
 Error: no default environment configured; pass --env or set `default: true` on one environment
 ```
 

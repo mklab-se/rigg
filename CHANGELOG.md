@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Docs
+
+- Readability pass over every user-facing page. Tutorials open with an
+  at-a-glance table (time, cost, what you need, what you get) and follow one
+  fixed shape per step: intent, command, trimmed output, why it matters;
+  long asides became callouts or links. Reference pages gained a contents
+  list, short table cells with the explanations moved into prose under the
+  table, and error messages in their own blocks. README, CONCEPTS, MCP and
+  the narrative page were rewrapped into short paragraphs with bold
+  lead-ins. No command, flag, output or claim changed; the docs guards and
+  `rigg dev docs-check` stay green.
+
 ## [2.0.0] - 2026-09-10
 
 rigg 2.0 narrows to the Agentic RAG stack it does best — Microsoft Foundry

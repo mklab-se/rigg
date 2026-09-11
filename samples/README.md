@@ -1,16 +1,16 @@
 # Rigg samples
 
 One rigg **workspace**, two **projects** — copy what you need. `rigg.yaml`
-uses placeholder service names; point them at your own services (or run
-`rigg init` in a fresh directory and copy the project folders in).
+uses placeholder service names; point them at your own services, or run
+`rigg init` in a fresh directory and copy the project folders in.
 
 | Project | What it shows |
 |---|---|
 | [`quickstart-blob`](projects/quickstart-blob/) | The minimal explicit pipeline: blob data source → index → indexer → knowledge source → knowledge base |
 | [`agentic-stack`](projects/agentic-stack/) | The full showcase: skillset with a custom Web API skill (OpenAPI spec in `apis/`), knowledge base, Foundry agent + model deployment + guardrail |
 
-Because the two projects live in one workspace, this also demonstrates the
-multi-project model: each project is pushed/pulled/diffed independently
+**Two projects in one workspace** also demonstrate the multi-project model:
+each project is pushed, pulled and diffed independently
 (`rigg push agentic-stack`), and a resource belongs to exactly one project.
 
 ```bash
@@ -20,8 +20,8 @@ rigg describe                # dependency graph + the API you must implement
 rigg push quickstart-blob    # after pointing rigg.yaml at your services
 ```
 
-These files are a reference, not a walkthrough. To build the same thing
+**These files are a reference, not a walkthrough.** To build the same thing
 step by step against your own subscription, follow
-[tutorial 2 — Build from scratch](../docs/tutorials/02-build-from-scratch.md);
-to put a stack you *already* have under version control, start with
+[tutorial 2 — Build from scratch](../docs/tutorials/02-build-from-scratch.md).
+To put a stack you *already* have under version control, start with
 [tutorial 1](../docs/tutorials/01-pull-an-existing-solution.md).

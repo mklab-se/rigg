@@ -1,11 +1,23 @@
 # `project.yaml`
 
-A **project** is the unit rigg pulls, pushes, diffs, promotes and deletes. It
-is a directory under `projects/` containing a `project.yaml` and one tree of
+A **project** is the unit rigg pulls, pushes, diffs, promotes and deletes: a
+directory under `projects/` containing a `project.yaml` and one tree of
 resource definitions per environment. `project.yaml` itself holds metadata
 only — one optional field. The *directory contents* are the membership: a
 resource file under a project's tree is that project's resource, and no other
 project may claim it.
+
+## Contents
+
+- [Complete example](#complete-example)
+- [The directory tree](#the-directory-tree)
+- [Directory is membership](#directory-is-membership)
+- [Exclusive ownership](#exclusive-ownership)
+- [Choosing project boundaries](#choosing-project-boundaries)
+- [Selecting a project on the command line](#selecting-a-project-on-the-command-line)
+- [Creating a project](#creating-a-project)
+- [Deletes are explicit](#deletes-are-explicit)
+- [Common mistakes](#common-mistakes)
 
 ## Complete example
 
@@ -18,10 +30,13 @@ That is the whole file. A project with nothing to say may hold `{}`.
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `description` | string | no | — | One line about what this project owns. Shown by `rigg describe` and `rigg status`. |
+| `description` | string | no | — | One line about what this project owns |
 
-Unknown keys are rejected (`deny_unknown_fields`), so a mistyped key is a
-load error rather than a silently ignored setting.
+**`description`** is shown by `rigg describe` and `rigg status`.
+
+> [!NOTE]
+> Unknown keys are rejected (`deny_unknown_fields`), so a mistyped key is a
+> load error rather than a silently ignored setting.
 
 ## The directory tree
 
@@ -52,11 +67,19 @@ projects/contoso-docs/
 
 | Level | Meaning |
 |---|---|
-| `projects/<project>/` | The project. Its directory name **is** its name — there is no `name:` field to disagree with. |
-| `project.yaml` | Marks the directory as a project. A subdirectory of `projects/` without one is not scanned. |
-| `envs/<env>/` | One tree per environment name from `rigg.yaml`. Environments a project does not deploy to simply have no directory. |
-| `search/` / `foundry/` | The service the kinds below it belong to. |
-| `<kind-dir>/<stem>.json` | One resource. See [Resource files](resource-files.md). |
+| `projects/<project>/` | The project. Its directory name **is** its name |
+| `project.yaml` | Marks the directory as a project |
+| `envs/<env>/` | One tree per environment name from `rigg.yaml` |
+| `search/` / `foundry/` | The service the kinds below it belong to |
+| `<kind-dir>/<stem>.json` | One resource. See [Resource files](resource-files.md) |
+
+**`projects/<project>/`** — there is no `name:` field to disagree with the
+directory name.
+
+**`project.yaml`** — a subdirectory of `projects/` without one is not scanned.
+
+**`envs/<env>/`** — an environment a project does not deploy to has no
+directory.
 
 Projects are discovered by scanning `projects/*/project.yaml` under the
 workspace's files root (the workspace directory, or the `root:` subdirectory
@@ -81,7 +104,7 @@ Within one environment, a `(kind, name)` pair may appear in exactly one
 project. rigg checks this before every operation that reads the whole
 workspace:
 
-```
+```text
 Error: resource indexes/contoso-docs is defined in both project 'contoso-docs' and project 'contoso-search' — a resource must belong to exactly one project
 ```
 
@@ -91,7 +114,7 @@ one logical resource deployed twice. The rule is per environment.
 A related check catches two files in the same kind directory carrying the
 same physical `name`:
 
-```
+```text
 Error: duplicate physical name 'contoso-docs': both projects/contoso-docs/envs/dev/search/indexes/a.json and projects/contoso-docs/envs/dev/search/indexes/b.json define a resource named 'contoso-docs' — physical (Azure) names must be unique within a kind
 ```
 
@@ -105,11 +128,12 @@ be two. `rigg concepts` walks through the trade-off in full.
 
 Because a project is the promote unit, a resource shared by two products
 (one embedding deployment used by two agents, say) forces a decision: put it
-in the project that owns its lifecycle, and let the other reference it. A
-reference to a resource outside the workspace is a warning, not an error —
+in the project that owns its lifecycle, and let the other reference it.
+
+A reference to a resource outside the workspace is a warning, not an error —
 `rigg validate --strict` turns it into one:
 
-```
+```text
 warning: [projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json] references deployments/text-embedding-3-large — not in this workspace (must already exist in Azure)
 ```
 
@@ -127,20 +151,20 @@ rigg push --all
 The name may be omitted when the workspace has exactly one project.
 Otherwise:
 
-```
+```text
 Error: workspace has 3 projects; name one or pass --all
 ```
 
 Commands that act on a single project (`promote`, `delete`, `verify`,
 `describe`) accept the name but not `--all`:
 
-```
+```text
 Error: workspace has 3 projects; name one
 ```
 
 And a workspace with no projects yet says so rather than doing nothing:
 
-```
+```text
 Error: workspace has no projects (create one with `rigg new project <name>`)
 ```
 
@@ -158,9 +182,11 @@ rigg new index contoso-docs --project contoso-docs
 rigg new pipeline contoso-docs --project contoso-docs --type azureblob
 ```
 
-`rigg adopt <project> all` fills a project from resources that already exist
-in Azure; `rigg copy <source> <target>` duplicates a resource file locally,
-optionally across projects (`rigg copy contoso-docs:indexes/a contoso-search:b`).
+> [!TIP]
+> `rigg adopt <project> all` fills a project from resources that already
+> exist in Azure; `rigg copy <source> <target>` duplicates a resource file
+> locally, optionally across projects
+> (`rigg copy contoso-docs:indexes/a contoso-search:b`).
 
 ## Deletes are explicit
 

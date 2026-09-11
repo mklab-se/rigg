@@ -8,13 +8,33 @@ handful more exist to point rigg at a fake Azure during its own tests.
 Every variable listed here is read by rigg's own code. Flags always win over
 variables, and `rigg.yaml` always wins over both for anything it can express.
 
+## Contents
+
+- [Session](#session)
+- [Authentication](#authentication)
+- [Tuning](#tuning)
+- [Test-only](#test-only)
+- [Not environment variables](#not-environment-variables)
+- [Recipes](#recipes)
+- [Common mistakes](#common-mistakes)
+
 ## Session
 
 | Variable | Read by | Default | Meaning |
 |---|---|---|---|
-| `RIGG_ENV` | every command that targets an environment | — | Selects the environment, as if `--env` had been passed. Order of precedence: `--env` > `RIGG_ENV` > the environment marked `default: true`. |
-| `RIGG_NON_INTERACTIVE` | every command | unset | Forces non-interactive behaviour while still sitting at a terminal. Any value counts as "on" **except** the empty string, `0`, and `false` (case-insensitive) — so `RIGG_NON_INTERACTIVE=` from a CI template does not silently disable prompting. |
-| `RIGG_NO_UPDATE_CHECK` | `rigg` startup | unset | Any value (even empty) skips the background release check. Already implied by `--quiet` and by `rigg mcp serve`. |
+| `RIGG_ENV` | every command that targets an environment | — | Selects the environment, as if `--env` had been passed |
+| `RIGG_NON_INTERACTIVE` | every command | unset | Forces non-interactive behaviour while still at a terminal |
+| `RIGG_NO_UPDATE_CHECK` | `rigg` startup | unset | Skips the background release check |
+
+**`RIGG_ENV`** — order of precedence: `--env` > `RIGG_ENV` > the environment
+marked `default: true`.
+
+**`RIGG_NON_INTERACTIVE`** — any value counts as "on" **except** the empty
+string, `0`, and `false` (case-insensitive), so `RIGG_NON_INTERACTIVE=` from
+a CI template does not silently disable prompting.
+
+**`RIGG_NO_UPDATE_CHECK`** — any value works, even an empty one. Already
+implied by `--quiet` and by `rigg mcp serve`.
 
 rigg also treats a session as non-interactive when `--non-interactive`,
 `--yes` or `--output json` is given, or when stdin or stdout is not a
@@ -33,17 +53,35 @@ precedence first:
 
 | Variable | Read by | Default | Meaning |
 |---|---|---|---|
-| `RIGG_ACCESS_TOKEN` | the token chain | — | A pre-minted bearer token, honoured for **every** audience. It wins over everything. Intended for tests and for hosts that mint their own tokens; it is not a general-purpose credential, because one token cannot really be valid for Search, Foundry, ARM, Key Vault and Graph at once. |
-| `AZURE_CLIENT_ID` | the token chain | — | Service-principal (or workload-identity) client id. |
-| `AZURE_TENANT_ID` | the token chain | — | The service principal's home tenant. An environment's own `tenant:` in `rigg.yaml` wins over it when both are present. |
-| `AZURE_CLIENT_SECRET` | the token chain | — | Client secret. Sent in the token-request form body; never logged, never placed in a process argument. |
-| `AZURE_FEDERATED_TOKEN_FILE` | the token chain | — | Path to an OIDC assertion written by a workload-identity issuer (GitHub Actions, AKS). **Wins over `AZURE_CLIENT_SECRET`** when both are set, and is re-read at every token request because the issuer rotates it. This is the credential `rigg ci init`'s workflows use — no secret is stored anywhere. |
+| `RIGG_ACCESS_TOKEN` | the token chain | — | A pre-minted bearer token, honoured for **every** audience |
+| `AZURE_CLIENT_ID` | the token chain | — | Service-principal (or workload-identity) client id |
+| `AZURE_TENANT_ID` | the token chain | — | The service principal's home tenant |
+| `AZURE_CLIENT_SECRET` | the token chain | — | Client secret |
+| `AZURE_FEDERATED_TOKEN_FILE` | the token chain | — | Path to an OIDC assertion from a workload-identity issuer |
 
-rigg takes the service-principal path only when **all three** of
-`AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and one of
-`AZURE_CLIENT_SECRET` / `AZURE_FEDERATED_TOKEN_FILE` are set and non-empty.
-With anything less it falls back to the Azure CLI, silently — which is the
-right behaviour on a workstation and the wrong surprise in CI.
+**`RIGG_ACCESS_TOKEN`** wins over everything. It is intended for tests and
+for hosts that mint their own tokens; it is not a general-purpose credential,
+because one token cannot really be valid for Search, Foundry, ARM, Key Vault
+and Graph at once.
+
+**`AZURE_TENANT_ID`** — an environment's own `tenant:` in `rigg.yaml` wins
+over it when both are present.
+
+**`AZURE_CLIENT_SECRET`** is sent in the token-request form body; it is never
+logged and never placed in a process argument.
+
+**`AZURE_FEDERATED_TOKEN_FILE`** is written by a workload-identity issuer
+(GitHub Actions, AKS). It **wins over `AZURE_CLIENT_SECRET`** when both are
+set, and is re-read at every token request because the issuer rotates it.
+This is the credential `rigg ci init`'s workflows use — no secret is stored
+anywhere.
+
+> [!WARNING]
+> rigg takes the service-principal path only when **all three** of
+> `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and one of `AZURE_CLIENT_SECRET` /
+> `AZURE_FEDERATED_TOKEN_FILE` are set and non-empty. With anything less it
+> falls back to the Azure CLI, silently — which is the right behaviour on a
+> workstation and the wrong surprise in CI.
 
 `AZURE_SUBSCRIPTION_ID` is *not* read by rigg — the subscription comes from
 `rigg.yaml`. It appears in the workflows `rigg ci init` writes because the
@@ -54,9 +92,14 @@ as a repository variable alongside `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`.
 
 | Variable | Read by | Default | Meaning |
 |---|---|---|---|
-| `RIGG_RBAC_RETRY_SECS` | `rigg push` | `10` | Seconds between attempts while waiting for a role assignment rigg just created to become visible, and between retries of a write that failed on a not-yet-propagated grant. |
-| `RIGG_RBAC_MAX_RETRIES` | `rigg push` | `18` | How many such attempts to make. Raise both in a tenant where RBAC propagation is slow; a grant that never lands is a warning, not a refusal. |
-| `RIGG_WATCH_INTERVAL_SECS` | `rigg az indexer run --watch` | `5` | Seconds between indexer status polls. |
+| `RIGG_RBAC_RETRY_SECS` | `rigg push` | `10` | Seconds between attempts while waiting for a role assignment |
+| `RIGG_RBAC_MAX_RETRIES` | `rigg push` | `18` | How many such attempts to make |
+| `RIGG_WATCH_INTERVAL_SECS` | `rigg az indexer run --watch` | `5` | Seconds between indexer status polls |
+
+**The two RBAC variables** cover both waiting for a role assignment rigg has
+created to become visible and retrying a write that failed on a
+not-yet-propagated grant. Raise both in a tenant where RBAC propagation is
+slow; a grant that never lands is a warning, not a refusal.
 
 ## Test-only
 
@@ -71,14 +114,19 @@ cloud, but the supported way to move an endpoint is `endpoint:` in
 | `RIGG_LOGIN_ENDPOINT` | the Entra ID token endpoint host | `https://login.microsoftonline.com` |
 | `RIGG_GRAPH_ENDPOINT` | the Microsoft Graph base URL (route-versioned) | `https://graph.microsoft.com/v1.0` |
 | `RIGG_KEYVAULT_ENDPOINT` | the vault host — it replaces the vault URI entirely | the binding's own vault URI |
-| `RIGG_OPENAPI_DIR` | — | unset. Points at a local checkout of `azure-rest-api-specs` for an ignored test that re-derives rigg's pinned schema fixtures; not used at runtime. |
+| `RIGG_OPENAPI_DIR` | — | unset |
+
+**`RIGG_OPENAPI_DIR`** points at a local checkout of `azure-rest-api-specs`
+for an ignored test that re-derives rigg's pinned schema fixtures. It is not
+used at runtime.
 
 Each endpoint variable is ignored when set to the empty string, and a
 trailing `/` is trimmed.
 
-The Search and Foundry data planes have **no** endpoint variable — their
-override is `endpoint:` under `search:` / `foundry:` in `rigg.yaml`, which is
-what rigg's own sync tests use together with `RIGG_ACCESS_TOKEN`.
+> [!NOTE]
+> The Search and Foundry data planes have **no** endpoint variable — their
+> override is `endpoint:` under `search:` / `foundry:` in `rigg.yaml`, which
+> is what rigg's own sync tests use together with `RIGG_ACCESS_TOKEN`.
 
 ## Not environment variables
 
@@ -137,10 +185,11 @@ keeps working under *your* identity and in CI you get a sign-in error
 (`Not logged in to Azure CLI. Run: az login`) that looks nothing like the
 missing variable that caused it. `rigg auth status` reports
 `Environment Variables: Configured` only when the full set is present — check
-there first. When a credential file is named but unreadable, the error is
-explicit:
+there first.
 
-```
+When a credential file is named but unreadable, the error is explicit:
+
+```text
 Authentication failed: could not read the federated token file AZURE_FEDERATED_TOKEN_FILE=/var/run/secrets/azure/tokens/azure-identity-token: No such file or directory (os error 2)
 ```
 

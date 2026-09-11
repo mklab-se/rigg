@@ -20,11 +20,12 @@ live in [the CLI reference](reference/cli.md).
 
 ## Three states, not two: sync classes and baselines
 
-A naive config tool compares two things: the file and the cloud. That cannot
-tell "I edited this" apart from "someone edited it in the portal" — both look
-like "they differ". rigg compares **three**: the local file, the live remote
-document, and a **baseline** — the document as it was the last time the two
-agreed.
+**A naive config tool compares two things:** the file and the cloud. That
+cannot tell "I edited this" apart from "someone edited it in the portal" —
+both look like "they differ".
+
+**rigg compares three:** the local file, the live remote document, and a
+**baseline** — the document as it was the last time the two agreed.
 
 The baseline for every resource a project owns lives in
 `.rigg/<env>/<project>/state.json` (gitignored — it is a cache, not a source
@@ -36,14 +37,14 @@ The three-way comparison yields exactly one class per resource, which is what
 | Class | Local | Remote | What it means | `status` label |
 |---|---|---|---|---|
 | InSync | = baseline | = baseline | nothing to do | `in sync` |
-| LocalAhead | changed | = baseline | you edited a file; push it | `local ahead (push pending)` |
-| RemoteAhead | = baseline | changed | someone changed Azure; pull it | `remote ahead (pull pending)` |
-| Conflict | changed | changed | both moved since the last sync | `CONFLICT` |
-| LocalOnly | exists | absent | new resource, or remote-deleted | `local only (push to create)` |
-| RemoteOnly | absent | exists | unmanaged, or you deleted the file | `remote only` |
+| LocalAhead | changed | = baseline | push your edit | `local ahead (push pending)` |
+| RemoteAhead | = baseline | changed | pull Azure's change | `remote ahead (pull pending)` |
+| Conflict | changed | changed | both moved since sync | `CONFLICT` |
+| LocalOnly | exists | absent | new, or remote-deleted | `local only (push to create)` |
+| RemoteOnly | absent | exists | unmanaged, or file deleted | `remote only` |
 | Untracked | exists | exists | no baseline, and they differ | `untracked (never synced)` |
 
-Two design decisions make this reliable rather than noisy:
+Two design decisions make this reliable rather than noisy.
 
 **Comparison is semantic, not textual.** Before anything is compared, a
 document is normalized: the registry marks per kind which fields are
@@ -59,25 +60,25 @@ always the document Azure actually holds, defaults and all, so the next
 `status` says `in sync` instead of inventing a diff out of a field the service
 filled in for you.
 
-Conflicts are never resolved silently. `rigg push` refuses a conflicted
+**Conflicts are never resolved silently.** `rigg push` refuses a conflicted
 resource and exits 5; you pull, re-apply your edit, and push again.
 
 ## The binding layer
 
-Resource files reference infrastructure that lives *outside* Search and
-Foundry: a storage account inside a data source's connection string, a
+**Resource files reference infrastructure that lives outside Search and
+Foundry:** a storage account inside a data source's connection string, a
 function app inside a custom skill's URI, a user-assigned identity inside a
 skillset, a key vault inside an encryption key. Those references are the
-reason a dev file cannot simply be copied to prod.
+reason a dev file cannot be copied to prod.
 
-rigg's answer is a **binding**: a name in an environment's `dependencies:` map
+**rigg's answer is a binding:** a name in an environment's `dependencies:` map
 pointing at one physical resource, e.g. `docs-storage: { storage:
 contoso-docs-dev }`. The same name in another environment is the same *role*,
 played by a possibly different resource. Two implicit bindings, `search` and
 `foundry`, come free with every environment.
 
-What makes this mechanical rather than heuristic is the **InfraRef table** in
-`crates/rigg-core/src/registry.rs`: per resource kind, the exact JSON paths
+What makes this mechanical rather than heuristic is the **InfraRef table**
+in `crates/rigg-core/src/registry.rs`: per resource kind, the exact JSON paths
 that carry infrastructure, the binding type each maps to, the syntactic form
 to parse it out of (an ARM id embedded in a connection string, a bare
 `userAssignedIdentity`, an origin URL), and the `@odata.type` it is valid for.
@@ -106,11 +107,11 @@ costs a round trip, never correctness.
 
 ## The identity requirement graph
 
-rigg writes no credential to any file, so every service-to-service connection
-it manages is a managed identity plus a role assignment. That turns "does this
-work?" into a question rigg can answer *offline*: derive, from the files and
-the bindings, the set of `(principal, role, scope)` edges the environment
-requires; then ask Azure which of them exist.
+**rigg writes no credential to any file**, so every service-to-service
+connection it manages is a managed identity plus a role assignment. That turns
+"does this work?" into a question rigg can answer *offline*: derive, from the
+files and the bindings, the set of `(principal, role, scope)` edges the
+environment requires; then ask Azure which of them exist.
 
 The graph and the principals behind it are documented in CONCEPTS —
 **[How rigg handles authentication](../CONCEPTS.md#how-rigg-handles-authentication)**
@@ -119,24 +120,28 @@ is used, because it is one computation with four entry points:
 
 | Command | Scope | What it does with the result |
 |---|---|---|
-| `rigg auth doctor` | the whole environment tree | reports every edge with its file evidence and an `az` line; `--fix` applies the ones rigg owns |
-| `rigg push` (preflight) | only the resources this plan writes | refuses (exit 4) when something is missing that rigg may not grant; otherwise grants and waits for propagation |
+| `rigg auth doctor` | the whole environment tree | reports every edge with its file evidence and an `az` line |
+| `rigg push` (preflight) | only the resources this plan writes | refuses (exit 4) or grants, then waits for propagation |
 | `rigg status --auth` | the whole environment tree | one summary line per environment |
-| `rigg verify` | the live data plane | attributes an observed failure to the edge that would explain it |
+| `rigg verify` | the live data plane | attributes an observed failure to the edge explaining it |
 
-The push preflight being **plan-scoped** is the point: a push that touches one
+`auth doctor --fix` applies the edges rigg owns. The push preflight refuses
+when something is missing that rigg may not grant; otherwise it grants and
+waits until Azure reports the assignment.
+
+The push preflight being plan-scoped is the point: a push that touches one
 synonym map is not blocked by an unrelated storage grant a different resource
 would need.
 
 ## Promote is translation, not copy
 
-`rigg promote --from A --to B` never copies a file. For every logical resource
-(correlated by file path, not by physical name) it *derives* the document B
-should hold, choosing per field between five sources: infrastructure
-translated through the bindings, sibling references rewritten to the target's
-physical names, values kept from the target (its own `name`, its `x-rigg-pin`
-paths), a Web API auth carrier re-derived from the target function app's own
-Easy Auth state, and everything else taken from A.
+**`rigg promote --from A --to B` never copies a file.** For every logical
+resource (correlated by file path, not by physical name) it *derives* the
+document B should hold, choosing per field between five sources:
+infrastructure translated through the bindings, sibling references rewritten
+to the target's physical names, values kept from the target (its own `name`,
+its `x-rigg-pin` paths), a Web API auth carrier re-derived from the target
+function app's own Easy Auth state, and everything else taken from A.
 
 The full rule list is in
 [CONCEPTS → Promoting between environments](../CONCEPTS.md#promoting-between-environments).
@@ -153,8 +158,8 @@ Which brings us to how questions work.
 
 ## The question protocol
 
-Guided flows are not "interactive commands with a scripted fallback". There is
-one protocol, and a terminal prompt is just one renderer for it.
+**Guided flows are not "interactive commands with a scripted fallback".**
+There is one protocol, and a terminal prompt is one renderer for it.
 
 A question has an **id**, a **kind** (`choice`, `text`, `confirm`,
 `confirm-env`), a prompt, optional candidates, and an optional default. The id
@@ -162,17 +167,21 @@ is stable and namespaced, so the same question always has the same name:
 
 | Prefix | Asked by |
 |---|---|
-| `confirm.protected.<env>` | the protected-environment gate on `push`, `delete --remote`, `verify`, `az indexer run/reset`, `auth doctor --fix`, `auth easy-auth`, `auth roles remove` |
+| `confirm.protected.<env>` | the protected-environment gate (see below) |
 | `binding.<env>.<name>` | `rigg env add --like`, and promote when the target lacks a binding |
 | `env.<name>.…` | `rigg env add` (e.g. whether to protect the new environment) |
 | `learn.<env>.record` | the offer to record learned bindings after `adopt`/`pull` |
 | `promote.…` | promote's source-side binding, external-API and deployment questions |
 | `auth.…` | `rigg auth doctor --fix` and `auth roles remove` batch confirmations |
 
-On a terminal, questions are prompted. Everywhere else — `--non-interactive`,
-`RIGG_NON_INTERACTIVE`, `--output json`, no TTY on stdin, an MCP tool call —
-an unanswered question makes the command exit **6** and print one
-`needs-input` document instead of failing blind:
+The protected-environment gate covers `push`, `delete --remote`,
+`verify`, `az indexer run/reset`, `auth doctor --fix`, `auth easy-auth` and
+`auth roles remove`.
+
+**On a terminal, questions are prompted.** Everywhere else —
+`--non-interactive`, `RIGG_NON_INTERACTIVE`, `--output json`, no TTY on stdin,
+an MCP tool call — an unanswered question makes the command exit **6** and
+print one `needs-input` document instead of failing blind:
 
 ```json
 {
@@ -194,7 +203,7 @@ and re-run. Answers that were used are persisted where they represent a
 decision (a promote binding), so the same question is not asked twice.
 `--confirm-env <env>` is exactly `--answer confirm.protected.<env>=<env>`.
 
-`--yes` is a different thing and deliberately weaker: it accepts routine
+**`--yes` is a different thing and deliberately weaker:** it accepts routine
 "apply N changes?" prompts. It never satisfies a `confirm-env` question,
 because scripts reach for `--yes` reflexively and a protected environment that
 `--yes` cleared would not be protected at all.
@@ -233,6 +242,8 @@ environment.
 
 ## Where to next
 
-- [Tutorials](tutorials/01-pull-an-existing-solution.md) — four end-to-end walkthroughs.
+- [Tutorials](tutorials/01-pull-an-existing-solution.md) — four end-to-end
+  walkthroughs.
 - [CONCEPTS.md](../CONCEPTS.md) — the model, and the authentication chapter.
-- [Reference index](README.md) — every file, field, flag, variable and exit code.
+- [Reference index](README.md) — every file, field, flag, variable and exit
+  code.

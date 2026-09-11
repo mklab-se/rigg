@@ -21,51 +21,52 @@
 
 ## The Problem
 
-Building an Agentic RAG system in Azure means configuring resources across two
-services: **Azure AI Search** for retrieval — indexes, skillsets, indexers,
-knowledge bases — and **Microsoft Foundry** for the agent layer — agent
-definitions, instructions, tools, model deployments. Together they form a
-pipeline where agents query knowledge bases, which route to knowledge sources,
-which search indexes built from your data.
+An Agentic RAG system in Azure spans two services. **Azure AI Search** does
+retrieval — indexes, skillsets, indexers, knowledge bases. **Microsoft
+Foundry** holds the agent layer — agent definitions, instructions, tools,
+model deployments. Agents query knowledge bases, which route to knowledge
+sources, which search indexes built from your data.
 
 None of that configuration is managed by traditional IaC. ARM, Bicep and
-Terraform provision the *services*; the configuration *inside* them — the index
-schemas, skillset pipelines, agent instructions and retrieval rules that
-actually determine how your system behaves — lives in REST APIs and portal
-blades. Which means:
+Terraform provision the *services*. The configuration *inside* them — index
+schemas, skillset pipelines, agent instructions, retrieval rules — lives in
+REST APIs and portal blades. Which means:
 
-- **No change history.** Azure does not record who changed an index schema or
-  an agent instruction, so a regression has no diff to look at.
+- **No change history.** Azure does not record who changed an index schema
+  or an agent instruction, so a regression has no diff to look at.
 - **Portal drift.** Ad-hoc changes are frictionless, and configurations
   silently diverge from what anyone remembers deploying.
 - **No review.** Agent instructions and scoring profiles go live unreviewed,
   though they shape every answer your system gives.
-- **No pipeline.** Nothing to validate in a pull request, deploy on merge, or
-  check for drift on a schedule.
-- **Manual promotion.** Moving dev → staging → prod means hand-exporting JSON
-  across two services and re-pointing every cross-resource reference.
-- **Nothing for your AI tools to read.** Ask Claude Code to help optimise your
-  retrieval pipeline and it cannot see any of it.
+- **No pipeline.** Nothing to validate in a pull request, deploy on merge,
+  or check for drift on a schedule.
+- **Manual promotion.** Moving dev → staging → prod means hand-exporting
+  JSON across two services and re-pointing every cross-resource reference.
+- **Nothing for your AI tools to read.** Ask Claude Code to help optimise
+  your retrieval pipeline and it cannot see any of it.
 
 ## What Rigg Does
 
-`rigg` pulls resource definitions from Azure AI Search and Microsoft Foundry
-into local files, versions them in Git, and pushes changes back. A
-**workspace** (`rigg.yaml`) holds your environments; a **project** is the group
-of resources you pull, push, review and deploy as one unit — and every resource
-belongs to exactly one project, which is what keeps sync unambiguous.
+**Files, not portals.** `rigg` pulls resource definitions from Azure AI
+Search and Microsoft Foundry into local files, versions them in Git, and
+pushes changes back. A **workspace** (`rigg.yaml`) holds your environments; a
+**project** is the group of resources you pull, push, review and deploy as
+one unit. Every resource belongs to exactly one project, which is what keeps
+sync unambiguous.
 
-That gets you Git history and code review over the whole stack, semantic drift
-detection against both services, environment promotion that *translates*
-infrastructure references rather than copying them, CI/CD with OIDC and no
-stored secrets, and identity-first authentication — no file rigg writes ever
-contains a credential, and `rigg auth doctor` derives the role assignments your
-files require and can create them for you.
+**What that buys you:** Git history and code review over the whole stack,
+semantic drift detection against both services, environment promotion that
+*translates* infrastructure references rather than copying them, and CI/CD
+with OIDC and no stored secrets.
 
-It also gets your AI coding tools a way in: `rigg describe` returns the full
-dependency graph in one call, and a built-in [MCP server](MCP.md) lets Claude
-Code, Copilot, Cursor and others pull, push, diff and explore through
-structured tool calls.
+**Identity-first authentication.** No file rigg writes ever contains a
+credential. `rigg auth doctor` derives the role assignments your files
+require, and can create them for you.
+
+**A way in for your AI tools.** `rigg describe` returns the full dependency
+graph in one call, and a built-in [MCP server](MCP.md) lets Claude Code,
+Copilot, Cursor and others pull, push, diff and explore through structured
+tool calls.
 
 Use rigg for **Azure AI Search alone**, **Microsoft Foundry alone**, or both.
 See [docs/how-rigg-works.md](docs/how-rigg-works.md) for the mechanism.
@@ -86,30 +87,45 @@ See [INSTALL.md](INSTALL.md) for pre-built binaries and shell completions.
 
 ## Quick Start
 
+1. Point rigg at your Azure services (discovered via the Azure CLI).
+
+   ```bash
+   rigg init .
+   ```
+
+2. Group what you manage into a project.
+
+   ```bash
+   rigg new project docs-rag
+   ```
+
+3. Adopt what already exists in Azure.
+
+   ```bash
+   rigg adopt docs-rag all
+   ```
+
+4. Review the plan before anything is written.
+
+   ```bash
+   rigg push docs-rag --dry-run
+   ```
+
+**Then apply it.** `validate` checks the files on their own — structure,
+ownership, references, no secrets — before the push writes anything.
+
 ```bash
-# 1. Point rigg at your Azure services (discovered via the Azure CLI)
-rigg init .
-
-# 2. Group what you manage into a project
-rigg new project docs-rag
-
-# 3. Adopt what already exists in Azure...
-rigg adopt docs-rag all
-```
-
-```bash
-# ...or scaffold a pipeline from scratch instead
-rigg new pipeline docs -p docs-rag --type azureblob
-```
-
-```bash
-# 4. Review, then apply
 rigg validate docs-rag
-rigg push docs-rag --dry-run
 rigg push docs-rag
 ```
 
-Then connect your AI tool (optional but recommended):
+**Starting from nothing?** Scaffold a pipeline instead of step 3.
+
+```bash
+rigg new pipeline docs -p docs-rag --type azureblob
+```
+
+**Connect your AI tool** — optional, but recommended.
 
 ```bash
 rigg mcp install claude-code    # or vs-code
@@ -122,7 +138,7 @@ tutorial 1.
 
 | Tutorial | What it covers |
 |---|---|
-| [1 — Pull an existing solution](docs/tutorials/01-pull-an-existing-solution.md) | `init`, `adopt`, bindings, the first commit, and a proven delete/push round trip |
+| [1 — Put an existing Azure solution under version control](docs/tutorials/01-pull-an-existing-solution.md) | `init`, `adopt`, bindings, the first commit, a delete/push round trip |
 | [2 — Build from scratch](docs/tutorials/02-build-from-scratch.md) | blob → index → indexer → knowledge base → Foundry agent, with `auth doctor --fix` |
 | [3 — Add an environment and promote](docs/tutorials/03-add-an-environment-and-promote.md) | `env add --like`, `promote` as translation, the binding questions |
 | [4 — Push to protected production](docs/tutorials/04-push-to-protected-production.md) | `protected`/`strict-bindings`, `--confirm-env`, `ci init`, the agent gate |
@@ -136,17 +152,20 @@ tutorial 1.
 | [State](docs/reference/state.md) · [Environment variables](docs/reference/environment-variables.md) | `.rigg/`, and every `RIGG_*`/`AZURE_*` variable |
 | [Exit codes and questions](docs/reference/exit-codes-and-questions.md) | Exit codes, the `needs-input` protocol, every question id |
 
-Also: [CONCEPTS.md](CONCEPTS.md) — the model, including
-[how rigg handles authentication](CONCEPTS.md#how-rigg-handles-authentication);
-[how-rigg-works.md](docs/how-rigg-works.md) — sync classes, bindings, the
-identity graph, promotion and the question protocol; [MCP.md](MCP.md) — the
-MCP server and its 14 tools; [SKILLS.md](SKILLS.md) — agent skills;
-[samples/](samples/) — a runnable workspace with two projects.
+Also worth reading:
+
+- [CONCEPTS.md](CONCEPTS.md) — the model, including
+  [how rigg handles authentication](CONCEPTS.md#how-rigg-handles-authentication).
+- [how-rigg-works.md](docs/how-rigg-works.md) — sync classes, bindings, the
+  identity graph, promotion and the question protocol.
+- [MCP.md](MCP.md) — the MCP server and its 14 tools.
+- [SKILLS.md](SKILLS.md) — agent skills.
+- [samples/](samples/) — a runnable workspace with two projects.
 
 ## Exit Codes
 
-Standardized for scripting and CI (`--non-interactive` guarantees rigg never
-blocks on a prompt):
+Standardized for scripting and CI. `--non-interactive` guarantees rigg never
+blocks on a prompt.
 
 | Code | Meaning |
 |---|---|
@@ -158,10 +177,11 @@ blocks on a prompt):
 | 5 | Drift or conflict detected |
 | 6 | Needs input |
 
-Exit 6 means a guided flow needs an answer it cannot prompt for: rigg prints a
-`needs-input` JSON document (the questions, with ids, prompts and candidates)
-instead of failing blind. Answer with `--answer <id>=<value>` (repeatable) or
-`--answers-file <path>` and re-run; answered questions are never asked again.
+Exit 6 means a guided flow needs an answer it cannot prompt for. Instead of
+failing blind, rigg prints a `needs-input` JSON document with the questions,
+their ids, prompts and candidates. Answer with `--answer <id>=<value>`
+(repeatable) or `--answers-file <path>` and re-run; answered questions are
+never asked again.
 
 ## License
 

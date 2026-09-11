@@ -2,22 +2,9 @@
 
 `rigg` is configuration-as-code for Azure AI Search and Microsoft Foundry. A
 **workspace** (`rigg.yaml`) declares environments; **projects**
-(`projects/<name>/`) own resource definitions as JSON files; `pull`, `push`,
+(`projects/<name>/`) own resource definitions as JSON files. `pull`, `push`,
 `diff` and `promote` operate on whole projects, so the entire Agentic RAG
 stack lives in Git.
-
-## Start here
-
-Read in this order. Each step assumes the one before it.
-
-1. [`CONCEPTS.md`](../CONCEPTS.md) — the mental model: workspace, project,
-   environment, logical id vs. physical name. Also available offline as
-   `rigg concepts`.
-2. [Tutorial 1 — pull an existing solution](tutorials/01-pull-an-existing-solution.md)
-   — put resources you already have in Azure under version control.
-3. [How rigg works](how-rigg-works.md) — the sync engine, the binding layer,
-   the identity graph, promote-as-translation.
-4. The rest of the tutorials, then the reference pages as you need them.
 
 ## I want to…
 
@@ -37,12 +24,25 @@ Read in this order. Each step assumes the one before it.
 | Take a working solution from dev to production | [Tutorial 3](tutorials/03-add-an-environment-and-promote.md), [Tutorial 4](tutorials/04-push-to-protected-production.md) |
 | Let an AI agent operate rigg | [`MCP.md`](../MCP.md) |
 
+## Start here
+
+New to rigg? Read in this order. Each step assumes the one before it.
+
+1. [`CONCEPTS.md`](../CONCEPTS.md) — the mental model: workspace, project,
+   environment, logical id vs. physical name. Also available offline as
+   `rigg concepts`.
+2. [Tutorial 1 — Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md)
+   — put resources you already have in Azure under version control.
+3. [How rigg works](how-rigg-works.md) — the sync engine, the binding layer,
+   the identity graph, promote-as-translation.
+4. The rest of the tutorials, then the reference pages as you need them.
+
 ## Tutorials
 
 Each one is runnable top to bottom against your own subscription, states its
 prerequisites and cost up front, and ends with a clean-up step.
 
-1. [Pull an existing solution](tutorials/01-pull-an-existing-solution.md) —
+1. [Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md) —
    `rigg init`, `rigg adopt`, the bindings cache, the round trip back to Azure.
 2. [Build from scratch](tutorials/02-build-from-scratch.md) — `rigg new
    pipeline`, managed identity, `rigg auth doctor`, a Foundry agent grounded
@@ -50,7 +50,8 @@ prerequisites and cost up front, and ends with a clean-up step.
 3. [Add an environment and promote](tutorials/03-add-an-environment-and-promote.md)
    — `rigg env add`, binding questions, `rigg promote`.
 4. [Push to protected production](tutorials/04-push-to-protected-production.md)
-   — `policy: protected`, `strict-bindings`, CI with a service principal.
+   — `policy: protected`, `strict-bindings`, CI with OIDC and no stored
+   credentials.
 
 ## Reference
 
@@ -79,11 +80,15 @@ rigg mcp tools --markdown
 
 The last two print a Markdown region that replaces the text between the
 `<!-- generated:… -->` markers in `docs/reference/resource-files.md` and
-`MCP.md`. Never hand-edit inside those markers.
+`MCP.md`.
 
-`rigg dev docs-check --root .` parses every `rigg …` line in every code
-fence, resolves every relative link and anchor, and asserts that every
-environment variable and question-id prefix the code uses is documented.
+> [!WARNING]
+> Never hand-edit inside those markers.
+
+**A fourth check has no generated output.** `rigg dev docs-check --root .`
+parses every `rigg …` line in every code fence, resolves every relative link
+and anchor, and asserts that every environment variable and question-id
+prefix the code uses is documented.
 
 ## See also
 

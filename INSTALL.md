@@ -4,10 +4,15 @@
 
 rigg authenticates via the Azure CLI or service principal credentials:
 
-- **For development**: Install the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) and run `az login`
-- **For CI/CD**: Set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and either `AZURE_CLIENT_SECRET` or `AZURE_FEDERATED_TOKEN_FILE` (GitHub Actions OIDC / workload identity) environment variables
+- **For development** — install the
+  [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+  and run `az login`.
+- **For CI/CD** — set the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
+  environment variables, plus either `AZURE_CLIENT_SECRET` or
+  `AZURE_FEDERATED_TOKEN_FILE` (GitHub Actions OIDC / workload identity).
 
-If neither is configured, `rigg init` will fall back to manual service name entry. All other commands require authentication.
+If neither is configured, `rigg init` falls back to manual service name
+entry. All other commands require authentication.
 
 ## Homebrew (macOS / Linux)
 
@@ -17,7 +22,8 @@ brew install mklab-se/tap/rigg
 
 ## Pre-built Binaries
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/mklab-se/rigg/releases/latest):
+Download the latest binary for your platform from
+[GitHub Releases](https://github.com/mklab-se/rigg/releases/latest):
 
 | Platform | Archive |
 |---|---|
@@ -36,16 +42,17 @@ sudo mv rigg /usr/local/bin/
 
 ## Software bill of materials (SBOM)
 
-Every release asset above has a matching CycloneDX 1.5 SBOM listing the exact crate versions
-compiled into that platform's binary:
+Every release asset above has a matching CycloneDX 1.5 SBOM listing the exact
+crate versions compiled into that platform's binary:
 
 ```
 rigg-vX.Y.Z-<target>.cdx.json
 ```
 
-The binaries are also built with [`cargo auditable`](https://github.com/rust-secure-code/cargo-auditable),
-so the dependency list travels inside the executable itself. Check a downloaded binary against the
-RustSec advisory database with:
+The binaries are also built with
+[`cargo auditable`](https://github.com/rust-secure-code/cargo-auditable), so
+the dependency list travels inside the executable itself. Check a downloaded
+binary against the RustSec advisory database with:
 
 ```sh
 cargo install cargo-audit --features=fix
@@ -74,7 +81,11 @@ The binary is at `target/release/rigg`. Requires Rust 1.88 or later.
 
 ## cargo binstall
 
-If you already have [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, it can download a pre-built binary from GitHub Releases instead of compiling from source — combining the convenience of `cargo install` with the speed of a binary download:
+If you already have
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed, it
+can download a pre-built binary from GitHub Releases instead of compiling
+from source. That combines the convenience of `cargo install` with the speed
+of a binary download:
 
 ```bash
 cargo binstall rigg
@@ -86,28 +97,34 @@ If you don't have cargo-binstall, install it first:
 cargo install cargo-binstall
 ```
 
-For most users, Homebrew or a direct binary download from [GitHub Releases](https://github.com/mklab-se/rigg/releases/latest) is simpler.
+For most users, Homebrew or a direct binary download from
+[GitHub Releases](https://github.com/mklab-se/rigg/releases/latest) is
+simpler.
 
 ## Shell Completions
 
 Generate completions for your shell with `rigg completion <shell>`:
 
 **Bash** — add to `~/.bashrc`:
+
 ```bash
 source <(rigg completion bash)
 ```
 
 **Zsh** — add to `~/.zshrc`:
+
 ```bash
 source <(rigg completion zsh)
 ```
 
 **Fish** — save to completions directory:
+
 ```bash
 rigg completion fish > ~/.config/fish/completions/rigg.fish
 ```
 
 **PowerShell** — add to profile:
+
 ```powershell
 rigg completion powershell >> $PROFILE
 ```
@@ -120,7 +137,9 @@ rigg --version
 
 ## Connect to Your AI Coding Tool
 
-rigg includes a built-in MCP server that gives AI coding tools direct access to understand and manage your Agentic RAG stack — pull, push, diff, and explore resources through structured tool calls instead of shell commands.
+rigg includes a built-in MCP server that gives AI coding tools direct access
+to understand and manage your Agentic RAG stack — pull, push, diff and
+explore resources through structured tool calls instead of shell commands.
 
 ```bash
 # Claude Code
@@ -130,6 +149,8 @@ rigg mcp install claude-code
 rigg mcp install vs-code
 ```
 
-Projects that include `.mcp.json` in the repo root are auto-discovered automatically — the AI tool picks up rigg when you open the project, no install step needed.
+Projects that include `.mcp.json` in the repo root are auto-discovered — the
+AI tool picks up rigg when you open the project, no install step needed.
 
-See [MCP.md](MCP.md) for the full tool reference and [SKILLS.md](SKILLS.md) for agent skills and slash commands.
+See [MCP.md](MCP.md) for the full tool reference, and [SKILLS.md](SKILLS.md)
+for agent skills and slash commands.

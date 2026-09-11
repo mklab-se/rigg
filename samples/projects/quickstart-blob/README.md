@@ -1,7 +1,8 @@
 # quickstart-blob
 
 The "hello world" of rigg: index blob documents and expose them for agentic
-retrieval. Every piece is an explicit file you can edit and push independently.
+retrieval. Every piece is an explicit file you can edit and push
+independently.
 
 For the same pipeline built from scratch against your own subscription, with
 expected output at every step, follow
@@ -24,7 +25,8 @@ envs/demo/search/knowledge-bases/quickstart-kb.json   # what agents query (route
    **Storage Blob Data Reader** on the account, which
    `rigg auth doctor --fix` grants.
 2. Shape `quickstart-index.json` to your documents.
-3. `rigg push quickstart-blob` — resources are created in dependency order.
+3. Push the project — resources are created in dependency order:
+   `rigg push quickstart-blob`.
 4. Run the indexer and watch it finish:
    `rigg az indexer run quickstart-indexer --watch`, then
    `rigg az index stats quickstart-index` for the document count.
@@ -32,4 +34,5 @@ envs/demo/search/knowledge-bases/quickstart-kb.json   # what agents query (route
    indexer to completion and retrieves from every knowledge base.
 6. Agents can now ground on `quickstart-kb` (see the agentic-stack sample).
 
-Test each step with `rigg diff quickstart-blob` and `rigg status quickstart-blob`.
+Test each step with `rigg diff quickstart-blob` and
+`rigg status quickstart-blob`.

@@ -9,17 +9,20 @@ wiring explained, is
 
 ## The pieces
 
-- **Search**: `docs-ds` → `docs-index` ← `docs-indexer` (+ `docs-skills`) → `docs-ks` → `docs-kb`
-- **Custom skill**: `docs-skills` contains a WebApiSkill linked (via
-  `"x-rigg-api": "doc-enrichment"`) to the OpenAPI spec in
-  `../../apis/doc-enrichment.json`. *You* implement that API (an Azure
-  Function is the usual choice) — `rigg describe` lists it under "APIs to
-  implement", and `rigg validate` checks the skill matches the spec.
-- **Foundry**: `gpt-4.1-mini` model deployment (referencing the
-  `default-guardrail` RAI policy) and `docs-agent`, whose instructions live in
-  `docs-agent.instructions.md` (the `$file` sidecar pattern) and whose MCP
-  tool grounds on `docs-kb` via `"x-rigg-ref": "knowledge-bases/docs-kb"` —
-  rigg injects the environment-specific endpoint at push time.
+**Search:** `docs-ds` → `docs-index` ← `docs-indexer` (+ `docs-skills`) →
+`docs-ks` → `docs-kb`.
+
+**Custom skill:** `docs-skills` contains a WebApiSkill linked to the OpenAPI
+spec in `../../apis/doc-enrichment.json` via
+`"x-rigg-api": "doc-enrichment"`. *You* implement that API — an Azure
+Function is the usual choice. `rigg describe` lists it under "APIs to
+implement", and `rigg validate` checks the skill matches the spec.
+
+**Foundry:** a `gpt-4.1-mini` model deployment (referencing the
+`default-guardrail` RAI policy) and `docs-agent`. The agent's instructions
+live in `docs-agent.instructions.md` (the `$file` sidecar pattern), and its
+MCP tool grounds on `docs-kb` via `"x-rigg-ref": "knowledge-bases/docs-kb"` —
+rigg injects the environment-specific endpoint at push time.
 
 ## Order of operations
 
@@ -40,6 +43,7 @@ rigg az knowledge-base ask docs-kb "What does the handbook say about leave?"
 rigg az agent ask docs-agent "Summarize the leave policy."
 ```
 
-Identity note: prefer a user-assigned managed identity shared by the pipeline
-when your stack spans services — role assignments survive service re-creation.
-See [CONCEPTS.md](../../../CONCEPTS.md#how-rigg-handles-authentication).
+**Identity note:** prefer a user-assigned managed identity shared by the
+pipeline when your stack spans services — role assignments survive service
+re-creation. See
+[CONCEPTS.md](../../../CONCEPTS.md#how-rigg-handles-authentication).

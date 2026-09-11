@@ -1,16 +1,14 @@
 # Resource files
 
-Every resource a project owns is one JSON file on disk:
+Every resource a project owns is one JSON file on disk. The file stem is the
+resource's logical id, and the physical Azure name lives in the `name` field
+inside the file. Directory contents are membership: a file under a project's
+tree is that project's resource, and no other project may claim it.
 
 ```
 projects/<project>/envs/<env>/search/<kind-dir>/<name>.json
 projects/<project>/envs/<env>/foundry/<kind-dir>/<name>.json
 ```
-
-The file stem is the resource's logical id; the physical Azure name lives in
-the `name` field inside the file. Directory contents are membership — a file
-under a project's tree is that project's resource, and no other project may
-claim it.
 
 The contents are Azure's own document for that resource — the body of the
 REST API's `PUT`, near enough — so Microsoft's reference for each kind is the
@@ -18,6 +16,19 @@ reference for what may go in the file. What this page documents is everything
 rigg adds around that: where each kind lives, which fields rigg strips in
 which direction, what it refuses to store, and which fields it rewrites when
 you promote between environments.
+
+## Contents
+
+- [The twelve kinds](#the-twelve-kinds)
+- [Naming: stem vs. `name`](#naming-stem-vs-name)
+- [What rigg strips, and when](#what-rigg-strips-and-when) —
+  [immutable fields](#immutable-fields)
+- [Secrets are never stored locally](#secrets-are-never-stored-locally)
+- [`$file` sidecars](#file-sidecars)
+- [References between resources](#references-between-resources)
+- [Infrastructure reference fields](#infrastructure-reference-fields) —
+  [how a binding gets used](#how-a-binding-gets-used)
+- [Common mistakes](#common-mistakes)
 
 ## The twelve kinds
 
@@ -36,16 +47,19 @@ you promote between environments.
 | Connection | `foundry/connections/` | ARM, `Microsoft.CognitiveServices` | stable |
 | Guardrail (RAI policy) | `foundry/guardrails/` | ARM, `Microsoft.CognitiveServices` | stable |
 
-"Channel" is the Azure AI Search api-version a kind requires. Knowledge bases
-need the preview channel because their retrieval and output configuration
-does not exist in the stable api-version — a stable `GET` silently omits it
-and a stable `PUT` cannot set it. The api-versions themselves are pinned in
-rigg's registry and overridable per environment
+**"Channel"** is the Azure AI Search api-version a kind requires. Knowledge
+bases need the preview channel because their retrieval and output
+configuration does not exist in the stable api-version — a stable `GET`
+silently omits it and a stable `PUT` cannot set it.
+
+The api-versions themselves are pinned in rigg's registry and overridable per
+environment
 ([rigg.yaml § The `search` target](rigg-yaml.md#the-search-target)).
 
-Scaffold one of any kind with `rigg new <kind> <name>`, or a whole
-blob → index → indexer → knowledge source → knowledge base chain with
-`rigg new pipeline <name>`.
+> [!TIP]
+> Scaffold one of any kind with `rigg new <kind> <name>`, or a whole
+> blob → index → indexer → knowledge source → knowledge base chain with
+> `rigg new pipeline <name>`.
 
 ## Naming: stem vs. `name`
 
@@ -53,8 +67,12 @@ Two names are in play and they are allowed to differ.
 
 | | Where | What it is |
 |---|---|---|
-| **Stem** | the file name without `.json` | The resource's *logical id* — how rigg correlates the same resource across environments, and what `x-rigg-ref`, `rigg status` and `--only` use |
-| **`name`** | the `name` field inside the file | The *physical* Azure name — what actually exists in the service |
+| **Stem** | the file name without `.json` | The resource's *logical id* |
+| **`name`** | the `name` field inside the file | The *physical* Azure name |
+
+**Stem** is how rigg correlates the same resource across environments, and
+what `x-rigg-ref`, `rigg status` and `--only` use. **`name`** is what
+actually exists in the service.
 
 Normally they match. They diverge when a resource is named differently in
 different environments: `envs/dev/search/indexes/contoso-docs.json` may hold
@@ -65,13 +83,13 @@ Azure.
 
 Every file needs a `name`:
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/indexes/contoso-docs.json] missing "name" field
 ```
 
-and no two files in one kind directory may claim the same physical name:
+And no two files in one kind directory may claim the same physical name:
 
-```
+```text
 Error: duplicate physical name 'contoso-docs': both projects/contoso-docs/envs/dev/search/indexes/a.json and projects/contoso-docs/envs/dev/search/indexes/b.json define a resource named 'contoso-docs' — physical (Azure) names must be unique within a kind
 ```
 
@@ -83,10 +101,24 @@ registry:
 
 | Class | Removed on pull (never on disk) | Removed on push | Removed before comparison | Why |
 |---|---|---|---|---|
-| **Volatile** | yes | yes | yes | Azure rewrites them on every read — `@odata.etag`, `@odata.context`, `etag`, and per-kind equivalents. Keeping them would make every `rigg status` show drift |
-| **Read-only** | yes | yes | yes | Returned by `GET` but rejected by `PUT`. Writing them to disk would guarantee a failed push |
-| **`x-rigg-*`** | no — kept | **yes** | yes | rigg-local [annotations](annotations.md). Yours, never Azure's |
-| **Write-only** | no — kept | no — sent | **against Azure: yes; against the baseline: no** | Accepted by `PUT` but redacted on `GET` (a data source's `credentials.connectionString`). Comparing them with Azure would show permanent phantom drift, so they are compared with the [baseline](state.md) instead — a local change to only that field is still local-ahead |
+| **Volatile** | yes | yes | yes | Azure rewrites them on every read |
+| **Read-only** | yes | yes | yes | Returned by `GET`, rejected by `PUT` |
+| **`x-rigg-*`** | no — kept | **yes** | yes | Yours, never Azure's |
+| **Write-only** | no — kept | no — sent | **against Azure: yes; against the baseline: no** | Redacted by `GET` |
+
+**Volatile** fields are `@odata.etag`, `@odata.context`, `etag`, and per-kind
+equivalents. Keeping them would make every `rigg status` show drift.
+
+**Read-only** fields are returned by `GET` but rejected by `PUT`; writing
+them to disk would guarantee a failed push.
+
+**`x-rigg-*`** keys are rigg-local [annotations](annotations.md).
+
+**Write-only** fields are accepted by `PUT` but redacted on `GET` (a data
+source's `credentials.connectionString`). Comparing them with Azure would
+show permanent phantom drift, so they are compared with the
+[baseline](state.md) instead — a local change to only that field is still
+local-ahead.
 
 Concretely, per kind:
 
@@ -100,35 +132,38 @@ Concretely, per kind:
 | Connection | `id`, `type`, `systemData`, `etag`, `properties.provisioningState` | — | — |
 | Guardrail | `id`, `type`, `systemData`, `etag` | — | — |
 
-A knowledge source's `createdResources` is read-only because rigg's model is
-explicit-only: resources Azure creates for you are Azure's to manage, and
+**A knowledge source's `createdResources` is read-only** because rigg's model
+is explicit-only: resources Azure creates for you are Azure's to manage, and
 rigg never adopts them into your files.
 
-An indexer's execution history is not in this table because it is not part of
-the indexer document at all — it lives on the separate `/status` resource,
+**An indexer's execution history is not in this table** because it is not part
+of the indexer document at all — it lives on the separate `/status` resource,
 which `rigg az indexer status` fetches and rigg never merges into the file.
 
 ### Immutable fields
 
 Some fields the service will not change in place. When a local value differs
 from the remote one, an in-place `PUT` cannot reconcile the two and the
-resource has to be deleted and re-created — `rigg push` shows this as
-`replace` rather than `update`, and gates it separately from the ordinary
-apply prompt: interactively it asks (defaulting to No), and non-interactively
-`--yes` is deliberately not enough —
-
-```
-Error: push plan contains replace(s); pass --allow-replace (in addition to --yes) to proceed
-```
+resource has to be deleted and re-created.
 
 | Kind | Immutable field |
 |---|---|
 | Knowledge source | `kind` (`azureBlob`, `searchIndex`, …) |
 
-Replacing a knowledge source means unlinking every knowledge base that points
-at it first and relinking afterwards, including knowledge bases in other
-projects. rigg writes a [recovery file](state.md#replace-recovery-files) so an
-interrupted replace can be finished by the next push.
+`rigg push` shows this as `replace` rather than `update`, and gates it
+separately from the ordinary apply prompt: interactively it asks (defaulting
+to No), and non-interactively `--yes` is deliberately not enough:
+
+```text
+Error: push plan contains replace(s); pass --allow-replace (in addition to --yes) to proceed
+```
+
+> [!WARNING]
+> Replacing a knowledge source means unlinking every knowledge base that
+> points at it first and relinking afterwards, including knowledge bases in
+> other projects. rigg writes a [recovery
+> file](state.md#replace-recovery-files) so an interrupted replace can be
+> finished by the next push.
 
 ## Secrets are never stored locally
 
@@ -149,7 +184,7 @@ A value in one of these is accepted only when it is an identity-based
 placeholder — a `ResourceId=` connection string, or a `<…>` scaffold
 placeholder you have not filled in yet. Anything else:
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] field 'credentials.connectionString' contains a credential — rigg never stores secrets locally. Use a managed identity (connection string 'ResourceId=/subscriptions/...') and grant the identity RBAC access instead; secrets belong in Azure Key Vault, never in files
 ```
 
@@ -157,13 +192,12 @@ Two further checks are not path-based, because they cannot be: any document
 containing `AccountKey=` anywhere is rejected outright, and an
 `x-functions-key` header on a Web API skill is matched case-insensitively.
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] contains an 'AccountKey=' connection string — replace it with an identity-based 'ResourceId=...' connection and delete/rotate the leaked key
 ```
 
-The identity-based form for a blob data source looks like this — note that
-there is no key anywhere, only a resource id and, optionally, the identity to
-use:
+The identity-based form for a blob data source looks like this. There is no
+key anywhere, only a resource id and, optionally, the identity to use:
 
 ```json
 {
@@ -185,9 +219,11 @@ identity. `rigg new data-source <name> --identity <binding>` scaffolds the
 user-assigned form; `rigg auth doctor` reports whichever principal a resource
 ends up using and whether it has the roles it needs.
 
-When a key genuinely cannot be avoided — an Azure Function that will not take
-a token — name its *source* rather than its value with
-[`x-rigg-auth`](annotations.md#x-rigg-auth), and rigg fetches it at push time.
+> [!TIP]
+> When a key genuinely cannot be avoided — an Azure Function that will not
+> take a token — name its *source* rather than its value with
+> [`x-rigg-auth`](annotations.md#x-rigg-auth), and rigg fetches it at push
+> time.
 
 Data sources are limited to Azure Blob Storage: `azureblob` and `adlsgen2`
 (the same type with hierarchical namespace enabled) are the only accepted
@@ -246,7 +282,7 @@ the point.
 
 A `$file` pointing nowhere is an error rather than an empty string:
 
-```
+```text
 Error: sidecar file not found: projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.instructions.md (referenced from projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json)
 ```
 
@@ -279,13 +315,13 @@ A reference to a resource that is not in the workspace is a warning by
 default (it may legitimately be a pre-existing Azure resource);
 `rigg validate --strict` makes it an error:
 
-```
+```text
 warning: [projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json] references deployments/text-embedding-3-large — not in this workspace (must already exist in Azure)
 ```
 
 A scaffold placeholder left unfilled is always an error:
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/indexers/contoso-docs.json] placeholder reference '<index-name>' — replace the scaffold placeholder
 ```
 
@@ -304,9 +340,10 @@ form used to recognise and rewrite the value. `Only for @odata.type`
 restricts a rule to array elements of one Azure type (for example, only
 `WebApiSkill` entries inside `skills[]`).
 
-The tables are generated from rigg's registry — run
-`rigg dev infra-table` and replace the text between the markers to refresh
-them.
+> [!NOTE]
+> The tables are generated from rigg's registry — run
+> `rigg dev infra-table` and replace the text between the markers to refresh
+> them.
 
 <!-- generated:infra-table:start -->
 ### data-sources
@@ -403,17 +440,18 @@ decides what happens:
 `rigg validate` and `rigg push`'s preflight run the same machinery and print
 the same messages:
 
-```
+```text
 ! [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] credentials.connectionString references storage 'contosostorage', which no environment binds — run `rigg env bind dev --learn` to record it
 ```
 
-`rigg env bind <env> --learn` is the fast way out: it walks these very fields,
-proposes a binding name for each unbound reference, and writes the ones you
-accept into `rigg.yaml`.
+> [!TIP]
+> `rigg env bind <env> --learn` is the fast way out: it walks these very
+> fields, proposes a binding name for each unbound reference, and writes the
+> ones you accept into `rigg.yaml`.
 
-`rigg promote --from dev --to prod` uses the same table in the other
-direction: for each field it finds the source environment's binding, looks up
-the *target's* binding of the same name, and rewrites the value into the
+**`rigg promote --from dev --to prod` uses the same table in the other
+direction.** For each field it finds the source environment's binding, looks
+up the *target's* binding of the same name, and rewrites the value into the
 target's world — a different storage account, a different function app, a
 different vault. That is why an unbound infrastructure reference blocks a
 promote into a strict environment: rigg has no name to translate through.

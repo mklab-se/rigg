@@ -3,9 +3,22 @@
 A custom **Web API skill** lets an Azure AI Search skillset call HTTP code you
 wrote — typically an Azure Function — in the middle of an indexer's enrichment
 pipeline. rigg keeps the contract for that call in the workspace, as an
-OpenAPI document in `apis/`, so the skillset and the function can be checked
-against each other before anything is pushed and so whoever implements the
+OpenAPI document in `apis/`. The skillset and the function can then be checked
+against each other before anything is pushed, and whoever implements the
 function has a spec to implement rather than a screenshot to copy.
+
+## Contents
+
+- [Where the files live](#where-the-files-live)
+- [Creating one](#creating-one)
+- [Complete example](#complete-example)
+- [What rigg reads](#what-rigg-reads)
+- [What `rigg validate` checks](#what-rigg-validate-checks)
+- [Handing the work off](#handing-the-work-off)
+- [Authenticating the call](#authenticating-the-call)
+- [Common mistakes](#common-mistakes)
+
+## Where the files live
 
 `apis/` is workspace-wide, not per project and not per environment: one
 contract describes the API, while each environment's skillset points at its
@@ -34,8 +47,8 @@ A skillset opts in with [`x-rigg-api`](annotations.md#x-rigg-api):
 rigg new api contoso-enrich
 ```
 
-writes `apis/contoso-enrich.json` — a complete, valid starting point you edit
-in place. Its two `data` schemas are empty and marked
+This writes `apis/contoso-enrich.json` — a complete, valid starting point you
+edit in place. Its two `data` schemas are empty and marked
 `"additionalProperties": true`, so the scaffold is an **open** contract:
 nothing is name-checked until you fill the schemas in (see
 [openness](#what-rigg-reads) below).
@@ -145,12 +158,28 @@ operation. Local `$ref`s (`#/components/…`) are followed.
 
 | Key | Type | Required | Default | Meaning to rigg |
 |---|---|---|---|---|
-| `openapi` | string | **yes** | — | Must be present. Its absence is what distinguishes an OpenAPI document from any other JSON. |
-| `paths` | object | **yes** | — | Its keys are the path templates a skill's `uri` may end with. |
-| `paths.<path>.post.requestBody.content.application/json.schema` | schema | no | — | The request envelope. rigg reads `properties.values.items.properties.data`. |
-| `paths.<path>.post.responses.200.content.application/json.schema` | schema | no | — | The response envelope, read the same way. |
-| `…data.properties` | object | no | `{}` | The input (request) / output (response) field names available to the skill. |
-| `…data.additionalProperties` | bool | no | closed when `properties` are declared | A `data` schema is **closed** when `additionalProperties: false`, and also when the key is simply absent and `properties` is non-empty — which is how most schemas are written. It is **open** when `additionalProperties` is present with any other value, when `properties` is empty, or when the `data` schema is missing entirely. |
+| `openapi` | string | **yes** | — | Must be present |
+| `paths` | object | **yes** | — | Its keys are the path templates a skill's `uri` may end with |
+| `paths.<path>.post.requestBody.content.application/json.schema` | schema | no | — | The request envelope |
+| `paths.<path>.post.responses.200.content.application/json.schema` | schema | no | — | The response envelope |
+| `…data.properties` | object | no | `{}` | The field names available to the skill |
+| `…data.additionalProperties` | bool | no | closed when `properties` are declared | Whether names are checked |
+
+**`openapi`** — its absence is what distinguishes an OpenAPI document from
+any other JSON.
+
+**The two envelope schemas** — rigg reads
+`properties.values.items.properties.data` out of each of them.
+
+**`…data.properties`** are the input (request) and output (response) field
+names.
+
+**`…data.additionalProperties`** decides whether those names are checked. A
+`data` schema is **closed** when `additionalProperties: false`, and also when
+the key is absent and `properties` is non-empty — which is how most
+schemas are written. It is **open** when `additionalProperties` is present
+with any other value, when `properties` is empty, or when the `data` schema
+is missing entirely.
 
 Everything else in the document — `info`, `servers`, `security`, other
 operations, other status codes, descriptions, examples — rigg reads past. Put
@@ -164,14 +193,16 @@ response schema open (or declaring only a response schema and no request
 schema) opens the whole contract, and the `inputs` check goes with it — the
 name check in step 4 below is all-or-nothing across `inputs` and `outputs`.
 
-Because the closed state is the default for any schema that declares
-`properties`, writing a `data` schema and forgetting `additionalProperties`
-turns the name check **on**, not off. That is usually what you want: it is
-what turns a typo in a skillset's `outputs` into a validation error instead of
-an empty enriched field discovered three indexer runs later. To opt out while
-the field names are still moving, set `additionalProperties: true` on every
-`data` schema in the document; to lock the contract down, spell out
-`additionalProperties: false` on each of them.
+> [!TIP]
+> Because the closed state is the default for any schema that declares
+> `properties`, writing a `data` schema and forgetting `additionalProperties`
+> turns the name check **on**, not off. That is usually what you want: it is
+> what turns a typo in a skillset's `outputs` into a validation error instead
+> of an empty enriched field discovered three indexer runs later.
+
+To opt out while the field names are still moving, set
+`additionalProperties: true` on every `data` schema in the document; to lock
+the contract down, spell out `additionalProperties: false` on each of them.
 
 ## What `rigg validate` checks
 
@@ -179,13 +210,13 @@ For every `WebApiSkill` carrying `x-rigg-api`:
 
 1. **The spec exists.**
 
-   ```
+   ```text
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] x-rigg-api 'contoso-enrich' has no spec at apis/contoso-enrich.json (create with `rigg new api contoso-enrich`)
    ```
 
 2. **The spec parses as OpenAPI.**
 
-   ```
+   ```text
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] apis/contoso-enrich.json: missing `openapi` version field
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] apis/contoso-enrich.json: missing `paths`
    ```
@@ -193,7 +224,7 @@ For every `WebApiSkill` carrying `x-rigg-api`:
 3. **The skill's URI path matches a path in the spec** (compared as a
    suffix, so the function app's host and route prefix are irrelevant).
 
-   ```
+   ```text
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] WebApiSkill uri path '/api/summarize' does not match any path in apis/contoso-enrich.json (/api/enrich)
    ```
 
@@ -202,7 +233,7 @@ For every `WebApiSkill` carrying `x-rigg-api`:
    loops are gated on the one contract-wide closed verdict above — if the
    contract is open, neither runs.
 
-   ```
+   ```text
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] skill inputs 'body' is not in apis/contoso-enrich.json's data schema (language, text)
    ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] skill outputs 'sumary' is not in apis/contoso-enrich.json's data schema (summary)
    ```
@@ -219,7 +250,7 @@ the spec path and the resource that consumes it:
 rigg describe contoso-docs
 ```
 
-```
+```text
   APIs to implement (specs in apis/):
     contoso-enrich (used by skillsets/contoso-enrich)
 ```
@@ -243,15 +274,19 @@ rigg auth easy-auth enrich-fn
 
 The positional argument is the `function-app` **binding name** from
 `rigg.yaml`, not a site name — every scope rigg acts on is a resolved
-binding. The command creates (or reuses, with `--client-id`) an Entra
-application for the app, admits the identities that actually call it (each
-user-assigned identity the matching skillsets declare, plus the search
-service's system-assigned identity for any skill that declares none), shows
-the planned `authsettingsV2` document as a diff, and — once confirmed — sets
+binding.
+
+The command creates (or reuses, with `--client-id`) an Entra application for
+the app, admits the identities that actually call it (each user-assigned
+identity the matching skillsets declare, plus the search service's
+system-assigned identity for any skill that declares none), shows the planned
+`authsettingsV2` document as a diff, and — once confirmed — sets
 `"authResourceId": "api://<client-id>"` on the matching Web API skills
-locally. Then `rigg push`. The environment must declare a `tenant:`, because
-Easy Auth's OpenID issuer is
-`https://login.microsoftonline.com/<tenant>/v2.0`.
+locally. Then `rigg push`.
+
+> [!NOTE]
+> The environment must declare a `tenant:`, because Easy Auth's OpenID issuer
+> is `https://login.microsoftonline.com/<tenant>/v2.0`.
 
 On the function side that means: accept a bearer token, issued by your
 tenant, whose audience is the app's identifier URI (`api://<client-id>`), from

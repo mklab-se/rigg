@@ -16,6 +16,16 @@ Four have meaning to rigg today:
 | [`x-rigg-pin`](#x-rigg-pin) | top level of any resource file | array of dot-paths | Fields `rigg promote` must keep at this environment's value |
 | [`x-rigg-ref`](#x-rigg-ref) | any object, at any depth | `<kind-dir>/<name>` | A cross-service reference to another rigg-managed resource |
 
+## Contents
+
+- [The rules every annotation obeys](#the-rules-every-annotation-obeys)
+- [Complete example](#complete-example)
+- [`x-rigg-api`](#x-rigg-api) — the OpenAPI contract a Web API skill implements
+- [`x-rigg-auth`](#x-rigg-auth) — where a function key comes from
+- [`x-rigg-pin`](#x-rigg-pin) — fields promote must not overwrite
+- [`x-rigg-ref`](#x-rigg-ref) — a reference Azure has no field for
+- [Common mistakes](#common-mistakes)
+
 ## The rules every annotation obeys
 
 **Kept on disk, stripped before the wire.** `x-rigg-*` keys live in your
@@ -36,8 +46,8 @@ annotation never shows as drift against Azure. It is a local edit, visible in
 Git.
 
 **Unknown `x-rigg-*` keys are inert.** A key rigg does not recognise is kept
-on disk, carried over, and stripped on push like the others — it just does
-not do anything. Use one as a private note if you like; do not expect rigg to
+on disk, carried over, and stripped on push like the others — it has no
+effect. Use one as a private note if you like; do not expect rigg to
 act on it.
 
 ## Complete example
@@ -89,9 +99,12 @@ than by URL:
 | | |
 |---|---|
 | **Type** | string — the stem of a file in `apis/` |
-| **Valid on** | a `WebApiSkill` object inside a skillset's `skills[]`. rigg also recognises the key anywhere else in any resource file, and requires the spec to exist there too. |
+| **Valid on** | a `WebApiSkill` object inside a skillset's `skills[]` |
 | **Required** | no |
-| **Default** | none — a `WebApiSkill` without it is simply not contract-checked |
+| **Default** | none — a `WebApiSkill` without it is not contract-checked |
+
+rigg also recognises the key anywhere else in any resource file, and requires
+the spec to exist there too.
 
 The value names `apis/<value>.json`, an OpenAPI 3.x document describing the
 HTTP API the skill calls. See [APIs](apis.md) for the contract itself.
@@ -100,9 +113,9 @@ HTTP API the skill calls. See [APIs](apis.md) for the contract itself.
 skill against it: the skill's `uri` path must match one of the spec's paths,
 and — when the spec's `values[].data` schemas are closed
 (`additionalProperties: false`) — every `inputs[].name` and `outputs[].name`
-must be a property the schema declares.
+must be a property the schema declares. The three failures look like this:
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] x-rigg-api 'contoso-enrich' has no spec at apis/contoso-enrich.json (create with `rigg new api contoso-enrich`)
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] WebApiSkill uri path '/api/summarize' does not match any path in apis/contoso-enrich.json (/api/enrich)
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] skill inputs 'body' is not in apis/contoso-enrich.json's data schema (text, language)
@@ -121,8 +134,15 @@ whole workspace and is not per-environment.
 
 ## `x-rigg-auth`
 
+Either the key comes from the function app itself:
+
 ```json
 "x-rigg-auth": "function-key"
+```
+
+Or it comes from a key vault:
+
+```json
 "x-rigg-auth": "key-vault:enrich-fn-key@secrets"
 ```
 
@@ -131,7 +151,9 @@ whole workspace and is not per-environment.
 | **Type** | string, one of two forms |
 | **Valid on** | an element of a skillset's `skills[]` |
 | **Required** | no |
-| **Default** | none — a skill without it is expected to be keyless (Entra ID / Easy Auth) |
+| **Default** | none — a skill without it is expected to be keyless |
+
+A skill with no carrier authenticates with Entra ID / Easy Auth.
 
 The Azure AI Search service must authenticate to the function a
 `WebApiSkill` calls. The preferred answer is no key at all: enable Microsoft
@@ -153,14 +175,17 @@ either as the `code=` query parameter of the skill's `uri` or as an
 `x-functions-key` HTTP header, whichever slot the skill already uses. The
 annotation is then stripped with the other `x-rigg-*` keys, the PUT goes out,
 and before anything is written back to disk the local placeholders are
-restored. The key exists in memory, in one request body, and nowhere else: it
-is never written to disk, printed, or traced — not even in an error, which
-names the secret and the vault but never the value.
+restored.
+
+> [!NOTE]
+> The key exists in memory, in one request body, and nowhere else: it is
+> never written to disk, printed, or traced — not even in an error, which
+> names the secret and the vault but never the value.
 
 **`rigg validate`** checks the form, and that a key-vault carrier names a
 real `key-vault` binding:
 
-```
+```text
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] unknown "x-rigg-auth" value 'vault:enrich-fn-key' — expected 'function-key' or 'key-vault:<secret-name>@<key-vault binding>'
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] "x-rigg-auth": 'key-vault:enrich-fn-key@secrets' names no dependency 'secrets' — declare it with `rigg env bind <env> secrets key-vault:<vault-name>`
 ✗ [projects/contoso-docs/envs/dev/search/skillsets/contoso-enrich.json] "x-rigg-auth": 'key-vault:enrich-fn-key@docs-storage' names binding 'docs-storage', which is not a key-vault dependency
@@ -168,16 +193,17 @@ real `key-vault` binding:
 
 Push refuses the same cases rather than pushing an unauthorized skill:
 
-```
+```text
 Error: `x-rigg-auth: key-vault:…@secrets` names no dependency in environment 'dev' — declare it: `rigg env bind dev secrets key-vault:<vault-name>`
 ```
 
 **`rigg promote` never carries it across.** A carrier authorizes exactly one
 environment's function app; copying it into another environment would either
-leak a key across a trust boundary or point at a vault that is not there. So
-promote strips the source's `x-rigg-auth` and re-applies the *target's* own
-carriers, matching the target's skill to the merged skill by `name`, then by
-(already translated) `uri`, and only then — when both skill lists are the
+leak a key across a trust boundary or point at a vault that is not there.
+
+So promote strips the source's `x-rigg-auth` and re-applies the *target's*
+own carriers, matching the target's skill to the merged skill by `name`, then
+by (already translated) `uri`, and only then — when both skill lists are the
 same length — by position. A skill that matches by none of those keeps no
 carrier at all, rather than inheriting one it does not own.
 
@@ -197,23 +223,28 @@ key path entirely by wiring Entra authentication instead.
 | **Type** | array of strings — registry dot-paths |
 | **Valid on** | the top level of any resource file |
 | **Required** | no |
-| **Default** | none — there are no per-kind default pins; a path is protected only if this list names it |
+| **Default** | none — a path is protected only if this list names it |
+
+There are no per-kind default pins.
 
 `x-rigg-pin` lives in the **target** environment's file and answers: "when
 something is promoted onto this file, which of my current values must
-survive?" Path syntax is the registry's: dot-separated keys, with `[]` after
-a key to descend into each element of an array — `sku.capacity`,
-`skills[].uri`, `vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri`.
-A path that neither document has is a silent no-op, so check the path against
-the file you mean to protect: a model deployment's capacity is `sku.capacity`,
-not `properties.capacity`.
+survive?"
 
-A `[]` segment pairs the target's array with the promoted one **by position**,
-not by name: element 0 keeps element 0's pinned value, element 1 keeps element
-1's. When the target's array is longer, its extra elements are appended to the
-promoted document wholesale — a tool only prod has survives the promote — and
-when the promoted array is longer, its extra elements are left alone. Reordering
-an array in one environment therefore changes what an array pin protects.
+**Path syntax is the registry's:** dot-separated keys, with `[]` after a key
+to descend into each element of an array — `sku.capacity`, `skills[].uri`,
+`vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri`. A path that
+neither document has is a silent no-op, so check the path against the file
+you mean to protect: a model deployment's capacity is `sku.capacity`, not
+`properties.capacity`.
+
+**A `[]` segment pairs the target's array with the promoted one by
+position**, not by name: element 0 keeps element 0's pinned value, element 1
+keeps element 1's. When the target's array is longer, its extra elements are
+appended to the promoted document wholesale — a tool only prod has survives
+the promote — and when the promoted array is longer, its extra elements are
+left alone. Reordering an array in one environment therefore changes what an
+array pin protects.
 
 `rigg promote <project> --from dev --to prod` builds each target document by
 taking the source's shape, translating references and infrastructure values
@@ -227,9 +258,11 @@ too, so it does not evaporate on the first promote.
 Use it for values that are legitimately different in this environment and
 that promote would otherwise overwrite — a production deployment's
 `sku.capacity`, a hand-tuned scoring profile, a URL rigg has no binding for.
-Nothing is pinned for you: an unlisted path is promoted over, and a capacity
-that goes *down* is not even flagged (the `promote.deployment.*` question only
-fires on an increase).
+
+> [!WARNING]
+> Nothing is pinned for you: an unlisted path is promoted over, and a
+> capacity that goes *down* is not even flagged (the `promote.deployment.*`
+> question only fires on an increase).
 
 `x-rigg-pin` in the **source** file does nothing to that promote (it is
 stripped along with the source's other annotations), and it never reaches
@@ -275,7 +308,7 @@ object's `server_url`, `url` or `endpoint` field (whichever the object
 already has, defaulting to `server_url`), immediately before the annotations
 are stripped:
 
-```
+```text
 https://contoso-search.search.windows.net/knowledgebases/contoso-kb/mcp?api-version=2026-08-01-preview
 ```
 
@@ -290,7 +323,7 @@ rewrites a registry reference field.
 
 **`rigg validate`** checks the shape:
 
-```
+```text
 ✗ [projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json] x-rigg-ref 'contoso-kb' is not of the form <kind-dir>/<name>
 ```
 
