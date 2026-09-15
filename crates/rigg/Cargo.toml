@@ -40,7 +40,7 @@ semver.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 # Splitting the shell command lines in the docs for `rigg dev docs-check`.
-shlex = "1"
+shlex = "2"
 
 rigg-core.workspace = true
 rigg-client.workspace = true

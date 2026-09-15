@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Dependencies refreshed to current versions: `ailloy` 2.1.1 (lockfile-only
+  patch of the AI hub, no API change), `rmcp` 3.4 (was 3.2; the MCP server
+  now builds its `ServerConfig` instead of the deprecated `ServerInfo` alias)
+  and `shlex` 2 (was 1; only the deprecated quoting helpers were removed, and
+  `rigg dev docs-check` uses `split` alone). MSRV stays at Rust 1.88, which
+  `rmcp` and `ailloy` both require. No behaviour changes.
+
+### Docs
+
+- README gained a "Releasing" section pointing at the release skill, the
+  release workflow and the per-target SBOMs shipped with every GitHub Release.
+
 ## [2.0.1] - 2026-09-11
 
 ### Docs

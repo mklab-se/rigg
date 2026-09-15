@@ -72,7 +72,7 @@ chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2"
 
 # MCP server
-rmcp = { version = "3.2", features = ["server", "transport-io"] }
+rmcp = { version = "3.4", features = ["server", "transport-io"] }
 schemars = "1.2"
 
 # Testing

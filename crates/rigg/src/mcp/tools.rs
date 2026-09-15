@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -687,8 +687,8 @@ impl RiggMcpServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for RiggMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "rigg manages Azure AI Search and Microsoft Foundry configuration as code. \
              A workspace contains projects; each project owns its resources exclusively, \
              and pull/push/diff operate on whole projects. Typical flow: rigg_describe to \
