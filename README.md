@@ -183,6 +183,21 @@ their ids, prompts and candidates. Answer with `--answer <id>=<value>`
 (repeatable) or `--answers-file <path>` and re-run; answered questions are
 never asked again.
 
+## Releasing
+
+Releases are driven by the [`/release`](.claude/skills/release/SKILL.md) skill (run it in Claude
+Code with `major`, `minor`, or `patch`). It updates dependencies, runs the CI gates, bumps the
+version, dates the changelog, then commits, pushes, and tags `vX.Y.Z`. Pushing the tag triggers
+[`release.yml`](.github/workflows/release.yml), which:
+
+1. Re-runs the full CI suite
+2. Builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries for Linux, macOS
+   (Intel + ARM), and Windows, with a CycloneDX SBOM per target
+3. Creates a GitHub Release with the archives and SBOMs (see
+   [INSTALL.md](INSTALL.md#software-bill-of-materials-sbom) for how to read them)
+4. Publishes `rigg-diff`, `rigg-core`, `rigg-client`, then `rigg` to crates.io
+5. Updates the Homebrew formula in `mklab-se/homebrew-tap`
+
 ## License
 
 MIT — see [LICENSE.md](LICENSE.md).
