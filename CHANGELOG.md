@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Dependencies refreshed to current versions: `ailloy` 2.1.2 (lockfile-only
+  patch of the AI hub, no API change) plus 15 transitive patch bumps. Every
+  root dependency's version requirement already covered the latest release,
+  so this is a lockfile-only refresh — no manifest changes, no behaviour
+  changes. MSRV stays at Rust 1.88. `cargo audit` reports no advisories.
+
+### Docs
+
+- Filled in gaps between the release skill and the current template: a note
+  to re-run clippy after `cargo fmt` fixes formatting, an INSTALL.md review
+  step, and fuller post-release verification (archive/SBOM count, crates.io,
+  Homebrew formula). `ci.yml` and `release.yml` already matched the template
+  (action majors, per-target SBOMs) — no workflow changes were needed.
+
 ## [2.1.0] - 2026-09-16
 
 ### Changed
