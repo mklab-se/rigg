@@ -29,7 +29,7 @@ tokio = { version = "1.53", features = ["full"] }
 futures = "0.3"
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
 
 # Configuration
 toml = "1.1"
@@ -80,7 +80,7 @@ tempfile = "3.27"
 regex-lite = "0.1"
 
 # AI integration
-ailloy = { version = "2.1", default-features = false, features = ["config-tui"] }
+ailloy = { version = "2.2", default-features = false, features = ["config-tui"] }
 
 # Internal crates
 rigg-core = { version = "2.1.1", path = "crates/rigg-core" }
