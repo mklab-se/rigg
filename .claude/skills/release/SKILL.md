@@ -33,7 +33,8 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 
 ### 3. Pre-flight checks
 
-- Run `cargo fmt --all -- --check` — abort if formatting issues
+- Run `cargo fmt --all -- --check` — abort if formatting issues. If you fix formatting with
+  `cargo fmt --all`, re-run clippy afterwards: reformatting can change what clippy flags
 - Run `cargo clippy --workspace --all-targets -- -D warnings` — abort if warnings
   (`--all-targets` matches CI: it also lints tests and benches)
 - Run `cargo test --workspace` — abort if any test fails
@@ -54,6 +55,7 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 - **CHANGELOG.md**: Rename the `[Unreleased]` section to `[{NEW_VERSION}] - {TODAY}` (YYYY-MM-DD format). If there is no `[Unreleased]` section, create a new dated entry summarizing changes since the last release
 - **README.md**: Review for accuracy — update any version references if present
 - **CLAUDE.md**: Review for accuracy — no version references to update typically
+- **INSTALL.md**: Review for accuracy — no version references to update typically
 
 ### 6. Verify the build
 
@@ -68,16 +70,21 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 - Push to main: `git push`
 - Create and push tag: `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}`
 
-### 8. Verify the release workflow
+### 8. Watch and verify
 
-- The push triggers the Release workflow on GitHub Actions. Do NOT declare
-  success yet — watch it: `gh run list --repo mklab-se/rigg --limit 3`, then
-  `gh run watch <id> --repo mklab-se/rigg` (or poll `gh run view <id>`)
-  until it completes
-- If it fails, inspect with `gh run view <id> --log-failed`, fix the cause,
-  and re-release as a patch
+- The tag push triggers the Release workflow. Do NOT declare success yet — watch it:
+  `gh run list --repo mklab-se/rigg --workflow release.yml --limit 1`, then
+  `gh run watch <id> --repo mklab-se/rigg --exit-status` until it completes
+- If it fails, inspect with `gh run view <id> --log-failed`, fix the cause, and re-release as a patch
+- When it is green, confirm the outputs:
+  - `gh release view v{NEW_VERSION} --repo mklab-se/rigg` lists 4 archives
+    (3 × `.tar.gz`, 1 × `.zip`) plus 4 matching `.cdx.json` SBOMs
+  - `cargo search rigg --limit 1` shows the new version on crates.io
+  - `Formula/rigg.rb` in `mklab-se/homebrew-tap` carries the new version
 
 ### 9. Confirm
 
-- Tell the user the release is tagged, pushed, and the workflow is green —
-  binaries are built, crates.io is published, and the Homebrew tap is updated
+- Tell the user the release is tagged, pushed, and the workflow is green — auditable binaries and
+  SBOMs are attached to the GitHub Release, crates.io is published, and the Homebrew tap is updated
+- The publish jobs require the `CARGO_REGISTRY_TOKEN` (in the `crates-io` environment) and
+  `HOMEBREW_TAP_TOKEN` (repo secret) to be configured — see README.md
