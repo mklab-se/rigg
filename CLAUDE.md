@@ -132,7 +132,23 @@ Pushing the tag triggers `.github/workflows/release.yml`: it re-runs CI, builds 
 
 Required secrets: `CARGO_REGISTRY_TOKEN` (crates.io env), `HOMEBREW_TAP_TOKEN`.
 
-MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (set by Ailloy 2.x / `rmcp` 3.x); CI runs latest stable. `reqwest` stays on 0.12 to share Ailloy's TLS stack.
+MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (set by Ailloy 2.x / `rmcp` 3.x); CI runs latest stable.
+
+Building from source on Windows needs NASM and CMake on `PATH` — `aws-lc-rs` (reqwest's TLS crypto
+backend) compiles optimized assembly routines at build time. macOS and Linux need nothing extra.
+The release workflow's Windows leg installs NASM via `ilammy/setup-nasm@v1`; CMake and MSVC are
+already on the `windows-latest` image.
+
+## Dependency Policy
+
+We keep this tool's dependencies at their latest compatible versions, not just the versions that
+happen to still compile. Staying current is the default, not something we get to eventually —
+letting dependencies drift is how technical debt accumulates unnoticed until a security advisory or
+a forced breaking upgrade makes it urgent. When a newer major is available and there's no concrete,
+documented reason not to take it (see any `# Stays on ...` comments in `Cargo.toml` for the current
+exceptions and why), take it during the next maintenance round rather than deferring it. The
+cross-repo `maintaining-rust-tools` skill drives this for the whole fleet (ailloy + cosq + deemer +
+mdeck + pidge + rigg + rusty-tmpl).
 
 ## AI Agent Integration
 
