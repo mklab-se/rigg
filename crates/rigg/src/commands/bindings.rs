@@ -670,4 +670,108 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("docs"), "{err}");
     }
+
+    /// Pins the exact bytes `edit_workspace_yaml` writes for a `rigg.yaml`
+    /// (flow-style input, quoted look-alikes, ARM ids, URLs, nulls, numbers,
+    /// multi-line and non-ASCII strings, plus mappings built in code), so a
+    /// YAML library change cannot silently reformat users' files.
+    #[test]
+    fn workspace_yaml_serialization_is_byte_stable() {
+        let input = r#"# header
+environments:
+  dev:
+    default: true
+    tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47
+    subscription: '00000000-0000-0000-0000-000000000000'
+    search: { service: mklab-search }
+    foundry: { account: mklab-ai, project: proj-default }
+    policy: { protected: false }
+    dependencies:
+      docs-storage: { storage: mklabstorage }
+      kv:    { key-vault: "/subscriptions/abc/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv" }
+      partner: { api: 'https://api.partner.example/v1?x=1#frag' }
+  prod:
+    note: "yes"
+    flags: ['true', 'null', '0123', '1.0', '', ' padded ', 'a: b', '# hash', '*star', '@at', '~', 'off', 'y', '0x1F', '2026-10-07']
+    numbers: [1, -2, 3.5, 1e3]
+    nothing: ~
+    text: "line one\nline two\n"
+    unicode: "caf\u00e9 \u2014 \U0001F600"
+    long: "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"
+"#;
+        let mut doc: Yaml = serde_yaml::from_str(input).unwrap();
+        {
+            let envs = envs_mut(&mut doc).unwrap();
+            let mut env = serde_yaml::Mapping::new();
+            env.insert("search".into(), Yaml::String("svc".into()));
+            let mut d = serde_yaml::Mapping::new();
+            d.insert(
+                Yaml::String("id-1".into()),
+                binding_yaml(&Binding {
+                    kind: BindingType::Identity,
+                    value: "/subscriptions/s/resourceGroups/r/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-1".into(),
+                }),
+            );
+            env.insert("dependencies".into(), Yaml::Mapping(d));
+            envs.insert("test".into(), Yaml::Mapping(env));
+        }
+        let out = serde_yaml::to_string(&doc).unwrap();
+        assert_eq!(out, EXPECTED_WORKSPACE_YAML);
+    }
+
+    const EXPECTED_WORKSPACE_YAML: &str = concat!(
+        "environments:\n",
+        "  dev:\n",
+        "    default: true\n",
+        "    tenant: 72f988bf-86f1-41af-91ab-2d7cd011db47\n",
+        "    subscription: 00000000-0000-0000-0000-000000000000\n",
+        "    search:\n",
+        "      service: mklab-search\n",
+        "    foundry:\n",
+        "      account: mklab-ai\n",
+        "      project: proj-default\n",
+        "    policy:\n",
+        "      protected: false\n",
+        "    dependencies:\n",
+        "      docs-storage:\n",
+        "        storage: mklabstorage\n",
+        "      kv:\n",
+        "        key-vault: /subscriptions/abc/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv\n",
+        "      partner:\n",
+        "        api: https://api.partner.example/v1?x=1#frag\n",
+        "  prod:\n",
+        "    note: yes\n",
+        "    flags:\n",
+        "    - 'true'\n",
+        "    - 'null'\n",
+        "    - '0123'\n",
+        "    - '1.0'\n",
+        "    - ''\n",
+        "    - ' padded '\n",
+        "    - 'a: b'\n",
+        "    - '# hash'\n",
+        "    - '*star'\n",
+        "    - '@at'\n",
+        "    - '~'\n",
+        "    - off\n",
+        "    - y\n",
+        "    - '0x1F'\n",
+        "    - 2026-10-07\n",
+        "    numbers:\n",
+        "    - 1\n",
+        "    - -2\n",
+        "    - 3.5\n",
+        "    - 1000.0\n",
+        "    nothing: null\n",
+        "    text: |\n",
+        "      line one\n",
+        "      line two\n",
+        "    unicode: caf\u{e9} \u{2014} \u{1f600}\n",
+        "    long: aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh\n",
+        "  test:\n",
+        "    search: svc\n",
+        "    dependencies:\n",
+        "      id-1:\n",
+        "        identity: /subscriptions/s/resourceGroups/r/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-1\n",
+    );
 }
