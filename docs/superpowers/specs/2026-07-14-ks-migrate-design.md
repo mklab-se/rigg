@@ -1,4 +1,4 @@
-# Knowledge-source migration to `searchIndex` — design
+# Knowledge-source migration to `searchIndex`: design
 
 **Date:** 2026-07-14
 **Status:** approved
@@ -10,8 +10,8 @@ Knowledge sources created in the Azure portal as indexed types (`azureBlob`,
 (data source, index, skillset, indexer) and own it: the generated objects are
 invisible to rigg (filtered via `createdResources`) and **deleting the
 knowledge source deletes all generated objects, including the index**. The
-`searchIndex` kind gives full control — every pipeline piece is an explicit,
-rigg-managed resource — and deleting a `searchIndex` KS never touches its
+`searchIndex` kind gives full control (every pipeline piece is an explicit,
+rigg-managed resource) and deleting a `searchIndex` KS never touches its
 index.
 
 Users need a smooth path from any indexed KS type to `searchIndex`. Doing this
@@ -37,13 +37,13 @@ in the portal is destructive and manual.
 - Two migration modes:
   - **In-place**: same KS name, same sub-resource names (read from live
     `createdResources`, never guessed). Next push replaces the KS and rebuilds
-    the index — explicitly warned (time, ingestion/embedding cost, downtime).
+    the index: explicitly warned (time, ingestion/embedding cost, downtime).
   - **Side-by-side**: new names for KS + sub-resources, interactively
     confirmed. Push is plain creates; the old KS keeps serving. **Cutover is
     manual** (user re-points KBs and deletes the old KS file + `push --prune`
     when satisfied).
 - Push-time safety gate for replaces: interactive default-No confirmation;
-  non-interactively `--yes` is NOT sufficient — a dedicated **`--allow-replace`**
+  non-interactively `--yes` is NOT sufficient: a dedicated **`--allow-replace`**
   flag is required (pattern mirrors `--confirm-env`). MCP `rigg_push` gains a
   matching `allow_replace` parameter.
 
@@ -74,7 +74,7 @@ Interactive select, or flags: `--in-place` / `--rename <new-ks-name>`.
   `createdResources`.
 - Writes into the project:
   - the four sub-resource JSONs copied from the **live generated definitions**
-    (`normalize_for_disk`), preserving chunking/embedding configuration —
+    (`normalize_for_disk`), preserving chunking/embedding configuration:
     scaffolds would silently change retrieval behavior;
   - the KS file rewritten to the `searchIndex` shape
     (`kind: "searchIndex"`, `searchIndexParameters.searchIndexName = <generated
@@ -135,7 +135,7 @@ identity-based rewrite (`ResourceId=`); declining leaves the file as-is and
 Normal creates/updates first, then each replace bundle sequentially, then
 prunes. Per bundle:
 
-1. **Snapshot referencing KBs** from the remote snapshot — *every* KB naming
+1. **Snapshot referencing KBs** from the remote snapshot: *every* KB naming
    the KS in `knowledgeSources[]`, including KBs the project doesn't own.
    Foreign KBs are unlinked temporarily and restored byte-for-byte, with a
    printed notice.
@@ -147,7 +147,7 @@ prunes. Per bundle:
    covers both.
 4. **DELETE the old KS** (Azure cascades the generated sub-resources away).
 5. **Create the new pipeline** in `graph::push_order` (dependencies before
-   dependents — the indexer last, after its data source, index, and skillset;
+   dependents: the indexer last, after its data source, index, and skillset;
    ties broken by registry declaration order), each PUT followed by GET-back
    canonicalization to disk
    + baseline. The indexer's initial run starts on creation.
@@ -181,7 +181,7 @@ migration.**
   each.
 - `rigg validate`: warns on data-source files with redacted key-based
   credentials.
-- Migrate command never guesses sub-resource names from patterns — only
+- Migrate command never guesses sub-resource names from patterns, only
   `createdResources` (portal conventions differ from rigg's scaffold suffixes).
 
 ## 5. Testing
@@ -197,7 +197,7 @@ migration.**
 - **`crates/rigg/tests/cli_surface.rs`**: `migrate knowledge-source` parsing,
   non-interactive behavior, remote-type/unowned-KS errors.
 - **Live** (mklabsrch): full in-place flow on `test-ks`; one side-by-side
-  round with cleanup. `regulatory` untouched — reserved for the user's manual
+  round with cleanup. `regulatory` untouched: reserved for the user's manual
   test.
 
 ## 6. Docs & integration
@@ -213,5 +213,5 @@ migration.**
 - Copying index *documents* between indexes (backup/restore-style migration
   that would avoid re-running the skillset). Could be a future optimization
   for side-by-side; today the indexer rebuilds from source data.
-- Automated side-by-side cutover (KB re-pointing + old-KS deletion) — manual
+- Automated side-by-side cutover (KB re-pointing + old-KS deletion): manual
   by explicit decision.

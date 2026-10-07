@@ -1,4 +1,4 @@
-//! `rigg az index` — query and inspect live indexes.
+//! `rigg az index`: query and inspect live indexes.
 
 use anyhow::Result;
 use colored::Colorize;

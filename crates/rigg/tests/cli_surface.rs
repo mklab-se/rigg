@@ -1,6 +1,6 @@
 //! CLI surface tests: command shape, exit codes, workspace-local behavior.
 //!
-//! These run the real binary against temp workspaces — no network.
+//! These run the real binary against temp workspaces: no network.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -194,7 +194,7 @@ fn workspace_two_envs() -> tempfile::TempDir {
 /// `rigg adopt` with several environments and no `--env` is the cheapest
 /// probe for the interactive/non-interactive decision: interactively it
 /// offers a pick-list, non-interactively it is a usage error naming the
-/// candidates — and it never touches the network either way.
+/// candidates, and it never touches the network either way.
 #[test]
 fn rigg_non_interactive_env_var_selects_script_mode() {
     let ws = workspace_two_envs();
@@ -748,7 +748,7 @@ fn datasource_scaffolds_include_deletion_tracking_and_validate_warns_when_missin
 
 #[test]
 fn concepts_explains_the_model() {
-    // Runs anywhere — no workspace required.
+    // Runs anywhere: no workspace required.
     let tmp = tempfile::tempdir().unwrap();
     rigg()
         .current_dir(tmp.path())
@@ -948,7 +948,7 @@ fn concepts_includes_environments_chapter() {
 }
 
 /// A workspace with two environments (dev + prod) and one project, no
-/// resources yet — tests populate `envs/<env>/...` files directly for full
+/// resources yet: tests populate `envs/<env>/...` files directly for full
 /// control over the dev/prod divergence being exercised.
 fn two_env_workspace() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
@@ -1073,7 +1073,7 @@ fn promote_x_rigg_pin_annotation_keeps_extra_path_and_itself() {
             "properties": {
                 "category": "RemoteTool-OLD",
                 "target": "https://prod-endpoint",
-                "description": "prod description — do not overwrite"
+                "description": "prod description: do not overwrite"
             },
             "x-rigg-pin": ["properties.description"]
         }),
@@ -1105,11 +1105,11 @@ fn promote_x_rigg_pin_annotation_keeps_extra_path_and_itself() {
     );
     assert_eq!(
         merged["properties"]["target"], "https://dev-endpoint",
-        "2.0: nothing is pinned by kind — an external endpoint kept verbatim \
+        "2.0: nothing is pinned by kind, an external endpoint kept verbatim \
          promotes like any other field"
     );
     assert_eq!(
-        merged["properties"]["description"], "prod description — do not overwrite",
+        merged["properties"]["description"], "prod description: do not overwrite",
         "x-rigg-pin-listed path kept"
     );
     assert_eq!(
@@ -1591,7 +1591,7 @@ fn promote_help_documents_translation_and_offline() {
 fn promote_pinned_array_path_preserves_target_only_tools_end_to_end() {
     // CRITICAL data-loss regression: prod's agent carries tools dev doesn't
     // have (an extra file_search tool). With the tool list pinned by the
-    // target's own `x-rigg-pin`, promote must keep them — the restore
+    // target's own `x-rigg-pin`, promote must keep them: the restore
     // appends target-only array elements wholesale.
     let ws = two_env_workspace();
     let dev_agents = ws.path().join("projects/demo/envs/dev/foundry/agents");
@@ -2134,7 +2134,7 @@ fn unknown_answer_id_is_a_usage_error() {
 }
 
 /// The ARM id `write_ds` embeds for a storage account, and the value the
-/// `docs` bindings below declare — a storage reference can only be
+/// `docs` bindings below declare: a storage reference can only be
 /// *rewritten* (by `rigg promote`) when the target binding carries the full
 /// id, so the bindings declare ids rather than bare names.
 fn storage_id(account: &str) -> String {
@@ -2144,7 +2144,7 @@ fn storage_id(account: &str) -> String {
 }
 
 /// Workspace with two environments, each declaring a `docs` storage
-/// dependency binding pointing at a different physical account — used by
+/// dependency binding pointing at a different physical account: used by
 /// the infra-reference classification and promote tests below.
 fn workspace_two_envs_with_bindings() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
@@ -2228,7 +2228,7 @@ fn validate_warns_on_unbound_in_dev_but_errors_in_protected_prod() {
 
 #[test]
 fn validate_leak_hint_uses_a_real_binding_type_keyword() {
-    // A model-host leak must suggest `ai-services:<name>` — `model host` is
+    // A model-host leak must suggest `ai-services:<name>`: `model host` is
     // the display word for the target, not something `rigg env bind` accepts.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -2261,7 +2261,7 @@ fn validate_leak_hint_uses_a_real_binding_type_keyword() {
 #[test]
 fn validate_leak_onto_another_environments_foundry_account_suggests_the_target() {
     // The other environment's match is its implicit `foundry` binding, which
-    // no `rigg env bind` can declare — the fix is the target or the file.
+    // no `rigg env bind` can declare: the fix is the target or the file.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("rigg.yaml"),
@@ -2421,7 +2421,7 @@ fn env_bind_learn_proposes_from_files_and_writes_with_yes() {
             predicate::str::contains("mklabstorageacc").and(predicate::str::contains("storage")),
         );
     let yaml = std::fs::read_to_string(ws.path().join("rigg.yaml")).unwrap();
-    // The file carried a full ARM id, so the learned binding keeps it — no
+    // The file carried a full ARM id, so the learned binding keeps it: no
     // by-name ARM lookup (and no subscription guess) needed later.
     assert!(
         yaml.contains(
@@ -2586,7 +2586,7 @@ fn env_add_like_skip_drops_a_binding_and_unknown_same_is_a_usage_error() {
 #[test]
 fn env_add_like_with_no_bindings_and_no_targets_is_a_usage_error() {
     // `dev` here has no dependencies at all, so `--like dev` alone gives
-    // `env add` nothing to write — that must fail loudly, not silently
+    // `env add` nothing to write: that must fail loudly, not silently
     // create a target-less, binding-less environment.
     let ws = workspace();
     rigg()
@@ -2643,7 +2643,7 @@ fn ci_init_role_list_names_the_bound_storage_role_with_its_scope() {
         );
 }
 
-/// The environment is the one selected, not always the default one — the
+/// The environment is the one selected, not always the default one: the
 /// workflows bake it in, so `-e prod` must produce prod's scopes.
 #[test]
 fn ci_init_uses_the_selected_environment() {
@@ -2666,7 +2666,7 @@ fn ci_init_uses_the_selected_environment() {
 
 /// Every scaffolded model deployment names Azure's built-in RAI policy
 /// (`Microsoft.DefaultV2`). That is a platform resource, never a workspace
-/// file, so `validate --strict` must not treat it as a dangling reference —
+/// file, so `validate --strict` must not treat it as a dangling reference,
 /// otherwise strict mode rejects rigg's own scaffold output.
 #[test]
 fn validate_strict_accepts_builtin_guardrail_references() {
@@ -2703,7 +2703,7 @@ fn validate_strict_accepts_builtin_guardrail_references() {
         .stdout(predicate::str::contains("guardrails/house-policy"));
 }
 
-/// The proposal table names files the way the rest of the CLI does —
+/// The proposal table names files the way the rest of the CLI does:
 /// relative to the workspace root. An absolute path makes the table
 /// unreadable and leaks the operator's home directory into transcripts.
 #[test]

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Baselines store the normalized document (checksums recomputed under current rules — no more false conflicts after rigg upgrades), and pull's conflict prompt shows a field summary with an in-place diff option.
+**Goal:** Baselines store the normalized document (checksums recomputed under current rules: no more false conflicts after rigg upgrades), and pull's conflict prompt shows a field summary with an in-place diff option.
 
 **Architecture:** `store.rs` gains an untagged `Baseline` enum (`Doc(Value)` new / `Checksum(String)` legacy); `set_baseline` stores the compare-normalized canonical doc; `classify` recomputes via `baseline_checksum`. `pull.rs`'s conflict arm computes an in-process diff for a summary line and offers `o/k/d/a` via the existing `confirm::prompt_choice`, rendering the labeled table on `d`.
 
@@ -11,26 +11,26 @@
 ## Global Constraints
 
 - Old `state.json` files (string checksums) MUST load unchanged (serde untagged); their classify behavior is exactly today's. Keys of `baselines` unchanged (callers scan keys).
-- New baselines never contain secrets (they are set from remote GETs / push-canonicalized docs where Azure redacts write-only fields) — do not add any secret-stripping logic beyond what `set_baseline`'s input already has, but DO store the compare-normalized form (which strips volatile/read-only noise).
+- New baselines never contain secrets (they are set from remote GETs / push-canonicalized docs where Azure redacts write-only fields): do not add any secret-stripping logic beyond what `set_baseline`'s input already has, but DO store the compare-normalized form (which strips volatile/read-only noise).
 - `--yes` and non-interactive pull behavior unchanged except the non-interactive conflict message gains a `rigg diff` pointer. Exit codes unchanged (conflict → 5).
 - `a` (abort) must not write anything further and must not save partial state for resources not yet processed; state already saved for previously-processed resources in this run is acceptable (matches current per-resource processing).
 - Every task leaves fmt/clippy(-D warnings)/`cargo test --workspace` green.
 
 ---
 
-### Task 1: rigg-core — `Baseline` enum + recomputed checksums
+### Task 1: rigg-core: `Baseline` enum + recomputed checksums
 
 **Files:**
 - Modify: `crates/rigg-core/src/store.rs`
 - Possibly touch callers of `ProjectState::baseline()` (grep: `crates/rigg/src/commands/pull.rs` uses `state.baseline(r).is_some()`; check for others).
 
 **Interfaces:**
-- Produces: `pub enum Baseline { Doc(Value), Checksum(String) }` (serde untagged; order matters — put `Checksum(String)` FIRST if untagged resolution would otherwise misparse, but a JSON string can never parse as `Value::Object`… note: `Value` deserializes ANY JSON including strings! So untagged with `Doc(Value)` first would swallow strings. Order: `Checksum(String)` first, then `Doc(Value)`. VERIFY with a round-trip test that a string loads as Checksum and an object as Doc.)
+- Produces: `pub enum Baseline { Doc(Value), Checksum(String) }` (serde untagged; order matters, put `Checksum(String)` FIRST if untagged resolution would otherwise misparse, but a JSON string can never parse as `Value::Object`… note: `Value` deserializes ANY JSON including strings! So untagged with `Doc(Value)` first would swallow strings. Order: `Checksum(String)` first, then `Doc(Value)`. VERIFY with a round-trip test that a string loads as Checksum and an object as Doc.)
 - Changes: `pub baselines: BTreeMap<String, Baseline>`; `set_baseline` stores the compare-normalized canonical doc; new `fn baseline_checksum(&self, r: &ResourceRef) -> Option<String>`; `classify` uses it; `baseline()` becomes `pub fn has_baseline(&self, r: &ResourceRef) -> bool` (update callers).
 
-- [ ] **Step 1: Read store.rs fully** — especially `checksum` (line ~337: `canonical_form(&normalize_for_compare(kind, value))` then hash), `set_baseline`, `classify`, and how `normalize_for_compare` is imported. The stored doc form should be exactly `canonical_form(&normalize_for_compare(kind, value))` so `baseline_checksum` can hash it directly. IMPORTANT SUBTLETY: `baseline_checksum` for `Doc(v)` must RE-APPLY current normalization before hashing — i.e. compute `Self::checksum(kind, v)` (which re-runs `normalize_for_compare`) — because a doc stored under OLD rules may retain fields that are volatile TODAY; re-normalizing strips them. `normalize_for_compare` must be idempotent (verify: it strips fields — stripping twice is safe).
+- [ ] **Step 1: Read store.rs fully**: especially `checksum` (line ~337: `canonical_form(&normalize_for_compare(kind, value))` then hash), `set_baseline`, `classify`, and how `normalize_for_compare` is imported. The stored doc form should be exactly `canonical_form(&normalize_for_compare(kind, value))` so `baseline_checksum` can hash it directly. IMPORTANT SUBTLETY: `baseline_checksum` for `Doc(v)` must RE-APPLY current normalization before hashing, i.e. compute `Self::checksum(kind, v)` (which re-runs `normalize_for_compare`), because a doc stored under OLD rules may retain fields that are volatile TODAY; re-normalizing strips them. `normalize_for_compare` must be idempotent (verify: it strips fields, stripping twice is safe).
 
-- [ ] **Step 2: Write failing unit tests** (store.rs `mod tests` — adapt to existing helpers; note `checksum` needs a `ResourceKind`, use `ResourceKind::Agent` and the real volatile field `metadata.modified_at`):
+- [ ] **Step 2: Write failing unit tests** (store.rs `mod tests`, adapt to existing helpers; note `checksum` needs a `ResourceKind`, use `ResourceKind::Agent` and the real volatile field `metadata.modified_at`):
 
 ```rust
     #[test]
@@ -52,7 +52,7 @@
         // volatile: the stored doc still carries the field. Under current
         // rules the recomputed checksum strips it, so an untouched local
         // (without the field) plus a remote-only change classifies as
-        // RemoteAhead — NOT Conflict.
+        // RemoteAhead, NOT Conflict.
         let r = ResourceRef::new(ResourceKind::Agent, "a".to_string());
         let old_doc = serde_json::json!({
             "name": "a", "model": "x",
@@ -82,20 +82,20 @@
     }
 ```
 
-(If `ProjectState` lacks `Default`, derive it or construct via serde. Adjust `SyncClass` import to the real path. If `metadata.modified_at` is not the ideal volatile field for Agent in `normalize_for_compare`, pick any field the compare-normalization strips for that kind — verify by reading `normalize_for_compare`.)
+(If `ProjectState` lacks `Default`, derive it or construct via serde. Adjust `SyncClass` import to the real path. If `metadata.modified_at` is not the ideal volatile field for Agent in `normalize_for_compare`, pick any field the compare-normalization strips for that kind: verify by reading `normalize_for_compare`.)
 
 - [ ] **Step 3: Confirm RED**, implement:
 
 ```rust
 /// A sync baseline. Newer rigg versions store the compare-normalized
 /// document so the checksum can be recomputed under CURRENT normalization
-/// rules — surviving rule evolution across rigg upgrades. Legacy entries
+/// rules: surviving rule evolution across rigg upgrades. Legacy entries
 /// hold only the frozen checksum and behave as before until the resource
 /// next syncs (every successful pull/push/adopt rewrites its baseline).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Baseline {
-    /// Legacy: frozen checksum (string MUST be tried first — `Value`
+    /// Legacy: frozen checksum (string MUST be tried first, `Value`
     /// deserializes any JSON, including strings).
     Checksum(String),
     /// Compare-normalized canonical document.
@@ -103,19 +103,19 @@ pub enum Baseline {
 }
 ```
 
-- `set_baseline`: `Baseline::Doc(canonical_form(&normalize_for_compare(r.kind, value)))` — reuse the exact functions `checksum` uses.
+- `set_baseline`: `Baseline::Doc(canonical_form(&normalize_for_compare(r.kind, value)))`, reuse the exact functions `checksum` uses.
 - `baseline_checksum(&self, r)`: `Checksum(s)` → `Some(s.clone())`; `Doc(v)` → `Some(Self::checksum(r.kind, v))`.
 - `classify`: replace `self.baseline(r)` with `self.baseline_checksum(r)` (adjust the `Option<&str>` match to `Option<String>`).
-- `has_baseline(&self, r) -> bool`; update pull.rs's `state.baseline(r).is_some()` (grep for `.baseline(` across crates — update every caller; keep behavior identical).
+- `has_baseline(&self, r) -> bool`; update pull.rs's `state.baseline(r).is_some()` (grep for `.baseline(` across crates: update every caller; keep behavior identical).
 
-- [ ] **Step 4: GREEN + full checks** — `cargo test -p rigg-core 2>&1 | tail -4 && cargo test --workspace 2>&1 | grep -c 'test result: ok' && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -2`.
-NOTE: sync.rs integration tests exercise baselines heavily (adopt → pull cycles) — they must pass UNCHANGED; if one fails, the enum or classify port is wrong, not the test.
+- [ ] **Step 4: GREEN + full checks**: `cargo test -p rigg-core 2>&1 | tail -4 && cargo test --workspace 2>&1 | grep -c 'test result: ok' && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -2`.
+NOTE: sync.rs integration tests exercise baselines heavily (adopt → pull cycles), they must pass UNCHANGED; if one fails, the enum or classify port is wrong, not the test.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/rigg-core/src/store.rs crates/rigg/src/commands/pull.rs
-git commit -m "feat: baselines store normalized docs — checksums recomputed under current rules"
+git commit -m "feat: baselines store normalized docs, checksums recomputed under current rules"
 ```
 
 (Include any other `.baseline(`-caller files the grep found.)
@@ -129,12 +129,12 @@ git commit -m "feat: baselines store normalized docs — checksums recomputed un
 - Test: `crates/rigg/tests/sync.rs` (non-interactive message), unit test in pull.rs or a suitable module for the summary helper
 
 **Interfaces:**
-- Produces (pull.rs): `fn conflict_summary(kind: ResourceKind, local: &Value, remote: &Value) -> String` — e.g. `4 field(s) differ (model, reasoning, metadata.microsoft.voice-live.enabled, …)`: count + up to 3 field paths + `, …` when more.
+- Produces (pull.rs): `fn conflict_summary(kind: ResourceKind, local: &Value, remote: &Value) -> String`, e.g. `4 field(s) differ (model, reasoning, metadata.microsoft.voice-live.enabled, …)`: count + up to 3 field paths + `, …` when more.
 - Consumes: `rigg_diff::semantic::diff`, `rigg_diff::output::{format_text, SideLabels}`, `confirm::prompt_choice`, `normalize_for_push`.
 
 - [ ] **Step 1: Write the failing tests.**
 
-a) Unit (pull.rs `mod tests` — create the module if absent):
+a) Unit (pull.rs `mod tests` (create the module if absent)):
 
 ```rust
     #[test]
@@ -168,7 +168,7 @@ b) sync.rs: find the existing non-interactive conflict test (exit 5); extend its
                     println!("  {} overwrote {}", "~".cyan(), r);
                     written += 1;
                 } else if ctx.interactive() {
-                    println!("  {} {} — {}", "conflict".red().bold(), r, summary);
+                    println!("  {} {}: {}", "conflict".red().bold(), r, summary);
                     let mut show_diff_option = true;
                     loop {
                         let opts: &[char] = if show_diff_option {
@@ -219,7 +219,7 @@ b) sync.rs: find the existing non-interactive conflict test (exit 5); extend its
                     }
                 } else {
                     println!(
-                        "  {} {} — {} (run `rigg diff {}` to inspect; pass --yes to overwrite)",
+                        "  {} {}: {} (run `rigg diff {}` to inspect; pass --yes to overwrite)",
                         "conflict".red().bold(),
                         r,
                         summary,
@@ -252,17 +252,17 @@ fn conflict_summary(kind: ResourceKind, local: &Value, remote: &Value) -> String
 }
 ```
 
-(Clean up the suffix logic — the sketch's intent: up to 3 names, then `, …` when more. Match the file's existing imports: `normalize_for_push` is already imported in pull.rs's diff-adjacent code? VERIFY — pull.rs may not import it; add `use rigg_core::normalize::normalize_for_push;` per the actual module path used in diff.rs. Adjust the existing `--yes` branch restructure carefully: today `ctx.yes || (interactive && prompt)` is one combined condition — the new structure splits it; preserve exact `--yes` and non-interactive semantics, and keep the existing baseline/save flow.)
+(Clean up the suffix logic, the sketch's intent: up to 3 names, then `, …` when more. Match the file's existing imports: `normalize_for_push` is already imported in pull.rs's diff-adjacent code? VERIFY: pull.rs may not import it; add `use rigg_core::normalize::normalize_for_push;` per the actual module path used in diff.rs. Adjust the existing `--yes` branch restructure carefully: today `ctx.yes || (interactive && prompt)` is one combined condition, the new structure splits it; preserve exact `--yes` and non-interactive semantics, and keep the existing baseline/save flow.)
 
-NOTE on `'a'`: saving state before erroring matches the constraint (resources already processed keep their refreshed baselines); verify `state.save` is idempotent with the function's final save (early return skips it — hence the explicit save).
+NOTE on `'a'`: saving state before erroring matches the constraint (resources already processed keep their refreshed baselines); verify `state.save` is idempotent with the function's final save (early return skips it, hence the explicit save).
 
-- [ ] **Step 3: GREEN + full checks** — the full battery; sync.rs conflict tests must pass with the extended assertion; all other pinned behavior unchanged.
+- [ ] **Step 3: GREEN + full checks**: the full battery; sync.rs conflict tests must pass with the extended assertion; all other pinned behavior unchanged.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add crates/rigg/src/commands/pull.rs crates/rigg/tests/sync.rs
-git commit -m "feat: informed pull conflict prompt — field summary, in-place diff, abort"
+git commit -m "feat: informed pull conflict prompt, field summary, in-place diff, abort"
 ```
 
 ---

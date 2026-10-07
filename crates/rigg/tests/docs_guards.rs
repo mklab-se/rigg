@@ -7,13 +7,13 @@
 //! in `docs/reference/resource-files.md`, and the tool table in `MCP.md`.
 //! The command-line and link walk lives in the binary (`rigg dev
 //! docs-check`) because the `rigg` crate has no lib target to import `Cli`
-//! from — these tests only drive it and assert the verdict.
+//! from: these tests only drive it and assert the verdict.
 
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 
-/// The workspace root — `crates/rigg/` two levels up.
+/// The workspace root: `crates/rigg/` two levels up.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -83,7 +83,7 @@ fn assert_region_current(file: &Path, name: &str, generated: &str) {
     assert_eq!(
         on_disk,
         fresh,
-        "\n{} region `{name}` is out of date — {}\n",
+        "\n{} region `{name}` is out of date: {}\n",
         file.display(),
         regen_hint(name)
     );
@@ -97,7 +97,7 @@ fn cli_reference_is_current() {
     assert_eq!(
         normalized(&on_disk),
         normalized(&generate(&["dev", "cli-reference"])),
-        "\n{} is out of date — run: cargo run -q --bin rigg -- dev cli-reference > docs/reference/cli.md\n",
+        "\n{} is out of date, run: cargo run -q --bin rigg -- dev cli-reference > docs/reference/cli.md\n",
         file.display()
     );
 }

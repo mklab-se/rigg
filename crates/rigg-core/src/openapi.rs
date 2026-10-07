@@ -1,5 +1,5 @@
 //! Minimal OpenAPI 3.x model for validating custom WebApiSkill contracts
-//! (spec §9). Rigg does not validate the full OpenAPI grammar — only what a
+//! (spec §9). Rigg does not validate the full OpenAPI grammar, only what a
 //! skillset needs: the paths, and the `values[].data` property names of the
 //! request and response envelopes.
 

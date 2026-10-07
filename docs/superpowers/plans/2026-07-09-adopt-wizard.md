@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `rigg adopt` with missing arguments becomes an interactive wizard — pick the project, pick unmanaged resources queried live from Azure (both services), opt into dependencies, confirm — while scriptable/CI behavior stays byte-identical.
+**Goal:** `rigg adopt` with missing arguments becomes an interactive wizard: pick the project, pick unmanaged resources queried live from Azure (both services), opt into dependencies, confirm, while scriptable/CI behavior stays byte-identical.
 
 **Architecture:** A thin `commands/interactive.rs` wraps `inquire` (already in the dep tree at 0.7.5 via ailloy). `adopt.rs::run` is reordered so workspace/snapshot load can precede selector acquisition; wizard steps fill in missing args when interactive. Pure helpers (`wizard_candidates`, `expand_deps`, `equivalent_command`) carry the logic and get unit tests; the TTY layer stays paper-thin.
 
@@ -12,9 +12,9 @@
 
 - Non-interactive / `--output json` / `-y` behavior is UNCHANGED: bare `rigg adopt` or missing selectors → usage error exit 2; all Workstream B semantics intact. The empty-selector usage check MUST run before any workspace/network access in non-wizard mode (cli_surface tests run without a mock server).
 - Wizard activation: `ctx.interactive() && !ctx.json() && (project missing || selectors empty)`.
-- The wizard produces the same resolved set and runs the same classification/write path as the CLI — no second adoption code path.
+- The wizard produces the same resolved set and runs the same classification/write path as the CLI: no second adoption code path.
 - Multi-select items are domain-sorted and domain-prefixed (`[Foundry] agents/x`, `[Search] indexes/y`) with a service legend above the prompt (inquire cannot render non-selectable headers). Foundry groups before Search; within a domain sort by kind directory then name.
-- If a configured service is unreachable, FAIL naming the service — never show a partial menu. (Already the behavior: `snapshot()` errors carry the failing kind's context; do not add fallback.)
+- If a configured service is unreachable, FAIL naming the service, never show a partial menu. (Already the behavior: `snapshot()` errors carry the failing kind's context; do not add fallback.)
 - Esc/Ctrl-C in any prompt → clean abort, exit 1, nothing written.
 - Wizard mode ALWAYS shows preview + confirm before writing (dep expansion can add unticked resources).
 - After a successful wizard adoption, print the equivalent scriptable command.
@@ -120,7 +120,7 @@ pub fn text(prompt: &str, plain: bool) -> Result<String> {
 }
 ```
 
-NOTE: check inquire 0.7's actual API — `RenderConfig::default_colored()` and `RenderConfig::empty()` exist in 0.7.x; if names differ, adapt minimally. The module will be dead code until Task 2 wires it: add `#![allow(dead_code)]` with a `// TODO(task 2)` comment OR (preferred) land Tasks 1+2 in one commit sequence where clippy runs at the end of Task 2. Since each task commits separately and clippy must pass per task, add the module-level allow with a comment and REMOVE it in Task 2.
+NOTE: check inquire 0.7's actual API, `RenderConfig::default_colored()` and `RenderConfig::empty()` exist in 0.7.x; if names differ, adapt minimally. The module will be dead code until Task 2 wires it: add `#![allow(dead_code)]` with a `// TODO(task 2)` comment OR (preferred) land Tasks 1+2 in one commit sequence where clippy runs at the end of Task 2. Since each task commits separately and clippy must pass per task, add the module-level allow with a comment and REMOVE it in Task 2.
 
 - [ ] **Step 3: Register the module** in `crates/rigg/src/commands/mod.rs`:
 
@@ -154,10 +154,10 @@ git commit -m "feat: interactive prompt layer wrapping inquire"
 **Interfaces:**
 - Consumes: Task 1's `interactive::{select, multi_select, confirm_default_yes, confirm_default_no, text}`.
 - Produces (adopt.rs, pure, unit-tested):
-  - `fn wizard_candidates(snapshot: &[(ResourceRef, Value)], owned_by_any: &BTreeMap<String, String>) -> Vec<(ResourceRef, String)>` — unmanaged only, sorted Foundry-first then Search, by (kind directory, name) within domain; label = `"[Foundry] agents/x"` / `"[Search] indexes/y"`.
-  - `fn expand_deps(to_adopt: &[(ResourceRef, Value)], owned_by_any: &BTreeMap<String, String>, snap_map: &BTreeMap<String, (ResourceRef, Value)>) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>)` — the additions and their keys (extracted from today's inline loop, same algorithm).
-  - `fn equivalent_command(project: &str, chosen: &[String], with_deps: bool) -> String` — e.g. `rigg adopt regulus agents/regulus --with-deps`.
-- Produces (new.rs): `pub fn create_project(ws: &Workspace, name: &str) -> Result<()>` — extracted from `new_project` (which becomes a thin wrapper doing `load_workspace()` + call).
+  - `fn wizard_candidates(snapshot: &[(ResourceRef, Value)], owned_by_any: &BTreeMap<String, String>) -> Vec<(ResourceRef, String)>`: unmanaged only, sorted Foundry-first then Search, by (kind directory, name) within domain; label = `"[Foundry] agents/x"` / `"[Search] indexes/y"`.
+  - `fn expand_deps(to_adopt: &[(ResourceRef, Value)], owned_by_any: &BTreeMap<String, String>, snap_map: &BTreeMap<String, (ResourceRef, Value)>) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>)`: the additions and their keys (extracted from today's inline loop, same algorithm).
+  - `fn equivalent_command(project: &str, chosen: &[String], with_deps: bool) -> String`: e.g. `rigg adopt regulus agents/regulus --with-deps`.
+- Produces (new.rs): `pub fn create_project(ws: &Workspace, name: &str) -> Result<()>`, extracted from `new_project` (which becomes a thin wrapper doing `load_workspace()` + call).
 
 - [ ] **Step 1: Make the project argument optional.** In `crates/rigg/src/cli.rs`, `AdoptArgs`:
 
@@ -195,7 +195,7 @@ pub fn create_project(ws: &Workspace, name: &str) -> Result<()> {
 }
 ```
 
-(Note: `validate_resource_name` is a new guard — project names share resource-name rules; import it. Task 3 documents this. The "Add resources" line stays in `new_project` only; Task 3 rewrites it.)
+(Note: `validate_resource_name` is a new guard, project names share resource-name rules; import it. Task 3 documents this. The "Add resources" line stays in `new_project` only; Task 3 rewrites it.)
 
 - [ ] **Step 3: Write the failing/pinning tests.** Append to `crates/rigg/tests/cli_surface.rs`:
 
@@ -272,13 +272,13 @@ NOTE: verify `ResourceKind::Agent` is the real variant name (check `traits.rs`);
 - [ ] **Step 4: Run to verify state**
 
 Run: `cargo test -p rigg --test cli_surface adopt_ 2>&1 | tail -12` and `cargo test -p rigg wizard_ 2>&1 | tail -8`
-Expected: the two new cli_surface tests — `adopt_without_project…` FAILS to compile or fails until `project` is optional and the usage message exists; unit tests FAIL (helpers undefined).
+Expected: the two new cli_surface tests, `adopt_without_project…` FAILS to compile or fails until `project` is optional and the usage message exists; unit tests FAIL (helpers undefined).
 
-- [ ] **Step 5: Reorder `run` and add the wizard.** Restructure `adopt.rs::run` to this shape (existing logic blocks are MOVED, not rewritten — classification, expansion, broad-confirm, write, report all stay as they are today except where noted):
+- [ ] **Step 5: Reorder `run` and add the wizard.** Restructure `adopt.rs::run` to this shape (existing logic blocks are MOVED, not rewritten, classification, expansion, broad-confirm, write, report all stay as they are today except where noted):
 
 ```rust
 pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
-    // Parse any given selectors first — cheap, and usage errors must not
+    // Parse any given selectors first: cheap, and usage errors must not
     // require a workspace or network.
     let mut selectors = args
         .selectors
@@ -310,7 +310,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         Some(p) => p.clone(),
         None => match ws.projects.len() {
             0 => {
-                println!("No projects yet — a project groups the resources you manage together.");
+                println!("No projects yet: a project groups the resources you manage together.");
                 if !interactive::confirm_default_yes("Create one now?", plain)? {
                     return Err(anyhow!("aborted"));
                 }
@@ -340,14 +340,14 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 
     // ---- ownership map, remote, snapshot: EXACTLY as today ----
     // (owned_by_any loop, Remote::for_project, ensure_any_connection,
-    //  snapshot, snap_map, supported — unchanged)
+    //  snapshot, snap_map, supported: unchanged)
 
     // ---- Wizard step 2: resources ----
     let mut wizard_chosen: Vec<String> = Vec::new(); // keys, for the hint
     if selectors.is_empty() {
         let candidates = wizard_candidates(&snapshot, &owned_by_any);
         if candidates.is_empty() {
-            println!("Nothing to adopt — everything visible is already managed.");
+            println!("Nothing to adopt: everything visible is already managed.");
             return Ok(());
         }
         // Service legend
@@ -427,14 +427,14 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
 Implementation notes (bind these exactly):
 - `wizard_candidates` sorts by `(domain_rank, kind.directory_name(), name)` where `domain_rank` = 0 for `Domain::FoundryData | Domain::FoundryArm`, 1 for `Domain::Search` (via `registry::meta(kind).domain`); label prefix `[Foundry] ` / `[Search] `.
 - The zero-project recursion happens at most once (after creation, `args.project` is `Some`). `Box::pin` is required for async recursion.
-- The existing with-deps inline loop is REPLACED by the `expand_deps` helper (same algorithm, `to_adopt` passed by ref, additions returned) — the non-wizard `--with-deps` path must produce byte-identical results to today; the sync tests from Workstream B pin this.
+- The existing with-deps inline loop is REPLACED by the `expand_deps` helper (same algorithm, `to_adopt` passed by ref, additions returned): the non-wizard `--with-deps` path must produce byte-identical results to today; the sync tests from Workstream B pin this.
 - `ws.project(&project_name)` borrows `ws`; keep the zero-project branch before that borrow (it returns/recurses).
-- Selector-less + `--dry-run` in wizard mode: allowed — wizard picks, then dry-run reports without confirm.
+- Selector-less + `--dry-run` in wizard mode: allowed, wizard picks, then dry-run reports without confirm.
 
 - [ ] **Step 6: Run all tests**
 
 Run: `cargo test -p rigg 2>&1 | tail -15`
-Expected: new unit tests pass; both new cli_surface tests pass; ALL Workstream B adopt tests (sync.rs) still pass unchanged — they run non-interactive, so the wizard never activates.
+Expected: new unit tests pass; both new cli_surface tests pass; ALL Workstream B adopt tests (sync.rs) still pass unchanged, they run non-interactive, so the wizard never activates.
 
 - [ ] **Step 7: fmt + clippy + full suite**
 
@@ -446,7 +446,7 @@ Expected: clean; 9 suites ok.
 ```bash
 git add crates/rigg/src/cli.rs crates/rigg/src/commands/adopt.rs crates/rigg/src/commands/new.rs \
         crates/rigg/src/commands/interactive.rs crates/rigg/tests/cli_surface.rs
-git commit -m "feat: interactive adopt wizard — pick project, resources, deps from live Azure"
+git commit -m "feat: interactive adopt wizard, pick project, resources, deps from live Azure"
 ```
 
 ---
@@ -505,7 +505,7 @@ Expected: FAIL.
 - [ ] **Step 4: Naming guidance.** In `CONCEPTS.md`, at the end of the "One or many projects? Choosing boundaries" section (after the "Because a resource lives in exactly one project…" paragraph), add:
 
 ```markdown
-**Naming:** Name a project after the thing it owns — a project holding the
+**Naming:** Name a project after the thing it owns: a project holding the
 `regulus` agent and its retrieval stack is naturally called `regulus`. Names
 follow the same rules as resource names (no `/` or `\`, at most 260
 characters).
@@ -528,7 +528,7 @@ rigg adopt my-rag                     # interactive: pick resources from a live 
 - [ ] **Step 6: Run tests + full checks**
 
 Run: `cargo test -p rigg --test cli_surface 2>&1 | tail -6 && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -3`
-Expected: all pass. NOTE: the CONCEPTS.md edit changes the embedded `include_str!` content — confirm `concepts` tests still pass (they assert on invariant sentence + headings, which are untouched).
+Expected: all pass. NOTE: the CONCEPTS.md edit changes the embedded `include_str!` content, confirm `concepts` tests still pass (they assert on invariant sentence + headings, which are untouched).
 
 - [ ] **Step 7: Commit**
 
@@ -547,10 +547,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Then LIVE acceptance (controller, not subagent): run `rigg adopt` interactively in the e2e-test workspace against real Azure — the Regulus scenario.
+Then LIVE acceptance (controller, not subagent): run `rigg adopt` interactively in the e2e-test workspace against real Azure, the Regulus scenario.
 
 ## Self-Review notes
 
 - Spec coverage: activation matrix → Task 2 Step 5 + pinning tests; project step incl. zero-project create → Task 2; cross-service grouped menu → `wizard_candidates` + legend; deps ask-only-if-adds → Task 2; always-confirm in wizard → Task 2; hint → `equivalent_command`; unreachable-service hard fail → unchanged `snapshot()` (constraint documents it); signpost + naming → Task 3; prompt layer + no-color + abort mapping → Task 1.
 - Type consistency: `interactive::` fn signatures used in Task 2 match Task 1; `create_project(&ws, &name)` matches Task 2 Step 2; `AdoptArgs.project: Option<String>` threaded through the recursion struct literal.
-- The wizard never runs in tests (no TTY) — Workstream B tests remain the behavioral pin for everything scriptable.
+- The wizard never runs in tests (no TTY): Workstream B tests remain the behavioral pin for everything scriptable.

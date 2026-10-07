@@ -1111,7 +1111,7 @@ async fn protected_env_push_non_interactive_emits_needs_input_with_exit_6() {
     assert_eq!(doc["status"], "needs-input");
     assert_eq!(doc["questions"][0]["id"], "confirm.protected.prod");
     assert_eq!(doc["questions"][0]["kind"], "confirm-env");
-    // The plan is shown ("explain, then act") before the gate is asked —
+    // The plan is shown ("explain, then act") before the gate is asked,
     // in --output json mode, prose narration (including the plan) goes to
     // stderr so stdout stays pure JSON, but it must still appear somewhere.
     let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
@@ -1224,7 +1224,7 @@ async fn push_refuses_a_leaked_binding_before_any_mutation() {
         .await;
 
     // `dev` binds the storage account; `prod` (protected, hence strict) does
-    // not — a prod file pointing at it is dev's infrastructure leaking into
+    // not: a prod file pointing at it is dev's infrastructure leaking into
     // a production push.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -1297,7 +1297,7 @@ async fn push_dry_run_reports_a_leaked_binding_without_refusing() {
 
     // Same leaked-binding setup as `push_refuses_a_leaked_binding_before_any_mutation`,
     // but with `--dry-run`: the preflight must still run (and report the
-    // leak), but must not refuse — a dry run only previews.
+    // leak), but must not refuse: a dry run only previews.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("rigg.yaml"),
@@ -2299,7 +2299,7 @@ async fn push_replace_empty_kb_falls_back_to_delete() {
 #[tokio::test]
 async fn push_resumes_interrupted_replace_relink() {
     let server = MockServer::start().await;
-    // Remote KS already replaced (searchIndex) — only the relink is pending.
+    // Remote KS already replaced (searchIndex), only the relink is pending.
     Mock::given(method("GET"))
         .and(path("/knowledgeSources/test-ks"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -2357,7 +2357,7 @@ async fn push_relink_preflight_refuses_a_leaked_binding_before_relinking() {
     mount_put_echo(&server, "/knowledgeBases/kb1").await;
 
     // `dev` binds the AOAI model host; `prod` (protected, hence strict) does
-    // not — a pending relink whose restored knowledge-base doc points at it
+    // not: a pending relink whose restored knowledge-base doc points at it
     // is dev's infrastructure leaking into a production push, exactly like
     // a plain push plan. The plan itself is otherwise empty (no local
     // files), which is what routes push through the pending-relinks branch
@@ -2664,7 +2664,7 @@ async fn push_warns_about_in_sync_skillset_with_redacted_webapi_key() {
     write_resource(ws.path(), "skillsets", "webss", &ss);
 
     // In sync: Azure redacts stored secrets on every GET, which says NOTHING
-    // about the remote key's validity (issue #5) — an ordinary push stays a
+    // about the remote key's validity (issue #5): an ordinary push stays a
     // quiet no-op with a non-blocking note, never a failure claim or prompt.
     rigg(ws.path())
         .args(["push", "demo", "--yes"])
@@ -2707,7 +2707,7 @@ async fn push_in_sync_annotated_skillset_is_idempotent() {
     let ws = workspace(&server.uri());
     write_resource(ws.path(), "skillsets", "webss", &local_ss);
 
-    // Issue #5: an in-sync annotated skillset is NOT re-PUT on every push —
+    // Issue #5: an in-sync annotated skillset is NOT re-PUT on every push,
     // ordinary pushes are idempotent; key refresh is explicit.
     rigg(ws.path())
         .args(["push", "demo", "--yes"])
@@ -2747,7 +2747,7 @@ async fn push_refresh_credentials_pulls_in_sync_redacted_into_the_gate() {
     write_resource(ws.path(), "skillsets", "webss", &ss);
 
     // --refresh-credentials makes the unknown state explicit work: the
-    // in-sync skillset joins the plan and the auth gate applies — which
+    // in-sync skillset joins the plan and the auth gate applies, which
     // non-interactively means blocking (exit 3), before any mutation.
     rigg(ws.path())
         .args(["push", "demo", "--yes", "--refresh-credentials"])
@@ -2794,7 +2794,7 @@ async fn push_local_ahead_redacted_webapi_key_still_blocks() {
 }
 
 // ---------------------------------------------------------------------------
-// rigg az — runtime operations
+// rigg az: runtime operations
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -3287,7 +3287,7 @@ async fn adopt_multi_env_without_selection_requires_explicit_env() {
     let ws = workspace_two_env_servers(&dev.uri(), &prod.uri());
 
     // Non-interactive with several environments: refuse to guess, even though
-    // dev is marked default — adopting from the wrong env is too costly.
+    // dev is marked default: adopting from the wrong env is too costly.
     rigg(ws.path())
         .args(["adopt", "demo", "all"])
         .assert()
@@ -3429,7 +3429,7 @@ async fn migrate_side_by_side_rewrites_index_projection_targets() {
 
 /// The retrieval & output configuration (retrievalInstructions,
 /// answerInstructions, outputMode, retrievalReasoningEffort, per-source
-/// serving flags) only exists in the preview api-version — the stable GET
+/// serving flags) only exists in the preview api-version: the stable GET
 /// silently omits it. Rigg must manage knowledge bases on the preview
 /// channel or adopt/pull capture an incomplete document and push can never
 /// set those fields.
@@ -3536,7 +3536,7 @@ async fn pull_follows_odata_next_link_across_pages() {
 }
 
 /// A server that keeps returning the same `@odata.nextLink` forever must not
-/// hang `list` indefinitely (or grow memory without bound) — the client
+/// hang `list` indefinitely (or grow memory without bound): the client
 /// bounds paging and errors out with a clear message.
 #[tokio::test]
 async fn pull_fails_fast_on_a_cycling_odata_next_link() {
@@ -3564,7 +3564,7 @@ async fn pull_fails_fast_on_a_cycling_odata_next_link() {
 }
 
 /// A field Azure returns that rigg's pinned schema fixture does not know
-/// about is reported on stderr as a note — an API-drift canary — while the
+/// about is reported on stderr as a note, an API-drift canary, while the
 /// document itself is written through unchanged (rigg stays pass-through).
 #[tokio::test]
 async fn pull_reports_fields_unknown_to_the_pinned_schema() {
@@ -3666,7 +3666,7 @@ async fn push_verify_exercises_the_pushed_resources() {
         .args(["push", "demo", "--yes", "--verify"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("indexer 'idxr' — 3 processed"))
+        .stdout(predicate::str::contains("indexer 'idxr': 3 processed"))
         .stdout(predicate::str::contains("knowledge base 'kb' retrieved"))
         .stdout(predicate::str::contains("2 check(s) passed"));
 
@@ -3687,14 +3687,14 @@ async fn push_verify_exercises_the_pushed_resources() {
 /// A local edit that touches ONLY a data source's write-only connection
 /// string must still be pushable. Checksums deliberately ignore write-only
 /// fields (Azure redacts them on every GET, so comparing them against the
-/// remote would report drift forever) — so the BASELINE is what such an edit
+/// remote would report drift forever), so the BASELINE is what such an edit
 /// is measured against. Regression: re-pointing a data source at another
 /// storage account used to classify as "in sync" and `push` skipped it.
 #[tokio::test]
 async fn a_connection_string_only_edit_is_pushed() {
     const OLD: &str = "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/old-acct;";
     const NEW: &str = "ResourceId=/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/new-acct;";
-    // Azure redacts the connection string on every GET — the remote can never
+    // Azure redacts the connection string on every GET: the remote can never
     // witness this change.
     let redacted = json!({
         "@odata.etag": "\"0x1\"",
@@ -3754,7 +3754,7 @@ async fn a_connection_string_only_edit_is_pushed() {
         "pull must not wipe the local connection string with Azure's redaction"
     );
 
-    // re-point the data source at another storage account — nothing else
+    // re-point the data source at another storage account, nothing else
     std::fs::write(&file, serde_json::to_string_pretty(&ds(NEW)).unwrap()).unwrap();
 
     rigg(ws.path())
@@ -3763,7 +3763,7 @@ async fn a_connection_string_only_edit_is_pushed() {
         .success()
         .stdout(predicate::str::contains("local ahead"));
 
-    // diff shows old → new from local vs BASELINE — never from the redacted
+    // diff shows old → new from local vs BASELINE, never from the redacted
     // remote, which has nothing to show.
     let report = rigg(ws.path())
         .args(["diff", "demo", "--exit-code", "--format", "json"])

@@ -1,6 +1,6 @@
 # Rigg samples
 
-One rigg **workspace**, two **projects** — copy what you need. `rigg.yaml`
+One rigg **workspace**, two **projects**: copy what you need. `rigg.yaml`
 uses placeholder service names; point them at your own services, or run
 `rigg init` in a fresh directory and copy the project folders in.
 
@@ -22,6 +22,6 @@ rigg push quickstart-blob    # after pointing rigg.yaml at your services
 
 **These files are a reference, not a walkthrough.** To build the same thing
 step by step against your own subscription, follow
-[tutorial 2 — Build from scratch](../docs/tutorials/02-build-from-scratch.md).
+[tutorial 2: Build from scratch](../docs/tutorials/02-build-from-scratch.md).
 To put a stack you *already* have under version control, start with
 [tutorial 1](../docs/tutorials/01-pull-an-existing-solution.md).

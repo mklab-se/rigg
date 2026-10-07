@@ -1,8 +1,8 @@
-# rigg — Portal-authored references, dependency selection, re-adoption
+# rigg: Portal-authored references, dependency selection, re-adoption
 
 **Date:** 2026-07-10
-**Status:** Design — approved (user-directed)
-**Workstream:** D (A concepts, B scoped adopt, C wizard — all merged).
+**Status:** Design: approved (user-directed)
+**Workstream:** D (A concepts, B scoped adopt, C wizard: all merged).
 
 ## Problems (all found by live-testing the Regulus adoption)
 
@@ -11,18 +11,18 @@
    (`https://mklabsrch.search.windows.net/knowledgebases/regulatory-kb/mcp?…`)
    and a `project_connection_id` (`kb-regulatory-kb-9kdyn`). rigg's reference
    extractor only understands `x-rigg-ref` annotations (rigg-authored files)
-   and the RefField table — so `--with-deps` stopped at the model deployment
+   and the RefField table, so `--with-deps` stopped at the model deployment
    and missed the entire Search retrieval stack plus the connection.
 2. **Dependency adoption is all-or-nothing.** The wizard asks one yes/no for
    the whole dependency set; the user may want the knowledge base but not the
    rest.
 3. **"Change my mind later" doesn't work.** `rigg adopt regulus agents/Regulus
    --with-deps` after Regulus is already owned classifies the agent as
-   "already managed" and drops it — dependency expansion then seeds from an
+   "already managed" and drops it: dependency expansion then seeds from an
    empty set and finds nothing. Adopting missing dependencies of an owned
    resource requires manually naming each one.
 4. **Server state leaks into deployment files.** `properties.currentCapacity`
-   and `properties.deploymentState` are runtime state, not configuration —
+   and `properties.deploymentState` are runtime state, not configuration:
    they will cause phantom drift.
 
 ## Conceptual decisions (settled with the user)
@@ -31,7 +31,7 @@
   changes ownership. The portal scenario ("someone wires a new KB into the
   agent via the portal") is `pull` (captures the agent's changed JSON) then
   `adopt` (claims the newly referenced, unmanaged resource).
-- **Re-capturing dependencies is still adoption** — same verb, no new command:
+- **Re-capturing dependencies is still adoption** (same verb, no new command):
   naming an owned resource with `--with-deps` means "adopt this resource's
   missing dependencies" (the resource itself stays a no-op). This makes the
   wizard's `hint:` line idempotent and re-runnable.
@@ -75,20 +75,20 @@ Regulus is adopted, and captures new portal-added dependencies after a `pull`.
 ### 3. Wizard: managed resources visible, dependencies selectable
 
 - **Menu**: in addition to unmanaged resources, resources owned by the
-  **target project** appear, marked — label suffix ` (managed)` — so the user
+  **target project** appear, marked: label suffix ` (managed)`, so the user
   can select one to trigger dependency capture. Resources owned by *other*
   projects stay hidden. Selecting only managed resources with no missing deps
   ends with "Nothing to adopt" (exit 0).
 - **Dependency step**: instead of yes/no on the whole set, the computed
   dependency closure is shown as a **multi-select with every item
-  pre-checked** (Enter = adopt all, space to drop individual items — e.g.
+  pre-checked** (Enter = adopt all, space to drop individual items, e.g.
   keep the knowledge base, skip the rest). Deselecting an item does not
-  remove other items that were reachable only through it — the closure is a
+  remove other items that were reachable only through it: the closure is a
   flat list; à la carte means the user's picks are final.
 - Non-interactive `--with-deps` stays all-or-nothing (deterministic scripts).
 - The final `hint:` includes `--with-deps` when any dependency was adopted and
   lists the resources the user actually picked from the menu (managed picks
-  included — re-running is a no-op-plus-new-deps, which is the point).
+  included: re-running is a no-op-plus-new-deps, which is the point).
 
 ### 4. Deployment volatile fields
 
@@ -96,7 +96,7 @@ Add `properties.currentCapacity` and `properties.deploymentState` to the
 Deployment `volatile_fields` in the registry. Note for existing files: the
 user's already-adopted `gpt-5.2-chat.json` contains both fields; after this
 change they are ignored in diff and stripped on the next pull/push
-canonicalization — no migration needed.
+canonicalization: no migration needed.
 
 ### 5. Help/docs
 

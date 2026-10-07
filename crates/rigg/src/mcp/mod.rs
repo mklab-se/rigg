@@ -26,7 +26,7 @@ pub async fn run(args: McpArgs) -> Result<()> {
 }
 
 /// The `| Tool | Purpose | Parameters |` table for the generated region of
-/// `MCP.md`, built from the tool router's own list — the exact names,
+/// `MCP.md`, built from the tool router's own list: the exact names,
 /// descriptions and JSON schemas an MCP client sees.
 ///
 /// `list_all()` sorts by tool name, and parameters are ordered required

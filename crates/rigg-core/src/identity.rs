@@ -1,8 +1,8 @@
 //! The identity graph (spec §3): which service-identity roles does this
 //! configuration require, on which scopes, and what settings must hold?
 //!
-//! Edges are derived from the documents themselves — every infrastructure
-//! reference the registry knows about ([`crate::infra::extract`]) — and
+//! Edges are derived from the documents themselves: every infrastructure
+//! reference the registry knows about ([`crate::infra::extract`]), and
 //! scoped through the environment's bindings ([`EnvBindings`]), so a scope is
 //! an ARM id whenever the binding resolves and an explicit "unbound" marker
 //! when it does not. `rigg auth doctor` verifies and repairs them; `rigg push`
@@ -149,7 +149,7 @@ pub enum Scope {
     Resolved(String),
     #[serde(rename_all = "camelCase")]
     Unresolved {
-        /// The binding that names this resource — empty when nothing in the
+        /// The binding that names this resource: empty when nothing in the
         /// environment binds it at all.
         binding: String,
         kind: Option<BindingType>,
@@ -202,7 +202,7 @@ pub enum Constraint {
     /// The referenced Cognitive Services account must be of kind `AIServices`.
     AiServicesKindRequired,
     /// Storage's trusted-services exception works only with the search
-    /// service's system-assigned identity — a UAMI cannot use it.
+    /// service's system-assigned identity: a UAMI cannot use it.
     TrustedServiceNeedsSystemIdentity,
     /// The feature this edge comes from exists on the preview channel only.
     PreviewOnly(&'static str),
@@ -221,7 +221,7 @@ pub struct Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EdgeKind {
-    /// An ARM role assignment — verifiable and fixable.
+    /// An ARM role assignment: verifiable and fixable.
     Rbac,
     /// Entra app authorization (Easy Auth audience) rather than ARM RBAC.
     AppAuthorization,
@@ -503,7 +503,7 @@ impl Doc<'_> {
     }
 }
 
-/// `a.b.resourceUri` → `a.b.<leaf>` — the sibling field of an infra
+/// `a.b.resourceUri` → `a.b.<leaf>`: the sibling field of an infra
 /// reference (its `authIdentity`/`identity` companion).
 fn sibling(path: &str, leaf: &str) -> String {
     match path.rfind('.') {
@@ -572,7 +572,7 @@ fn foundry_scope(env: &EnvBindings) -> Scope {
 }
 
 /// Build the identity graph for `docs` (spec §3.2 and §3.3). `operator` is
-/// left empty — operator edges depend on the plan, see [`operator_edges`].
+/// left empty: operator edges depend on the plan, see [`operator_edges`].
 pub fn graph_for_docs(env: &EnvBindings, docs: &[(ResourceKind, String, Value)]) -> Graph {
     let mut b = Builder::new(env);
     for (kind, name, value) in docs {
@@ -600,7 +600,7 @@ pub fn graph_for_docs(env: &EnvBindings, docs: &[(ResourceKind, String, Value)])
     }
 }
 
-/// Row 1 — a blob data source reads from its storage account.
+/// Row 1: a blob data source reads from its storage account.
 fn data_source_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
     if doc.kind != ResourceKind::DataSource {
         return;
@@ -634,7 +634,7 @@ fn data_source_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
                     account: scope.clone(),
                 },
                 format!(
-                    "{} uses NativeBlobSoftDeleteDeletionDetectionPolicy — blob soft delete must \
+                    "{} uses NativeBlobSoftDeleteDeletionDetectionPolicy: blob soft delete must \
                      be enabled on '{physical}' (and blob versioning off)",
                     doc.label()
                 ),
@@ -644,7 +644,7 @@ fn data_source_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
 }
 
-/// Row 2 — a blob knowledge source reads its container, and writes its
+/// Row 2: a blob knowledge source reads its container, and writes its
 /// enrichment asset store when it declares one.
 fn knowledge_source_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
     if doc.kind != ResourceKind::KnowledgeSource {
@@ -686,7 +686,7 @@ fn knowledge_source_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
 }
 
-/// Row 3 — a skillset's knowledge store writes projections.
+/// Row 3: a skillset's knowledge store writes projections.
 fn knowledge_store_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
     if doc.kind != ResourceKind::Skillset {
         return;
@@ -739,7 +739,7 @@ fn knowledge_store_storage(b: &mut Builder<'_>, doc: &Doc<'_>) {
 
 /// A storage edge, with the trusted-services constraint attached whenever a
 /// user-assigned identity is used (the exception works only with the search
-/// service's system-assigned identity — spec §3.3).
+/// service's system-assigned identity: spec §3.3).
 fn storage_edge(
     principal: Principal,
     role: roles::Role,
@@ -765,7 +765,7 @@ fn storage_checks(b: &mut Builder<'_>, doc: &Doc<'_>, scope: &Scope, path: &str)
                 account: scope.clone(),
             },
             format!(
-                "{} reaches this storage account — its firewall must admit the search service",
+                "{} reaches this storage account: its firewall must admit the search service",
                 doc.label()
             ),
         )
@@ -777,7 +777,7 @@ fn storage_checks(b: &mut Builder<'_>, doc: &Doc<'_>, scope: &Scope, path: &str)
                 account: scope.clone(),
             },
             format!(
-                "{} uses identity-based access — shared-key access may be disabled",
+                "{} uses identity-based access: shared-key access may be disabled",
                 doc.label()
             ),
         )
@@ -785,7 +785,7 @@ fn storage_checks(b: &mut Builder<'_>, doc: &Doc<'_>, scope: &Scope, path: &str)
     );
 }
 
-/// Rows 4 and 5 — model access on the host named by a `resourceUri`.
+/// Rows 4 and 5: model access on the host named by a `resourceUri`.
 fn model_host(b: &mut Builder<'_>, doc: &Doc<'_>) {
     let refs: Vec<(String, String)> = doc
         .of_form(InfraForm::OpenAiEndpoint)
@@ -816,7 +816,7 @@ fn model_host(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
 }
 
-/// Row 6 — identity-based AI services enrichment.
+/// Row 6: identity-based AI services enrichment.
 fn ai_services(b: &mut Builder<'_>, doc: &Doc<'_>) {
     let refs: Vec<(String, String)> = doc
         .of_form(InfraForm::AiServicesSubdomain)
@@ -849,7 +849,7 @@ fn ai_services(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
 }
 
-/// Row 7 — a Web API skill authenticating with a managed identity needs the
+/// Row 7: a Web API skill authenticating with a managed identity needs the
 /// target app to accept its token (Easy Auth), not an ARM role.
 fn web_api_skills(b: &mut Builder<'_>, doc: &Doc<'_>) {
     if doc.kind != ResourceKind::Skillset {
@@ -885,7 +885,7 @@ fn web_api_skills(b: &mut Builder<'_>, doc: &Doc<'_>) {
                 EdgeKind::AppAuthorization,
             )
             .because(format!(
-                "{} calls '{physical}' with a managed identity — the app must accept the audience \
+                "{} calls '{physical}' with a managed identity: the app must accept the audience \
                  '{audience}'",
                 doc.label()
             ))
@@ -922,7 +922,7 @@ fn web_api_skills(b: &mut Builder<'_>, doc: &Doc<'_>) {
     }
 }
 
-/// Row 8 — an agent reaching a knowledge base through an MCP connection that
+/// Row 8: an agent reaching a knowledge base through an MCP connection that
 /// authenticates with the Foundry project's own identity.
 fn agent_connections(b: &mut Builder<'_>, doc: &Doc<'_>, docs: &[(ResourceKind, String, Value)]) {
     if doc.kind != ResourceKind::Agent {
@@ -944,7 +944,7 @@ fn agent_connections(b: &mut Builder<'_>, doc: &Doc<'_>, docs: &[(ResourceKind, 
         }
         // The connection must authenticate with the project's identity. When
         // the connection is not among `docs` (a plan-scoped graph), the edge
-        // is kept — an unverifiable requirement beats a silently dropped one.
+        // is kept: an unverifiable requirement beats a silently dropped one.
         let declared = docs
             .iter()
             .find(|(k, n, _)| *k == ResourceKind::Connection && n == conn);
@@ -976,7 +976,7 @@ fn agent_connections(b: &mut Builder<'_>, doc: &Doc<'_>, docs: &[(ResourceKind, 
     }
 }
 
-/// Row 9 — customer-managed encryption keys without an explicit credential.
+/// Row 9: customer-managed encryption keys without an explicit credential.
 fn encryption_keys(b: &mut Builder<'_>, doc: &Doc<'_>) {
     let Some(found) = doc.at("encryptionKey.keyVaultUri") else {
         return;
@@ -1056,7 +1056,7 @@ fn search_checks(b: &mut Builder<'_>) {
 // ---------------------------------------------------------------------
 
 /// The operator's own rights for a plan (spec §3.2): what the caller must
-/// hold to apply `kinds_in_plan`, plus — for every edge in `needs_grants` —
+/// hold to apply `kinds_in_plan`, plus, for every edge in `needs_grants`,
 /// the ability to create a role assignment at that edge's scope.
 ///
 /// `verify` covers the data-plane reads `rigg push --verify`, `rigg query`
@@ -1064,7 +1064,7 @@ fn search_checks(b: &mut Builder<'_>) {
 ///
 /// `foundry_project_id` is the ARM id of the environment's Foundry *project*
 /// (`<account id>/projects/<project>`), which the binding table does not
-/// carry — the caller resolves it. Foundry User is scoped there (spec
+/// carry: the caller resolves it. Foundry User is scoped there (spec
 /// §3.2); the account-level roles stay on the account. Without it the
 /// project-scoped edge falls back to the account, where an `atScope()` check
 /// would miss a project-only assignment.
@@ -1169,7 +1169,7 @@ pub fn operator_edges(
 // compatibility
 // ---------------------------------------------------------------------
 
-/// The identity edges ONE document requires, with no environment bindings —
+/// The identity edges ONE document requires, with no environment bindings:
 /// scopes resolve only where the document itself is unambiguous. Used by
 /// push to diagnose an RBAC-shaped rejection of that document.
 pub fn edges_for(kind: ResourceKind, name: &str, value: &Value) -> Vec<Edge> {
@@ -1211,7 +1211,7 @@ mod tests {
 
     /// An environment whose dependency bindings are declared as full ARM ids
     /// and whose implicit `search`/`foundry` targets come from a resolution
-    /// cache — so every scope in these tests resolves.
+    /// cache, so every scope in these tests resolves.
     fn env() -> EnvBindings {
         let deps = [
             ("docs", BindingType::Storage, STORAGE_ID),
@@ -1705,7 +1705,7 @@ mod tests {
 
     /// I-5: `encryptionKey.identity` names the identity that fetches the
     /// key, exactly like every other sibling `identity`/`authIdentity`
-    /// field — the CMK edge (and therefore `--fix`) must follow it rather
+    /// field: the CMK edge (and therefore `--fix`) must follow it rather
     /// than grant the system identity a role it never uses.
     #[test]
     fn encryption_key_identity_attributes_the_cmk_edge_to_the_user_assigned_identity() {

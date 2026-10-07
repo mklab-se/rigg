@@ -44,10 +44,10 @@ pub struct ArmResource {
     pub kind: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// `properties.principalId` — set for managed identities.
+    /// `properties.principalId`: set for managed identities.
     #[serde(default)]
     pub principal_id: Option<String>,
-    /// `properties.clientId` — set for managed identities.
+    /// `properties.clientId`: set for managed identities.
     #[serde(default)]
     pub client_id: Option<String>,
 }
@@ -155,7 +155,7 @@ impl std::fmt::Display for AiServicesAccount {
 /// Microsoft Foundry project (sub-resource of AI Services account)
 #[derive(Debug, Clone, Deserialize)]
 pub struct FoundryProject {
-    /// ARM name — may be "accountName/projectName" for sub-resources
+    /// ARM name: may be "accountName/projectName" for sub-resources
     #[serde(default)]
     name: String,
     pub location: String,
@@ -377,7 +377,7 @@ impl ArmClient {
     }
 
     /// Create a new ARM client from an already-obtained bearer token and an
-    /// explicit base URL — for tests, so ARM-fake tests never touch the
+    /// explicit base URL: for tests, so ARM-fake tests never touch the
     /// process env var (they run in parallel and would stomp each other).
     pub fn with_token_and_base(token: String, base_url: String) -> Self {
         let http = Client::builder()
@@ -401,7 +401,7 @@ impl ArmClient {
         )
     }
 
-    /// This client's ARM base URL (honours `RIGG_ARM_ENDPOINT`) — for
+    /// This client's ARM base URL (honours `RIGG_ARM_ENDPOINT`): for
     /// callers building their own URLs (e.g. `ArmResourceClient`).
     pub fn base_url(&self) -> &str {
         &self.base_url
@@ -471,7 +471,7 @@ impl ArmClient {
 
     /// `resourceType → apiVersions` as ARM registers them for `namespace` in
     /// `subscription_id` (what `az provider show` prints). The ground truth
-    /// for which api-version a call may use — the specs repository can be
+    /// for which api-version a call may use: the specs repository can be
     /// ahead of it.
     pub async fn provider_api_versions(
         &self,
@@ -754,7 +754,7 @@ impl ArmClient {
     }
 
     /// Find the ARM resource id of ANY Microsoft.CognitiveServices account
-    /// by name — regardless of kind (AIServices, CognitiveServices, OpenAI,
+    /// by name, regardless of kind (AIServices, CognitiveServices, OpenAI,
     /// ...). Unlike [`Self::list_ai_services_accounts`] (which serves
     /// Foundry discovery and filters to kind AIServices), this covers e.g.
     /// the plain CognitiveServices accounts skillsets use for enrichment.
@@ -763,7 +763,7 @@ impl ArmClient {
     }
 
     /// Find ANY Microsoft.CognitiveServices account by name (full document,
-    /// including its `kind` — needed to tell Foundry/AIServices resources
+    /// including its `kind`: needed to tell Foundry/AIServices resources
     /// apart from legacy CognitiveServices accounts).
     pub async fn find_cognitive_account(
         &self,
@@ -856,7 +856,7 @@ impl ArmClient {
     }
 
     /// Microsoft.Web sites (function apps / web apps) within one
-    /// subscription only — the per-subscription counterpart to
+    /// subscription only: the per-subscription counterpart to
     /// [`Self::list_web_sites`], used by the binding fan-out so
     /// `--subscription` narrows the search instead of being ignored.
     pub async fn list_web_sites_subscription(
@@ -1115,7 +1115,7 @@ impl ArmClient {
     }
 
     /// Whether a storage account contains a blob container with this name
-    /// (checked via ARM with the caller's CLI token — no data-plane access
+    /// (checked via ARM with the caller's CLI token: no data-plane access
     /// or account keys involved).
     pub async fn storage_account_has_container(
         &self,
@@ -1147,7 +1147,7 @@ impl ArmClient {
 
     /// Find every storage account (across all visible subscriptions) that
     /// holds a blob container named `container`. Used to auto-construct
-    /// identity-based `ResourceId=` data-source connections — the user is
+    /// identity-based `ResourceId=` data-source connections: the user is
     /// already logged in via Azure CLI, so rigg discovers instead of asking.
     /// Accounts that fail the container check (e.g. insufficient RBAC on an
     /// unrelated subscription) are skipped, not fatal.
@@ -1398,7 +1398,7 @@ impl ArmClient {
             .collect())
     }
 
-    /// `GET /subscriptions/{sub}/providers/{resource_type_path}` — the raw
+    /// `GET /subscriptions/{sub}/providers/{resource_type_path}`: the raw
     /// `value` array, shared by the typed list helpers above.
     async fn list_provider_resources(
         &self,
@@ -1429,7 +1429,7 @@ impl ArmClient {
             .unwrap_or_default())
     }
 
-    /// The [`ArmResource`] list for one [`BindingType`] in one subscription —
+    /// The [`ArmResource`] list for one [`BindingType`] in one subscription:
     /// used by [`Self::resolve_binding`]'s by-name lookup.
     async fn list_resources_for_kind(
         &self,
@@ -1489,7 +1489,7 @@ impl ArmClient {
     }
 
     /// The [`Provider`] channel a [`TargetKind`]'s ARM id is read back
-    /// through — `None` for `api` (URL bindings have no ARM resource).
+    /// through: `None` for `api` (URL bindings have no ARM resource).
     fn provider_for_target(kind: TargetKind) -> Option<Provider> {
         match kind {
             TargetKind::Search => Some(Provider::SearchArm),
@@ -1580,7 +1580,7 @@ impl ArmClient {
         })
     }
 
-    /// Resolve a declared `dependencies` binding — [`Self::resolve_target`]
+    /// Resolve a declared `dependencies` binding: [`Self::resolve_target`]
     /// for [`TargetKind::Binding`].
     pub async fn resolve_binding(
         &self,
@@ -1593,7 +1593,7 @@ impl ArmClient {
     }
 
     /// Resolve a binding value (bare name, ARM id, or URL) to a
-    /// [`ResolvedBinding`] — for a declared dependency type or for one of an
+    /// [`ResolvedBinding`]: for a declared dependency type or for one of an
     /// environment's implicit targets ([`TargetKind::Search`],
     /// [`TargetKind::Foundry`]).
     ///
@@ -1602,7 +1602,7 @@ impl ArmClient {
     ///   of `kind` in `subscription` (or every enabled subscription, when
     ///   `None`): zero matches is a [`ClientError::NotFound`], more than one
     ///   is a `409` [`ClientError::Api`] naming the ambiguous ids.
-    /// - A URL (only meaningful for [`BindingType::Api`]) resolves locally —
+    /// - A URL (only meaningful for [`BindingType::Api`]) resolves locally:
     ///   no ARM call.
     ///
     /// The returned [`ResolvedBinding::name`] is the ARM resource's name;
@@ -1643,7 +1643,7 @@ impl ArmClient {
                 };
                 let mut matches: Vec<ArmResource> = Vec::new();
                 // A subscription we cannot list (no RBAC on it, a disabled
-                // provider) must not sink the whole lookup — the resource
+                // provider) must not sink the whole lookup: the resource
                 // usually lives in one of the others. Remember the first
                 // failure so an all-denied fan-out reports *that* instead of
                 // a misleading "not found"; but once at least one
@@ -1683,7 +1683,7 @@ impl ArmClient {
                     _ => Err(ClientError::Api {
                         status: 409,
                         message: format!(
-                            "ambiguous: {} — use the full ARM id",
+                            "ambiguous: {}, use the full ARM id",
                             matches
                                 .iter()
                                 .map(|m| m.id.as_str())

@@ -75,7 +75,7 @@ pub enum AuthError {
 fn account_parse_error(e: serde_json::Error) -> AuthError {
     AuthError::TokenError(format!(
         "could not parse `az account show` output ({e}); this is usually a \
-         transient Azure CLI issue — try again, and if it persists run `az login`"
+         transient Azure CLI issue: try again, and if it persists run `az login`"
     ))
 }
 
@@ -85,7 +85,7 @@ fn account_parse_error(e: serde_json::Error) -> AuthError {
 fn token_error_detail(stderr: &str, status: std::process::ExitStatus) -> String {
     if stderr.trim().is_empty() {
         format!(
-            "az returned no error detail (exit {status}); usually transient — try again, or run `az login`"
+            "az returned no error detail (exit {status}); usually transient: try again, or run `az login`"
         )
     } else {
         stderr.trim().to_string()
@@ -116,7 +116,7 @@ fn token_cache_key(tenant: Option<&str>, audience: &str) -> String {
 /// Microsoft Graph, which the CLI serves via `--resource-type ms-graph`.
 ///
 /// There is deliberately no `--username`: `az account get-access-token`
-/// rejects it, and a service principal never comes through here — it is
+/// rejects it, and a service principal never comes through here: it is
 /// minted directly against Entra ID by
 /// [`mint_service_principal_token`].
 fn az_token_args(tenant: Option<&str>, audience: &str) -> Vec<String> {
@@ -167,7 +167,7 @@ pub fn login_endpoint() -> String {
 pub enum SpCredential {
     /// A client secret (`AZURE_CLIENT_SECRET`).
     Secret(String),
-    /// A federated identity assertion — the OIDC token GitHub Actions (and
+    /// A federated identity assertion: the OIDC token GitHub Actions (and
     /// any workload-identity issuer) writes to `AZURE_FEDERATED_TOKEN_FILE`.
     FederatedAssertion(String),
 }
@@ -277,7 +277,7 @@ pub fn mint_service_principal_token(
     }
 }
 
-/// Entra ID's own error text for a failed token request — `error` plus
+/// Entra ID's own error text for a failed token request: `error` plus
 /// `error_description` (which carries the AADSTS code) when the body is the
 /// documented JSON envelope, else the raw body. Only ever the *response*, so
 /// no credential can end up here.
@@ -305,7 +305,7 @@ fn token_endpoint_error(status: u16, body: &str) -> String {
 ///
 /// `token_for` is synchronous (it backs the blocking `AuthProvider` trait),
 /// so the request runs on its own thread with its own single-threaded
-/// runtime rather than borrowing the caller's — exactly as blocking as the
+/// runtime rather than borrowing the caller's: exactly as blocking as the
 /// `az` subprocess it replaces, and safe to call from inside an async
 /// command.
 fn post_form(url: &str, form: Vec<(&'static str, String)>) -> Result<(u16, String), AuthError> {
@@ -338,11 +338,11 @@ fn post_form(url: &str, form: Vec<(&'static str, String)>) -> Result<(u16, Strin
         .map_err(|_| AuthError::TokenError("the token request thread panicked".to_string()))?
 }
 
-/// An access token for one `(tenant, audience)` pair — the single entry point
+/// An access token for one `(tenant, audience)` pair: the single entry point
 /// every client uses (spec §8).
 ///
 /// Resolution order, highest first:
-/// 1. `RIGG_ACCESS_TOKEN` — a pre-minted token, honoured for any audience.
+/// 1. `RIGG_ACCESS_TOKEN`: a pre-minted token, honoured for any audience.
 /// 2. Service-principal environment variables (`AZURE_CLIENT_ID` /
 ///    `AZURE_TENANT_ID` plus `AZURE_CLIENT_SECRET` or
 ///    `AZURE_FEDERATED_TOKEN_FILE`), minted straight from Entra ID.
@@ -351,7 +351,7 @@ fn post_form(url: &str, form: Vec<(&'static str, String)>) -> Result<(u16, Strin
 /// Results are cached for 5 minutes keyed by `(tenant, audience)`; failures
 /// are never cached. `tenant: None` means the CLI's current tenant.
 pub fn token_for(tenant: Option<&str>, audience: &str) -> Result<String, AuthError> {
-    // A pre-minted token wins over everything, for every audience — same
+    // A pre-minted token wins over everything, for every audience: same
     // rule the data-plane providers follow.
     if let Ok(token) = std::env::var("RIGG_ACCESS_TOKEN")
         && !token.is_empty()
@@ -518,8 +518,8 @@ impl AzCliAuth {
     }
 
     /// Get an ARM access token scoped to a specific tenant.
-    /// `tenant: None` behaves exactly like [`Self::get_arm_token`] — same
-    /// cache entry — so existing callers are unaffected.
+    /// `tenant: None` behaves exactly like [`Self::get_arm_token`], same
+    /// cache entry, so existing callers are unaffected.
     pub fn get_arm_token_for_tenant(tenant: Option<&str>) -> Result<String, AuthError> {
         token_for(tenant, arm_audience())
     }
@@ -623,7 +623,7 @@ impl EnvAuth {
     }
 
     /// Whether the environment describes a usable service principal: a client
-    /// id, a tenant, and a credential — either a secret or the federated
+    /// id, a tenant, and a credential: either a secret or the federated
     /// assertion file a workload-identity runner writes.
     pub fn is_configured() -> bool {
         let set = |name: &str| std::env::var(name).is_ok_and(|v| !v.is_empty());
@@ -777,7 +777,7 @@ mod tests {
             std::env::set_var("AZURE_FEDERATED_TOKEN_FILE", &file);
         }
 
-        // GitHub OIDC sets no secret at all — that is still a configured
+        // GitHub OIDC sets no secret at all: that is still a configured
         // service principal.
         assert!(EnvAuth::is_configured());
         let auth = EnvAuth::from_env().unwrap();

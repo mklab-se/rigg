@@ -30,7 +30,7 @@ impl Remote {
         Remote::for_env(env)
     }
 
-    /// Build for an environment alone — the project has never mattered here
+    /// Build for an environment alone: the project has never mattered here
     /// (targets are environment-level), and callers without one (the auth
     /// engine, which reports across every project) should not have to invent
     /// a `Project` to reach the connections.
@@ -46,7 +46,7 @@ impl Remote {
 
     /// Print the actual Azure targets (service names + resolved base URLs)
     /// so the user can verify where cloud operations go before anything
-    /// happens — the URLs shown are exactly what the clients request against.
+    /// happens: the URLs shown are exactly what the clients request against.
     pub fn print_targets(&self) {
         for line in self.target_lines() {
             println!("{line}");
@@ -157,7 +157,7 @@ impl Remote {
     /// Create or update; returns the server's post-write document
     /// (GETs it back when the API returns 204/no body) for canonicalization.
     ///
-    /// A timed-out PUT is ambiguous — the server may have completed it (an
+    /// A timed-out PUT is ambiguous: the server may have completed it (an
     /// indexer create validates connections and starts its first run before
     /// responding). Resolve the ambiguity instead of failing: GET the
     /// resource and accept the write when the server's document semantically
@@ -172,7 +172,7 @@ impl Remote {
                     Ok(server_doc)
                 }
                 _ => Err(e.context(format!(
-                    "the request timed out and {r} does not (yet) match what was sent — \
+                    "the request timed out and {r} does not (yet) match what was sent: \
                          re-run the command; it resumes safely"
                 ))),
             },
@@ -324,7 +324,7 @@ fn resolve_walk(search_service: &str, value: &mut Value) -> Result<()> {
                     .unwrap_or("server_url");
                 map.insert(field.to_string(), Value::String(mcp_url));
                 // Foundry rejects an MCP tool without a `server_label`, and
-                // the label is not environment-specific — derive it from the
+                // the label is not environment-specific: derive it from the
                 // same annotation rather than making every agent file carry
                 // a hand-written copy of its knowledge base's name.
                 if !map

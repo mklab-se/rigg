@@ -1,4 +1,4 @@
-//! `rigg dev docs-check` — the mechanical honesty check for the docs.
+//! `rigg dev docs-check`: the mechanical honesty check for the docs.
 //!
 //! It has to live in the binary: the `rigg` crate has no lib target, so
 //! `Cli::try_parse_from` (check 1) and `ask::KNOWN_ID_PREFIXES` (check 4)
@@ -8,7 +8,7 @@
 //! Four checks, all reported together so one run lists everything:
 //!
 //! 1. every `rigg …` line in a shell code fence parses through clap;
-//! 2. every relative Markdown link — and its `#anchor` — resolves;
+//! 2. every relative Markdown link, and its `#anchor`, resolves;
 //! 3. every `RIGG_*` / `AZURE_*` variable the code reads is documented;
 //! 4. every `ask::KNOWN_ID_PREFIXES` entry is documented.
 //!
@@ -351,7 +351,7 @@ fn check_links(
             };
             if !heading_slugs(&target_text).contains(anchor) {
                 findings.push(format!(
-                    "{shown}:{}: `{target}` — no heading with anchor `#{anchor}`",
+                    "{shown}:{}: `{target}`: no heading with anchor `#{anchor}`",
                     idx + 1
                 ));
             }
@@ -447,7 +447,7 @@ fn check_env_vars(root: &Path, findings: &mut Vec<String>, notes: &mut Vec<Strin
     let names = env_var_names(&root.join("crates"));
     if !page.is_file() {
         notes.push(format!(
-            "{ENV_VARS_PAGE} does not exist yet — {} environment variables unchecked",
+            "{ENV_VARS_PAGE} does not exist yet: {} environment variables unchecked",
             names.len()
         ));
         return Ok(());
@@ -524,7 +524,7 @@ fn check_question_prefixes(
     let page = root.join(QUESTIONS_PAGE);
     if !page.is_file() {
         notes.push(format!(
-            "{QUESTIONS_PAGE} does not exist yet — {} question id prefixes unchecked",
+            "{QUESTIONS_PAGE} does not exist yet: {} question id prefixes unchecked",
             KNOWN_ID_PREFIXES.len()
         ));
         return Ok(());

@@ -18,7 +18,7 @@
 
 ---
 
-### Task 1: rigg-core — portal reference extraction + deployment volatile fields
+### Task 1: rigg-core: portal reference extraction + deployment volatile fields
 
 **Files:**
 - Modify: `crates/rigg-core/src/registry.rs`
@@ -66,7 +66,7 @@
     }
 ```
 
-NOTE: verify the Agent kind's existing RefField for `model` (so the third assert matches reality — check the Agent KindMeta; if the model reference path differs, adjust). Verify variant names (`KnowledgeBase`, `Connection`) in resources/traits.rs.
+NOTE: verify the Agent kind's existing RefField for `model` (so the third assert matches reality, check the Agent KindMeta; if the model reference path differs, adjust). Verify variant names (`KnowledgeBase`, `Connection`) in resources/traits.rs.
 
 - [ ] **Step 2: Run to confirm failures**
 
@@ -88,7 +88,7 @@ b) Portal reference pass. First CHECK whether `collect_path` traverses arrays (r
 
 If collect_path does NOT traverse arrays, extract it in the custom pass below instead.
 
-c) KB URL pass — add to `extract_references` after `collect_x_rigg_refs(body, &mut out);`:
+c) KB URL pass, add to `extract_references` after `collect_x_rigg_refs(body, &mut out);`:
 
 ```rust
     if kind == ResourceKind::Agent {
@@ -142,7 +142,7 @@ fn parse_kb_mcp_url(url: &str) -> Option<String> {
 - [ ] **Step 4: Tests pass + full checks**
 
 Run: `cargo test -p rigg-core 2>&1 | tail -4 && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -2 && cargo test --workspace 2>&1 | grep -c 'test result: ok'`
-Expected: all green (the volatile-field change may affect normalize tests — if a fixture asserts deployment normalization, update expectations only if the test was asserting the OLD behavior).
+Expected: all green (the volatile-field change may affect normalize tests, if a fixture asserts deployment normalization, update expectations only if the test was asserting the OLD behavior).
 
 - [ ] **Step 5: Commit**
 
@@ -153,16 +153,16 @@ git commit -m "feat: extract portal-authored agent refs (KB MCP URL, connection 
 
 ---
 
-### Task 2: adopt.rs — expansion seeds from explicitly-named owned resources
+### Task 2: adopt.rs: expansion seeds from explicitly-named owned resources
 
 **Files:**
 - Modify: `crates/rigg/src/commands/adopt.rs`
 - Test: `crates/rigg/tests/sync.rs`
 
 **Interfaces:**
-- `expand_deps(seeds: &[(ResourceRef, Value)], owned_by_any, snap_map) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>)` — UNCHANGED signature, but callers now pass `to_adopt ∪ owned_seeds` as the walk roots. (Verify the current parameter name; the walk must start from all roots but only ever ADD unmanaged resources.)
+- `expand_deps(seeds: &[(ResourceRef, Value)], owned_by_any, snap_map) -> (Vec<(ResourceRef, Value)>, BTreeSet<String>)`: UNCHANGED signature, but callers now pass `to_adopt ∪ owned_seeds` as the walk roots. (Verify the current parameter name; the walk must start from all roots but only ever ADD unmanaged resources.)
 
-- [ ] **Step 1: Write failing sync test** (wiremock, Search side — an owned indexer whose deps are unmanaged):
+- [ ] **Step 1: Write failing sync test** (wiremock, Search side, an owned indexer whose deps are unmanaged):
 
 ```rust
 #[tokio::test]
@@ -214,13 +214,13 @@ async fn adopt_with_deps_on_owned_resource_adopts_missing_deps() {
 - [ ] **Step 2: Run to confirm the second half fails**
 
 Run: `cargo test -p rigg --test sync adopt_with_deps_on_owned 2>&1 | tail -10`
-Expected: FAIL — today the owned seed is dropped and no deps are found.
+Expected: FAIL, today the owned seed is dropped and no deps are found.
 
 - [ ] **Step 3: Implement seeding.** In the classification loop, the arm for `Some(owner) if owner == &project.name` currently only pushes the skip message for explicit selectors. Additionally collect the doc as a seed:
 
 Before the loop: `let mut owned_seeds: Vec<(ResourceRef, Value)> = Vec::new();`
 
-In that arm (explicit or not — but only explicit matters, since sweeps skip owned silently; collect ONLY for explicit selectors to keep sweep semantics unchanged):
+In that arm (explicit or not, but only explicit matters, since sweeps skip owned silently; collect ONLY for explicit selectors to keep sweep semantics unchanged):
 
 ```rust
                 Some(owner) if owner == &project.name => {
@@ -239,7 +239,7 @@ Then wherever `expand_deps(&to_adopt, ...)` is called (both the `--with-deps` pa
         let (adds, keys) = expand_deps(&roots, &owned_by_any, &snap_map);
 ```
 
-(Verify how `expand_deps` uses its first argument: it seeds `in_set` from the roots' keys AND walks from them; since owned seeds are in `owned_by_any`, they can never be re-added as additions — confirm by reading the function. The additions extend `to_adopt` exactly as today.)
+(Verify how `expand_deps` uses its first argument: it seeds `in_set` from the roots' keys AND walks from them; since owned seeds are in `owned_by_any`, they can never be re-added as additions, confirm by reading the function. The additions extend `to_adopt` exactly as today.)
 
 - [ ] **Step 4: Tests pass + full checks**
 
@@ -255,7 +255,7 @@ git commit -m "feat: adopt --with-deps seeds from explicitly-named owned resourc
 
 ---
 
-### Task 3: wizard — managed entries + per-dependency multi-select
+### Task 3: wizard: managed entries + per-dependency multi-select
 
 **Files:**
 - Modify: `crates/rigg/src/commands/adopt.rs`
@@ -264,8 +264,8 @@ git commit -m "feat: adopt --with-deps seeds from explicitly-named owned resourc
 - Test: unit tests in adopt.rs; `crates/rigg/tests/cli_surface.rs` (help text)
 
 **Interfaces:**
-- `wizard_candidates(snapshot, owned_by_any, target_project: &str) -> Vec<(ResourceRef, String)>` — NEW param; includes target-project-owned entries with label suffix `" (managed)"`, still excludes other-project-owned and platform-managed.
-- `interactive::multi_select_checked(prompt, options: Vec<String>, checked: bool, plain: bool) -> Result<Vec<usize>>` — like multi_select but with all items pre-checked when `checked` (inquire: `.with_all_selected_by_default()` or `.with_default(&indices)` — verify the 0.7 API and use what exists).
+- `wizard_candidates(snapshot, owned_by_any, target_project: &str) -> Vec<(ResourceRef, String)>`: NEW param; includes target-project-owned entries with label suffix `" (managed)"`, still excludes other-project-owned and platform-managed.
+- `interactive::multi_select_checked(prompt, options: Vec<String>, checked: bool, plain: bool) -> Result<Vec<usize>>`: like multi_select but with all items pre-checked when `checked` (inquire: `.with_all_selected_by_default()` or `.with_default(&indices)`, verify the 0.7 API and use what exists).
 
 - [ ] **Step 1: Write failing unit test** for the candidates change (adopt.rs `mod tests`):
 
@@ -296,7 +296,7 @@ Update the two existing `wizard_candidates` tests for the new parameter (pass a 
 
 a) `wizard_candidates`: new `target_project: &str` param. Filter becomes: skip platform-managed; skip owned-by-OTHER (`owned_by_any.get(key)` is Some and != target_project); include unmanaged (plain label) and owned-by-target (label + `" (managed)"`).
 
-b) Wizard step 2: pass `&project.name`; picked managed entries flow into `selectors` as `Selector::One` exactly like the rest (Task 2's seeding then handles them: skip + seed). Do NOT add managed picks to `wizard_chosen`… actually DO add them — the hint should reproduce the invocation (`rigg adopt regulus agents/Regulus --with-deps` re-runs idempotently by design). Add them.
+b) Wizard step 2: pass `&project.name`; picked managed entries flow into `selectors` as `Selector::One` exactly like the rest (Task 2's seeding then handles them: skip + seed). Do NOT add managed picks to `wizard_chosen`… actually DO add them: the hint should reproduce the invocation (`rigg adopt regulus agents/Regulus --with-deps` re-runs idempotently by design). Add them.
 
 c) Dependency step: replace the yes/no with a pre-checked multi-select. Current shape (wizard branch):
 
@@ -312,7 +312,7 @@ becomes:
         if !adds.is_empty() {
             let labels: Vec<String> = adds.iter().map(|(r, _)| r.to_string()).collect();
             let picked = interactive::multi_select_checked(
-                "Upstream dependencies found — adopt these too? (all selected; space to drop)",
+                "Upstream dependencies found: adopt these too? (all selected; space to drop)",
                 labels,
                 true,
                 plain,
@@ -328,7 +328,7 @@ becomes:
         }
 ```
 
-(`keys` from expand_deps is no longer used wholesale in the wizard path — only the picked subset. The non-wizard `--with-deps` path keeps using the full `adds`/`keys` as today.)
+(`keys` from expand_deps is no longer used wholesale in the wizard path, only the picked subset. The non-wizard `--with-deps` path keeps using the full `adds`/`keys` as today.)
 
 d) `interactive.rs`:
 
@@ -354,16 +354,16 @@ pub fn multi_select_checked(
 }
 ```
 
-(Verify `with_default(&[usize])` exists in inquire 0.7 MultiSelect — check the vendored source; adapt if the API takes a different form.)
+(Verify `with_default(&[usize])` exists in inquire 0.7 MultiSelect: check the vendored source; adapt if the API takes a different form.)
 
-e) `cli.rs` Adopt long help — extend the doc comment:
+e) `cli.rs` Adopt long help (extend the doc comment):
 
 ```rust
     /// Adopt selected unmanaged Azure resources into a project
     ///
     /// Selectors: `all`, a kind (e.g. `indexes`), or `<kind>/<name>`
     /// (e.g. `agents/regulus`). Naming a resource the project already manages
-    /// together with --with-deps adopts its missing dependencies — useful
+    /// together with --with-deps adopts its missing dependencies: useful
     /// after new references appear (e.g. added via the portal).
     /// See `rigg concepts` for the project model.
     Adopt(AdoptArgs),
@@ -399,14 +399,14 @@ git commit -m "feat: wizard shows managed resources and per-dependency selection
 **Files:**
 - Modify: `README.md`, `GETTING_STARTED.md`
 
-- [ ] **Step 1: README** — in the Quick Start adopt block, after the `--with-deps` example line, add:
+- [ ] **Step 1: README**: in the Quick Start adopt block, after the `--with-deps` example line, add:
 
 ```markdown
 # Later: capture newly-added dependencies of something you already manage
 rigg adopt my-rag agents/my-agent --with-deps
 ```
 
-- [ ] **Step 2: GETTING_STARTED** — extend the "Existing resources?" bullet's final sentence with: `; re-run with an already-managed resource to capture dependencies added later (e.g. via the portal)`.
+- [ ] **Step 2: GETTING_STARTED**: extend the "Existing resources?" bullet's final sentence with: `; re-run with an already-managed resource to capture dependencies added later (e.g. via the portal)`.
 
 - [ ] **Step 3: Verify + commit**
 
@@ -422,10 +422,10 @@ git commit -m "docs: document re-adoption of dependencies via adopt --with-deps"
 
 ## Final Verification
 
-`cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace` — then live acceptance: wizard re-run selecting `agents/Regulus (managed)`, expecting the regulatory stack (KB, KS, index, connection — indexer/data-source/skillset only if reachable from those roots) as pre-checked dependencies.
+`cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`, then live acceptance: wizard re-run selecting `agents/Regulus (managed)`, expecting the regulatory stack (KB, KS, index, connection, indexer/data-source/skillset only if reachable from those roots) as pre-checked dependencies.
 
 ## Self-Review notes
 
 - Spec §1 → Task 1; §2 → Task 2; §3 → Task 3; §4 → Task 1; §5 → Tasks 3-4.
 - Signature threads: `wizard_candidates(..., target_project)` updated with both existing tests; `multi_select_checked` consumed in Task 3c; `expand_deps` roots built at both call sites.
-- Known semantic nuance (intentional): from the agent, the dependency closure reaches KB→KS→index and the connection, but NOT the indexer/data-source/skillset (they reference the index, not vice versa) — capturing those still requires naming the indexer. Documented reality; not silently glossed.
+- Known semantic nuance (intentional): from the agent, the dependency closure reaches KB→KS→index and the connection, but NOT the indexer/data-source/skillset (they reference the index, not vice versa), capturing those still requires naming the indexer. Documented reality; not silently glossed.

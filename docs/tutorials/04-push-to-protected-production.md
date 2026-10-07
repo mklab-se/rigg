@@ -1,4 +1,4 @@
-# Tutorial 4 — Push to protected production
+# Tutorial 4: Push to protected production
 
 Production deserves a gate that a reflex cannot open. This tutorial marks an
 environment protected, walks through what that changes for a human, for a CI
@@ -9,7 +9,7 @@ deploys on merge using OIDC and no stored secrets.
 |---|---|
 | **Time** | About 30 minutes. |
 | **Cost** | Step 4 is the one step that is not a preview: a real `rigg push … --verify` against production. The push itself costs nothing, but `--verify` runs every indexer to completion and asks every agent one question, so it bills ingestion, embedding and tokens. |
-| **You need** | • A workspace with at least two environments, from [tutorial 3](03-add-an-environment-and-promote.md). Examples use `dev`, `staging` and `prod`, and the project `docs-rag`<br>• Production targets: a Search service and a Foundry project you are allowed to write to<br>• A GitHub repository for the workspace, for step 7<br>• Role: `Search Service Contributor` and `Azure AI User` on the prod resources<br>• Permission to register an Entra application, to create the CI identity in step 7<br>• Role: `User Access Administrator`/`Owner` to grant that identity its roles — registering an app and granting roles are the two things rigg will never do for you |
+| **You need** | • A workspace with at least two environments, from [tutorial 3](03-add-an-environment-and-promote.md). Examples use `dev`, `staging` and `prod`, and the project `docs-rag`<br>• Production targets: a Search service and a Foundry project you are allowed to write to<br>• A GitHub repository for the workspace, for step 7<br>• Role: `Search Service Contributor` and `Azure AI User` on the prod resources<br>• Permission to register an Entra application, to create the CI identity in step 7<br>• Role: `User Access Administrator`/`Owner` to grant that identity its roles. Registering an app and granting roles are the two things rigg will never do for you |
 | **You get** | A production environment nothing mutates without naming it, and a CI pipeline with no stored credentials. |
 
 > [!NOTE]
@@ -20,7 +20,7 @@ deploys on merge using OIDC and no stored secrets.
 > service and its own Foundry project, usually in its own subscription; the
 > only thing that changes is what you write in step 1.
 
-## Step 1 — Mark the environment protected
+## Step 1: Mark the environment protected
 
 Add the policy block to the `prod` environment in `rigg.yaml`.
 
@@ -48,7 +48,7 @@ Two policy flags, doing different jobs:
 - **`strict-bindings: true`** turns *warnings* about infrastructure references
   into *errors*: a reference that matches no binding fails `validate` and
   `push` with exit 3. It defaults to the value of `protected`, so writing it
-  out above is documentation rather than a change — set it to `false`
+  out above is documentation rather than a change: set it to `false`
   explicitly if you want a protected environment that only warns.
 
 Confirm it took:
@@ -75,7 +75,7 @@ prod
 > keys are documented in
 > [the policy reference](../reference/rigg-yaml.md#policy).
 
-## Step 2 — Fill the prod tree
+## Step 2: Fill the prod tree
 
 Promote into prod exactly as tutorial 3 promoted into staging, then check the
 plan is empty before you go looking for a gate to open.
@@ -106,9 +106,9 @@ strings instead of reporting `kept from 'staging'`.
 > way step 6 of tutorial 3 did. Without that, pushing prod lands on another
 > environment's resources.
 
-## Step 3 — Try to push without confirming
+## Step 3: Try to push without confirming
 
-Make a change worth gating — an edit to the agent's instructions sidecar, say —
+Make a change worth gating: an edit to the agent's instructions sidecar, say,
 and preview it.
 
 ```bash
@@ -121,11 +121,11 @@ Push project 'docs-rag' (env: prod, protected)
   Search:  contoso-search → https://contoso-search.search.windows.net
   Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   update agents/docs-agent
-  (dry run — nothing pushed)
+  (dry run, nothing pushed)
 ```
 
 No confirmation was asked for, because nothing was going to be written. Now
-attempt the real thing the way a script would — `--yes`, and
+attempt the real thing the way a script would: `--yes`, and
 `--non-interactive` so that you see what CI would see:
 
 ```bash
@@ -184,10 +184,10 @@ Push project 'docs-rag' (env: prod, protected)
 Error: --confirm-env must equal the environment name 'prod' exactly
 ```
 
-That is exit 2, naming the environment it must match — and still nothing
+That is exit 2, naming the environment it must match, and still nothing
 written.
 
-## Step 4 — Confirm, verify, and push
+## Step 4: Confirm, verify, and push
 
 Supply the environment's name, and prove the stack still runs after the write.
 
@@ -205,7 +205,7 @@ Push project 'docs-rag' (env: prod, protected)
 
 Verify project 'docs-rag' (env: prod)
 …
-  ✓ indexer 'docs-indexer' — 0 processed, 0 failed
+  ✓ indexer 'docs-indexer': 0 processed, 0 failed
   ✓ knowledge base 'docs-kb' retrieved
   ✓ agent 'docs-agent' replied
 ✓ 3 check(s) passed
@@ -213,8 +213,8 @@ Verify project 'docs-rag' (env: prod)
 
 **Why it matters.** `--confirm-env prod` is exactly `--answer
 confirm.protected.prod=prod`. A push proves the definitions landed; `--verify`
-proves the stack still *runs* — every indexer to completion, a retrieve from
-every knowledge base, one turn with every agent — and exits 1 if anything
+proves the stack still *runs* (every indexer to completion, a retrieve from
+every knowledge base, one turn with every agent) and exits 1 if anything
 fails. Because those runs cost real ingestion and tokens, it is opt-in.
 
 > [!TIP]
@@ -222,7 +222,7 @@ fails. Because those runs cost real ingestion and tokens, it is opt-in.
 > stack, and takes the same `--confirm-env`, because it writes: an indexer run
 > is a mutation.
 
-## Step 5 — Review what rigg changed in your subscription
+## Step 5: Review what rigg changed in your subscription
 
 List the role assignments rigg made for the environment.
 
@@ -236,7 +236,7 @@ auth roles assignments described 'rigg:contoso-rag:prod:…' across 4 scope(s) (
   (rigg has not created any role assignments here)
 ```
 
-Nothing, in this walkthrough — prod shares its services with dev, and the
+Nothing, in this walkthrough: prod shares its services with dev, and the
 grants dev's push made already cover them. The dev environment's own listing is
 what a populated one looks like:
 
@@ -251,18 +251,18 @@ auth roles assignments described 'rigg:contoso-rag:dev:…' across 4 scope(s) (e
       role:  <role-guid>
       scope: /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Search/searchServices/contoso-search
 
-1 assignment(s) — remove them with `rigg auth roles remove`
+1 assignment(s): remove them with `rigg auth roles remove`
 ```
 
 **Why it matters.** Every assignment rigg creates carries a description of the
-form `rigg:<workspace>:<env>:<reason>` — a sentence naming the file that
-explains it — and this command lists exactly those: not the assignments your
+form `rigg:<workspace>:<env>:<reason>`, a sentence naming the file that
+explains it, and this command lists exactly those: not the assignments your
 platform team made, not another environment's, not ones granted
 subscription-wide. `rigg auth roles remove -e prod --confirm-env prod` undoes
 precisely this list, which means adopting rigg is reversible. `list` only
 reads, so it is not gated; `remove` writes, so it is.
 
-## Step 6 — Guard the boundary
+## Step 6: Guard the boundary
 
 Let `strict-bindings` do its work: validate every environment's tree at once,
 the way CI does.
@@ -286,7 +286,7 @@ rigg validate docs-rag -e prod --strict --show-bindings
 in the workspace: `✓ bound` when the environment owns it, `= shared` when
 another environment points at the same physical resource, and an error under
 `--strict` when nothing covers it. One line per reference per environment pair
-is what three environments on one set of services looks like — the search
+is what three environments on one set of services looks like: the search
 service appears twice because two files reference it. Give prod its own storage
 account and its `docs-storage` lines become `✓ bound` instead.
 
@@ -294,7 +294,7 @@ account and its `docs-storage` lines become `✓ bound` instead.
 > Keep production out of your shell's default: `rigg env set-default dev` means
 > a forgotten `-e` targets dev, and `RIGG_ENV` in a shell profile is a reliable
 > way to surprise yourself. Every mutating command prints the environment and
-> the resolved service URL in its banner — read the `(env: prod, protected)`
+> the resolved service URL in its banner: read the `(env: prod, protected)`
 > line before answering a prompt.
 
 > [!NOTE]
@@ -302,7 +302,7 @@ account and its `docs-storage` lines become `✓ bound` instead.
 > validates every environment's tree. Validation reads files; it never writes,
 > so it is not gated.
 
-## Step 7 — Deploy from CI, with no secrets
+## Step 7: Deploy from CI, with no secrets
 
 `ci init` writes the workflows and tells you what the CI identity will need.
 
@@ -318,10 +318,10 @@ rigg ci init github -e prod
 
 ✓ GitHub workflows created for environment 'prod'. To finish setup:
   1. Create an Entra app registration with federated credentials for this repo
-     (workload identity federation — no client secrets):
+     (workload identity federation, no client secrets):
        az ad app create --display-name rigg-deploy
        az ad app federated-credential create ... (subject: repo:<owner>/<repo>:ref:refs/heads/main)
-  2. Grant it what 'prod' actually requires — from this workspace's files:
+  2. Grant it what 'prod' actually requires, from this workspace's files:
        <role-guid>  # Search Service Contributor
          /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Search/searchServices/contoso-search
 …
@@ -337,14 +337,14 @@ rigg ci init github -e prod
 identity graph over *your* files and bindings and printed the roles the
 workflows will actually need, at their real ARM scopes, naming each role by its
 definition GUID because Microsoft is renaming the Foundry roles. The elided
-lines name the rest — `Foundry User`, `Foundry Project Manager` and `Foundry
+lines name the rest: `Foundry User`, `Foundry Project Manager` and `Foundry
 Account Owner` on the Foundry account and project, and the roles a push must be
 able to *grant*: `Storage Blob Data Reader`, `Cognitive Services User` and
 `Search Index Data Reader`.
 
 > [!TIP]
 > `-e prod` matters: `ci init` pins the workflows to whichever environment
-> resolves — flag, then `RIGG_ENV`, then the workspace default. If you would
+> resolves: flag, then `RIGG_ENV`, then the workspace default. If you would
 > rather not let CI grant roles at all, pre-grant them once with
 > `rigg auth doctor -e prod --fix` and add `--skip-auth-preflight` to the
 > deploy job's push.
@@ -358,7 +358,7 @@ Three workflows are written:
 | `rigg-drift.yml` | nightly cron | `rigg diff --all --env prod --exit-code --format markdown`; exit 5 opens or updates a drift issue |
 
 All three log in with `azure/login@v2` using OIDC federated credentials
-(`permissions: id-token: write`) — the repository holds three non-secret
+(`permissions: id-token: write`): the repository holds three non-secret
 *variables* and no client secret at all. Note the deploy job's `--confirm-env`:
 it is a no-op for an unprotected environment and the required consent for a
 protected one, and putting the environment's name in the workflow file means
@@ -374,7 +374,7 @@ rigg auth doctor -e prod --principal <the CI identity's object id>
 `--principal` reports *that* object id's rights instead of yours, so you find
 out about a missing role now rather than at 3 a.m.
 
-## Step 8 — The same gate, for an AI agent
+## Step 8: The same gate, for an AI agent
 
 If you have connected rigg's MCP server (`rigg mcp install claude-code`), your
 assistant reaches the identical gate. Its first `rigg_push` call has no
@@ -386,7 +386,7 @@ assistant reaches the identical gate. Its first `rigg_push` call has no
 
 The server turns a call without `force` into `--dry-run`. A preview writes
 nothing, so it is never gated: the assistant gets the plan back and shows it to
-you. You approve, and it calls `rigg_push` again with `force: true` — and
+you. You approve, and it calls `rigg_push` again with `force: true`, and
 *that* call comes back with, as its *result* rather than an error:
 
 ```json
@@ -405,7 +405,7 @@ you. You approve, and it calls `rigg_push` again with `force: true` — and
 ```
 
 **Why it matters.** The agent shows you that question, you say `prod`, and it
-calls the tool a third time — `force: true` again, now with `answers:
+calls the tool a third time, `force: true` again, now with `answers:
 {"confirm.protected.prod": "prod"}` (or the `confirm_env: "prod"` shorthand).
 Preview, consent, write: the assistant can drive the loop, but the one value
 that opens the gate has to come from you.
@@ -422,7 +422,7 @@ that opens the gate has to come from you.
 - [x] Strict binding checks, so an environment leak fails review instead of
       production.
 - [x] A CI pipeline that validates every pull request, deploys on merge and
-      reports drift nightly — with OIDC and no stored credentials.
+      reports drift nightly, with OIDC and no stored credentials.
 - [x] A reversible footprint: `rigg auth roles list -e prod` shows every role
       assignment rigg made, and `remove` undoes exactly those.
 

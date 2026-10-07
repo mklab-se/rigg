@@ -30,7 +30,7 @@ pub fn select(prompt: &str, options: Vec<String>, plain: bool) -> Result<String>
 }
 
 /// Like [`select`], but returns the chosen option's index into `options`
-/// instead of its label — the caller resolves it by position, so duplicate
+/// instead of its label: the caller resolves it by position, so duplicate
 /// labels (or a candidate literally labelled like the sentinel row) are
 /// never mis-routed.
 pub fn select_index(prompt: &str, options: Vec<String>, plain: bool) -> Result<usize> {

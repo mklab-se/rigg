@@ -1,15 +1,15 @@
-# Tutorial 2 — Build an Agentic RAG stack from scratch
+# Tutorial 2: Build an Agentic RAG stack from scratch
 
 Nothing exists yet except a storage account with some documents in it. By the
-end you will have the whole chain — blob container → data source → index →
-skillset → indexer → knowledge source → knowledge base → Foundry agent — as
+end you will have the whole chain (blob container → data source → index →
+skillset → indexer → knowledge source → knowledge base → Foundry agent) as
 files in Git, running in Azure, answering questions.
 
 | | |
 |---|---|
 | **Time** | About 45 minutes, most of it waiting for the first indexer run. |
 | **Cost** | This one *does* create resources. An index and its indexer runs cost storage and ingestion; the model deployment the knowledge base and the agent share bills per token. Reuse a deployment you already have where you can, and [clean up](#clean-up) when you are done. |
-| **You need** | • Tutorial 1's setup: `rigg` installed, `az login` done<br>• An Azure AI Search service (`contoso-search`) and a Microsoft Foundry account/project (`contoso-ai`/`rag`) with at least one chat model deployment — `gpt-4.1-mini` in the examples. Both the knowledge base and the agent need one<br>• An Azure Storage account (`contosodocs`) with a blob container (`handbook`) holding a few PDFs, Word files or Markdown documents<br>• Role: `Search Service Contributor` on the Search service<br>• Role: `Azure AI User` on the Foundry project, and `Contributor` on the Foundry account if you want rigg to create a model deployment<br>• Role: `Storage Blob Data Contributor` on the storage account if you are the one uploading the documents — that is a data-plane role, and `Contributor` alone does not include it<br>• Role: `User Access Administrator` or `Owner` on the storage account **or** the resource group, so rigg can grant the service identities the roles the stack needs |
+| **You need** | • Tutorial 1's setup: `rigg` installed, `az login` done<br>• An Azure AI Search service (`contoso-search`) and a Microsoft Foundry account/project (`contoso-ai`/`rag`) with at least one chat model deployment, `gpt-4.1-mini` in the examples. Both the knowledge base and the agent need one<br>• An Azure Storage account (`contosodocs`) with a blob container (`handbook`) holding a few PDFs, Word files or Markdown documents<br>• Role: `Search Service Contributor` on the Search service<br>• Role: `Azure AI User` on the Foundry project, and `Contributor` on the Foundry account if you want rigg to create a model deployment<br>• Role: `Storage Blob Data Contributor` on the storage account if you are the one uploading the documents (that is a data-plane role, and `Contributor` alone does not include it)<br>• Role: `User Access Administrator` or `Owner` on the storage account **or** the resource group, so rigg can grant the service identities the roles the stack needs |
 | **You get** | A complete Agentic RAG stack, every piece a reviewable file, wired keylessly. |
 
 > [!TIP]
@@ -26,7 +26,7 @@ rigg init .
 rigg new project docs-rag
 ```
 
-## Step 1 — Scaffold the whole retrieval pipeline
+## Step 1: Scaffold the whole retrieval pipeline
 
 One command writes the six files of the retrieval chain, already wired to each
 other.
@@ -53,7 +53,7 @@ Pipeline 'docs' scaffolded in project 'docs-rag':
 
 **Why it matters.** The indexer names the data source, index and skillset; the
 knowledge source points at the index; the knowledge base routes to the
-knowledge source. Everything is **explicit** — there is no hidden
+knowledge source. Everything is **explicit**: there is no hidden
 Azure-generated pipeline behind a knowledge source, so the whole retrieval
 chain is reviewable files.
 
@@ -66,7 +66,7 @@ chain is reviewable files.
 > every field rigg strips is in
 > [the resource files reference](../reference/resource-files.md).
 
-## Step 2 — Point the data source at your container
+## Step 2: Point the data source at your container
 
 Open `projects/docs-rag/envs/dev/search/data-sources/docs-ds.json` and replace
 the four `<…>` placeholders the scaffold left.
@@ -87,7 +87,7 @@ the four `<…>` placeholders the scaffold left.
 ```
 
 **Why it matters.** Note what is *not* there: an account key. `ResourceId=` is
-the keyless form — the Search service authenticates to storage with its managed
+the keyless form: the Search service authenticates to storage with its managed
 identity, and rigg's job in step 6 is to make sure that identity actually has
 the role. A file that did contain a key would be rejected by `rigg validate`;
 see
@@ -106,7 +106,7 @@ see
 > identity, which is the only one Azure Storage's trusted-services firewall
 > exception accepts. If your stack spans several services and you would rather
 > use one user-assigned identity everywhere, bind it and scaffold the data
-> source against it — delete the one the pipeline wrote first, or use a
+> source against it: delete the one the pipeline wrote first, or use a
 > different name:
 >
 > ```bash
@@ -118,9 +118,9 @@ see
 `skillset`); it writes the bound identity's ARM id into the scaffold instead of
 leaving the service's own.
 
-## Step 3 — Shape the index, and map the fields into it
+## Step 3: Shape the index, and map the fields into it
 
-`docs-index.json` ships with a minimal schema — `id`, `content`, `title`, `url`
+`docs-index.json` ships with a minimal schema: `id`, `content`, `title`, `url`
 and a semantic configuration. Edit the fields to match your documents, then
 tell the indexer which blob metadata fills them, in
 `indexers/docs-indexer.json`:
@@ -139,7 +139,7 @@ tell the indexer which blob metadata fills them, in
 **Why it matters.** A blob indexer populates `content` on its own and will
 invent a key for you, but `title` and `url` arrive empty unless you say where
 they come from. The key field has to be a valid Azure Search document key, and
-a blob path is not one — `base64Encode` is what makes it legal.
+a blob path is not one: `base64Encode` is what makes it legal.
 
 > [!WARNING]
 > The index is the one file worth spending real time on, because **index fields
@@ -147,7 +147,7 @@ a blob path is not one — `base64Encode` is what makes it legal.
 > recreating the index. If you do not need the enrichment skillset, delete
 > `skillsets/docs-skills.json` and remove `"skillsetName"` from the indexer.
 
-## Step 4 — Give the knowledge base a model
+## Step 4: Give the knowledge base a model
 
 A knowledge base plans its retrieval with a chat model, so fill in the
 placeholders in `knowledge-bases/docs-kb.json`.
@@ -168,13 +168,13 @@ placeholders in `knowledge-bases/docs-kb.json`.
 ```
 
 **Why it matters.** Without a model, Azure rejects every call to the knowledge
-base — `A Knowledge Base model must be specified to use any reasoning effort
-other than 'Minimal'`. Point it at a deployment that already exists —
+base: `A Knowledge Base model must be specified to use any reasoning effort
+other than 'Minimal'`. Point it at a deployment that already exists:
 `contoso-ai` and `gpt-4.1-mini` here. The Search service calls that model with
 its own managed identity, which is a role you do not have to remember: step 6
 derives the requirement from this very field.
 
-## Step 5 — Record the storage binding, then validate
+## Step 5: Record the storage binding, then validate
 
 Name the storage account as a dependency of the environment, then check the
 files offline.
@@ -192,7 +192,7 @@ rigg validate docs-rag
 **Why it matters.** The storage account is now a named dependency rather than a
 string buried in a connection field, and that name is what makes tutorial 3
 possible: promoting to staging re-points `docs-storage` at staging's own
-account. `validate` is entirely offline — JSON structure against the pinned
+account. `validate` is entirely offline: JSON structure against the pinned
 Azure schemas, filename/`name` consistency, exclusive ownership across
 projects, every reference resolving, no key material anywhere, and every
 infrastructure reference classified against the bindings. A failure exits 3 and
@@ -203,7 +203,7 @@ names the file and the JSON path.
 > the files. Every binding type and its syntax is in
 > [the `dependencies` reference](../reference/rigg-yaml.md#dependencies).
 
-## Step 6 — Check the identity wiring
+## Step 6: Check the identity wiring
 
 `auth doctor` derives what the environment requires from the files themselves
 and checks each requirement against Azure.
@@ -237,7 +237,7 @@ you edited in step 4 and concluded that the search service's identity needs
 `Cognitive Services User` on the Foundry account. The elided lines check the
 storage firewall, shared-key access, blob soft delete, the search SKU, its
 identity and its Entra tokens. Every finding names the principal, the role, the
-ARM scope, the file and JSON path that caused it — and, when it is missing, the
+ARM scope, the file and JSON path that caused it, and, when it is missing, the
 `az` command that fixes it.
 
 A missing finding reads like this, and `auth doctor` exits 4 when anything is
@@ -258,13 +258,13 @@ rigg auth doctor -e dev --fix
 > [!NOTE]
 > `--fix` only ever changes things rigg owns: role assignments *between
 > services*, a service identity, the search service's auth options, storage
-> firewall and soft-delete settings. It will never grant **you** a role — that
-> would let anyone who can run rigg escalate their own access — so operator
+> firewall and soft-delete settings. It will never grant **you** a role (that
+> would let anyone who can run rigg escalate their own access), so operator
 > gaps always come back as an `az` line. Every assignment rigg creates is
 > tagged (`rigg:<workspace>:<env>:<reason>`) so `rigg auth roles list` can show
 > them and `rigg auth roles remove` can undo exactly those and nothing else.
 
-## Step 7 — Push
+## Step 7: Push
 
 Send the six definitions to Azure.
 
@@ -289,7 +289,7 @@ Push project 'docs-rag' (env: dev)
   ✓ knowledge-bases/docs-kb
 ```
 
-**Why it matters.** The order is not the order you wrote the files in — it is a
+**Why it matters.** The order is not the order you wrote the files in: it is a
 topological sort of the reference graph, so nothing is created before what it
 points at. Before the first write, push re-ran the auth check *scoped to this
 plan*: a push that touches one synonym map is never blocked by an unrelated
@@ -301,11 +301,11 @@ storage grant. Creating an indexer makes Azure run it once immediately.
 > optional defaults (`defaultLanguageCode: "en"`, `pageOverlapLength: 0`) some
 > time *after* the create, so the copy rigg read back at push time was still
 > all-nulls. `rigg pull docs-rag` takes Azure's version and the two agree from
-> then on. A push in the meantime is safe — it prints `skip
-> skillsets/docs-skills (remote changed since last sync — pull first)` and
+> then on. A push in the meantime is safe: it prints `skip
+> skillsets/docs-skills (remote changed since last sync: pull first)` and
 > leaves it alone.
 
-## Step 8 — Run the indexer and watch it
+## Step 8: Run the indexer and watch it
 
 Clear the change-tracking state, then run the indexer to see the whole corpus
 go through.
@@ -319,7 +319,7 @@ rigg az indexer run docs-indexer --watch
 # output
   Search:  contoso-search → https://contoso-search.search.windows.net
   Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
-  ✓ reset docs-indexer — run it with: rigg az indexer run docs-indexer
+  ✓ reset docs-indexer. Run it with: rigg az indexer run docs-indexer
   Search:  contoso-search → https://contoso-search.search.windows.net
   Foundry: contoso-ai/rag → https://contoso-ai.services.ai.azure.com
   ✓ triggered a run of 'docs-indexer'
@@ -366,7 +366,7 @@ Index 'docs-index'
 The base64 `id` and the populated `title`/`url` are the field mappings from
 step 3 doing their job.
 
-## Step 9 — Ask the knowledge base
+## Step 9: Ask the knowledge base
 
 Test retrieval on its own, before an agent is in the picture.
 
@@ -387,7 +387,7 @@ Employees are entitled to 480 days of parental leave per child. 390 of those
 days are paid at the income-related rate; the remaining 90 are paid at the
 flat rate. Leave may be taken until the child turns twelve.
 
-(chunks truncated for reading — full text via --output json)
+(chunks truncated for reading: full text via --output json)
 
 References:
   [1] aHR0cHM6Ly9jb250b3NvZG9jcy5ibG9iLmNvcmUud2luZG93cy5uZXQvaGFuZGJvb2svbGVhdmUtcG9saWN5Lm1k6 (score 3.43)
@@ -395,12 +395,12 @@ References:
 
 **Why it matters.** A knowledge base is *agentic retrieval*: rather than a
 keyword query, it takes a semantic intent, plans across its knowledge sources,
-and returns grounding **passages** plus the document keys they came from — not
+and returns grounding **passages** plus the document keys they came from, not
 a synthesized answer. Synthesis is the agent's job in the next step. Testing
 retrieval here means that if the agent later gives a bad answer, you already
 know whether the retrieval layer was at fault.
 
-## Step 10 — Add the Foundry agent
+## Step 10: Add the Foundry agent
 
 The agent needs two things beyond its own file: a model deployment to run on,
 and a Foundry **connection** that lets it call the knowledge base.
@@ -417,10 +417,10 @@ Created /Users/you/contoso-rag/projects/docs-rag/envs/dev/foundry/agents/docs-ag
 ```
 
 > [!NOTE]
-> Reuse a deployment that already exists in the project — name it in the agent
+> Reuse a deployment that already exists in the project: name it in the agent
 > file and rigg will warn, once, that it is not a workspace file: `warning:
 > [projects/docs-rag/envs/dev/foundry/agents/docs-agent.json] references
-> deployments/gpt-4.1-mini — not in this workspace (must already exist in
+> deployments/gpt-4.1-mini, not in this workspace (must already exist in
 > Azure)`. To manage the deployment as code instead, `rigg new deployment
 > gpt-4.1-mini -p docs-rag` writes a file for it; push creates it, and it bills
 > per token from then on, so keep `sku.capacity` small.
@@ -442,7 +442,7 @@ that says how to authenticate to it. Fill in `connections/docs-kb-conn.json`:
 }
 ```
 
-`ProjectManagedIdentity` means the Foundry project calls Search as itself — no
+`ProjectManagedIdentity` means the Foundry project calls Search as itself: no
 key, no secret. Then wire the agent to both:
 
 ```json
@@ -468,11 +468,11 @@ Two rigg-specific things are happening here:
 - `{"$file": "docs-agent.instructions.md"}` is a **sidecar**: the instructions
   live in a Markdown file next to the JSON, so a prompt change is a readable
   diff in a pull request instead of one enormous escaped string. `rigg new
-  agent` created that file — write the agent's instructions in it.
+  agent` created that file: write the agent's instructions in it.
 - [`x-rigg-ref`](../reference/annotations.md#x-rigg-ref) says *which* knowledge
   base, not *where* it is. At push time rigg computes the knowledge base's MCP
   endpoint for the target environment, fills in `server_url`, and derives the
-  `server_label` Foundry insists on — so the same file works in dev, staging
+  `server_label` Foundry insists on, so the same file works in dev, staging
   and prod. `x-rigg-*` keys are stripped before the request, so Azure never
   sees the annotation. The
   [annotations reference](../reference/annotations.md) covers `x-rigg-api`,
@@ -493,7 +493,7 @@ Push project 'docs-rag' (env: dev)
   create agents/docs-agent
 
   ! auth preflight: 1 requirement(s) missing for this plan
-    ✗ foundry-project → Search Index Data Reader @ /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Search/searchServices/contoso-search — Foundry project '/subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.CognitiveServices/accounts/contoso-ai/projects/rag' lacks 'Search Index Data Reader' here
+    ✗ foundry-project → Search Index Data Reader @ /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Search/searchServices/contoso-search: Foundry project '/subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.CognitiveServices/accounts/contoso-ai/projects/rag' lacks 'Search Index Data Reader' here
 …
   fix assign 'Search Index Data Reader' to <foundry-project-object-id> at /subscriptions/<subscription-id>/resourceGroups/contoso-rg/providers/Microsoft.Search/searchServices/contoso-search
       ✓ applied
@@ -504,7 +504,7 @@ Push project 'docs-rag' (env: dev)
 
 Verify project 'docs-rag' (env: dev)
 …
-  ✓ indexer 'docs-indexer' — 0 processed, 0 failed
+  ✓ indexer 'docs-indexer': 0 processed, 0 failed
   ✓ knowledge base 'docs-kb' retrieved
   ✓ agent 'docs-agent' replied
 ✓ 3 check(s) passed
@@ -515,9 +515,9 @@ wrote down that a Foundry project calling a knowledge base needs `Search Index
 Data Reader` on the Search service; rigg derived it from the connection and the
 agent tool you wrote, found it missing, fixed it, waited for Entra to make the
 assignment visible, and only then pushed. `0 processed` on the indexer is
-the high-water mark from step 8 — nothing has changed in the container since.
+the high-water mark from step 8, nothing has changed in the container since.
 
-## Step 11 — Talk to it
+## Step 11: Talk to it
 
 Ask the agent the question its grounding data can answer.
 
@@ -533,7 +533,7 @@ You are entitled to 480 days of parental leave per child. Of these, 390 days are
 ```
 
 **Why it matters.** The citation at the end is the agent naming the blob its
-answer came from — the chain from step 2's container to this sentence, closed.
+answer came from: the chain from step 2's container to this sentence, closed.
 
 Commit it:
 
@@ -553,8 +553,8 @@ git add . && git commit -m "docs-rag: blob → index → knowledge base → agen
 ## Clean up
 
 If this was an experiment rather than the start of something, remove the
-project's resources from Azure in reverse dependency order — the local files
-stay — and withdraw exactly the role assignments rigg created for this
+project's resources from Azure in reverse dependency order (the local files
+stay) and withdraw exactly the role assignments rigg created for this
 environment.
 
 ```bash
@@ -564,11 +564,11 @@ rigg auth roles remove -e dev
 
 > [!WARNING]
 > A model deployment is the one thing that keeps billing after you stop
-> looking, so check it is gone — or, if you reused an existing one as this
+> looking, so check it is gone, or, if you reused an existing one as this
 > tutorial did, that it is *still there*: `rigg delete --remote` removes what
 > the project owns, and a deployment you never adopted was never the project's
 > to delete.
 
 ## Next
 
-[Tutorial 3 — Add an environment and promote](03-add-an-environment-and-promote.md)
+[Tutorial 3: Add an environment and promote](03-add-an-environment-and-promote.md)

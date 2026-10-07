@@ -56,7 +56,7 @@ async fn env_show_refresh_resolves_bindings_against_arm() {
         .stdout(predicate::str::contains(
             "/subscriptions/sub-a/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/devacct",
         ));
-    // The implicit `search` target is resolved and cached too — it is a
+    // The implicit `search` target is resolved and cached too: it is a
     // binding like any other, and every classification leans on it.
     let cache: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(ws.path().join(".rigg/dev/bindings.json")).unwrap(),
@@ -100,7 +100,7 @@ async fn env_show_refresh_marks_an_unresolvable_binding_and_still_succeeds() {
 }
 
 // ---------------------------------------------------------------------
-// `rigg promote` — the online phase (Web API auth re-derivation, deployment
+// `rigg promote`: the online phase (Web API auth re-derivation, deployment
 // availability and quota) against the ARM fake.
 // ---------------------------------------------------------------------
 
@@ -131,7 +131,7 @@ fn read_json(path: &std::path::Path) -> serde_json::Value {
 }
 
 /// A dev skillset whose Web API skill carries a redacted function key in its
-/// URI — the carrier promote must strip and re-derive against the target.
+/// URI: the carrier promote must strip and re-derive against the target.
 fn write_keyed_skillset(ws: &std::path::Path, uri: &str) {
     write_json(
         &ws.join("projects/demo/envs/dev/search/skillsets/ss.json"),
@@ -213,7 +213,7 @@ async fn promote_sets_entra_auth_when_target_function_app_has_easy_auth() {
 async fn promote_dry_run_runs_the_online_phase_and_writes_nothing() {
     // `--dry-run` (without `--offline`) is a preview, not a network-free
     // mode: the online checks are part of what it previews, so the Entra
-    // decision must show up here too — and nothing gets written.
+    // decision must show up here too, and nothing gets written.
     let server = MockServer::start().await;
     mount_arm_fake(
         &server,
@@ -353,7 +353,7 @@ async fn promote_asks_when_a_deployment_model_is_unavailable_in_the_target_regio
         }),
     );
 
-    // Unanswered, the unavailable model is a question — and nothing is written.
+    // Unanswered, the unavailable model is a question, and nothing is written.
     let out = rigg(ws.path(), &server.uri())
         .args([
             "promote", "demo", "--from", "dev", "--to", "prod", "--yes", "--output", "json",
@@ -411,7 +411,7 @@ async fn promote_asks_when_a_deployment_model_is_unavailable_in_the_target_regio
         "the available deployment is promoted"
     );
 
-    // Once `emb` matches, skipping `gpt5` again leaves nothing to write —
+    // Once `emb` matches, skipping `gpt5` again leaves nothing to write,
     // which is not the same as the two environments already matching.
     rigg(ws.path(), &server.uri())
         .args([
@@ -667,7 +667,7 @@ async fn promote_capacity_answer_writes_the_new_capacity() {
         "sub-a",
         "swedencentral",
         vec![model_entry("text-embedding-3-large", "1")],
-        // 2 of 100 free — the deployment asks for 10.
+        // 2 of 100 free: the deployment asks for 10.
         vec![usage_entry(
             "OpenAI.GlobalStandard.text-embedding-3-large",
             98.0,

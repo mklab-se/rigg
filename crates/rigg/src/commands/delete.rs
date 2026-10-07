@@ -1,4 +1,4 @@
-//! `rigg delete <project> --remote` — remove a project's resources from Azure.
+//! `rigg delete <project> --remote`: remove a project's resources from Azure.
 //!
 //! Local files are never touched by this command (delete files + `rigg push
 //! --prune` for single resources; `rm -r` for local project removal).

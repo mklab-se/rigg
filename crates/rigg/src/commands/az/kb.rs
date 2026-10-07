@@ -1,4 +1,4 @@
-//! `rigg az knowledge-base` (alias `kb`) — agentic retrieval against a
+//! `rigg az knowledge-base` (alias `kb`): agentic retrieval against a
 //! live knowledge base. The stable API is extractive: the response carries
 //! grounding content and references, not a synthesized answer.
 
@@ -50,7 +50,7 @@ async fn ask(ctx: &GlobalContext, name: &str, prompt: &str) -> Result<()> {
     }
 
     // Grounding content. The stable API returns the grounding as a
-    // JSON-encoded array of {ref_id, content} inside the message text —
+    // JSON-encoded array of {ref_id, content} inside the message text:
     // unpack it for humans (the raw payload is available via --output json).
     let mut printed = false;
     if let Some(messages) = result.get("response").and_then(Value::as_array) {
@@ -130,6 +130,6 @@ fn render_grounding(text: &str) {
     }
     if !chunks.is_empty() {
         println!();
-        println!("(chunks truncated for reading — full text via --output json)");
+        println!("(chunks truncated for reading: full text via --output json)");
     }
 }

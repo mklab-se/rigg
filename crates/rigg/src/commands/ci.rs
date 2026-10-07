@@ -1,9 +1,9 @@
-//! `rigg ci init <provider>` — scaffold CI/CD workflows (spec §8.3).
+//! `rigg ci init <provider>`: scaffold CI/CD workflows (spec §8.3).
 //!
 //! The role list printed at the end is not a canned paragraph: it is
 //! [`rigg_core::identity::operator_edges`] over this environment's own tree,
 //! scoped through the bindings cache, so the CI identity is told about the
-//! exact roles and ARM scopes the workflows will actually need — including
+//! exact roles and ARM scopes the workflows will actually need, including
 //! the grants it must be able to make on a bound storage account. Everything
 //! here is offline; a scope the cache cannot resolve is printed as a
 //! placeholder rather than guessed at.
@@ -35,7 +35,7 @@ pub async fn run(ctx: &GlobalContext, cmd: CiCommands) -> Result<()> {
 /// One line of the printed role list.
 pub struct RoleLine {
     pub role: String,
-    /// The role definition GUID — what `az role assignment create --role`
+    /// The role definition GUID: what `az role assignment create --role`
     /// must be given. A role *name* resolves against the tenant's role
     /// definitions, and Microsoft is renaming the Foundry roles, so the id
     /// is what the printed list leads with.
@@ -47,7 +47,7 @@ pub struct RoleLine {
 }
 
 impl RoleLine {
-    /// `<guid>  # <display name>` — the form a caller can paste into
+    /// `<guid>  # <display name>`: the form a caller can paste into
     /// `--role`.
     pub fn display(&self) -> String {
         format!("{}  # {}", self.role_id, self.role)
@@ -61,7 +61,7 @@ fn render_scope(scope: &Scope, env: &str) -> String {
         Scope::Resolved(id) => id.clone(),
         Scope::Unresolved { .. } => {
             format!(
-                "{} — resolve with `rigg env bind {env} --learn`",
+                "{}: resolve with `rigg env bind {env} --learn`",
                 scope.describe()
             )
         }
@@ -115,7 +115,7 @@ pub fn role_lines(ws: &Workspace, env: &ResolvedEnv) -> Vec<RoleLine> {
         .iter()
         .filter(|e| e.kind == EdgeKind::Rbac)
         .collect();
-    // `verify: false` — the scaffolded workflows run validate / push / diff,
+    // `verify: false`: the scaffolded workflows run validate / push / diff,
     // none of which read the data plane. Add Search Index Data Reader if you
     // add `--verify` to the deploy job.
     let (operator, _) = operator_edges(&bindings, &kinds, false, &grants, project_id.as_deref());
@@ -171,7 +171,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
         let path = dir.join(name);
         if path.exists() && !force {
             bail!(
-                "{} already exists — pass --force to overwrite",
+                "{} already exists: pass --force to overwrite",
                 path.display()
             );
         }
@@ -191,7 +191,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
     );
     say!(
         ctx,
-        "     (workload identity federation — no client secrets):"
+        "     (workload identity federation, no client secrets):"
     );
     say!(ctx, "       az ad app create --display-name rigg-deploy");
     say!(
@@ -206,12 +206,12 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
                 lines.iter().partition(|l| !l.grant);
             say!(
                 ctx,
-                "  2. Grant it what '{env}' actually requires — from this workspace's files:"
+                "  2. Grant it what '{env}' actually requires, from this workspace's files:"
             );
             if held.is_empty() {
                 say!(
                     ctx,
-                    "       (no resources yet — re-run after your first push)"
+                    "       (no resources yet: re-run after your first push)"
                 );
             }
             for line in &held {
@@ -253,7 +253,7 @@ async fn init(ctx: &GlobalContext, provider: &str, force: bool) -> Result<()> {
         None => {
             say!(
                 ctx,
-                "  2. Grant it the roles this workspace requires — run `rigg auth doctor -e {env}`"
+                "  2. Grant it the roles this workspace requires: run `rigg auth doctor -e {env}`"
             );
             say!(
                 ctx,

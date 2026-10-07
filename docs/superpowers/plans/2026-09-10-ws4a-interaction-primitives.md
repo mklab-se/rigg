@@ -1,4 +1,4 @@
-# Workstream 4a: Interaction primitives — Implementation Plan
+# Workstream 4a: Interaction primitives: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -124,7 +124,7 @@ fn unknown_answer_id_is_a_usage_error() {
 }
 ```
 
-(For this test, `status` must validate answers before doing anything else: put the check in `GlobalContext::from_cli` → `Cli::run`, comparing against the ids the command *declares* — see Step 3.)
+(For this test, `status` must validate answers before doing anything else: put the check in `GlobalContext::from_cli` → `Cli::run`, comparing against the ids the command *declares*, see Step 3.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -133,7 +133,7 @@ Expected: compile errors / FAIL.
 
 - [ ] **Step 3: Implement**
 
-`ask.rs`: the types above. `ScriptedAsker::ask` looks up `q.id`; found → `coerce`; missing → `Err(NeedsInput { questions: vec![q.clone()] })`. `ask_all` collects every unanswered question into one `NeedsInput` (answered ones are coerced; if all answered returns the answers). `NeedsInput` implements `std::error::Error` (thiserror) with `Display` = `"{n} question(s) need an answer: {ids}"`, and `to_json()` builds the protocol document (serialize `Question` with `#[serde(skip_serializing_if = "Vec::is_empty")]` on `candidates`, `skip_serializing_if = "Option::is_none"` on `default`, and `allow_other` only when true — implement with a manual `to_value` rather than fighting serde attributes).
+`ask.rs`: the types above. `ScriptedAsker::ask` looks up `q.id`; found → `coerce`; missing → `Err(NeedsInput { questions: vec![q.clone()] })`. `ask_all` collects every unanswered question into one `NeedsInput` (answered ones are coerced; if all answered returns the answers). `NeedsInput` implements `std::error::Error` (thiserror) with `Display` = `"{n} question(s) need an answer: {ids}"`, and `to_json()` builds the protocol document (serialize `Question` with `#[serde(skip_serializing_if = "Vec::is_empty")]` on `candidates`, `skip_serializing_if = "Option::is_none"` on `default`, and `allow_other` only when true: implement with a manual `to_value` rather than fighting serde attributes).
 
 `cli.rs`: add global args
 
@@ -157,7 +157,7 @@ Expected: green.
 
 ```bash
 git add -A
-git commit -m "feat(cli): question protocol — Asker trait, --answer/--answers-file, needs-input exit 6
+git commit -m "feat(cli): question protocol, Asker trait, --answer/--answers-file, needs-input exit 6
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -221,7 +221,7 @@ async fn protected_env_push_accepts_answer_flag() {
 }
 ```
 
-Check the existing helper names in `sync.rs` (`mount_empty_lists_except`, `workspace_with_protected_prod`, `write_resource_env`) and the existing PUT/GET mock shapes used by other push tests; mirror them. The existing test `protected_env_push_blocks_non_interactive_without_confirm_env` currently expects exit 2 — it now expects exit **6** in json mode and exit 6 in text mode too (the gate is a question); update its assertion and message check (`stderr` contains `confirm.protected.prod`). `--confirm-env prod` keeps working (it is sugar for the answer).
+Check the existing helper names in `sync.rs` (`mount_empty_lists_except`, `workspace_with_protected_prod`, `write_resource_env`) and the existing PUT/GET mock shapes used by other push tests; mirror them. The existing test `protected_env_push_blocks_non_interactive_without_confirm_env` currently expects exit 2: it now expects exit **6** in json mode and exit 6 in text mode too (the gate is a question); update its assertion and message check (`stderr` contains `confirm.protected.prod`). `--confirm-env prod` keeps working (it is sugar for the answer).
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -286,13 +286,13 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-`tools.rs`: `with_common_answers(args, env, json, answers: Option<&BTreeMap<String,String>>) -> Vec<String>` (owned strings since answers are formatted); keep `with_common` as a thin wrapper for tools without answers. Add `#[schemars(default)] pub answers: Option<BTreeMap<String, String>>` with doc "Answers to questions a previous call returned as `needs-input` (id → value)" to `ProjectParams` and the mutating tools' params. In `rigg_cli`, map exit code `6` to `stdout` unchanged (the JSON document is the tool result) — add a line in the module doc and in the server instructions string (grep `ServerInfo`/instructions in `mcp/mod.rs` or `tools.rs`) explaining the needs-input loop.
+`tools.rs`: `with_common_answers(args, env, json, answers: Option<&BTreeMap<String,String>>) -> Vec<String>` (owned strings since answers are formatted); keep `with_common` as a thin wrapper for tools without answers. Add `#[schemars(default)] pub answers: Option<BTreeMap<String, String>>` with doc "Answers to questions a previous call returned as `needs-input` (id → value)" to `ProjectParams` and the mutating tools' params. In `rigg_cli`, map exit code `6` to `stdout` unchanged (the JSON document is the tool result): add a line in the module doc and in the server instructions string (grep `ServerInfo`/instructions in `mcp/mod.rs` or `tools.rs`) explaining the needs-input loop.
 
-Docs: CONCEPTS "Exit codes" gains `6 — needs input`; new paragraph:
+Docs: CONCEPTS "Exit codes" gains `6 (needs input`; new paragraph):
 
 > **When rigg needs an answer.** Guided flows ask questions. On a terminal rigg prompts. In scripts and from AI agents rigg cannot prompt, so it prints a `needs-input` JSON document listing the questions (id, prompt, candidates) and exits 6. Re-run with `--answer <id>=<value>` (repeatable) or `--answers-file <path>`; answered questions are never asked again. A protected environment's typed confirmation is such a question (`confirm.protected.<env>`); `--confirm-env <env>` remains as shorthand.
 
-Copy to `crates/rigg/CONCEPTS.md`. README: same in short. CHANGELOG `[Unreleased] — 2.0.0` → `### Added` bullet for the protocol and exit 6.
+Copy to `crates/rigg/CONCEPTS.md`. README: same in short. CHANGELOG `[Unreleased]: 2.0.0` → `### Added` bullet for the protocol and exit 6.
 
 - [ ] **Step 4: Run the gate**
 
@@ -315,10 +315,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 Executed on branch `rigg-2`, commits 27f5733..5217925. Rulings:
 
 - | T1 unknown-id check vs lazily declared questions | prefix registry KNOWN_ID_PREFIXES (Ruling: prefixes, not exact ids, so later workstreams append; cost if wrong: a typo in an id is not caught at startup) | clean |
-- Task 1: review Approved; Important: module-wide #![allow(dead_code)] in ask.rs. Ruling: carried into Task 2 (which wires the primitives and removes most dead surface) — Task 2 must replace it with item-level allows or remove them. Cost if wrong: none.
-- Task 2: implemented c0b7293 (DONE_WITH_CONCERNS). Concern: protected gate moved BEFORE the plan output to keep stdout pure in json mode — violates explain-then-act. Ruling: fix round before review — restore gate-after-plan; add a `say!`-style helper that writes prose to stdout in text mode and stderr in json mode, apply to push.rs and delete.rs prose; the needs-input document remains the only stdout content in json mode. Cost if wrong: none; keeps the UX rule.
-- Task 2: review Approved. Important 1 (print_targets suppressed instead of redirected in json mode) + Minor 2 (wrong --confirm-env exits 1 not 2) + Minor 3 (choice label→value by index; sentinel shadowing) + Minor 5 (MCP exit-6 label) + Minor 6 (say!(ctx) blank-line arm) — Ruling: carried into Task 3 (touches mcp/tools.rs, docs; the others are 5-line edits in files Task 3 already opens). Minor 4 (gate comment wording) folded in too. Cost if wrong: none.
+- Task 1: review Approved; Important: module-wide #![allow(dead_code)] in ask.rs. Ruling: carried into Task 2 (which wires the primitives and removes most dead surface), Task 2 must replace it with item-level allows or remove them. Cost if wrong: none.
+- Task 2: implemented c0b7293 (DONE_WITH_CONCERNS). Concern: protected gate moved BEFORE the plan output to keep stdout pure in json mode, violates explain-then-act. Ruling: fix round before review, restore gate-after-plan; add a `say!`-style helper that writes prose to stdout in text mode and stderr in json mode, apply to push.rs and delete.rs prose; the needs-input document remains the only stdout content in json mode. Cost if wrong: none; keeps the UX rule.
+- Task 2: review Approved. Important 1 (print_targets suppressed instead of redirected in json mode) + Minor 2 (wrong --confirm-env exits 1 not 2) + Minor 3 (choice label→value by index; sentinel shadowing) + Minor 5 (MCP exit-6 label) + Minor 6 (say!(ctx) blank-line arm), Ruling: carried into Task 3 (touches mcp/tools.rs, docs; the others are 5-line edits in files Task 3 already opens). Minor 4 (gate comment wording) folded in too. Cost if wrong: none.
 - Task 3: review Approved. Important (out of brief scope): rigg_indexer_run MCP tool has no answers/confirm_env param → dead end on protected envs. Ruling: fix in the final fix wave.
-- Final review (opus): mergeable after fixes. Ruling: ONE fix wave covering Critical 1 (MCP isolates the needs-input document from text stdout), Critical 2 (rigg_indexer_run gets answers+confirm_env), Important 3 (az target banner via say!), 4 (MCP.md), 5 (CHANGELOG breaking list + RIGG_NON_INTERACTIVE docs), 6 (mode-detection + answers-file + delete tests), 7 (protected_env_question + confirm_env answer helper; confirm_protected_env becomes the convenience wrapper), 8 (command = re-runnable name, context carries project), 9 (ask_all accumulates coercion errors), 10 (drop CommandError::NeedsInput; ask::NeedsInput canonical), 12 (RIGG_NON_INTERACTIVE=0/"" not truthy — document "set to 1"), 13 (doc line), 14 (assert exact message), 15 (explicit fallback). Finding 11 (routine --yes gates stay usage errors) — Ruling: keep per spec §2; revisit when promote lands. Cost if wrong: agents hit exit 2 after exit 6 on protected pushes without --yes — documented.
+- Final review (opus): mergeable after fixes. Ruling: ONE fix wave covering Critical 1 (MCP isolates the needs-input document from text stdout), Critical 2 (rigg_indexer_run gets answers+confirm_env), Important 3 (az target banner via say!), 4 (MCP.md), 5 (CHANGELOG breaking list + RIGG_NON_INTERACTIVE docs), 6 (mode-detection + answers-file + delete tests), 7 (protected_env_question + confirm_env answer helper; confirm_protected_env becomes the convenience wrapper), 8 (command = re-runnable name, context carries project), 9 (ask_all accumulates coercion errors), 10 (drop CommandError::NeedsInput; ask::NeedsInput canonical), 12 (RIGG_NON_INTERACTIVE=0/"" not truthy, document "set to 1"), 13 (doc line), 14 (assert exact message), 15 (explicit fallback). Finding 11 (routine --yes gates stay usage errors), Ruling: keep per spec §2; revisit when promote lands. Cost if wrong: agents hit exit 2 after exit 6 on protected pushes without --yes, documented.
 
 Deferred (can wait): az indexer run/reset prose still println! under --output json; ConfirmEnv env derived from id prefix; routine --yes gates remain usage errors (spec §2) until promote lands.

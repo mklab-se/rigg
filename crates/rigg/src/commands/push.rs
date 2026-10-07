@@ -1,4 +1,4 @@
-//! `rigg push` — apply local project files to Azure, in dependency order.
+//! `rigg push`: apply local project files to Azure, in dependency order.
 //!
 //! Semantics (spec §5.3):
 //! - only semantically-changed resources are pushed
@@ -45,7 +45,7 @@ pub async fn run(ctx: &GlobalContext, args: PushArgs) -> Result<()> {
         any_conflict |= push_project(ctx, &ws, &env, project, &args).await?;
     }
     // `--verify` proves the stack works, so it runs after every project has
-    // landed — and only then: verifying half a plan proves nothing, and a
+    // landed, and only then: verifying half a plan proves nothing, and a
     // dry run wrote nothing to verify.
     if args.verify && !any_conflict && !args.dry_run {
         say!(ctx);
@@ -67,7 +67,7 @@ struct PlanItem {
 }
 
 /// One replace operation: a resource whose immutable field(s) changed, so it
-/// must be deleted and re-created — for a knowledge source, together with the
+/// must be deleted and re-created: for a knowledge source, together with the
 /// generated pipeline Azure cascades away on delete.
 struct ReplaceBundle {
     ks: ResourceRef,
@@ -145,7 +145,7 @@ async fn push_project(
         match state.classify(r, Some(body), remote_doc.as_ref()) {
             SyncClass::InSync => {
                 // Azure redacts stored secrets on every GET, so "in sync"
-                // cannot certify the remote key of a Web API skill — but it
+                // cannot certify the remote key of a Web API skill, but it
                 // cannot condemn it either (issue #5). Ordinary pushes leave
                 // in-sync resources alone; `--refresh-credentials` makes the
                 // re-authorization explicit: annotated skills re-PUT with a
@@ -178,7 +178,7 @@ async fn push_project(
 
     // Attach each replace bundle's sub-resources: local files named by the
     // remote knowledge source's createdResources are cascade-deleted with it
-    // and must be re-created inside the bundle — pull them out of the normal
+    // and must be re-created inside the bundle: pull them out of the normal
     // plan whatever their own sync class.
     for bundle in &mut replaces {
         let created: BTreeSet<String> = migrate::created_resources(&bundle.remote_ks)
@@ -210,7 +210,7 @@ async fn push_project(
     }
 
     // Web API skills with unusable (redacted) auth are gated ONLY when this
-    // push would actually PUT them — like the other credential preflights.
+    // push would actually PUT them, like the other credential preflights.
     // For everything else (typically in-sync resources) Azure's redaction is
     // routine secret hygiene, not evidence of a broken key (issue #5): those
     // are surfaced as a non-blocking note pointing at --refresh-credentials.
@@ -244,14 +244,14 @@ async fn push_project(
         for r in unknown {
             say!(
                 ctx,
-                "  note: {r} has a server-redacted Web API key (normal on Azure GETs, says nothing about the stored key) — if enrichment is failing, run `rigg push --refresh-credentials` to re-authorize"
+                "  note: {r} has a server-redacted Web API key (normal on Azure GETs, says nothing about the stored key). If enrichment is failing, run `rigg push --refresh-credentials` to re-authorize"
             );
         }
     };
 
     // Report the plan. webapi_missing is empty whenever the plan is empty
     // (it only flags planned mutations), so an ordinary no-op push stays a
-    // no-op — in-sync redacted skills get the note, nothing more.
+    // no-op, in-sync redacted skills get the note, nothing more.
     if to_push.is_empty() && orphans.is_empty() && conflicts.is_empty() && replaces.is_empty() {
         print_webapi_unknown_notes(&webapi_unknown);
         if !pending_relinks.is_empty() && !args.dry_run {
@@ -343,7 +343,7 @@ async fn push_project(
     for r in &skipped_remote_ahead {
         say!(
             ctx,
-            "  {} {} (remote changed since last sync — pull first)",
+            "  {} {} (remote changed since last sync: pull first)",
             "skip".yellow(),
             r
         );
@@ -370,7 +370,7 @@ async fn push_project(
     }
 
     // Credential preflight: a data source about to be CREATED (plain create
-    // or replace re-create) without a usable connection fails at PUT time —
+    // or replace re-create) without a usable connection fails at PUT time:
     // for a replace, AFTER the old pipeline was already destroyed. Detect it
     // here, before anything mutates. Updates that omit credentials are legal
     // (the service keeps the existing secret), so only creations are gated.
@@ -394,7 +394,7 @@ async fn push_project(
     for r in &cred_missing {
         say!(
             ctx,
-            "  {} {} has no credentials.connectionString — a created data source needs a connection (identity-based ResourceId=...)",
+            "  {} {} has no credentials.connectionString: a created data source needs a connection (identity-based ResourceId=...)",
             "!".yellow(),
             r
         );
@@ -424,7 +424,7 @@ async fn push_project(
     for (r, _) in &key_missing {
         say!(
             ctx,
-            "  {} {} has a key-based cognitiveServices connection without a usable key — switch to identity-based (AIServicesByIdentity)",
+            "  {} {} has a key-based cognitiveServices connection without a usable key: switch to identity-based (AIServicesByIdentity)",
             "!".yellow(),
             r
         );
@@ -432,11 +432,11 @@ async fn push_project(
 
     // Custom Web API skills whose outgoing body would carry an unusable
     // (redacted) key: PUTting the literal placeholder breaks enrichment for
-    // every document — resolve now (Entra ID or push-time key), not then.
+    // every document: resolve now (Entra ID or push-time key), not then.
     for r in &webapi_missing {
         say!(
             ctx,
-            "  {} {} would push a custom Web API skill with an unusable (redacted) key — authorize it first (Entra ID or push-time function key)",
+            "  {} {} would push a custom Web API skill with an unusable (redacted) key: authorize it first (Entra ID or push-time function key)",
             "!".yellow(),
             r
         );
@@ -446,7 +446,7 @@ async fn push_project(
     // Binding preflight: classify every infrastructure reference in every
     // body this push would write, exactly as `rigg validate` does, and
     // refuse before a single mutation when one of them belongs to another
-    // environment (a leak) — or, in a strict-bindings environment, is bound
+    // environment (a leak), or, in a strict-bindings environment, is bound
     // nowhere at all. Runs before the protected gate so the refusal is the
     // first thing a wrong-environment push hits, and before the dry-run
     // early return so a preview reports the same findings (without
@@ -462,11 +462,11 @@ async fn push_project(
 
     // Auth preflight: verify the identity graph THIS plan implies before a
     // single resource is written (spec §4.2). Placed after the binding
-    // preflight (a wrong-environment push must be caught first — there is no
+    // preflight (a wrong-environment push must be caught first: there is no
     // point granting roles for a plan that will be refused) and before the
     // credential preflights and the protected gate, so a refusal is the
     // first thing a push that cannot work hits. The *repair* it proposes is
-    // applied later, past every gate that can still abort — see
+    // applied later, past every gate that can still abort: see
     // `apply_auth_repair` below.
     let mut plan_docs: Vec<(ResourceKind, String, Value)> = to_push
         .iter()
@@ -488,13 +488,13 @@ async fn push_project(
     let auth_repair = auth_preflight(ctx, ws, env, plan_docs, args).await?;
 
     if args.dry_run {
-        say!(ctx, "  (dry run — nothing pushed)");
+        say!(ctx, "  (dry run, nothing pushed)");
         return Ok(!conflicts.is_empty());
     }
 
     // Resolve missing connections before any gate: interactively, discover
     // the storage account by container via ARM (the user is logged in with
-    // Azure CLI — rigg figures it out instead of asking for an id); anything
+    // Azure CLI: rigg figures it out instead of asking for an id); anything
     // still unresolved refuses the push before a single remote call.
     if !cred_missing.is_empty() {
         if ctx.interactive() {
@@ -536,7 +536,7 @@ async fn push_project(
         if !cred_missing.is_empty() {
             let names: Vec<String> = cred_missing.iter().map(|r| r.to_string()).collect();
             return Err(anyhow!(CommandError::Validation(format!(
-                "{} has no credentials.connectionString — set an identity-based connection \
+                "{} has no credentials.connectionString: set an identity-based connection \
                  (`ResourceId=/subscriptions/.../storageAccounts/<name>;`) in the file, or run \
                  `rigg push` interactively to auto-discover the storage account",
                 names.join(", ")
@@ -548,7 +548,7 @@ async fn push_project(
             let pending = key_missing.clone();
             for (r, subdomain) in pending {
                 let Some(subdomain) = subdomain else {
-                    continue; // no subdomain in the file — cannot rewrite automatically
+                    continue; // no subdomain in the file: cannot rewrite automatically
                 };
                 // Keyless billing only works against Foundry-kind resources;
                 // verify (and if needed re-target) before offering the switch.
@@ -592,7 +592,7 @@ async fn push_project(
         if !key_missing.is_empty() {
             let names: Vec<String> = key_missing.iter().map(|(r, _)| r.to_string()).collect();
             return Err(anyhow!(CommandError::Validation(format!(
-                "{} has a key-based cognitiveServices connection without a usable key — \
+                "{} has a key-based cognitiveServices connection without a usable key: \
                  rigg never stores keys; use the identity-based form \
                  (`{{\"@odata.type\": \"#Microsoft.Azure.Search.AIServicesByIdentity\", \
                  \"subdomainUrl\": \"https://<account>.cognitiveservices.azure.com/\"}}`), \
@@ -647,7 +647,7 @@ async fn push_project(
             for r in &webapi_missing {
                 say!(
                     ctx,
-                    "  {} {} left WITHOUT Web API authorization — its enrichment will fail until fixed",
+                    "  {} {} left WITHOUT Web API authorization: its enrichment will fail until fixed",
                     "!".yellow(),
                     r
                 );
@@ -657,7 +657,7 @@ async fn push_project(
             // here can never trip on an untouched in-sync resource.
             let blocking: Vec<String> = webapi_missing.iter().map(|r| r.to_string()).collect();
             return Err(anyhow!(CommandError::Validation(format!(
-                "{} would push a custom Web API skill with an unusable (redacted) key — run \
+                "{} would push a custom Web API skill with an unusable (redacted) key: run \
                  `rigg push` interactively to choose Entra ID auth (authResourceId) or a \
                  push-time-resolved function key",
                 blocking.join(", ")
@@ -666,7 +666,7 @@ async fn push_project(
     }
 
     // The connections just fixed need data-plane roles the identities may
-    // not have yet — offer to verify/grant them right here instead of
+    // not have yet: offer to verify/grant them right here instead of
     // hinting and letting the push run into a predictable 400.
     if fixed_credentials && ctx.interactive() {
         say!(ctx);
@@ -679,19 +679,19 @@ async fn push_project(
         {
             say!(
                 ctx,
-                "  {} auth doctor could not fix everything ({e:#}) — continuing; the push may fail until the roles exist",
+                "  {} auth doctor could not fix everything ({e:#}): continuing; the push may fail until the roles exist",
                 "!".yellow()
             );
         }
     }
 
     // Protected-env gate: fires after the plan is built and displayed (the
-    // "explain, then act" rule — show what would happen, then ask), and
+    // "explain, then act" rule: show what would happen, then ask), and
     // before any mutating call to the environment's resources (creates/
     // updates below, and the --prune deletion path), and before the routine
     // apply confirmation so a
     // rejected/missing typed confirmation short-circuits everything that
-    // follows. Dry runs never reach here — they return above, before this
+    // follows. Dry runs never reach here: they return above, before this
     // point, so previewing a protected env's plan without confirming is
     // still the whole point of `--dry-run`.
     if !confirm_protected_env(
@@ -711,7 +711,7 @@ async fn push_project(
     }
 
     // Replace gate: --yes deliberately does NOT satisfy it (same philosophy
-    // as --confirm-env) — a replace destroys and rebuilds a live index, and
+    // as --confirm-env): a replace destroys and rebuilds a live index, and
     // scripts pipe -y reflexively. Interactive: explicit default-No confirm.
     if !replaces.is_empty() && !args.allow_replace {
         if ctx.interactive() {
@@ -746,7 +746,7 @@ async fn push_project(
         )));
     }
 
-    // Apply what the auth preflight found — with consent, and then waited
+    // Apply what the auth preflight found, with consent, and then waited
     // out. Deliberately *after* every gate that can still abort (the
     // protected-environment gate, the replace gate, the apply confirmation):
     // the preflight's refusal has to come before them so a doomed push is
@@ -870,7 +870,7 @@ async fn push_project(
         }
     }
 
-    // Execute in order (conflicts resolved to local were appended — reorder).
+    // Execute in order (conflicts resolved to local were appended: reorder).
     let order = graph::push_order(
         &to_push
             .iter()
@@ -937,7 +937,7 @@ async fn push_project(
     }
 
     // Prune orphans in reverse dependency order (best effort ordering: use
-    // registry declaration order reversed — orphan bodies are gone).
+    // registry declaration order reversed: orphan bodies are gone).
     if args.prune {
         let mut ordered = orphans.clone();
         ordered.sort();
@@ -956,13 +956,13 @@ async fn push_project(
 
 /// Classify every infrastructure reference in the bodies this push would
 /// write against `env`'s bindings (and every other environment's, for
-/// leak/share detection) — the same machinery `rigg validate` runs, with the
+/// leak/share detection): the same machinery `rigg validate` runs, with the
 /// same message texts ([`infra_report`]).
 ///
 /// A leak is always an error; unbound/external references are errors in a
 /// strict-bindings environment (the default for protected ones) and warnings
 /// otherwise. Called before any mutating call, so an error means nothing was
-/// written to Azure — except on `dry_run`, where a preview never refuses:
+/// written to Azure, except on `dry_run`, where a preview never refuses:
 /// every finding (error or warning) is printed instead, so a `--dry-run`
 /// never reports a clean plan for a push that would fail one command later.
 fn binding_preflight<'a>(
@@ -1033,12 +1033,12 @@ struct AuthRepair {
 }
 
 /// Plan-scoped auth preflight (spec §4.2): verify the identity graph the
-/// bodies this push would write imply — service-identity role assignments,
+/// bodies this push would write imply (service-identity role assignments,
 /// the settings and network rules they depend on, and the operator's own
-/// rights — before a single resource is written.
+/// rights) before a single resource is written.
 ///
-/// This is the **check** half only. Anything rigg may not repair — the
-/// operator's own rights, which rigg never grants itself — refuses here,
+/// This is the **check** half only. Anything rigg may not repair (the
+/// operator's own rights, which rigg never grants itself) refuses here,
 /// with exit 4 and the `az` line to run, so the refusal lands before the
 /// protected-environment gate and before anything else is asked. What rigg
 /// *can* repair is reported and handed back as an [`AuthRepair`] for
@@ -1046,8 +1046,8 @@ struct AuthRepair {
 /// cleared: a preflight must never change an environment the operator has
 /// not yet confirmed the push to.
 ///
-/// `--dry-run` reports every finding — what rigg would fix and what only a
-/// human can — and refuses nothing (the binding preflight's rule: a preview
+/// `--dry-run` reports every finding, what rigg would fix and what only a
+/// human can, and refuses nothing (the binding preflight's rule: a preview
 /// must not show a clean plan for a push that would fail, but must not fail
 /// either). `--skip-auth-preflight` skips the whole thing, for a caller who
 /// cannot read ARM but knows the wiring holds.
@@ -1100,7 +1100,7 @@ async fn auth_preflight(
     for item in &missing {
         say!(
             ctx,
-            "    {} {} — {}",
+            "    {} {}: {}",
             "✗".red(),
             item.headline(),
             item.detail
@@ -1128,7 +1128,7 @@ async fn auth_preflight(
     }
 
     if args.dry_run {
-        say!(ctx, "  (dry run — nothing granted)");
+        say!(ctx, "  (dry run, nothing granted)");
         return Ok(None);
     }
 
@@ -1164,7 +1164,7 @@ async fn apply_auth_repair(
     let AuthRepair { fixes, missing } = repair;
     let missing: Vec<&ReportItem> = missing.iter().collect();
     // `--yes` is consent for the whole push, grants included. Otherwise ask
-    // `auth.fix.all` — the same question `auth doctor --fix` asks, so a
+    // `auth.fix.all`: the same question `auth doctor --fix` asks, so a
     // scripted caller can pre-answer it. Asked through `ask_all` (not `ask`)
     // so a malformed `--answer auth.fix.all=maybe` is the usage error
     // (exit 2) every other flow produces. An unanswerable question here is
@@ -1217,7 +1217,7 @@ async fn apply_auth_repair(
 /// escape hatch.
 fn refusal(env: &ResolvedEnv, items: &[&ReportItem]) -> anyhow::Error {
     anyhow!(CommandError::AuthDenied(format!(
-        "{} auth requirement(s) missing for this plan; nothing was pushed to '{}': {} — run `rigg auth doctor -e {} --fix`, or push with --skip-auth-preflight to try anyway",
+        "{} auth requirement(s) missing for this plan; nothing was pushed to '{}': {}. Run `rigg auth doctor -e {} --fix` or push with --skip-auth-preflight to try anyway",
         items.len(),
         env.name,
         items
@@ -1248,7 +1248,7 @@ fn rbac_wait_tuning() -> (u64, u32) {
 
 /// Poll until every role assignment rigg just created is visible through
 /// `atScope()` for its principal (spec §4.2 step 2). A role that never
-/// appears is a warning, not a refusal — the push proceeds and
+/// appears is a warning, not a refusal: the push proceeds and
 /// [`put_with_rbac_help`] catches it if it really has not landed.
 async fn wait_for_grants(
     ctx: &GlobalContext,
@@ -1312,7 +1312,7 @@ async fn wait_for_grants(
         } else {
             say!(
                 ctx,
-                "      {} '{}' is not visible yet — pushing anyway (rigg retries the write while \
+                "      {} '{}' is not visible yet: pushing anyway (rigg retries the write while \
                  it propagates)",
                 "!".yellow(),
                 role.name
@@ -1349,7 +1349,7 @@ fn rbac_retry_tuning() -> (u64, u32) {
     (secs, attempts)
 }
 
-/// Which roles `body` requires that the service identities do not hold —
+/// Which roles `body` requires that the service identities do not hold:
 /// the very verification `rigg auth doctor` performs, narrowed to this one
 /// document. Going through the auth engine (rather than the 1.x ad-hoc ARM
 /// walk) means the diagnosis sees the environment's binding table, so an
@@ -1395,7 +1395,7 @@ async fn put_with_rbac_help(
     ctx: &GlobalContext,
     ws: &Workspace,
     env: &ResolvedEnv,
-    // `push --verify`'s data-plane smoke run needs the read roles too — a
+    // `push --verify`'s data-plane smoke run needs the read roles too: a
     // 403 diagnosed without them names every edge but the one that explains
     // the failure.
     verify_roles: bool,
@@ -1407,7 +1407,7 @@ async fn put_with_rbac_help(
     };
     say!(
         ctx,
-        "  {} {} rejected for a role/permission — diagnosing via ARM...",
+        "  {} {} rejected for a role/permission: diagnosing via ARM...",
         "!".yellow(),
         r
     );
@@ -1431,7 +1431,7 @@ async fn put_with_rbac_help(
             let fixes = report.fixes();
             if !ctx.interactive() {
                 return Err(anyhow!(CommandError::Validation(format!(
-                    "{r} requires access the service identity does not hold: {} — run `rigg auth doctor --fix`",
+                    "{r} requires access the service identity does not hold: {}. Run `rigg auth doctor --fix`",
                     fixes
                         .iter()
                         .map(Fix::describe)
@@ -1444,7 +1444,7 @@ async fn put_with_rbac_help(
                 ctx.no_color,
             )? {
                 return Err(first.context(
-                    "missing role(s) left ungranted — run `rigg auth doctor --fix`, then push again",
+                    "missing role(s) left ungranted: run `rigg auth doctor --fix`, then push again",
                 ));
             }
             let arm = rigg_client::arm::ArmClient::for_tenant(env.env.tenant.as_deref())?;
@@ -1470,26 +1470,26 @@ async fn put_with_rbac_help(
                 }
             }
             return Err(first.context(format!(
-                "{r} needs {} access requirement(s) rigg may not grant itself — waiting will not help; run the command(s) above (or `rigg auth doctor -e {} --fix`), then push again",
+                "{r} needs {} access requirement(s) rigg may not grant itself: waiting will not help; run the command(s) above (or `rigg auth doctor -e {} --fix`), then push again",
                 unfixable.len(),
                 env.name
             )));
         }
         Some(_) => say!(
             ctx,
-            "  {} the role assignments exist — Azure is still propagating them",
+            "  {} the role assignments exist: Azure is still propagating them",
             "ℹ".cyan()
         ),
         None => say!(
             ctx,
-            "  {} could not verify role assignments — retrying in case a fresh grant is propagating",
+            "  {} could not verify role assignments: retrying in case a fresh grant is propagating",
             "!".yellow()
         ),
     }
     let (delay, attempts) = rbac_retry_tuning();
     say!(
         ctx,
-        "  waiting for RBAC propagation — retrying every {delay}s for up to ~{} min (Ctrl-C is safe; re-running push resumes)",
+        "  waiting for RBAC propagation: retrying every {delay}s for up to ~{} min (Ctrl-C is safe; re-running push resumes)",
         (delay * attempts as u64).div_ceil(60)
     );
     let mut last = first;
@@ -1512,7 +1512,7 @@ async fn put_with_rbac_help(
         }
     }
     Err(last.context(format!(
-        "access had not propagated after {attempts} attempts — wait a few minutes and re-run `rigg push` (it resumes where it left off)"
+        "access had not propagated after {attempts} attempts: wait a few minutes and re-run `rigg push` (it resumes where it left off)"
     )))
 }
 
@@ -1522,7 +1522,7 @@ async fn put_with_rbac_help(
 
 /// Recovery file for one replace: written before the knowledge bases are
 /// unlinked, removed after they are restored. Its presence after a crash is
-/// what lets the next `rigg push` finish the relink — essential for
+/// what lets the next `rigg push` finish the relink: essential for
 /// knowledge bases outside this project, whose original docs exist nowhere
 /// else.
 fn recovery_path(ws: &Workspace, env: &str, project: &str, ks_name: &str) -> std::path::PathBuf {
@@ -1562,7 +1562,7 @@ fn load_pending_relinks(
             .unwrap_or_default();
         say!(
             ctx,
-            "  {} found interrupted replace of knowledge-sources/{ks} — will restore {} knowledge base link(s)",
+            "  {} found interrupted replace of knowledge-sources/{ks}: will restore {} knowledge base link(s)",
             "↻".cyan(),
             kbs.len()
         );
@@ -1590,7 +1590,7 @@ async fn finish_pending_relinks(
         if remote.get(&ks_ref).await?.is_none() {
             say!(
                 ctx,
-                "  {} knowledge-sources/{ks_name} still missing remotely — push its file, then run push again to restore knowledge base links",
+                "  {} knowledge-sources/{ks_name} still missing remotely: push its file, then run push again to restore knowledge base links",
                 "!".yellow()
             );
             continue;
@@ -1665,7 +1665,7 @@ async fn execute_replace(
     let ks = &bundle.ks;
     say!(ctx, "  {} {}", "replace".magenta().bold(), ks);
 
-    // 1. Snapshot referencing knowledge bases — ALL of them, this project's
+    // 1. Snapshot referencing knowledge bases: ALL of them, this project's
     // or not: the delete fails while any reference exists. Foreign ones are
     // restored byte-for-byte afterwards.
     let mut referencing: Vec<Value> = Vec::new();
@@ -1684,7 +1684,7 @@ async fn execute_replace(
                 if store.locate(&kb_ref)?.is_none() && !state.has_baseline(&kb_ref) {
                     say!(
                         ctx,
-                        "      {} temporarily unlinking foreign knowledge base '{name}' (not managed by this project) — restored afterwards",
+                        "      {} temporarily unlinking foreign knowledge base '{name}' (not managed by this project): restored afterwards",
                         "!".yellow()
                     );
                 }
@@ -1743,7 +1743,7 @@ async fn execute_replace(
         match result {
             Ok(_) => say!(ctx, "      unlinked {kb_ref}"),
             Err(e) if now_empty => {
-                // The service may reject an empty knowledgeSources list —
+                // The service may reject an empty knowledgeSources list:
                 // fall back to deleting the knowledge base (restored later
                 // from the recovery snapshot).
                 tracing::debug!("unlink PUT rejected ({e:#}); deleting {kb_ref} instead");
@@ -1828,7 +1828,7 @@ async fn execute_replace(
     }
     say!(
         ctx,
-        "      {} index is repopulating — knowledge bases may return thin results until the indexer finishes",
+        "      {} index is repopulating: knowledge bases may return thin results until the indexer finishes",
         "ℹ".cyan()
     );
     Ok(())

@@ -1,4 +1,4 @@
-//! `rigg copy` — copy a resource file locally under a new name,
+//! `rigg copy`: copy a resource file locally under a new name,
 //! within or across projects. No network access.
 
 use anyhow::{Context, Result, bail};

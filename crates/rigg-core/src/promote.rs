@@ -1,30 +1,30 @@
-//! Translating one environment's resource documents into another's —
+//! Translating one environment's resource documents into another's:
 //! the engine behind `rigg promote` (spec
 //! `docs/superpowers/specs/2026-09-09-promote-v2-design.md` §2).
 //!
 //! [`translate`] takes both environments as [`EnvDocs`] (bindings + the
-//! project's documents, correlated by LOGICAL id — the file stem — never by
+//! project's documents, correlated by LOGICAL id, the file stem, never by
 //! physical name) and produces a [`Plan`]: for every source document, the
 //! document the target environment should have. Five rules, in order:
 //!
-//! 1. **Local annotations and auth carriers are stripped** — `x-rigg-pin`
+//! 1. **Local annotations and auth carriers are stripped**: `x-rigg-pin`
 //!    belongs to the target's file, and a WebApiSkill's key/`authResourceId`/
 //!    `x-rigg-auth` authorizes the SOURCE environment's function app and must
 //!    never cross ([`AuthCarrier::Stripped`]).
-//! 2. **Infrastructure translation** — every `registry::InfraRef` value is
+//! 2. **Infrastructure translation**: every `registry::InfraRef` value is
 //!    parsed to a physical resource, mapped to the binding name it has in the
 //!    source, and re-rendered from the target's binding of the same name
 //!    ([`Rewire`]). Same physical value on both sides = `shared`: no change,
 //!    still reported.
-//! 3. **Sibling translation** — registry reference fields, `x-rigg-ref`
+//! 3. **Sibling translation**: registry reference fields, `x-rigg-ref`
 //!    annotations and the knowledge-base name inside an MCP URL follow a
 //!    sibling that is physically named differently in the target
 //!    ([`Renamed`]).
-//! 4. **Kept from the target** — its `name`, every path its `x-rigg-pin`
+//! 4. **Kept from the target**: its `name`, every path its `x-rigg-pin`
 //!    lists (with the array semantics of [`registry::restore_path`]) and the
 //!    annotation itself; plus its own Web API auth carriers
 //!    ([`AuthCarrier::Kept`]).
-//! 5. **Everything else comes from the source** — that is the promotion.
+//! 5. **Everything else comes from the source**: that is the promotion.
 //!
 //! Anything translation cannot decide becomes a [`Pending`] question instead
 //! of a guess; the value is then left exactly as the source had it.
@@ -42,7 +42,7 @@ use crate::resources::ResourceKind;
 
 /// The `x-functions-key` header a WebApiSkill uses to carry a function key.
 const FUNCTION_KEY_HEADER: &str = "x-functions-key";
-/// The placeholder Azure itself returns in place of a redacted key — and
+/// The placeholder Azure itself returns in place of a redacted key, and
 /// what a file records for a key that lives in ARM, never on disk.
 const REDACTED_KEY: &str = "<redacted>";
 
@@ -137,7 +137,7 @@ pub struct Item {
     pub auth: Vec<AuthCarrier>,
     /// The paths the target's own `x-rigg-pin` asked to keep, restored from
     /// its document (sorted, de-duplicated). The target's `name` and the
-    /// annotation itself are always kept and are not listed here — this is
+    /// annotation itself are always kept and are not listed here: this is
     /// the user's pin list, not rigg's.
     pub pinned: Vec<String>,
 }
@@ -148,7 +148,7 @@ impl Item {
     }
 
     /// New, changed, or unchanged relative to the target's current document
-    /// (semantic comparison — key order and nulls do not count).
+    /// (semantic comparison: key order and nulls do not count).
     pub fn change(&self) -> Change {
         match &self.before {
             None => Change::New,
@@ -168,7 +168,7 @@ impl Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pending {
     /// A value in the source names a physical resource no source binding
-    /// covers — there is nothing to map it through.
+    /// covers: there is nothing to map it through.
     UnboundInSource {
         kind: ResourceKind,
         stem: String,
@@ -216,7 +216,7 @@ impl Pending {
 pub struct Plan {
     pub from: String,
     pub to: String,
-    /// Every source resource, in (kind, stem) order — new, changed and
+    /// Every source resource, in (kind, stem) order: new, changed and
     /// unchanged alike; ask [`Item::change`] which.
     pub items: Vec<Item>,
     /// Resources only the target has. Never touched by promote.
@@ -310,7 +310,7 @@ pub fn translate(source: &EnvDocs, target: &EnvDocs) -> Plan {
 
 /// One row per binding the plan rewires: `(binding, target, from, to,
 /// shared, reference count)`, ordered by binding name. The binding's
-/// [`Target`] is the first one seen — an `ai-services` binding can serve
+/// [`Target`] is the first one seen: an `ai-services` binding can serve
 /// both `ModelHost` and `AiServices` references, and the preview shows one
 /// row per binding.
 pub fn rewiring_table(plan: &Plan) -> Vec<(String, Target, String, String, bool, usize)> {
@@ -355,7 +355,7 @@ pub fn proposed_binding_name(physical: &str) -> String {
 }
 
 // ---------------------------------------------------------------------
-// step 1 — strip what belongs to the source environment only
+// step 1: strip what belongs to the source environment only
 // ---------------------------------------------------------------------
 
 /// Remove every skill's Web API auth carrier: the key in the URI, the
@@ -448,7 +448,7 @@ fn is_code_param(param: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// step 2 — infrastructure translation
+// step 2: infrastructure translation
 // ---------------------------------------------------------------------
 
 fn rewire_infra(
@@ -468,7 +468,7 @@ fn rewire_infra(
         let usage: Usage = (doc.kind, doc.stem.clone(), found.path.clone());
 
         // `Api` references are matched by URL prefix, exactly as
-        // `infra::classify` matches them — never by host equality, or a
+        // `infra::classify` matches them, never by host equality, or a
         // binding scoped to `https://api.x/v1` would claim `…/v2/enrich`.
         let src_binding = if kind_of_target == Target::Api {
             let ref_url = found.physical.original.as_str().unwrap_or_default();
@@ -533,7 +533,7 @@ fn rewire_infra(
             continue;
         };
         if !set_path(merged, &found.path, value) {
-            // Nothing was written — never claim a rewiring that did not
+            // Nothing was written, never claim a rewiring that did not
             // happen.
             continue;
         }
@@ -587,7 +587,7 @@ fn base_url_of(entry: &BindingEntry) -> Option<String> {
     entry.resolved.as_ref().and_then(|r| r.endpoint.clone())
 }
 
-/// Set `value` at a CONCRETE path (`a.b[2].c`) — the shape
+/// Set `value` at a CONCRETE path (`a.b[2].c`): the shape
 /// [`infra::extract`] reports, so every segment already exists. Returns
 /// whether the write actually happened.
 fn set_path(root: &mut Value, path: &str, value: Value) -> bool {
@@ -621,7 +621,7 @@ fn split_index(segment: &str) -> (&str, Option<usize>) {
 }
 
 // ---------------------------------------------------------------------
-// step 3 — sibling translation
+// step 3: sibling translation
 // ---------------------------------------------------------------------
 
 /// Which siblings are physically named differently in the target:
@@ -696,7 +696,7 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
     }
 
     // `x-rigg-ref` annotations follow the same rule, at their own concrete
-    // paths — one record per annotation, not one per distinct value.
+    // paths: one record per annotation, not one per distinct value.
     let mut annotations: Vec<(String, String)> = Vec::new();
     collect_x_rigg_refs(merged, "", &mut annotations);
     for (path, value) in annotations {
@@ -725,7 +725,7 @@ fn rename_siblings(kind: ResourceKind, merged: &mut Value, renames: &Renames) ->
 }
 
 /// Visit every value at a registry `path` (`key[]` descends into arrays)
-/// with its CONCRETE path — `indexProjections.selectors[1].targetIndexName`.
+/// with its CONCRETE path: `indexProjections.selectors[1].targetIndexName`.
 /// The read-only counterpart of the paths [`set_path`] understands.
 fn collect_concrete(root: &Value, path: &str, f: &mut dyn FnMut(&str, &Value)) {
     fn walk(v: &Value, segments: &[&str], prefix: String, f: &mut dyn FnMut(&str, &Value)) {
@@ -758,7 +758,7 @@ fn collect_concrete(root: &Value, path: &str, f: &mut dyn FnMut(&str, &Value)) {
     walk(root, &segments, String::new(), f);
 }
 
-/// Every `x-rigg-ref` annotation in `v`, as `(concrete path, value)` —
+/// Every `x-rigg-ref` annotation in `v`, as `(concrete path, value)`:
 /// `tools[0].x-rigg-ref`, the shape [`set_path`] understands.
 fn collect_x_rigg_refs(v: &Value, prefix: &str, out: &mut Vec<(String, String)>) {
     match v {
@@ -788,14 +788,14 @@ fn collect_x_rigg_refs(v: &Value, prefix: &str, out: &mut Vec<(String, String)>)
 }
 
 // ---------------------------------------------------------------------
-// step 4 — what the target keeps
+// step 4: what the target keeps
 // ---------------------------------------------------------------------
 
 /// Restore the target's physical identity and pinned paths into `merged`,
 /// returning the paths its `x-rigg-pin` asked for.
 ///
 /// Identity is unconditional: the promoted document is named
-/// [`Doc::physical`] — never the source's name. When the target's file
+/// [`Doc::physical`], never the source's name. When the target's file
 /// carries no `name` key at all (its identity is the file stem) the key is
 /// removed instead, so the target keeps its shape as well as its name.
 fn keep_from_target(merged: &mut Value, target: &Doc) -> Vec<String> {
@@ -824,8 +824,8 @@ fn keep_from_target(merged: &mut Value, target: &Doc) -> Vec<String> {
 
 /// Re-apply the target's own Web API auth carriers. A carrier authorizes ONE
 /// skill's endpoint, so the target's skill is matched to a merged skill by
-/// `name`, then by (already translated) `uri`, and only then — when the two
-/// skill lists have the same length, so position still means something — by
+/// `name`, then by (already translated) `uri`, and only then (when the two
+/// skill lists have the same length, so position still means something) by
 /// index. Matched by nothing: the carrier is not re-applied and nothing is
 /// recorded, rather than landing on a skill it does not authorize.
 fn keep_target_auth(merged: &mut Value, target: &Value) -> Vec<AuthCarrier> {
@@ -1027,7 +1027,7 @@ fn push_usage(used_by: &mut Vec<Usage>, usage: Usage) {
     }
 }
 
-/// Position of `kind` in [`ResourceKind::all`] — the registry's push-friendly
+/// Position of `kind` in [`ResourceKind::all`]: the registry's push-friendly
 /// declaration order, which is also the order a plan lists resources in.
 fn kind_order(kind: ResourceKind) -> usize {
     ResourceKind::all()
@@ -1580,7 +1580,7 @@ mod tests {
         assert_eq!(
             item.pinned,
             vec!["tools[].server_url".to_string()],
-            "`pinned` is the user's pin list — not `name`, not the annotation"
+            "`pinned` is the user's pin list, not `name`, not the annotation"
         );
 
         // No target at all: the source's own annotation still never leaks.
@@ -1753,7 +1753,7 @@ mod tests {
                 json!({"name": "Regulus-dev", "model": "gpt-5-mini"}),
             )],
         };
-        // The target's file has no `name` at all — its identity is the stem.
+        // The target's file has no `name` at all: its identity is the stem.
         let tgt = EnvDocs {
             env: "prod".into(),
             bindings: env("prod", "s-prod", "f-prod", &[]),
@@ -2227,7 +2227,7 @@ mod tests {
     fn sibling_names_swapped_between_environments_are_not_collapsed() {
         // dev `a` = `ks-1`, `b` = `ks-2`; prod has them the other way round.
         // Each reference must be mapped by the value it had BEFORE any
-        // rewrite — a whole-document rename pass would rewrite `ks-1` to
+        // rewrite: a whole-document rename pass would rewrite `ks-1` to
         // `ks-2` and then that same value back to `ks-1`.
         let ks = |stem: &str, name: &str| {
             doc(
@@ -2333,7 +2333,7 @@ mod tests {
     fn a_kept_function_key_carrier_leaves_a_redacted_code_placeholder() {
         // The target authenticates with a key in the URI: promote keeps the
         // annotation, and the translated URI must carry the placeholder the
-        // auth gate looks for — not read as an anonymous endpoint.
+        // auth gate looks for, not read as an anonymous endpoint.
         let src = EnvDocs {
             env: "dev".into(),
             bindings: env(

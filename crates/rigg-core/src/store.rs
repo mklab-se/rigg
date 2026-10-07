@@ -11,7 +11,7 @@
 //! ```
 //!
 //! Each environment gets its own complete resource tree. The **file stem**
-//! (kind dir + filename) is the resource's *logical* identity — the
+//! (kind dir + filename) is the resource's *logical* identity: the
 //! correlation across environments. The **`name` field inside the file** is
 //! the *physical* Azure name for that environment; by default stem == name,
 //! but they may diverge when a resource is renamed in one environment (see
@@ -54,7 +54,7 @@ pub enum StoreError {
     #[error("invalid resource name in {path}: {message}")]
     BadName { path: PathBuf, message: String },
     #[error(
-        "duplicate physical name '{name}': both {first} and {second} define a resource named '{name}' — physical (Azure) names must be unique within a kind"
+        "duplicate physical name '{name}': both {first} and {second} define a resource named '{name}'. Physical (Azure) names must be unique within a kind"
     )]
     DuplicatePhysicalName {
         name: String,
@@ -62,7 +62,7 @@ pub enum StoreError {
         second: PathBuf,
     },
     #[error(
-        "resource {reference} is defined in both project '{first}' and project '{second}' — a resource must belong to exactly one project"
+        "resource {reference} is defined in both project '{first}' and project '{second}': a resource must belong to exactly one project"
     )]
     DuplicateOwnership {
         reference: String,
@@ -140,7 +140,7 @@ impl<'w> Store<'w> {
             .join(kind.directory_name())
     }
 
-    /// Absolute path for a NEW resource file (used on create — the physical
+    /// Absolute path for a NEW resource file (used on create: the physical
     /// name becomes the filename). Existing resources may live at a
     /// different path when their file stem diverged from the physical name;
     /// use [`Store::locate`] to find those.
@@ -149,7 +149,7 @@ impl<'w> Store<'w> {
     }
 
     /// Find the file in this store whose physical name (`name` field, or the
-    /// file stem when absent) equals `r.name`. Scans the kind directory —
+    /// file stem when absent) equals `r.name`. Scans the kind directory:
     /// small dirs, correctness over micro-optimization.
     pub fn locate(&self, r: &ResourceRef) -> Result<Option<PathBuf>> {
         let dir = self.kind_dir(r.kind);
@@ -186,9 +186,9 @@ impl<'w> Store<'w> {
         Ok(None)
     }
 
-    /// Path for a resource being CREATED: `<physical name>.json`, or — when
+    /// Path for a resource being CREATED: `<physical name>.json`, or, when
     /// that stem is already occupied by a DIFFERENT resource (a renamed one
-    /// whose stem no longer matches its `name` field) — the first free
+    /// whose stem no longer matches its `name` field), the first free
     /// numbered stem (`<name>-2.json`, `<name>-3.json`, …). The create path
     /// never points at an existing file, so creating can never overwrite a
     /// renamed resource.
@@ -213,7 +213,7 @@ impl<'w> Store<'w> {
     /// A file with invalid JSON is a HARD error (deliberately): sync
     /// operations (push/pull/prune/ownership checks) build their world view
     /// from this listing, and silently skipping a broken file would let them
-    /// act on a partial view — e.g. pruning a resource that still exists
+    /// act on a partial view, e.g. pruning a resource that still exists
     /// locally. Fail loud and name the file instead.
     pub fn list(&self) -> Result<Vec<(ResourceRef, PathBuf)>> {
         let mut out = Vec::new();
@@ -310,7 +310,7 @@ impl<'w> Store<'w> {
     /// the target environment's pins and annotations deliberately, and the
     /// write-only fields are precisely what it translated (a data source's
     /// `credentials.connectionString` is rewritten to point at the target's
-    /// storage account) — carrying the old file's values back over would
+    /// storage account): carrying the old file's values back over would
     /// silently undo the translation and promote would never converge.
     pub fn write_exact(&self, r: &ResourceRef, value: &Value) -> Result<bool> {
         self.write_inner(r, value, CarryOver::No)
@@ -318,7 +318,7 @@ impl<'w> Store<'w> {
 
     fn write_inner(&self, r: &ResourceRef, value: &Value, carry: CarryOver) -> Result<bool> {
         // Defense in depth: a physical name containing '/', '\' or '..' would
-        // otherwise build a path escaping the kind directory — and land where
+        // otherwise build a path escaping the kind directory, and land where
         // `list()`'s non-recursive scan never sees it.
         validate_resource_name(&r.name).map_err(|e| StoreError::BadName {
             path: self.create_path_for(r),
@@ -340,7 +340,7 @@ impl<'w> Store<'w> {
                 carry_over_write_only(r.kind, &existing, &mut normalized);
             }
             // semantic_eq excludes write-only fields (the server never
-            // echoes them) — compare them separately so a credentials
+            // echoes them): compare them separately so a credentials
             // change alone still lands on disk.
             if crate::normalize::semantic_eq(r.kind, &existing, &normalized)
                 && write_only_eq(r.kind, &existing, &normalized)
@@ -363,7 +363,7 @@ impl<'w> Store<'w> {
         Ok(true)
     }
 
-    /// Write a resource at an explicit STEM rather than its physical name —
+    /// Write a resource at an explicit STEM rather than its physical name:
     /// used by `rigg promote` when creating a resource in the target
     /// environment that has no counterpart there yet: the new file must land
     /// at the SOURCE environment's stem (its logical/correlation id) so the
@@ -446,7 +446,7 @@ impl<'w> Store<'w> {
     }
 
     /// Delete a resource file (and its default sidecars). Only ever removes
-    /// the file `locate` resolves for this physical name — deleting a name
+    /// the file `locate` resolves for this physical name: deleting a name
     /// that matches nothing is a no-op (never falls through to a stem-guessed
     /// path that could belong to a renamed resource).
     pub fn delete(&self, r: &ResourceRef) -> Result<()> {
@@ -454,7 +454,7 @@ impl<'w> Store<'w> {
             return Ok(());
         };
         // Sidecars are named after the file's stem (its logical id), which
-        // may differ from the physical name — derive it from `path`, not `r`.
+        // may differ from the physical name: derive it from `path`, not `r`.
         let stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -499,7 +499,7 @@ fn physical_name(path: &Path, fallback_stem: &str) -> Result<String> {
 
 /// Whether two documents agree on every write-only field. `semantic_eq`
 /// excludes these fields (the server never echoes them, so including them
-/// would read every canonicalization as drift) — but a LOCAL write that
+/// would read every canonicalization as drift), but a LOCAL write that
 /// only changes a credential must still reach the disk.
 fn write_only_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
     crate::registry::meta(kind)
@@ -510,7 +510,7 @@ fn write_only_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
 
 /// The non-null values a document carries at one write-only field spec.
 /// Nulls are dropped so that "absent" and "redacted to null" (Azure does
-/// both, endpoint depending) compare equal — the same rule `canonical_form`
+/// both, endpoint depending) compare equal: the same rule `canonical_form`
 /// applies to the stored baseline.
 fn write_only_values(doc: &Value, spec: &str) -> Vec<Value> {
     let mut out = Vec::new();
@@ -537,7 +537,7 @@ enum CarryOver {
 /// `doc` is normally the server's echo, and Azure never echoes a write-only
 /// field (a data source's `credentials.connectionString` comes back null or
 /// absent). [`Store::write`] carries those values over from the local file,
-/// so the baseline has to as well — otherwise it can never notice that the
+/// so the baseline has to as well, otherwise it can never notice that the
 /// user later re-pointed the data source at another storage account, and
 /// `status`/`push` would call such an edit "in sync" forever.
 pub fn baseline_doc(kind: ResourceKind, doc: &Value, local: Option<&Value>) -> Value {
@@ -565,7 +565,7 @@ pub fn carry_over_write_only(kind: ResourceKind, from: &Value, to: &mut Value) {
     }
 }
 
-/// Set a dot-path (no `[]` support — write-only fields are object paths),
+/// Set a dot-path (no `[]` support: write-only fields are object paths),
 /// creating intermediate objects as needed.
 fn set_path(value: &mut Value, segments: &[&str], new_value: Value) {
     let Some((head, rest)) = segments.split_first() else {
@@ -612,7 +612,7 @@ fn carry_over_x_rigg(from: &Value, to: &mut Value) {
 }
 
 /// Enforce exclusive ownership: a (kind, name) may appear in only one
-/// project — within one environment (a physical resource named the same in
+/// project: within one environment (a physical resource named the same in
 /// two envs is normal; it's the same logical resource pushed twice).
 pub fn assert_exclusive_ownership(ws: &Workspace, env: &str) -> Result<()> {
     let mut seen: BTreeMap<ResourceRef, &str> = BTreeMap::new();
@@ -653,8 +653,8 @@ pub enum SyncClass {
 }
 
 /// A sync baseline. Newer rigg versions store the push-normalized document
-/// so the checksum can be recomputed under CURRENT normalization rules —
-/// surviving rule evolution across rigg upgrades — and so the write-only
+/// so the checksum can be recomputed under CURRENT normalization rules
+/// (surviving rule evolution across rigg upgrades) and so the write-only
 /// fields the checksum deliberately ignores are still on record. Legacy
 /// entries hold only the frozen checksum and behave as before until the
 /// resource next syncs (every successful pull/push/adopt rewrites its
@@ -662,7 +662,7 @@ pub enum SyncClass {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Baseline {
-    /// Legacy: frozen checksum (string MUST be tried first — `Value`
+    /// Legacy: frozen checksum (string MUST be tried first, `Value`
     /// deserializes any JSON, including strings).
     Checksum(String),
     /// Push-normalized canonical document (write-only fields included).
@@ -702,7 +702,7 @@ impl ProjectState {
     ///
     /// The form is canonicalized (object keys sorted recursively, arrays of
     /// named objects sorted by name) so that server-side reordering between
-    /// GET and PUT responses never reads as a change — matching the semantics
+    /// GET and PUT responses never reads as a change: matching the semantics
     /// of the order-insensitive diff.
     pub fn checksum(kind: ResourceKind, value: &Value) -> String {
         let normalized = canonical_form(&normalize_for_compare(kind, value));
@@ -716,7 +716,7 @@ impl ProjectState {
     }
 
     /// Checksum of the recorded baseline, recomputed under CURRENT
-    /// normalization rules for `Doc` entries — this is what lets a resource
+    /// normalization rules for `Doc` entries: this is what lets a resource
     /// self-heal when a rigg upgrade changes which fields are volatile.
     /// Legacy `Checksum` entries are frozen and returned as-is.
     pub fn baseline_checksum(&self, r: &ResourceRef) -> Option<String> {
@@ -736,7 +736,7 @@ impl ProjectState {
     }
 
     /// Record a baseline. `kind_value` should be the document as it now
-    /// exists on disk — see [`baseline_doc`], which merges the local file's
+    /// exists on disk: see [`baseline_doc`], which merges the local file's
     /// write-only fields into a server echo that redacts them.
     pub fn set_baseline(&mut self, r: &ResourceRef, kind_value: &Value) {
         // `normalize_for_push`, not `normalize_for_compare`: the write-only
@@ -792,7 +792,7 @@ impl ProjectState {
                     Some(base) => {
                         // Checksums ignore write-only fields (Azure redacts
                         // them, so including them would read as drift on
-                        // every data source forever) — but a local edit that
+                        // every data source forever), but a local edit that
                         // touches ONLY the credentials is still a change the
                         // user needs pushed. The baseline is the only side
                         // that can witness it; the remote never can.
@@ -972,7 +972,7 @@ mod tests {
     fn write_exact_replaces_a_write_only_field_instead_of_carrying_it_over() {
         // `rigg promote` translates a data source's connection string into
         // the TARGET environment's storage account. `write` would copy the
-        // old (source-pointing) string back over it — `write_exact` must
+        // old (source-pointing) string back over it: `write_exact` must
         // land the document exactly as given.
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);
@@ -1413,7 +1413,7 @@ mod tests {
         // volatile: the stored doc still carries the field. Under current
         // rules the recomputed checksum strips it, so an untouched local
         // (without the field) plus a remote-only change classifies as
-        // RemoteAhead — NOT Conflict.
+        // RemoteAhead, NOT Conflict.
         let r = ResourceRef::new(ResourceKind::Agent, "a".to_string());
         let old_doc = json!({
             "name": "a", "model": "x",
@@ -1457,7 +1457,7 @@ mod tests {
     fn a_credential_only_local_edit_classifies_as_local_ahead() {
         // Regression: checksums ignore write-only fields, so re-pointing a
         // data source at another storage account used to classify as InSync
-        // and `push` skipped it — the credential could never be rotated.
+        // and `push` skipped it: the credential could never be rotated.
         let r = ResourceRef::new(ResourceKind::DataSource, "ds");
         let ds = |conn: &str| {
             json!({
@@ -1504,7 +1504,7 @@ mod tests {
     fn credential_only_change_still_writes() {
         // Regression: semantic_eq excludes write-only fields, so a write
         // whose ONLY change is a new credentials.connectionString used to be
-        // skipped as "no change" — the migrate/push credential fixups then
+        // skipped as "no change": the migrate/push credential fixups then
         // never landed on disk.
         let tmp = tempfile::tempdir().unwrap();
         let ws = ws_with_projects(tmp.path(), &["p"]);

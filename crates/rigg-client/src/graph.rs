@@ -1,4 +1,4 @@
-//! Microsoft Graph client — the application, service principal and app-role
+//! Microsoft Graph client: the application, service principal and app-role
 //! calls that Easy Auth wiring needs (spec
 //! `2026-09-09-identity-and-auth-design.md` §5).
 //!
@@ -26,9 +26,9 @@ const CALLER_ROLE_VALUE: &str = "Caller";
 /// An Entra ID application registration.
 #[derive(Debug, Clone)]
 pub struct Application {
-    /// Directory object id — what `PATCH /applications/{id}` takes.
+    /// Directory object id: what `PATCH /applications/{id}` takes.
     pub id: String,
-    /// Client id (`appId`) — what `api://<appId>` and Easy Auth's
+    /// Client id (`appId`): what `api://<appId>` and Easy Auth's
     /// `registration.clientId` take.
     pub app_id: String,
 }
@@ -36,7 +36,7 @@ pub struct Application {
 /// An enterprise application (service principal).
 #[derive(Debug, Clone)]
 pub struct ServicePrincipal {
-    /// Directory object id — the `resourceId` of an app-role assignment.
+    /// Directory object id: the `resourceId` of an app-role assignment.
     pub id: String,
     /// When true, callers must hold an app role before a token is issued.
     pub app_role_assignment_required: bool,
@@ -70,7 +70,7 @@ impl GraphClient {
     }
 
     /// Build a client from an already-obtained token and an explicit base
-    /// URL — for tests, so Graph-fake tests never touch the process env var.
+    /// URL: for tests, so Graph-fake tests never touch the process env var.
     pub fn with_token_and_base(token: String, base_url: String) -> Self {
         Self {
             http: Client::builder()
@@ -106,7 +106,7 @@ impl GraphClient {
         Ok(Application { id, app_id })
     }
 
-    /// Find an existing application by its client (`appId`) id — what
+    /// Find an existing application by its client (`appId`) id: what
     /// `rigg auth easy-auth --client-id <id>` reuses instead of registering
     /// a new one. `Ok(None)` when the tenant has no such application.
     pub async fn application_by_app_id(
@@ -133,7 +133,7 @@ impl GraphClient {
     }
 
     /// The `appId` (client id) of the service principal with directory
-    /// object id `object_id` — how a managed identity's *principal* id
+    /// object id `object_id`: how a managed identity's *principal* id
     /// becomes the client id Easy Auth's `allowedApplications` names.
     pub async fn service_principal_app_id(&self, object_id: &str) -> Result<String, ClientError> {
         let sp = self
@@ -159,8 +159,8 @@ impl GraphClient {
     /// only rigg's entry would delete every role the application already
     /// publishes (and revoke the assignments that reference them) and every
     /// audience its existing callers ask tokens for. A `Caller` role that is
-    /// already there is reused — id included, since the assignments in the
-    /// directory name it — rather than re-created under a new id, and a
+    /// already there is reused (id included, since the assignments in the
+    /// directory name it) rather than re-created under a new id, and a
     /// `uri` the application already lists is not added twice.
     pub async fn set_identifier_uri_and_role(
         &self,
@@ -263,7 +263,7 @@ impl GraphClient {
     /// existing assignments are listed first and a matching one short-circuits
     /// the POST. Graph answers a duplicate POST with a
     /// `400 Request_BadRequest` ("Permission being assigned already exists on
-    /// the object"), and that is tolerated too — for the race, and for a
+    /// the object"), and that is tolerated too: for the race, and for a
     /// directory that will not let rigg read the assignment list it is
     /// allowed to write to. Re-running the command must never fail *after*
     /// the `authsettingsV2` PUT has already landed.
@@ -334,13 +334,13 @@ impl GraphClient {
     }
 }
 
-/// The app role id rigg uses for one identifier URI — deterministic, so the
+/// The app role id rigg uses for one identifier URI: deterministic, so the
 /// role survives re-running the wiring.
 pub(crate) fn app_role_id_for(uri: &str) -> String {
     deterministic_uuid(&format!("rigg-app-role|{uri}"))
 }
 
-/// Graph's way of saying the app-role assignment is already there — the one
+/// Graph's way of saying the app-role assignment is already there: the one
 /// 400 that means "nothing to do" rather than "the request was wrong".
 fn is_already_assigned(err: &ClientError) -> bool {
     matches!(
@@ -368,7 +368,7 @@ fn string_at(value: &Value, key: &str) -> Option<String> {
 }
 
 /// Turn a Graph failure into a `ClientError`, surfacing Graph's own
-/// `error.message` — the part that says *which* directory role is missing.
+/// `error.message`: the part that says *which* directory role is missing.
 pub(crate) fn graph_error(status: u16, body: &str) -> ClientError {
     let message = serde_json::from_str::<Value>(body)
         .ok()

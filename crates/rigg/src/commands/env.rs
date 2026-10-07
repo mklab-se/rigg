@@ -100,11 +100,11 @@ async fn show(ctx: &GlobalContext, name: Option<&str>, refresh: bool) -> Result<
     Ok(())
 }
 
-/// Re-resolve every binding of `env` against ARM and save the cache — the
+/// Re-resolve every binding of `env` against ARM and save the cache: the
 /// declared `dependencies` and the implicit `search`/`foundry` targets,
 /// which are cached under those reserved names. A binding that cannot be
 /// resolved is reported (and dropped from the cache) rather than failing the
-/// command — `env show` must still print everything else it knows.
+/// command: `env show` must still print everything else it knows.
 async fn refresh_bindings(
     ctx: &GlobalContext,
     ws: &Workspace,
@@ -220,7 +220,7 @@ fn print_env(
 }
 
 /// What a binding resolved to (ARM id, endpoint, or physical name), or why it
-/// could not be resolved — empty when it has never been refreshed.
+/// could not be resolved: empty when it has never been refreshed.
 fn resolution_suffix(
     cache: &BindingCache,
     errors: &BTreeMap<String, String>,
@@ -414,7 +414,7 @@ fn learn_bindings(ctx: &GlobalContext, env_name: &str) -> Result<()> {
 /// Run the `rigg env add <name> --like <like>` flow inline, from another
 /// command that found the environment missing (today: `rigg promote --to`
 /// naming an environment that does not exist yet). The whole question set
-/// lives in [`add`] — the caller only supplies the two names, and reloads
+/// lives in [`add`]: the caller only supplies the two names, and reloads
 /// the workspace afterwards.
 pub async fn add_like_inline(
     ctx: &GlobalContext,
@@ -491,7 +491,7 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
     }
 
     // Validate `--like`/`--same`/`--skip` and build the (unasked) copy set
-    // up front — cheap, and needed below to tell a deliberately target-less
+    // up front: cheap, and needed below to tell a deliberately target-less
     // environment (bindings given) from one with nothing to add at all.
     // `--same` is the default for everything, and is accepted as an
     // explicit statement of intent (it must name a real binding).
@@ -532,7 +532,7 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
     // Explicit target flags skip the wizard entirely (non-interactive-
     // friendly, scriptable). With neither flag: a TTY runs the interactive
     // wizard (ARM discovery, same as `rigg init`); anything else is a usage
-    // error that points at the wizard — unless bindings were given, which
+    // error that points at the wizard, unless bindings were given, which
     // makes a target-less environment a deliberate choice.
     let has_targets = search_service.is_some() || foundry_account.is_some();
     let (search, foundry) = if has_targets {
@@ -556,8 +556,8 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
         )));
     };
 
-    // Dependencies: copied from `--like` (minus `--skip`, and minus `--same`
-    // — those are a stated intent, kept as-is with no question asked), then
+    // Dependencies: copied from `--like` (minus `--skip`, and minus `--same`:
+    // those are a stated intent, kept as-is with no question asked), then
     // asked about interactively for the rest, then overridden by `--bind`.
     let mut deps: BTreeMap<String, Binding> = BTreeMap::new();
     if let (Some(source_name), Some(copy)) = (&like, like_copy) {
@@ -664,7 +664,7 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
     Ok(())
 }
 
-/// Fixed context for [`ask_like_bindings`] — grouped to keep the function's
+/// Fixed context for [`ask_like_bindings`]: grouped to keep the function's
 /// argument count sane.
 struct LikeAskContext<'a> {
     new_env: &'a str,
@@ -677,8 +677,8 @@ struct LikeAskContext<'a> {
 
 /// One question per copied binding: keep the source's value, pick another
 /// resource of the same type from ARM, or skip it. Bindings already named
-/// by `--bind` are not asked about, and neither are ones named by `--same`
-/// — that flag is itself the answer ("keep the source's value"), stated
+/// by `--bind` are not asked about, and neither are ones named by `--same`:
+/// that flag is itself the answer ("keep the source's value"), stated
 /// up front, so it's honored silently rather than asked about again.
 async fn ask_like_bindings(
     ctx: &GlobalContext,
@@ -765,7 +765,7 @@ async fn ask_like_bindings(
 }
 
 /// Remove an environment. `clean_roles` first deletes the role assignments
-/// rigg created for it (spec §4.4) — otherwise they outlive the environment
+/// rigg created for it (spec §4.4), otherwise they outlive the environment
 /// that explains them, on infrastructure other environments may share.
 async fn remove(ctx: &GlobalContext, name: &str, clean_roles: bool) -> Result<()> {
     if clean_roles {

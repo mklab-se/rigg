@@ -38,7 +38,7 @@ pub struct Proposal {
 }
 
 /// Edit `rigg.yaml` in place. The file is re-serialized from the parsed
-/// document, so **no** comment in it survives — the header `rigg init`
+/// document, so **no** comment in it survives: the header `rigg init`
 /// writes is regenerated here so at least that one is never lost.
 pub fn edit_workspace_yaml(edit: impl FnOnce(&mut Yaml) -> Result<()>) -> Result<()> {
     let ws = load_workspace()?;
@@ -61,7 +61,7 @@ fn workspace_yaml_header(root: Option<&str>) -> String {
     };
     format!(
         "# Rigg workspace configuration.\n\
-         # Resource definitions live in {where_} — see `rigg new project`.\n"
+         # Resource definitions live in {where_} (see `rigg new project`).\n"
     )
 }
 
@@ -212,7 +212,7 @@ fn origin(url: &str) -> String {
 ///
 /// Names are the physical name lower-kebabed (for `api`, the host's first
 /// label); a name that would collide with an existing binding of another
-/// type or value — or with an earlier proposal — gets a `-2`, `-3`, … suffix.
+/// type or value, or with an earlier proposal, gets a `-2`, `-3`, … suffix.
 pub fn learn(ws: &Workspace, env_name: &str, env_bindings: &EnvBindings) -> Result<Vec<Proposal>> {
     let mut grouped: BTreeMap<(BindingType, String), Proposal> = BTreeMap::new();
 
@@ -229,7 +229,7 @@ pub fn learn(ws: &Workspace, env_name: &str, env_bindings: &EnvBindings) -> Resu
                 continue;
             }
             for classified in infra::classify(env_bindings, &[], refs) {
-                // Bound/Shared: already covered here. Leak can't occur —
+                // Bound/Shared: already covered here. Leak can't occur:
                 // no other environments are passed in.
                 if !matches!(classified.class, Class::Unbound | Class::External) {
                     continue;
@@ -308,9 +308,9 @@ fn physical_of(proposal: &Proposal) -> String {
 }
 
 /// What to record as a proposal's value: an origin for `api`, otherwise the
-/// full ARM id when the file carries one — spliced out of a storage
+/// full ARM id when the file carries one (spliced out of a storage
 /// connection string's `ResourceId=` or read from an identity's
-/// `userAssignedIdentity` — and the bare physical name only when it does
+/// `userAssignedIdentity`) and the bare physical name only when it does
 /// not. Keeping the id means the binding needs no ARM by-name lookup (and
 /// no guess about which subscription the resource lives in).
 pub fn proposed_value(kind: BindingType, found: &infra::FoundRef) -> String {
@@ -371,7 +371,7 @@ pub fn answers_to_bindings(
 ) -> Result<Vec<(String, Binding)>> {
     if proposals.len() != answers.len() {
         return Err(anyhow!(CommandError::Usage(format!(
-            "got {} answer(s) for {} binding proposal(s) — every proposal needs exactly one \
+            "got {} answer(s) for {} binding proposal(s): every proposal needs exactly one \
              answer (use '{SKIP_ANSWER}' to decline)",
             answers.len(),
             proposals.len()
@@ -387,7 +387,7 @@ pub fn answers_to_bindings(
         validate_binding_name(raw).map_err(|e| anyhow!(CommandError::Usage(e)))?;
         if !seen.insert(raw.to_string()) {
             return Err(anyhow!(CommandError::Usage(format!(
-                "two proposals were both renamed to '{raw}' — bindings need distinct names"
+                "two proposals were both renamed to '{raw}': bindings need distinct names"
             ))));
         }
         out.push((
@@ -415,7 +415,7 @@ pub fn resolve_proposals(
     answers_to_bindings(proposals, &answers)
 }
 
-/// Every environment except `env_name`, as binding tables — the "shared
+/// Every environment except `env_name`, as binding tables: the "shared
 /// with" column's input.
 pub fn other_env_bindings(ws: &Workspace, env_name: &str) -> Vec<EnvBindings> {
     ws.config
@@ -429,7 +429,7 @@ pub fn other_env_bindings(ws: &Workspace, env_name: &str) -> Vec<EnvBindings> {
 /// The environments that bind the same *physical* resource as `binding`.
 ///
 /// Sharing is one thing everywhere: the same physical value competing for the
-/// same [`Wanted`] that `infra::classify` uses — so an `ai-services` binding
+/// same [`Wanted`] that `infra::classify` uses, so an `ai-services` binding
 /// and another environment's implicit `foundry` target do count as shared,
 /// while the binding *names* need not match.
 pub fn shared_with(others: &[EnvBindings], binding: &Binding) -> Vec<String> {
@@ -496,7 +496,7 @@ pub fn offer_to_learn(ctx: &GlobalContext, ws: &Workspace, env: &ResolvedEnv) ->
         }
     } else {
         eprintln!(
-            "hint: {} infrastructure reference(s) are not bound in '{}' — run `rigg env bind {} --learn` to record them",
+            "hint: {} infrastructure reference(s) are not bound in '{}'. Run `rigg env bind {} --learn` to record them",
             proposals.len(),
             env.name,
             env.name
@@ -595,11 +595,11 @@ mod tests {
     fn workspace_yaml_header_matches_init() {
         assert_eq!(
             workspace_yaml_header(None),
-            "# Rigg workspace configuration.\n# Resource definitions live in projects/<name>/ — see `rigg new project`.\n"
+            "# Rigg workspace configuration.\n# Resource definitions live in projects/<name>/ (see `rigg new project`).\n"
         );
         assert!(
             workspace_yaml_header(Some("cfg"))
-                .contains("live in cfg/projects/<name>/ — see `rigg new project`.")
+                .contains("live in cfg/projects/<name>/ (see `rigg new project`).")
         );
     }
 

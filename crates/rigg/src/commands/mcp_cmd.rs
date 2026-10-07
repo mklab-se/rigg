@@ -1,4 +1,4 @@
-//! `rigg mcp` — delegates to the MCP server module.
+//! `rigg mcp`: delegates to the MCP server module.
 
 use anyhow::Result;
 

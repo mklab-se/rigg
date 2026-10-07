@@ -4,10 +4,10 @@
 
 rigg authenticates via the Azure CLI or service principal credentials:
 
-- **For development** — install the
+- **For development**: install the
   [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
   and run `az login`.
-- **For CI/CD** — set the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
+- **For CI/CD**: set the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
   environment variables, plus either `AZURE_CLIENT_SECRET` or
   `AZURE_FEDERATED_TOKEN_FILE` (GitHub Actions OIDC / workload identity).
 
@@ -70,9 +70,9 @@ cargo install rigg
 ```
 
 On Windows, building from source needs [NASM](https://www.nasm.us/) and [CMake](https://cmake.org/)
-on `PATH` (plus the Visual Studio Build Tools most Rust installs already have) — they're needed to
+on `PATH` (plus the Visual Studio Build Tools most Rust installs already have): they're needed to
 compile [`aws-lc-rs`](https://github.com/aws/aws-lc-rs), the TLS crypto backend. macOS and Linux need
-nothing extra. If you'd rather skip the build tools entirely, use `cargo binstall` or Homebrew below —
+nothing extra. If you'd rather skip the build tools entirely, use `cargo binstall` or Homebrew below,
 both fetch a pre-built binary.
 
 ## Build from Source
@@ -84,7 +84,7 @@ cargo build --release
 ```
 
 The binary is at `target/release/rigg`. Requires Rust 1.88 or later. See the Windows NASM/CMake note
-above — it applies here too.
+above: it applies here too.
 
 ## cargo binstall
 
@@ -112,25 +112,25 @@ simpler.
 
 Generate completions for your shell with `rigg completion <shell>`:
 
-**Bash** — add to `~/.bashrc`:
+**Bash** (add to `~/.bashrc`):
 
 ```bash
 source <(rigg completion bash)
 ```
 
-**Zsh** — add to `~/.zshrc`:
+**Zsh** (add to `~/.zshrc`):
 
 ```bash
 source <(rigg completion zsh)
 ```
 
-**Fish** — save to completions directory:
+**Fish** (save to completions directory):
 
 ```bash
 rigg completion fish > ~/.config/fish/completions/rigg.fish
 ```
 
-**PowerShell** — add to profile:
+**PowerShell** (add to profile):
 
 ```powershell
 rigg completion powershell >> $PROFILE
@@ -145,7 +145,7 @@ rigg --version
 ## Connect to Your AI Coding Tool
 
 rigg includes a built-in MCP server that gives AI coding tools direct access
-to understand and manage your Agentic RAG stack — pull, push, diff and
+to understand and manage your Agentic RAG stack: pull, push, diff and
 explore resources through structured tool calls instead of shell commands.
 
 ```bash
@@ -156,7 +156,7 @@ rigg mcp install claude-code
 rigg mcp install vs-code
 ```
 
-Projects that include `.mcp.json` in the repo root are auto-discovered — the
+Projects that include `.mcp.json` in the repo root are auto-discovered: the
 AI tool picks up rigg when you open the project, no install step needed.
 
 See [MCP.md](MCP.md) for the full tool reference, and [SKILLS.md](SKILLS.md)

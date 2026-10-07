@@ -1,4 +1,4 @@
-//! `rigg az agent` — single-shot prompts against live Foundry agents.
+//! `rigg az agent`: single-shot prompts against live Foundry agents.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -26,7 +26,7 @@ async fn ask(ctx: &GlobalContext, name: &str, prompt: &str) -> Result<()> {
     match text {
         Some(text) => println!("{text}"),
         None => {
-            println!("(could not find reply text in the response — raw payload follows)");
+            println!("(could not find reply text in the response: raw payload follows)");
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }

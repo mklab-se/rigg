@@ -9,9 +9,9 @@ split is the key to using rigg well.
 - Why two levels?
 - One or many projects? Choosing boundaries
 - Workspace layout
-- Environments — logical vs. physical identity, dependencies and bindings,
+- Environments: logical vs. physical identity, dependencies and bindings,
   validation classes, promoting between environments, protected environments
-- How rigg handles authentication — the principals, the requirement graph,
+- How rigg handles authentication: the principals, the requirement graph,
   where the graph is used, what rigg grants, Easy Auth, when Azure still
   wants a key, the trusted-services caveat, tokens
 - Exit codes
@@ -38,9 +38,9 @@ another project over the same resource.
 
 ## Why two levels?
 
-The workspace answers *"where do things go?"* — which services and
+The workspace answers *"where do things go?"*: which services and
 environments, shared across everything. Projects answer *"what do I manage
-together?"* — the unit of change, review, and deployment.
+together?"*: the unit of change, review, and deployment.
 
 Separating them means you can promote one coherent project from dev to prod
 without dragging along unrelated resources. Different projects can be owned
@@ -49,15 +49,15 @@ configuration.
 
 ## One or many projects? Choosing boundaries
 
-Use **one** project when your whole stack ships and is reviewed together —
+Use **one** project when your whole stack ships and is reviewed together:
 for example, a single agent plus the retrieval pipeline it depends on.
 
 Use **several** projects to draw boundaries you care about:
 
-- **By deployable unit** — each agent or app that ships independently.
-- **By ownership / review scope** — a team owns its project; pull requests
+- **By deployable unit**: each agent or app that ships independently.
+- **By ownership / review scope**: a team owns its project; pull requests
   stay focused on one project's files.
-- **By lifecycle** — group things that change on the same cadence; separate
+- **By lifecycle**: group things that change on the same cadence; separate
   things that don't.
 
 **Rule of thumb:** if you would pull, push, and review it as a unit, it is a
@@ -68,7 +68,7 @@ projects.
 shared resource goes in the project that owns it. Other projects refer to it
 by name and environment rather than co-owning it.
 
-**Naming.** Name a project after the thing it owns — a project holding the
+**Naming.** Name a project after the thing it owns: a project holding the
 `regulus` agent and its retrieval stack is naturally called `regulus`. Names
 follow the same rules as resource names (no `/` or `\`, at most 260
 characters).
@@ -79,7 +79,7 @@ characters).
 rigg.yaml                     # workspace: environments (targets, dependencies, policy)
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
-  project.yaml                # metadata only — the directory IS the membership
+  project.yaml                # metadata only: the directory IS the membership
   envs/<env>/
     search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
             knowledge-sources,knowledge-bases}/<name>.json
@@ -87,8 +87,8 @@ projects/<name>/
 .rigg/<env>/<project>/...     # per-environment sync state (gitignored)
 ```
 
-**Platform-provided resources** — such as Microsoft's built-in guardrail
-policies — are never adopted or listed as unmanaged. rigg only tracks
+**Platform-provided resources**, such as Microsoft's built-in guardrail
+policies, are never adopted or listed as unmanaged. rigg only tracks
 configuration you can actually change; your resources reference the rest by
 name.
 
@@ -130,26 +130,26 @@ environments:
 
 **One tree per environment.** Every project keeps a separate resource tree
 rooted at `envs/<env>/` (see the layout above). This is deliberate: dev and
-prod genuinely diverge — different field mappings while you're testing,
+prod genuinely diverge: different field mappings while you're testing,
 different agent instructions before a rollout. A full tree, rather than a
 shared file with overlay patches, makes that divergence something you can
 see and diff instead of logic hidden behind a merge step.
 
 The three parts of an environment:
 
-- **Targets** — exactly one `search` and one `foundry` per environment
+- **Targets**: exactly one `search` and one `foundry` per environment
   (either may be absent when a project only uses one service). Two Search
   services means two environments, not a list.
-- **Tenant / subscription** — optional. When present, ARM discovery and
+- **Tenant / subscription**: optional. When present, ARM discovery and
   token acquisition are scoped to them; when absent, rigg uses the Azure CLI
   default tenant and searches every subscription visible in it. Environments
   in different subscriptions or tenants are fully supported.
-- **Policy** — `protected` (see [below](#protected-environments)) and
+- **Policy**: `protected` (see [below](#protected-environments)) and
   `strict-bindings` (see [Validation classes](#validation-classes)).
 
 ### Logical identity vs. physical name
 
-**A resource is identified by where its file lives** — the kind directory
+**A resource is identified by where its file lives**: the kind directory
 and file stem. `envs/dev/search/indexes/docs-index.json` has the logical id
 `indexes/docs-index`, and that file path is its identity across
 environments.
@@ -172,7 +172,7 @@ encryption key, a function app in a custom skill's URL.
 **A binding gives that infrastructure a name.** Under `dependencies:`, each
 entry maps a *binding name* to `{ <type>: <value> }`. The recognized types
 are `storage`, `ai-services`, `function-app`, `identity`, `key-vault`, and
-`api` (an external REST base URL, matched by prefix — no ARM lookup).
+`api` (an external REST base URL, matched by prefix: no ARM lookup).
 
 A name is resolved through ARM (account/site/vault/identity name, or you can
 write the full ARM id directly) in the environment's subscription. The
@@ -191,17 +191,17 @@ differ, as `docs-storage` does above.
 **Two implicit bindings come free** with every environment: `search` (its
 own Search service) and `foundry` (its own Foundry account), usable wherever
 a binding of type `ai-services` or the Search endpoint is expected. Most
-workspaces need no separate `ai-services` binding at all — the Foundry
+workspaces need no separate `ai-services` binding at all: the Foundry
 account that hosts the project usually also hosts the models.
 
-**Declare or learn — both are first-class.** Write `dependencies:` by hand
+**Declare or learn, both are first-class.** Write `dependencies:` by hand
 (or let an AI write it) and rigg resolves and validates against it on first
 use: configuration first.
 
 Or run `rigg env bind <env> --learn`: discovery first. It scans that
 environment's files, extracts every infrastructure reference, groups it by
 (type, physical resource), proposes a binding name per group (the resource's
-name, lower-kebab-cased — rename any of them before confirming), and writes
+name, lower-kebab-cased: rename any of them before confirming), and writes
 the result to `rigg.yaml`. `adopt` and `pull` run the same scan after
 writing files, and offer the learn step when new unbound references appear.
 
@@ -244,7 +244,7 @@ the file points at another environment's infrastructure. **Unbound** and
 `strict-bindings` defaults to the value of `protected`, so a protected
 environment is strict by default; set it explicitly to change that.
 
-An error names the file, the path, the physical value, and — for a leak —
+An error names the file, the path, the physical value, and (for a leak)
 the environment that owns it, plus the fix: `rigg env bind <env> --learn` or
 `rigg env bind <env> <name> <type>:<value>`. `push` runs the same
 classification on its plan as a preflight, and refuses on error before any
@@ -253,7 +253,7 @@ mutation.
 ### Promoting between environments
 
 `rigg promote` produces, for every logical resource in environment `A`, the
-document it should have in `B` — by **translation**, not by copying:
+document it should have in `B` (by **translation**, not by copying):
 
 ```bash
 rigg promote --from dev --to prod --dry-run          # preview only (project optional when there is exactly one)
@@ -263,13 +263,13 @@ rigg push my-rag --env prod                          # then sync it to Azure
 
 For each field, translation picks exactly one of:
 
-1. **Infrastructure translation** — every infrastructure reference (a
+1. **Infrastructure translation**: every infrastructure reference (a
    registry-recognized `InfraRef`: storage, ai-services, function-app,
    identity, key-vault, api) is parsed to its physical resource, mapped to
    the binding name it has in `A`, and rendered from `B`'s binding of the
-   same name. The same physical value in both environments is **shared** —
+   same name. The same physical value in both environments is **shared**:
    no change, but still listed in the preview.
-2. **Sibling translation** — every reference to another resource by physical
+2. **Sibling translation**: every reference to another resource by physical
    name is rewritten to that sibling's physical name in `B`, correlated by
    logical id (file stem). This covers an indexer's data source, index and
    skillset, a knowledge base's knowledge sources, an agent's deployment and
@@ -277,11 +277,11 @@ For each field, translation picks exactly one of:
    `SearchKbMcpUrl`. If the sibling doesn't exist in `B` yet, it is created
    in this same promote under `A`'s physical name, so the reference is
    already correct.
-3. **Kept from the target** — the resource's own `name` (physical identity
+3. **Kept from the target**: the resource's own `name` (physical identity
    is never promoted), any path listed in the target file's `x-rigg-pin`
    annotation (1.x array semantics apply: target-only array elements along a
    pinned path survive), and the target file's own `x-rigg-pin`.
-4. **Re-derived from the target's infrastructure** — a Web API skill's auth
+4. **Re-derived from the target's infrastructure**: a Web API skill's auth
    carrier, once its URI is translated to `B`'s function app. If `B`'s
    skillset file already carries an auth carrier for that skill
    (`authResourceId`, `x-rigg-auth`, or an `x-functions-key` header), that
@@ -291,7 +291,7 @@ For each field, translation picks exactly one of:
    function-key` when `A` used a key, else anonymous. `A`'s `x-rigg-auth`,
    `authResourceId` and key header never cross as-is. With `--offline`, the
    carrier is left unresolved and reported; `push`'s auth gate handles it.
-5. **Everything else** comes from `A` — that is the promotion.
+5. **Everything else** comes from `A`: that is the promotion.
 
 Resources that only exist in `B` are never touched, and nothing is deleted.
 The translated document is written exactly as translation produced it: a
@@ -300,7 +300,7 @@ over, because carrying anything over from the file being replaced would
 silently undo the translation.
 
 Sidecars are promoted as content (inline on read, extract on write). A→B and
-B→A are the same operation — you choose the direction with `--from`/`--to`,
+B→A are the same operation: you choose the direction with `--from`/`--to`,
 not a fixed "deploy" direction.
 
 **Questions.** Translation stops on anything it cannot decide: a source
@@ -310,7 +310,7 @@ new-in-`B` deployment that Azure reports as unavailable or short on quota in
 `B`'s region.
 
 Interactively these are asked inline. Answers that create bindings are
-written to `rigg.yaml` once the run proceeds past the preview — a run
+written to `rigg.yaml` once the run proceeds past the preview: a run
 aborted at the confirmation loses them. Non-interactively every pending
 question comes back as a `needs-input` document (exit 6, nothing written);
 answer with `--answer <id>=<value>` (repeatable) or `--answers-file <path>`.
@@ -318,7 +318,7 @@ answer with `--answer <id>=<value>` (repeatable) or `--answers-file <path>`.
 
 **A missing target environment is not one of these questions.** It is a
 usage error (exit 2) up front, before translation runs, naming the exact
-`rigg env add <to> --like <from>` command to create it first — filled in
+`rigg env add <to> --like <from>` command to create it first: filled in
 with `A`'s own search service, Foundry account and project. Interactively,
 `rigg promote` offers to run that wizard inline instead of failing.
 
@@ -329,7 +329,7 @@ the number of references rewritten, a resource summary (changed / new /
 unchanged / kept-only-in-target) with per-resource semantic diffs, and
 checks (deployment availability/quota).
 
-`--dry-run` still runs the online checks — pass `--offline` too for a
+`--dry-run` still runs the online checks: pass `--offline` too for a
 network-free preview, which may still ask questions from what's already on
 disk. `--output json` carries the same sections as documented keys:
 `targets`, `rewiring[]`, `renamed[]`,
@@ -372,7 +372,7 @@ rigg is identity-first: **no file rigg writes ever contains a credential**,
 and `rigg validate` rejects one that does.
 
 Every connection it manages is made with a managed identity. The wiring that
-used to be a connection string is now a *role assignment* — something rigg
+used to be a connection string is now a *role assignment*: something rigg
 can derive from your files, check against Azure, and, where it is allowed
 to, create for you.
 
@@ -385,7 +385,7 @@ Four kinds of identity show up in a rigg workspace:
 | `search-system` | the Search service's system-assigned identity | ARM, on the environment's `search` target |
 | `search-user:<binding>` | a user-assigned identity a file names | the environment's `identity` binding of that name |
 | `foundry-project` | the Foundry project's system-assigned identity | ARM, on `<account>/projects/<project>` |
-| `operator` | **you** — your `az login` user, or a CI service principal | the access token's own claims |
+| `operator` | **you**: your `az login` user, or a CI service principal | the access token's own claims |
 
 **`search-system`** is the default for every Search-side connection.
 **`search-user:<binding>`** is named in an `identity` / `authIdentity` /
@@ -409,10 +409,10 @@ rigg reads every file in an environment's tree, extracts each infrastructure
 reference the registry knows about, resolves it through the environment's
 [bindings](#dependencies-and-bindings), and produces two things:
 
-- **Edges** — "this principal needs this role at this ARM scope, because of
+- **Edges**: "this principal needs this role at this ARM scope, because of
   this field in this file". An edge carries its evidence: the resource, the
   JSON path, and a sentence saying why.
-- **Checks** — the settings and network conditions that are not roles but
+- **Checks**: the settings and network conditions that are not roles but
   still gate the connection.
 
 What the files imply, today:
@@ -432,14 +432,14 @@ What the files imply, today:
 
 Four rows need a sentence more:
 
-- **Knowledge store** — a skillset with table projections also needs Storage
+- **Knowledge store**: a skillset with table projections also needs Storage
   Table Data Contributor plus Reader and Data Access.
-- **Embedding `resourceUri`** — an index vectorizer, an
+- **Embedding `resourceUri`**: an index vectorizer, an
   AzureOpenAIEmbeddingSkill, or a knowledge-source embedding model. A
   **chat-completion `resourceUri`** is a knowledge-base `models[]` entry or
   knowledge-source verbalization.
-- **`AIServicesByIdentity`** — the account must be of kind `AIServices`.
-- **WebApiSkill `authResourceId`** — not a role at all: the app must accept
+- **`AIServicesByIdentity`**: the account must be of kind `AIServices`.
+- **WebApiSkill `authResourceId`**: not a role at all: the app must accept
   the audience (see
   [Easy Auth](#easy-auth-the-edge-rbac-cannot-cover)).
 
@@ -451,7 +451,7 @@ Four rows need a sentence more:
   `disableLocalAuth`);
 - the storage firewall, and blob soft delete when a data source uses
   `NativeBlobSoftDeleteDeletionDetectionPolicy`;
-- whether shared-key access is disabled (reported for context —
+- whether shared-key access is disabled (reported for context:
   identity-based access works either way);
 - the AI Services account kind;
 - a function app's access restrictions and its Easy Auth settings.
@@ -481,8 +481,8 @@ by an assignment of one of the alternatives the edge lists, or by your
 definitions grants.
 
 A subscription Owner or Contributor therefore already counts for Search
-Service Contributor, Foundry Account Owner and — through the Cognitive
-Services Contributor alternative — project connections. It never counts for
+Service Contributor, Foundry Account Owner and, through the Cognitive
+Services Contributor alternative, project connections. It never counts for
 a role whose permissions live in `dataActions`: Foundry User, Search Index
 Data Reader, and Foundry Project Manager itself all carry data actions that
 `actions: ["*"]` does not cover. (Managed-identity edges keep to the exact
@@ -504,7 +504,7 @@ rigg push my-rag                        # plan-scoped preflight, before the firs
 rigg verify my-rag                      # proof, after the fact
 ```
 
-**`rigg auth doctor`** reports every edge and check — `✓` in place, `✗` a
+**`rigg auth doctor`** reports every edge and check: `✓` in place, `✗` a
 missing role, `!` a setting or network condition that does not hold, `?`
 something it could not judge, `-` deliberately checked elsewhere. Each comes
 with its principal, role, scope, reason, the file and path that require it,
@@ -518,7 +518,7 @@ cannot ask for (a script, or `--output json`). `--output json` prints
 **`rigg push`** runs `doctor --plan` against exactly the documents it is
 about to send, before the first mutation. Anything only a human may grant
 refuses right there (exit 4, with the `az` line). What rigg may grant is
-applied only after every gate has been cleared, and then **waited out** —
+applied only after every gate has been cleared, and then **waited out**:
 rigg polls until the assignment is visible before it continues.
 
 `--dry-run` reports the whole remediation and refuses nothing.
@@ -529,7 +529,7 @@ is fine and cannot read ARM.
 doctor is not: every indexer is run and watched to completion, every
 knowledge base gets a retrieve, every agent a one-turn question. A failure
 that looks like an authorization problem is attributed to the edge that
-would explain it. It exits 1 on any failure — and because indexer runs cost
+would explain it. It exits 1 on any failure, and because indexer runs cost
 money, a protected environment gates it like any other mutation.
 
 ### What rigg grants, and what it never grants
@@ -555,7 +555,7 @@ rigg auth roles remove -e dev     # …and remove them (env remove --clean-roles
 Two things rigg will **never** do:
 
 - **Grant you your own rights.** An operator edge is always reported, never
-  fixed — if `--fix` could grant the caller their own access, anyone able to
+  fixed, if `--fix` could grant the caller their own access, anyone able to
   run a push could escalate themselves. You get the `az` line, and someone
   with User Access Administrator runs it.
 - **Manage keys or passwords.** rigg never creates or rotates a credential,
@@ -563,7 +563,7 @@ Two things rigg will **never** do:
 
 ### Easy Auth: the edge RBAC cannot cover
 
-A custom Web API skill calling your Azure Function is not an ARM role — the
+A custom Web API skill calling your Azure Function is not an ARM role: the
 function app itself has to accept the search identity's token.
 `rigg auth easy-auth <function-app binding>` wires that end to end:
 
@@ -583,7 +583,7 @@ user-assigned identity a skillset declares in `authIdentity`. The merged
 document is shown as a diff and confirmed before anything is written.
 
 **What it changes on disk:** every skillset in the environment that calls
-that app is rewritten to be keyless — `authResourceId` set, the `code=`
+that app is rewritten to be keyless: `authResourceId` set, the `code=`
 parameter, the `x-functions-key` header and any `x-rigg-auth` carrier
 removed. Nothing is pushed: `rigg push` is still yours to run.
 
@@ -596,7 +596,7 @@ name the **source** it should be fetched from, on the WebApiSkill:
 |---|---|
 | `"x-rigg-auth": "function-key"` | reads the key from ARM `listkeys` on the function app (function-level key first, host key as fallback) |
 | `"x-rigg-auth": "key-vault:<secret>@<key-vault binding>"` | reads the secret from that vault's data plane with your own token (you need Key Vault Secrets User) |
-| neither, and `authResourceId` set | keyless — nothing is injected |
+| neither, and `authResourceId` set | keyless, nothing is injected |
 
 Either way the value exists only in the outgoing request body: the file
 keeps `<redacted>`, and the key never reaches disk, stdout, or a log.
@@ -622,13 +622,13 @@ shared user-assigned one, is rigg's default.
 
 ### Tokens
 
-rigg acquires one token per (tenant, audience) — ARM, Search, the Foundry
-data plane, Cognitive Services, Key Vault, Microsoft Graph — and caches it
+rigg acquires one token per (tenant, audience) (ARM, Search, the Foundry
+data plane, Cognitive Services, Key Vault, Microsoft Graph) and caches it
 for five minutes. The chain, highest first:
 
-1. `RIGG_ACCESS_TOKEN` — a pre-minted bearer token, honoured for **every**
+1. `RIGG_ACCESS_TOKEN`: a pre-minted bearer token, honoured for **every**
    audience. Intended for CI and test rigs.
-2. Service-principal environment variables — `AZURE_CLIENT_ID` and
+2. Service-principal environment variables: `AZURE_CLIENT_ID` and
    `AZURE_TENANT_ID` plus either `AZURE_CLIENT_SECRET` or
    `AZURE_FEDERATED_TOKEN_FILE` (OIDC). Tokens are minted directly from
    Entra ID; the Azure CLI does not have to be installed.
@@ -664,14 +664,14 @@ is set. The environment variable is the way to force script behaviour while
 still sitting at a terminal.
 
 Answers supplied up front are always used, in either mode. A value that is
-*wrong* — a `--confirm-env` that doesn't equal the environment's name, an
-`--answer` outside a question's candidates — is a usage error (exit 2)
+*wrong* (a `--confirm-env` that doesn't equal the environment's name, an
+`--answer` outside a question's candidates) is a usage error (exit 2)
 naming what was expected. That holds on a terminal too, where rigg
 deliberately does not fall back to prompting for a value you already tried
 to give.
 
 ## See also
 
-- **Getting Started** (`GETTING_STARTED.md`) — build a stack from scratch.
+- **Getting Started** (`GETTING_STARTED.md`): build a stack from scratch.
 - Run `rigg describe` to see how your resources connect, and `rigg status`
   to see what is in sync.

@@ -24,20 +24,20 @@
 
 **Files:** Modify `crates/rigg-client/src/client.rs`.
 **Produces:** on `AzureSearchClient`:
-- `pub async fn indexer_run(&self, name: &str) -> Result<(), ClientError>` — POST `{base}/indexers/{name}/run?api-version=` (expect 2xx; 202 typical)
-- `pub async fn indexer_reset(&self, name: &str) -> Result<(), ClientError>` — POST `/indexers/{name}/reset`
-- `pub async fn indexer_status(&self, name: &str) -> Result<Value, ClientError>` — GET `/indexers/{name}/status`
-- `pub async fn index_stats(&self, name: &str) -> Result<Value, ClientError>` — GET `/indexes/{name}/stats`
-- `pub async fn search_docs(&self, index: &str, body: &Value) -> Result<Value, ClientError>` — POST `/indexes/{index}/docs/search`
-- `pub async fn kb_retrieve(&self, kb: &str, body: &Value) -> Result<Value, ClientError>` — POST `/knowledgebases('{kb}')/retrieve` (also accept 206 as success)
+- `pub async fn indexer_run(&self, name: &str) -> Result<(), ClientError>`: POST `{base}/indexers/{name}/run?api-version=` (expect 2xx; 202 typical)
+- `pub async fn indexer_reset(&self, name: &str) -> Result<(), ClientError>`: POST `/indexers/{name}/reset`
+- `pub async fn indexer_status(&self, name: &str) -> Result<Value, ClientError>`: GET `/indexers/{name}/status`
+- `pub async fn index_stats(&self, name: &str) -> Result<Value, ClientError>`: GET `/indexes/{name}/stats`
+- `pub async fn search_docs(&self, index: &str, body: &Value) -> Result<Value, ClientError>`: POST `/indexes/{index}/docs/search`
+- `pub async fn kb_retrieve(&self, kb: &str, body: &Value) -> Result<Value, ClientError>`: POST `/knowledgebases('{kb}')/retrieve` (also accept 206 as success)
 
-Steps: implement using the existing `request` helper/URL patterns (mirror `resource_url`; the retrieve path uses the parenthesized OData form — build it directly with `urlencoding::encode(kb)`); `cargo build -p rigg-client`; commit `feat(client): search data-plane operations`.
+Steps: implement using the existing `request` helper/URL patterns (mirror `resource_url`; the retrieve path uses the parenthesized OData form, build it directly with `urlencoding::encode(kb)`); `cargo build -p rigg-client`; commit `feat(client): search data-plane operations`.
 (Wiremock coverage arrives with the CLI tests in Tasks 3–5.)
 
 ### Task 2: rigg-client foundry agent invocation
 
 **Files:** Modify `crates/rigg-client/src/foundry.rs`.
-**Produces:** `pub async fn agent_respond(&self, agent: &str, input: &str) -> Result<Value, ClientError>` — POST `{base_url}/api/projects/{project}/openai/v1/responses` (match the existing URL-building helper style) with body:
+**Produces:** `pub async fn agent_respond(&self, agent: &str, input: &str) -> Result<Value, ClientError>`, POST `{base_url}/api/projects/{project}/openai/v1/responses` (match the existing URL-building helper style) with body:
 
 ```json
 {"agent_reference": {"name": "<agent>", "type": "agent_reference"}, "input": "<input>", "stream": false}
@@ -98,13 +98,13 @@ pub enum AzIndexerCommands {
 }
 ```
 
-**az/mod.rs:** dispatch + `pub(crate) async fn connect(ctx) -> Result<(Workspace, ResolvedEnv, Remote)>` — load workspace, resolve env, pick the FIRST project for connections (ops are service-level; connections are env-level — use `select_projects(&ws, None, false)` when single project else any project whose env has connections: implement as: iterate ws.projects, first with a usable Remote; error if none) and print the target banner.
+**az/mod.rs:** dispatch + `pub(crate) async fn connect(ctx) -> Result<(Workspace, ResolvedEnv, Remote)>`, load workspace, resolve env, pick the FIRST project for connections (ops are service-level; connections are env-level, use `select_projects(&ws, None, false)` when single project else any project whose env has connections: implement as: iterate ws.projects, first with a usable Remote; error if none) and print the target banner.
 
 **indexer.rs behavior:**
-- run: protected gate → if `--reset`: confirm (`interactive::confirm_default_no` or `--yes`; non-interactive without --yes → Usage error) → reset → run → if `--watch`: poll `indexer_status` every `RIGG_WATCH_INTERVAL_SECS` (default 5): print transition lines; terminal when lastResult.status ∈ {success, transientFailure→keep? no: success|error|reset} — treat `success` → exit Ok; `error` → render errors, `Err(CommandError::Validation)`? use plain anyhow → exit 1; keep polling while overall/lastResult is `inProgress` or run not yet visible. Cap at 720 polls (1h) then error.
+- run: protected gate → if `--reset`: confirm (`interactive::confirm_default_no` or `--yes`; non-interactive without --yes → Usage error) → reset → run → if `--watch`: poll `indexer_status` every `RIGG_WATCH_INTERVAL_SECS` (default 5): print transition lines; terminal when lastResult.status ∈ {success, transientFailure→keep? no: success|error|reset}, treat `success` → exit Ok; `error` → render errors, `Err(CommandError::Validation)`? use plain anyhow → exit 1; keep polling while overall/lastResult is `inProgress` or run not yet visible. Cap at 720 polls (1h) then error.
 - status: fetch + render (status, lastResult status/start/end/items, errors/warnings ≤20 each with counts). `--output json` prints raw.
 
-**Wiremock tests (sync.rs):** `az_indexer_run_watch_reports_failure_with_errors` — POST run 202; status returns inProgress once then error with 2 doc errors (stateful wiremock: use `Mock::up_to_n_times(1)` mounted FIRST for the inProgress response, then a catch-all error-status mock; set RIGG_WATCH_INTERVAL_SECS=0). Assert exit failure + stderr/stdout contains the error message. `az_indexer_reset_requires_yes_non_interactively` — exit 2, no POSTs. `az_indexer_status_renders` — GET status → stdout contains items processed.
+**Wiremock tests (sync.rs):** `az_indexer_run_watch_reports_failure_with_errors`, POST run 202; status returns inProgress once then error with 2 doc errors (stateful wiremock: use `Mock::up_to_n_times(1)` mounted FIRST for the inProgress response, then a catch-all error-status mock; set RIGG_WATCH_INTERVAL_SECS=0). Assert exit failure + stderr/stdout contains the error message. `az_indexer_reset_requires_yes_non_interactively`: exit 2, no POSTs. `az_indexer_status_renders`: GET status → stdout contains items processed.
 
 Steps: failing tests → implement → pass → fmt/clippy → commit `feat: rigg az indexer run/reset/status with --watch`.
 
@@ -139,7 +139,7 @@ Commit `feat: rigg az index query/stats`.
 
 ### Task 5: `rigg az kb ask` + `rigg az agent ask`
 
-**Files:** Create `crates/rigg/src/commands/az/kb.rs`, `crates/rigg/src/commands/az/agent.rs`; cli.rs; remote.rs wrappers (`kb_retrieve`, `agent_ask` — agent path needs the foundry client); tests in sync.rs.
+**Files:** Create `crates/rigg/src/commands/az/kb.rs`, `crates/rigg/src/commands/az/agent.rs`; cli.rs; remote.rs wrappers (`kb_retrieve`, `agent_ask`: agent path needs the foundry client); tests in sync.rs.
 
 ```rust
 #[derive(Subcommand)] pub enum AzKbCommands {
@@ -155,7 +155,7 @@ Commit `feat: rigg az index query/stats`.
 - kb ask request: `{"intents": [{"type": "semantic", "search": prompt}], "includeActivity": true}`. Render: each `response[].content[]` where type==text → print text; then `references[]` numbered: `[{i}] {sourceData.title || docKey || url} (score {rerankerScore})`. Empty references → note. 206 → prefix warning "partial result (a knowledge source reported an error)".
 - agent ask render: walk `output[]`, items with `content[]`, entries with `text` (type `output_text`) → print; fallback `output_text` top-level string if present; else pretty-print JSON with a note.
 
-**Tests:** `az_kb_ask_renders_references` (wiremock POST retrieve on `/knowledgebases('test-kb')/retrieve` — note wiremock path matching with parens: use `path("/knowledgebases('test-kb')/retrieve")` — returns contract sample → stdout contains grounding text + reference title). `az_agent_ask_renders_reply` — workspace fixture needs `foundry: {account: mock, project: proj, endpoint: server.uri()}`; mock POST `/api/projects/proj/openai/v1/responses` → output_text reply; assert stdout.
+**Tests:** `az_kb_ask_renders_references` (wiremock POST retrieve on `/knowledgebases('test-kb')/retrieve`, note wiremock path matching with parens: use `path("/knowledgebases('test-kb')/retrieve")`, returns contract sample → stdout contains grounding text + reference title). `az_agent_ask_renders_reply`: workspace fixture needs `foundry: {account: mock, project: proj, endpoint: server.uri()}`; mock POST `/api/projects/proj/openai/v1/responses` → output_text reply; assert stdout.
 
 Commit `feat: rigg az kb ask / agent ask`.
 
@@ -194,7 +194,7 @@ Attach via `#[arg(add = ArgValueCompleter::new(...))]` on: az noun name args (in
 
 **completion.rs help:** extend long_about: static script + dynamic one-liners per shell (`source <(COMPLETE=zsh rigg)`, bash same, fish `COMPLETE=fish rigg | source`).
 
-**Tests:** unit — temp workspace with two projects/resources: projects() lists both; resource_names(Indexer) lists indexer stems; selectors contain "indexes/docs"; outside workspace → empty. cli_surface — `COMPLETE=zsh rigg` (env var, no args) exits 0 and emits non-empty script containing "_rigg" or "COMPLETE".
+**Tests:** unit, temp workspace with two projects/resources: projects() lists both; resource_names(Indexer) lists indexer stems; selectors contain "indexes/docs"; outside workspace → empty. cli_surface: `COMPLETE=zsh rigg` (env var, no args) exits 0 and emits non-empty script containing "_rigg" or "COMPLETE".
 
 Commit `feat: dynamic tab completion from workspace files`.
 
@@ -206,7 +206,7 @@ Steps: write docs; `cargo fmt --all -- --check && cargo clippy --workspace --all
 
 ### Task 9: live smoke (mklabsrch / mklabaifndr)
 
-From `e2e-test/`: `rigg az indexer status test-ks-indexer`; `rigg az index stats test-ks-index`; `rigg az index query test-ks-index "regulatory" --top 2`; `rigg az kb ask` against a temp KB over test-ks (create/push/ask/delete/prune) or skip KB live if regulatory-kb suffices via... use `regulatory-kb` READ-ONLY (ask is read-only — safe); `rigg az agent ask Regulus "Say hello"`. Fix findings; commit.
+From `e2e-test/`: `rigg az indexer status test-ks-indexer`; `rigg az index stats test-ks-index`; `rigg az index query test-ks-index "regulatory" --top 2`; `rigg az kb ask` against a temp KB over test-ks (create/push/ask/delete/prune) or skip KB live if regulatory-kb suffices via... use `regulatory-kb` READ-ONLY (ask is read-only: safe); `rigg az agent ask Regulus "Say hello"`. Fix findings; commit.
 
 ### Task 10: release v1.6.0
 

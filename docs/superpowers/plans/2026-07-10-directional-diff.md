@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- The diff's internal orientation stays old=remote/right, new=local/left (diff.rs comment) — ONLY presentation changes. Column order: `new_side` (local) first, `old_side` (Azure) second.
+- The diff's internal orientation stays old=remote/right, new=local/left (diff.rs comment), ONLY presentation changes. Column order: `new_side` (local) first, `old_side` (Azure) second.
 - No temporal words ("was", "now") anywhere in text/markdown diff output.
 - Hints: text format + local-vs-remote mode + drift present, only. Named project when exactly one project has drift; `<project>` placeholder otherwise. Never in compare-env/markdown/json.
 - JSON diff format byte-identical to today.
@@ -19,18 +19,18 @@
 
 ---
 
-### Task 1: rigg-diff — labeled table renderers
+### Task 1: rigg-diff: labeled table renderers
 
 **Files:**
 - Modify: `crates/rigg-diff/src/output.rs`
 
 **Interfaces:**
 - Produces: `pub struct SideLabels { pub new_side: String, pub old_side: String }`
-- Changes: `pub fn format_report(diffs: &[(String, DiffResult)], format: OutputFormat, labels: &SideLabels) -> String` (and `format_text`/`format_markdown` likewise; `format_json` ignores labels). Callers updated in Task 2 — this task updates output.rs's own unit tests only; expect the workspace build to break until Task 2 IF other crates call these. CHECK first: if `crates/rigg/src/commands/diff.rs` is the only caller, do Task 1+2 in ONE commit to keep every commit green (fold Task 2's diff.rs label-wiring — NOT the hints — into this commit and say so in the report).
+- Changes: `pub fn format_report(diffs: &[(String, DiffResult)], format: OutputFormat, labels: &SideLabels) -> String` (and `format_text`/`format_markdown` likewise; `format_json` ignores labels). Callers updated in Task 2: this task updates output.rs's own unit tests only; expect the workspace build to break until Task 2 IF other crates call these. CHECK first: if `crates/rigg/src/commands/diff.rs` is the only caller, do Task 1+2 in ONE commit to keep every commit green (fold Task 2's diff.rs label-wiring, NOT the hints, into this commit and say so in the report).
 
 - [ ] **Step 1: Read the current output.rs fully.** Note: `format_text` prints `"{resource}: N change(s)"` then per-change lines via `format_change_text`; `Change` has `path`, `kind` (Added/Removed/Modified), `old_value`, `new_value`, `description: Option<String>`. `format_report` dispatches by `OutputFormat`.
 
-- [ ] **Step 2: Write failing unit tests** (output.rs `mod tests` — adapt to the existing test helpers you find there):
+- [ ] **Step 2: Write failing unit tests** (output.rs `mod tests`, adapt to the existing test helpers you find there):
 
 ```rust
     #[test]
@@ -92,8 +92,8 @@
 a) `SideLabels` struct (with doc comments per the spec).
 
 b) `format_text(result, resource_name, labels)`:
-- Header line: `"{resource_name} — differs ({n} field(s))"` followed by a blank line.
-- Column layout: compute the field-column width from the longest path (cap ~40 chars; longer paths get their own line with values on the next line, or simply let the row overflow — pick the simpler: fixed-width `{:<40}` and let long paths push the row wider). Then `{:<40} {:<20} {}`-style: field, new_side value, old_side value. Header row uses the label strings.
+- Header line: `"{resource_name}: differs ({n} field(s))"` followed by a blank line.
+- Column layout: compute the field-column width from the longest path (cap ~40 chars; longer paths get their own line with values on the next line, or simply let the row overflow, pick the simpler: fixed-width `{:<40}` and let long paths push the row wider). Then `{:<40} {:<20} {}`-style: field, new_side value, old_side value. Header row uses the label strings.
 - Modified: both previews. Added (only in new/local): new preview + `(absent)`. Removed (only in old/Azure): `(absent)` + old preview.
 - `description`-carrying changes: print the description as a full-width row (indented, no columns).
 
@@ -110,13 +110,13 @@ f) Update existing output.rs tests that assert the old shape ("was") to the new 
 - compare-env mode: `SideLabels { new_side: env_a.name.clone(), old_side: env_b.name.clone() }` (verify against the pair construction: `pairs.push((r, a, b))` then `diff(&right_n /*b*/, &left_n /*a*/)` → new=a, old=b).
 Pass to `format_report`. Update sync.rs diff-shape assertions (grep for tests asserting `was`/`change(s)` in diff output) to the new table shape.
 
-- [ ] **Step 5: GREEN + full checks** — `cargo test -p rigg-diff 2>&1 | tail -4 && cargo test --workspace 2>&1 | grep -c 'test result: ok' && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -2`.
+- [ ] **Step 5: GREEN + full checks**: `cargo test -p rigg-diff 2>&1 | tail -4 && cargo test --workspace 2>&1 | grep -c 'test result: ok' && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -2`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add crates/rigg-diff/src/output.rs crates/rigg/src/commands/diff.rs crates/rigg/tests/sync.rs
-git commit -m "feat: direction-neutral diff — labeled local/Azure table, no temporal words"
+git commit -m "feat: direction-neutral diff, labeled local/Azure table, no temporal words"
 ```
 
 ---
@@ -129,7 +129,7 @@ git commit -m "feat: direction-neutral diff — labeled local/Azure table, no te
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Failing sync test** — a drifted local-vs-remote diff must print both hints; a clean diff must not:
+- [ ] **Step 1: Failing sync test**: a drifted local-vs-remote diff must print both hints; a clean diff must not:
 
 ```rust
 #[tokio::test]
@@ -159,14 +159,14 @@ async fn diff_prints_dual_direction_hints_on_drift() {
 }
 ```
 
-NOTE: check how existing sync diff tests mock the per-resource GET (`remote_b.get(r)`) — mirror their mock paths exactly (the `/indexes/docs` single-GET path and any api-version matchers). If an existing drifted-diff test exists, extend IT instead of writing a new mock scaffold.
+NOTE: check how existing sync diff tests mock the per-resource GET (`remote_b.get(r)`), mirror their mock paths exactly (the `/indexes/docs` single-GET path and any api-version matchers). If an existing drifted-diff test exists, extend IT instead of writing a new mock scaffold.
 
-- [ ] **Step 2: Confirm RED**, implement in diff.rs `run`: after printing the report, when `has_drift && args.format == DiffFormat::Text && compare_env.is_none()` (verify the actual field name for compare mode), collect the drifted project names from the diff results (the `String` keys are `"{project}/{kind}/{name}"` — split on first '/'); if exactly one distinct project, use it, else `<project>`:
+- [ ] **Step 2: Confirm RED**, implement in diff.rs `run`: after printing the report, when `has_drift && args.format == DiffFormat::Text && compare_env.is_none()` (verify the actual field name for compare mode), collect the drifted project names from the diff results (the `String` keys are `"{project}/{kind}/{name}"`, split on first '/'); if exactly one distinct project, use it, else `<project>`:
 
 ```rust
         println!();
-        println!("hint: rigg pull {p} — update local files to match Azure");
-        println!("      rigg push {p} — make Azure match your local files");
+        println!("hint: rigg pull {p}, update local files to match Azure");
+        println!("      rigg push {p}: make Azure match your local files");
 ```
 
 - [ ] **Step 3: GREEN + full checks** (same command battery).
@@ -192,15 +192,15 @@ git commit -m "feat: dual-direction pull/push hints after drifted diff"
 ```rust
     let system = "You explain configuration differences between a developer's LOCAL files and \
                   what is currently in AZURE (Azure AI Search / Microsoft Foundry). The report \
-                  labels each side — attribute every value to the correct side and NEVER assume \
+                  labels each side: attribute every value to the correct side and NEVER assume \
                   the user intends to push or pull. Structure your answer as: one or two lines on \
-                  what differs (interpret, don't restate every field); then 'If you pull:' — what \
-                  the local files would become; then 'If you push:' — what would change in Azure, \
+                  what differs (interpret, don't restate every field); then 'If you pull:' with what \
+                  the local files would become; then 'If you push:' with what would change in Azure, \
                   flagging risks under that direction only (deletions, immutable index fields, \
                   SKU/capacity/billing). Max 150 words.";
 ```
 
-- [ ] **Step 2: Registry** — Agent KindMeta `volatile_fields` gains `"metadata.modified_at"`. Add a registry test:
+- [ ] **Step 2: Registry**: Agent KindMeta `volatile_fields` gains `"metadata.modified_at"`. Add a registry test:
 
 ```rust
     #[test]
@@ -209,22 +209,22 @@ git commit -m "feat: dual-direction pull/push hints after drifted diff"
     }
 ```
 
-Check the Agent's current volatile list location and any normalize test that would now strip it (none expected — say so in the report if one needed updating).
+Check the Agent's current volatile list location and any normalize test that would now strip it (none expected: say so in the report if one needed updating).
 
-- [ ] **Step 3: README** — find the Semantic Diff sample block (the fenced block after "```bash\nrigg diff my-rag\n```") showing `~ Index 'docs-index' (modified) …` and replace the sample output with the new table + hint shape:
+- [ ] **Step 3: README**: find the Semantic Diff sample block (the fenced block after "```bash\nrigg diff my-rag\n```") showing `~ Index 'docs-index' (modified) …` and replace the sample output with the new table + hint shape:
 
 ```
-docs-index — differs (2 field(s))
+docs-index: differs (2 field(s))
 
   field                                    local            Azure (dev)
   fields[3].type                           Edm.Int32        Edm.String
   fields[7] 'rating'                       (present)        (absent)
 
-hint: rigg pull my-rag — update local files to match Azure
-      rigg push my-rag — make Azure match your local files
+hint: rigg pull my-rag (update local files to match Azure)
+      rigg push my-rag (make Azure match your local files)
 ```
 
-(Keep it illustrative — match the real renderer's shape from Task 1; run a quick local render if unsure and paste reality, not hope.)
+(Keep it illustrative: match the real renderer's shape from Task 1; run a quick local render if unsure and paste reality, not hope.)
 
 - [ ] **Step 4: Full checks + commit**
 

@@ -1,4 +1,4 @@
-//! `rigg auth doctor` (spec §4.1) — verify, explain and repair the identity
+//! `rigg auth doctor` (spec §4.1): verify, explain and repair the identity
 //! graph an environment needs. Thin over [`super::auth_engine`]: the
 //! verification, the rendering and the fixes are shared with `rigg push`'s
 //! auth preflight and `rigg status --auth`.
@@ -48,7 +48,7 @@ pub async fn run(
     let fixes = if fix { report.fixes() } else { Vec::new() };
 
     // The confirmation is one question for the whole batch (spec §4.2's "one
-    // confirmation per fix class, not per edge", taken to its conclusion —
+    // confirmation per fix class, not per edge", taken to its conclusion:
     // the list is right there in the report).
     //
     // In text mode the report is printed first, so a human sees what they
@@ -70,7 +70,7 @@ pub async fn run(
         // therefore before any write: a role assignment, a search service's
         // auth options or a storage firewall rule is a change to the
         // environment, so `--fix` sits behind the same typed confirmation as
-        // `push` — and `--yes` deliberately does not satisfy it. Asked here
+        // `push`, and `--yes` deliberately does not satisfy it. Asked here
         // rather than after the report so `--output json` still emits at
         // most one document (the `needs-input` one).
         if !confirm_protected_env(
@@ -134,7 +134,7 @@ pub async fn run(
     let unfixable = report.unfixable();
     let unresolved = report.unresolved();
     for item in unfixable.iter().chain(unresolved.iter()) {
-        say!(ctx, "  {} {} — {}", "✗".red(), item.headline(), item.detail);
+        say!(ctx, "  {} {}: {}", "✗".red(), item.headline(), item.detail);
     }
     if failed.is_empty() && unfixable.is_empty() && unresolved.is_empty() {
         say!(
@@ -145,8 +145,8 @@ pub async fn run(
         );
         return Ok(());
     }
-    // Anything rigg could not fix — or could not judge in the first place,
-    // which a fix does not turn into a verdict — keeps the exit code at 4.
+    // Anything rigg could not fix (or could not judge in the first place,
+    // which a fix does not turn into a verdict) keeps the exit code at 4.
     Err(anyhow!(CommandError::AuthDenied(format!(
         "{} problem(s) remain after --fix (re-run `rigg auth doctor -e {}` to re-verify): {}",
         failed.len() + unfixable.len() + unresolved.len(),
@@ -177,7 +177,7 @@ async fn verdict(ctx: &GlobalContext, report: &auth_engine::Report, env: &str) -
         .iter()
         .chain(report.operator.iter())
         .filter(|i| matches!(i.status, Status::Missing | Status::Unresolved))
-        .map(|i| format!("{} — {}", i.headline(), i.detail))
+        .map(|i| format!("{}: {}", i.headline(), i.detail))
         .collect();
     if !failures.is_empty()
         && crate::commands::ai_assist::ai_on(ctx)
@@ -195,7 +195,7 @@ async fn verdict(ctx: &GlobalContext, report: &auth_engine::Report, env: &str) -
         format!("re-run with --fix, or run the printed az commands (env: {env})")
     };
     Err(anyhow!(CommandError::AuthDenied(format!(
-        "{} missing, {} unresolved{} — {hint}",
+        "{} missing, {} unresolved{}: {hint}",
         report.summary.missing,
         report.summary.unresolved,
         match report.summary.live {

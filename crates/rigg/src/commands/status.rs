@@ -1,4 +1,4 @@
-//! `rigg status` — per-project sync classification + unmanaged remote
+//! `rigg status`: per-project sync classification + unmanaged remote
 //! resources, reported across all environments by default.
 
 use std::collections::BTreeSet;
@@ -50,7 +50,7 @@ pub async fn run(ctx: &GlobalContext, args: StatusArgs) -> Result<()> {
             is_default: Some(env.name.as_str()) == default_name.as_deref(),
             outcome: env_report(&ws, env, &projects).await,
             // The identity graph is the same verification `rigg auth doctor`
-            // runs, without the fixes — one line per environment here, the
+            // runs, without the fixes: one line per environment here, the
             // full report there.
             identity: match args.auth {
                 true => auth_engine::verify(
@@ -237,7 +237,7 @@ fn render_text(reports: &[EnvReport]) {
         match &rep.outcome {
             Err(e) => {
                 let hint = if is_auth(e) {
-                    " — run `rigg auth doctor`"
+                    ". Run `rigg auth doctor`"
                 } else {
                     ""
                 };
@@ -283,7 +283,7 @@ fn render_text(reports: &[EnvReport]) {
                 println!("  identity: {}", "ok".green());
             } else {
                 println!(
-                    "  identity: {} — rigg auth doctor -e {}",
+                    "  identity: {} (rigg auth doctor -e {})",
                     format!(
                         "{} missing, {} unresolved",
                         identity.missing, identity.unresolved

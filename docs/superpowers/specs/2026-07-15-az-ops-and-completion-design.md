@@ -1,4 +1,4 @@
-# `rigg az` operations commands + dynamic tab completion — design
+# `rigg az` operations commands + dynamic tab completion: design
 
 **Date:** 2026-07-15
 **Status:** approved
@@ -6,8 +6,8 @@
 ## Problem
 
 Rigg manages the configuration plane (definitions in git, synced with
-push/pull). Operating the resulting resources — triggering and watching an
-indexer, smoke-testing an index, prompting a knowledge base or agent — still
+push/pull). Operating the resulting resources (triggering and watching an
+indexer, smoke-testing an index, prompting a knowledge base or agent) still
 requires the Azure portal or hand-rolled curl. During the regulatory
 migration the portal had to fill this gap repeatedly (indexer run, status,
 error inspection). And as commands grow longer, the lack of value-level tab
@@ -44,7 +44,7 @@ rigg az agent ask <name> <prompt>
 - Environment resolution as everywhere: `-e` > `RIGG_ENV` > default env.
   Commands print the same target banner as push (service names + URLs).
 - Resources are addressed by **physical name; project ownership is NOT
-  required** (querying an unmanaged index is legitimate — these are runtime
+  required** (querying an unmanaged index is legitimate: these are runtime
   ops, not config ops). No `--project` flag.
 - `--output json` (existing global flag) emits the raw API response for
   scripting; default output is human-formatted.
@@ -59,7 +59,7 @@ rigg az agent ask <name> <prompt>
   exits 0 on success, non-zero (exit 1) on a failed run with the errors
   rendered. Without `--watch`: fire-and-forget with a hint to
   `rigg az indexer status`.
-- `index query`: one block per hit — `@search.score`, the `--select`ed
+- `index query`: one block per hit: `@search.score`, the `--select`ed
   fields (default: all retrievable fields, long strings truncated), total
   count. `--top` default 5.
 - `index stats`: document count + storage size (human units).
@@ -86,19 +86,19 @@ Search data plane (`client.rs`, api-version per registry channel):
 - `POST /indexers/{name}/reset` → 204
 - `GET  /indexers/{name}/status`
 - `GET  /indexes/{name}/stats`
-- `POST /indexes/{name}/docs/search` — body `{search, top, filter, select, count: true}`
+- `POST /indexes/{name}/docs/search`: body `{search, top, filter, select, count: true}`
 - Knowledge base retrieve (contract verified against the 2026-04-01 REST
   reference): `POST /knowledgebases('{name}')/retrieve` with body
   `{"intents": [{"type": "semantic", "search": "<prompt>"}],
-  "includeActivity": true}`. Note: the stable API is extractive — the
+  "includeActivity": true}`. Note: the stable API is extractive, the
   response carries grounding content (`response[].content[].text`) plus
   `references[]` (id, docKey/url, rerankerScore, sourceData.title/content)
   and `activity[]`; synthesized answers are preview-only. `kb ask` renders
   the grounding text followed by a numbered reference list. HTTP 206 =
-  partial (some sources errored) — rendered with a warning, exit 0.
+  partial (some sources errored): rendered with a warning, exit 0.
 
 Foundry data plane (`foundry.rs`): agent invocation via the v1 responses
-API — `POST {project_endpoint}/openai/v1/responses` with body
+API: `POST {project_endpoint}/openai/v1/responses` with body
 `{"agent_reference": {"name": "<agent>", "type": "agent_reference"},
 "input": "<prompt>"}`; the reply text is extracted from the OpenAI-shaped
 response (`output[] → content[] → output_text`).
@@ -111,11 +111,11 @@ generic over name; kb/agent specific).
 
 ## 3. MCP tools (crates/rigg/src/mcp/tools.rs)
 
-- `rigg_indexer_status {indexer, env?}` — read-only.
-- `rigg_query {index, search, top?, filter?, select?, env?}` — read-only.
-- `rigg_ask {knowledge_base? | agent?, prompt, env?}` — read-only; exactly
+- `rigg_indexer_status {indexer, env?}`: read-only.
+- `rigg_query {index, search, top?, filter?, select?, env?}`: read-only.
+- `rigg_ask {knowledge_base? | agent?, prompt, env?}`: read-only; exactly
   one of knowledge_base/agent required.
-- `rigg_indexer_run {indexer, env?, force?}` — without force: returns the
+- `rigg_indexer_run {indexer, env?, force?}`: without force: returns the
   current status + what would run (preview pattern); with force: triggers
   and returns the fire-and-forget acknowledgement.
 - Tool descriptions teach the post-push verification flow (push → run →
@@ -129,7 +129,7 @@ Two layers:
 1. **Static** (existing, unchanged): `rigg completion <shell>` generates
    clap_complete scripts covering subcommands and flags.
 2. **Dynamic values** (new): clap_complete's dynamic engine
-   (`unstable-dynamic` feature, `CompleteEnv`) — registered per shell with
+   (`unstable-dynamic` feature, `CompleteEnv`): registered per shell with
    one line, e.g. `source <(COMPLETE=zsh rigg)`. The shell then invokes the
    rigg binary for candidates. Custom completers attach to arguments:
    - `rigg az indexer run|reset|status <TAB>` → indexer names; same
@@ -144,7 +144,7 @@ Two layers:
 
    Candidates come from LOCAL workspace files only (workspace discovered by
    walking up from cwd, env = `RIGG_ENV` or the default; parsing `-e` from
-   the in-flight command line is attempted best-effort). No network calls —
+   the in-flight command line is attempted best-effort). No network calls:
    unmanaged resources don't complete (documented). Outside a workspace,
    value completion yields nothing (silently).
 3. `rigg completion --help` and the `rigg init` next-steps output teach the
@@ -156,14 +156,14 @@ API drift only surfaces on deliberate upgrades.
 
 ## 5. Architecture
 
-- `crates/rigg/src/commands/az/mod.rs` — `AzCommands` dispatch +
+- `crates/rigg/src/commands/az/mod.rs`: `AzCommands` dispatch +
   shared helpers (env banner, name arg).
-- `crates/rigg/src/commands/az/{indexer,index,kb,agent}.rs` — one file per
+- `crates/rigg/src/commands/az/{indexer,index,kb,agent}.rs`: one file per
   noun.
-- `crates/rigg/src/completion_dynamic.rs` — candidate functions (pure:
+- `crates/rigg/src/completion_dynamic.rs` (candidate functions (pure):
   workspace path in, Vec<String> out; unit-testable) + CompleteEnv hookup
   in `main.rs`.
-- Registry untouched — operations are not configuration.
+- Registry untouched: operations are not configuration.
 
 ## 6. Testing
 
@@ -185,7 +185,7 @@ API drift only surfaces on deliberate upgrades.
 
 ## Out of scope (backlog)
 
-- `rigg az agent chat` — interactive multi-turn REPL.
+- `rigg az agent chat`: interactive multi-turn REPL.
 - `rigg az indexer resetdocs` (per-document reset), debug-session support.
 - Network-backed completion (unmanaged resource names).
-- `rigg open <selector>` — portal deep-links.
+- `rigg open <selector>`: portal deep-links.

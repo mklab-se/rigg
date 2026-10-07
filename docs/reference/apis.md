@@ -1,7 +1,7 @@
-# `apis/<name>.json` — custom skill contracts
+# `apis/<name>.json`: custom skill contracts
 
 A custom **Web API skill** lets an Azure AI Search skillset call HTTP code you
-wrote — typically an Azure Function — in the middle of an indexer's enrichment
+wrote, typically an Azure Function, in the middle of an indexer's enrichment
 pipeline. rigg keeps the contract for that call in the workspace, as an
 OpenAPI document in `apis/`. The skillset and the function can then be checked
 against each other before anything is pushed, and whoever implements the
@@ -47,7 +47,7 @@ A skillset opts in with [`x-rigg-api`](annotations.md#x-rigg-api):
 rigg new api contoso-enrich
 ```
 
-This writes `apis/contoso-enrich.json` — a complete, valid starting point you
+This writes `apis/contoso-enrich.json`: a complete, valid starting point you
 edit in place. Its two `data` schemas are empty and marked
 `"additionalProperties": true`, so the scaffold is an **open** contract:
 nothing is name-checked until you fill the schemas in (see
@@ -158,17 +158,17 @@ operation. Local `$ref`s (`#/components/…`) are followed.
 
 | Key | Type | Required | Default | Meaning to rigg |
 |---|---|---|---|---|
-| `openapi` | string | **yes** | — | Must be present |
-| `paths` | object | **yes** | — | Its keys are the path templates a skill's `uri` may end with |
-| `paths.<path>.post.requestBody.content.application/json.schema` | schema | no | — | The request envelope |
-| `paths.<path>.post.responses.200.content.application/json.schema` | schema | no | — | The response envelope |
+| `openapi` | string | **yes** | n/a | Must be present |
+| `paths` | object | **yes** | n/a | Its keys are the path templates a skill's `uri` may end with |
+| `paths.<path>.post.requestBody.content.application/json.schema` | schema | no | n/a | The request envelope |
+| `paths.<path>.post.responses.200.content.application/json.schema` | schema | no | n/a | The response envelope |
 | `…data.properties` | object | no | `{}` | The field names available to the skill |
 | `…data.additionalProperties` | bool | no | closed when `properties` are declared | Whether names are checked |
 
-**`openapi`** — its absence is what distinguishes an OpenAPI document from
+**`openapi`**: its absence is what distinguishes an OpenAPI document from
 any other JSON.
 
-**The two envelope schemas** — rigg reads
+**The two envelope schemas**: rigg reads
 `properties.values.items.properties.data` out of each of them.
 
 **`…data.properties`** are the input (request) and output (response) field
@@ -176,13 +176,13 @@ names.
 
 **`…data.additionalProperties`** decides whether those names are checked. A
 `data` schema is **closed** when `additionalProperties: false`, and also when
-the key is absent and `properties` is non-empty — which is how most
+the key is absent and `properties` is non-empty, which is how most
 schemas are written. It is **open** when `additionalProperties` is present
 with any other value, when `properties` is empty, or when the `data` schema
 is missing entirely.
 
-Everything else in the document — `info`, `servers`, `security`, other
-operations, other status codes, descriptions, examples — rigg reads past. Put
+Everything else in the document (`info`, `servers`, `security`, other
+operations, other status codes, descriptions, examples) rigg reads past. Put
 whatever your API tooling needs there; it is your document.
 
 **Openness is one flag for the whole contract, not one per schema.** rigg
@@ -190,7 +190,7 @@ combines the request and response schemas into a single open/closed verdict:
 the contract is closed only when it declares a **request** schema that is
 closed *and* any response schema it declares is closed too. Leaving the
 response schema open (or declaring only a response schema and no request
-schema) opens the whole contract, and the `inputs` check goes with it — the
+schema) opens the whole contract, and the `inputs` check goes with it: the
 name check in step 4 below is all-or-nothing across `inputs` and `outputs`.
 
 > [!TIP]
@@ -230,7 +230,7 @@ For every `WebApiSkill` carrying `x-rigg-api`:
 
 4. **Closed contracts only:** every `inputs[].name` is a request `data`
    property, and every `outputs[].name` is a response `data` property. Both
-   loops are gated on the one contract-wide closed verdict above — if the
+   loops are gated on the one contract-wide closed verdict above, if the
    contract is open, neither runs.
 
    ```text
@@ -256,13 +256,13 @@ rigg describe contoso-docs
 ```
 
 The same list is in `rigg describe --output json` as `apis_to_implement`,
-with `api`, `spec_path` and `consumed_by` — which is how an AI agent asked to
+with `api`, `spec_path` and `consumed_by`, which is how an AI agent asked to
 "implement the missing APIs" finds them.
 
 ## Authenticating the call
 
 The contract says *what* the search service sends. It does not say how the
-service is allowed to call at all — that is the function app's problem, and
+service is allowed to call at all: that is the function app's problem, and
 rigg has an opinion.
 
 **Preferred: no key.** Enable Microsoft Entra authentication ("Easy Auth") on
@@ -273,14 +273,14 @@ rigg auth easy-auth enrich-fn
 ```
 
 The positional argument is the `function-app` **binding name** from
-`rigg.yaml`, not a site name — every scope rigg acts on is a resolved
+`rigg.yaml`, not a site name: every scope rigg acts on is a resolved
 binding.
 
 The command creates (or reuses, with `--client-id`) an Entra application for
 the app, admits the identities that actually call it (each user-assigned
 identity the matching skillsets declare, plus the search service's
 system-assigned identity for any skill that declares none), shows the planned
-`authsettingsV2` document as a diff, and — once confirmed — sets
+`authsettingsV2` document as a diff, and, once confirmed, sets
 `"authResourceId": "api://<client-id>"` on the matching Web API skills
 locally. Then `rigg push`.
 
@@ -293,8 +293,8 @@ tenant, whose audience is the app's identifier URI (`api://<client-id>`), from
 one of the admitted client ids. Nothing in the request body changes.
 
 **When a key is unavoidable**, name its source with
-[`x-rigg-auth`](annotations.md#x-rigg-auth) — `function-key` or
-`key-vault:<secret>@<binding>` — and rigg fetches it at push time and puts it
+[`x-rigg-auth`](annotations.md#x-rigg-auth): `function-key` or
+`key-vault:<secret>@<binding>`, and rigg fetches it at push time and puts it
 in the outgoing body only. A literal key written into `uri` or into an
 `x-functions-key` header is rejected by `rigg validate`.
 
@@ -310,10 +310,10 @@ contract while the shape is still moving.
 
 **Expecting the spec to be pushed.** `apis/` is a local contract. Azure never
 sees it; only the skillset is pushed. Nothing in `apis/` is per-environment
-either — a second deployment of the same API is a different `uri` in a
+either: a second deployment of the same API is a different `uri` in a
 different environment's skillset, not a second spec.
 
-**Pointing several skills at one spec with different routes.** That is fine —
+**Pointing several skills at one spec with different routes.** That is fine:
 list every route under `paths`. But rigg reads request/response schemas from
 the *first* path item with a `post`, so contract checking for the other
 routes falls back to the path check alone. Give a genuinely different
@@ -321,8 +321,8 @@ request shape its own spec.
 
 ## See also
 
-- [Annotations § `x-rigg-api`](annotations.md#x-rigg-api) — the key that links a skill to a spec.
-- [Annotations § `x-rigg-auth`](annotations.md#x-rigg-auth) — key carriers, when a key cannot be avoided.
-- [Resource files](resource-files.md) — skillsets and the infrastructure fields in them.
-- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies) — the `function-app` and `key-vault` bindings used above.
-- [CLI reference](cli.md#rigg-new) — `rigg new api`, `rigg describe`, `rigg auth easy-auth`.
+- [Annotations § `x-rigg-api`](annotations.md#x-rigg-api): the key that links a skill to a spec.
+- [Annotations § `x-rigg-auth`](annotations.md#x-rigg-auth): key carriers, when a key cannot be avoided.
+- [Resource files](resource-files.md): skillsets and the infrastructure fields in them.
+- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies): the `function-app` and `key-vault` bindings used above.
+- [CLI reference](cli.md#rigg-new): `rigg new api`, `rigg describe`, `rigg auth easy-auth`.

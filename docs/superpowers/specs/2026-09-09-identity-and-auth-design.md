@@ -1,4 +1,4 @@
-# rigg 2.0 — Identity and authentication
+# rigg 2.0: Identity and authentication
 
 **Date:** 2026-09-09
 **Status:** Design, approved direction. Workstream 3 of
@@ -105,15 +105,15 @@ Operator edges (always, per environment, scoped to what the plan touches):
 | Search SKU | Free has no managed identity; knowledge bases need Basic+ (S3 HD: none) | report |
 | Search identity exists | system-assigned enabled when the files name no identity, and every UAMI they *do* name attached | `--fix`: PATCH identity (ARM Search 2025-05-01) |
 | Storage network: firewall (`networkAcls.defaultAction: Deny`) | needs `bypass` ⊇ `AzureServices` **and** the connection must use the system-assigned identity (UAMI unsupported for the trusted-service exception); or a resource-instance rule for the search service; IP rules never work same-region | `--fix` (with confirmation): add `AzureServices` bypass or a resource-instance rule; rewrite the file to system identity when it used a UAMI (question) |
-| — 2.0.0 note | Deny + UAMI is reported with a hint and repaired with the **resource-instance rule** only; the "rewrite the file to system identity" question, and the Global Constraint question id `auth.identity.<env>` it reserves, are **not asked in 2.0.0** | — |
+|: 2.0.0 note | Deny + UAMI is reported with a hint and repaired with the **resource-instance rule** only; the "rewrite the file to system identity" question, and the Global Constraint question id `auth.identity.<env>` it reserves, are **not asked in 2.0.0** | n/a |
 | Storage `publicNetworkAccess: Disabled` | only a shared private link works; needs Basic+ (S1+ when the indexer has a skillset beyond embedding); indexer `executionEnvironment: private` | report existing `sharedPrivateLinkResources` (ARM Search) or print the exact creation command |
-| — 2.0.0 note | the condition is **reported only**; rigg does not list or create shared private links (`list_shared_private_links` exists in the client and has no caller) | — |
+|: 2.0.0 note | the condition is **reported only**; rigg does not list or create shared private links (`list_shared_private_links` exists in the client and has no caller) | n/a |
 | Blob soft delete | required by `NativeBlobSoftDeleteDeletionDetectionPolicy`; blob **versioning must be off** | `--fix` (confirmation): enable soft delete (7 days default); versioning: report |
 | `allowSharedKeyAccess: false` | fine for blobs with identity | none |
-| AIServicesByIdentity account kind | must be `AIServices` | question: switch `subdomainUrl` to a bound AIServices account — 2.0.0 **reports** the wrong kind and names the change; the question is not asked |
+| AIServicesByIdentity account kind | must be `AIServices` | question: switch `subdomainUrl` to a bound AIServices account, 2.0.0 **reports** the wrong kind and names the change; the question is not asked |
 | Function app access restrictions | must admit the search service (`AzureCognitiveSearch` service tag or search IP) | report + exact command |
 | Easy Auth on the function app | `authsettingsV2`: AAD provider enabled, `allowedAudiences` contains the skill's `authResourceId`, `unauthenticatedClientAction: Return401`; optionally `allowedApplications` contains the search MI client id | `--fix`: see §5 |
-| Deployment availability | model/version available in the account's region; quota headroom for `sku.capacity` | question (promote) / report (doctor) — in 2.0.0 this is **checked by `push`/`promote`**, where the deployment is written; `doctor` marks the row skipped rather than repeating it |
+| Deployment availability | model/version available in the account's region; quota headroom for `sku.capacity` | question (promote) / report (doctor), in 2.0.0 this is **checked by `push`/`promote`**, where the deployment is written; `doctor` marks the row skipped rather than repeating it |
 
 Cosmos DB and Azure SQL edges are removed with their data-source types.
 
@@ -146,7 +146,7 @@ Cosmos DB and Azure SQL edges are removed with their data-source types.
    non-interactively.
 
 `rigg status --auth` runs the doctor's verification per environment and
-adds one line per environment ("identity: ok" / "identity: 2 missing — rigg
+adds one line per environment ("identity: ok" / "identity: 2 missing, rigg
 auth doctor -e prod").
 
 ### 4.2 Push integration
@@ -172,7 +172,7 @@ Before the plan is applied:
 
 Enables Microsoft Entra authentication on a function app so Web API skills
 can be keyless (§5). Also reachable from push's Web API auth resolution
-("identity-based — set it up now").
+("identity-based: set it up now").
 
 ### 4.4 `rigg auth roles list|remove [-e env]`
 
@@ -195,9 +195,9 @@ Given a bound function app and the search identity:
 4. If the enterprise app has `appRoleAssignmentRequired: true`: Graph
    `POST /servicePrincipals/{resourceSpObjectId}/appRoleAssignedTo`
    `{ principalId: <caller MI object id>, resourceId: <resourceSpObjectId>, appRoleId: <Caller role id> }`.
-   The role is a real one rigg defines on the application in step 1 —
+   The role is a real one rigg defines on the application in step 1:
    `value: "Caller"`, `allowedMemberTypes: ["Application"]`, its id
-   deterministic in the identifier URI so a re-run finds the same role —
+   deterministic in the identifier URI so a re-run finds the same role,
    rather than the all-zeros default role: an explicit application-only role
    is auditable and revocable on its own. Posting to the *resource* service
    principal's `appRoleAssignedTo` and posting to the *principal's*
@@ -244,7 +244,7 @@ from 1.6.4). Keys never appear in output; the injected body is never logged.
 - Scaffolds and `rigg new` set the identity fields from the environment's
   `identity` binding when `--identity <binding>` is given, else leave them
   null (system). The flag applies to the kinds whose *scaffold* has a place
-  for a single identity object — `data-source` and `skillset`; for a
+  for a single identity object: `data-source` and `skillset`; for a
   skillset it also writes the `cognitiveServices` discriminator
   (`AIServicesByIdentity` + a `subdomainUrl` placeholder) that the identity
   is only legal alongside. Array-element identities (vectorizers, models,
@@ -277,7 +277,7 @@ the fixed default-scope fallbacks in doctor; `SEARCH_ARM_API` literals
   SKU; account kind); `resourceUri` → account resolution via `endpoints`;
   permissions wildcard matching; role-assignment filter and description.
 - Wiremock ARM + Graph fakes (shared with workstream 1): doctor end to end on
-  a two-environment workspace — missing role → `--fix` creates it with the
+  a two-environment workspace: missing role → `--fix` creates it with the
   description → second run green; operator lacking `roleAssignments/write`
   → exit 4 with the az command; Easy Auth wiring creates application,
   service principal and authsettingsV2; key-vault key source injected on

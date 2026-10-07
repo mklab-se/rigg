@@ -1,7 +1,7 @@
-//! Wiremock ARM fake for `ArmClient` — reused by later workstreams via
+//! Wiremock ARM fake for `ArmClient`: reused by later workstreams via
 //! `#[path = "arm_fake.rs"] mod arm_fake;`.
 //!
-//! Uses `ArmClient::with_token_and_base(token, server.uri())` exclusively —
+//! Uses `ArmClient::with_token_and_base(token, server.uri())` exclusively,
 //! never the `RIGG_ARM_ENDPOINT` process env var, since wiremock servers are
 //! per-test and tests in this binary run in parallel.
 
@@ -13,13 +13,13 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 /// Mount an ARM fake on `server`: `/subscriptions`, and per-subscription
 /// provider listings for storage accounts, cognitive services accounts,
-/// web sites, managed identities, key vaults, and search services — plus a
+/// web sites, managed identities, key vaults, and search services, plus a
 /// catch-all `GET {resource id}` responder.
 ///
 /// `resources` is `(type, name, resource_group, location)`, where `type` is
 /// one of `storageAccounts`, `accounts`, `sites`, `userAssignedIdentities`,
 /// `vaults`, `searchServices`. Every resource is served under every
-/// subscription in `subs` (with an id scoped to that subscription) — tests
+/// subscription in `subs` (with an id scoped to that subscription): tests
 /// that care about a specific subscription should pass `subscription:
 /// Some(...)` to `resolve_binding` rather than relying on placement here.
 pub async fn mount_arm_fake(
@@ -150,7 +150,7 @@ pub async fn mount_easy_auth(server: &MockServer, site: &str, enabled: bool, cli
         .await;
 }
 
-/// Mount the `authsettingsV2` PUT — the write half of Easy Auth. Echoes the
+/// Mount the `authsettingsV2` PUT: the write half of Easy Auth. Echoes the
 /// body back, so a test can read the merged document out of the request log.
 pub async fn mount_easy_auth_write(server: &MockServer, site: &str) {
     Mock::given(method("PUT"))
@@ -180,7 +180,7 @@ pub async fn last_auth_settings_put(server: &MockServer) -> Option<Value> {
         .and_then(|r| serde_json::from_slice(&r.body).ok())
 }
 
-/// Mount one site's `authsettingsV2` action as a failure (403, 500, …) —
+/// Mount one site's `authsettingsV2` action as a failure (403, 500, …):
 /// what an unauthorized caller gets. Promote must report this as a skipped
 /// decision, never as a verdict.
 pub async fn mount_easy_auth_failure(server: &MockServer, site: &str, status: u16) {
@@ -196,7 +196,7 @@ pub async fn mount_easy_auth_failure(server: &MockServer, site: &str, status: u1
 }
 
 /// Mount `Microsoft.CognitiveServices/locations/{location}/models` and
-/// `.../usages` for one subscription — what the deployment availability and
+/// `.../usages` for one subscription: what the deployment availability and
 /// quota checks read.
 pub async fn mount_models(
     server: &MockServer,
@@ -209,7 +209,7 @@ pub async fn mount_models(
 }
 
 /// Like [`mount_models`], but serves the models listing across several pages
-/// linked by `nextLink` — page `i > 0` lives at `models-page{i}`, and the
+/// linked by `nextLink`: page `i > 0` lives at `models-page{i}`, and the
 /// last page has no link.
 pub async fn mount_models_paged(
     server: &MockServer,
@@ -288,7 +288,7 @@ pub async fn mount_search_service(
     .await;
 }
 
-/// [`mount_search_service`] with an explicit `properties.hostingMode` — what
+/// [`mount_search_service`] with an explicit `properties.hostingMode`: what
 /// the knowledge-base SKU floor reads (`default` vs `highDensity`). RBAC on,
 /// public network enabled.
 #[allow(clippy::too_many_arguments)]
@@ -462,7 +462,7 @@ pub async fn mount_storage_account(
 ///
 /// When `can_write_role_assignments` the caller gets an Owner-shaped entry
 /// (`actions: ["*"]`); otherwise a Reader-shaped one plus an entry that
-/// grants the write via a wildcard but takes it back in `notActions` — so
+/// grants the write via a wildcard but takes it back in `notActions`, so
 /// the exclusion path is exercised by the negative case too.
 pub async fn mount_permissions(server: &MockServer, scope: &str, can_write_role_assignments: bool) {
     let value = if can_write_role_assignments {
@@ -489,7 +489,7 @@ pub async fn mount_permissions(server: &MockServer, scope: &str, can_write_role_
 }
 
 /// Mount `{scope}/providers/Microsoft.Authorization/permissions` with an
-/// explicit set of the caller's effective permission entries — what the
+/// explicit set of the caller's effective permission entries: what the
 /// operator edges' "covered by your effective permissions" path reads.
 ///
 /// Each entry is `(actions, notActions, dataActions, notDataActions)`.
@@ -523,7 +523,7 @@ pub const OWNER_PERMISSIONS: PermissionSet<'static> = (&["*"], &[], &[], &[]);
 
 /// Mount `/subscriptions/{sub}/…/roleDefinitions/{guid}` for one role.
 ///
-/// `actions` / `data_actions` are the definition's permission lists — the
+/// `actions` / `data_actions` are the definition's permission lists: the
 /// halves that decide whether an Owner-shaped caller covers the role.
 pub async fn mount_role_definition(
     server: &MockServer,
@@ -576,7 +576,7 @@ pub async fn mount_no_role_definitions(server: &MockServer) {
 /// a GET listing (`role_ids` assigned to `principal`, each carrying a
 /// `rigg:` description) and a PUT/DELETE recorder for assignment writes.
 ///
-/// The listing always ends with one **inherited** assignment — made at the
+/// The listing always ends with one **inherited** assignment: made at the
 /// parent subscription, `rigg:`-described, and returned by `atScope()` just
 /// as ARM returns it. It counts for a role check but must never be listed or
 /// removed as one of this scope's own.
@@ -630,7 +630,7 @@ pub async fn mount_role_assignments(
 pub const INHERITED_ROLE: &str = "role-inherited";
 
 /// One role-assignment document: listed under `listed_at`, but *made* at
-/// `made_at` — the two differ for an assignment inherited from an ancestor
+/// `made_at`: the two differ for an assignment inherited from an ancestor
 /// scope, which `properties.scope` is what reports.
 fn role_assignment(listed_at: &str, made_at: &str, principal: &str, role: &str, i: usize) -> Value {
     let sub = listed_at.split('/').nth(2).unwrap_or("sub");
@@ -650,7 +650,7 @@ fn role_assignment(listed_at: &str, made_at: &str, principal: &str, role: &str, 
 }
 
 /// Mount a role-assignment listing that spans two pages linked by
-/// `nextLink` — page 2 lives at `roleAssignments-page2`, as ARM's own
+/// `nextLink`: page 2 lives at `roleAssignments-page2`, as ARM's own
 /// absolute next link, which the client must follow verbatim.
 pub async fn mount_role_assignments_paged(
     server: &MockServer,

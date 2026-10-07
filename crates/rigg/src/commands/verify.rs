@@ -1,11 +1,11 @@
-//! `rigg verify` and `rigg push --verify` (spec §4.2.4) — prove the pushed
+//! `rigg verify` and `rigg push --verify` (spec §4.2.4): prove the pushed
 //! stack actually works instead of trusting a 200 from the control plane.
 //!
 //! For every resource in the project's environment tree that can be
 //! exercised: run each indexer to completion, retrieve from each knowledge
 //! base, ask each agent one turn. A failure whose message looks like an
 //! authorization problem is attributed to the identity edge that would
-//! explain it — the same graph `rigg auth doctor` verifies, built from the
+//! explain it: the same graph `rigg auth doctor` verifies, built from the
 //! cached binding table so verification never depends on ARM access.
 
 use anyhow::{Result, anyhow};
@@ -36,7 +36,7 @@ pub async fn run(ctx: &GlobalContext, args: VerifyArgs) -> Result<()> {
     let env = resolve_env(&ws, ctx)?;
     let projects = select_projects(&ws, args.project.as_deref(), args.all)?;
     // Verification triggers real indexer runs (ingestion, skill and embedding
-    // costs), so a protected environment asks first — the same gate
+    // costs), so a protected environment asks first: the same gate
     // `rigg az indexer run` applies, answerable the same way (`--confirm-env`,
     // or `--answer confirm.protected.<env>=<env>`) so a non-interactive
     // caller has a way through instead of a `needs-input` it cannot satisfy.
@@ -118,7 +118,7 @@ pub async fn run_for(
             if outcome.succeeded() {
                 say!(
                     ctx,
-                    "  {} indexer '{name}' — {} processed, {} failed",
+                    "  {} indexer '{name}': {} processed, {} failed",
                     "✓".green(),
                     outcome.items,
                     outcome.items_failed
@@ -209,7 +209,7 @@ fn report_failure(
     detail: &str,
 ) {
     let likely = attribution.likely(detail);
-    say!(ctx, "  {} {kind} '{name}' — {detail}", "✗".red());
+    say!(ctx, "  {} {kind} '{name}': {detail}", "✗".red());
     if let Some(edge) = &likely {
         say!(ctx, "      → likely {edge}");
     }
@@ -264,7 +264,7 @@ impl Attribution {
         Attribution { edges }
     }
 
-    /// The first edge whose scope names a resource the message mentions —
+    /// The first edge whose scope names a resource the message mentions,
     /// but only for messages that look like an authorization failure, so a
     /// document-parsing error is never blamed on a role.
     fn likely(&self, message: &str) -> Option<String> {

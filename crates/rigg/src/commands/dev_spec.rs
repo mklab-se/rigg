@@ -116,7 +116,7 @@ pub async fn api_diff(provider_name: &str, from: Option<String>, to: Option<Stri
         bail!("{} is route-versioned; nothing to diff", m.label)
     };
     // A `-preview`-suffixed version lives under the provider's preview spec
-    // folder, not its stable one — `from`/`to` can straddle both.
+    // folder, not its stable one: `from`/`to` can straddle both.
     let path_for = |version: &str| -> Result<&'static str> {
         if version.ends_with("-preview") {
             return m

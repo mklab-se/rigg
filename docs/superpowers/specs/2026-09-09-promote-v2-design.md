@@ -1,4 +1,4 @@
-# rigg 2.0 — Promote v2: translation between environments
+# rigg 2.0: Promote v2: translation between environments
 
 **Date:** 2026-09-09
 **Status:** Design, approved direction. Workstream 2 of
@@ -26,22 +26,22 @@
 `rigg promote [<project>] --from <A> --to <B>` produces, for every logical
 resource in `A`, the document it should have in `B`, by **translation**:
 
-1. **Infrastructure translation** — every infrastructure reference (registry
+1. **Infrastructure translation**: every infrastructure reference (registry
    `InfraRef`) is parsed to a physical resource, mapped to the binding name
    it has in `A`, and rendered from `B`'s binding of the same name. Same
    physical value in both = shared, no change, still listed.
-2. **Sibling translation** — every registry reference field (indexer →
+2. **Sibling translation**: every registry reference field (indexer →
    data source/index/skillset, knowledge base → knowledge sources, agent →
    deployment/connection, `x-rigg-ref`, and the knowledge-base name inside a
    `SearchKbMcpUrl`) that names a sibling by `A`'s physical name is rewritten
    to that sibling's physical name in `B` (by logical id = file stem). If the
    sibling does not exist in `B` yet, it will be created under `A`'s physical
    name in this same promote, so the reference stays as is.
-3. **Kept from the target** — the resource's own `name` (physical identity is
+3. **Kept from the target**: the resource's own `name` (physical identity is
    never promoted), any path listed in the target file's `x-rigg-pin`
    annotation (with the 1.x array semantics: target-only array elements along
    a pinned path survive), and the target file's own `x-rigg-pin`.
-4. **Re-derived from the target's infrastructure** — a WebApiSkill's auth
+4. **Re-derived from the target's infrastructure**: a WebApiSkill's auth
    carrier. After the URI is translated to `B`'s function app: if `B`'s
    skillset file already has an auth carrier for that skill (`authResourceId`,
    `x-rigg-auth`, or an `x-functions-key` header) it is kept; otherwise it is
@@ -51,7 +51,7 @@ resource in `A`, the document it should have in `B`, by **translation**:
    anonymous. `A`'s `x-rigg-auth`, `authResourceId` and key header never cross
    as-is. Offline (`--offline`), the carrier is left unresolved and reported;
    push's auth gate handles it.
-5. **Everything else** comes from `A` — that is the promotion.
+5. **Everything else** comes from `A`: that is the promotion.
 
 Resources only in `B` are never touched. Nothing is deleted. Sidecars are
 promoted as content (inline on read, extract on write).
@@ -99,7 +99,7 @@ Resources
 
 Checks
   ✓ deployments/gpt-5-mini: model available in swedencentral, quota ok
-  ! agents/Regulus: instructions differ (sidecar) — content change, promoted
+  ! agents/Regulus: instructions differ (sidecar), content change, promoted
 ```
 
 `--output json` carries the same sections: `rewiring[]`, `renamed[]`,
@@ -108,7 +108,7 @@ Checks
 ## 5. After writing
 
 Hints, in order: `rigg validate <p>` (already clean by construction, shown
-for the habit), `rigg auth doctor -e <B>` (what `B` needs before pushing —
+for the habit), `rigg auth doctor -e <B>` (what `B` needs before pushing:
 workstream 3 makes doctor binding-aware and plan-aware), `rigg push <p> -e
 <B> --dry-run`, `rigg push <p> -e <B>`.
 

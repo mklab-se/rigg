@@ -93,7 +93,7 @@ pub fn fixture_for(kind: ResourceKind) -> &'static SchemaFixture {
 /// shared `common-types` definitions that actually contribute `id`, `name`,
 /// `type`, and `systemData` (plus `properties` for connections). Comparing
 /// those envelopes against the sub-object fixture would always flag them as
-/// unknown, so this function is a no-op outside `Domain::Search` — the
+/// unknown, so this function is a no-op outside `Domain::Search`: the
 /// `schema_definition` values for the Foundry kinds are kept only because
 /// `api-diff` still uses them.
 pub fn unknown_top_level_fields(kind: ResourceKind, doc: &Value) -> Vec<String> {
@@ -123,8 +123,8 @@ pub fn unknown_top_level_fields(kind: ResourceKind, doc: &Value) -> Vec<String> 
 ///
 /// A definition with an OpenAPI `discriminator` (a polymorphic base, e.g.
 /// Search's `KnowledgeSource`) also picks up the properties every subtype
-/// adds via `allOf: [{$ref: <base>}, {properties: {...}}]` — e.g.
-/// `azureBlobParameters`, `searchIndexParameters` — since rigg treats the
+/// adds via `allOf: [{$ref: <base>}, {properties: {...}}]`, e.g.
+/// `azureBlobParameters`, `searchIndexParameters`, since rigg treats the
 /// resource as one document shape across all `kind` variants rather than as
 /// separate per-kind types.
 pub fn extract_fixture(openapi: &Value) -> BTreeMap<String, BTreeSet<String>> {
@@ -176,7 +176,7 @@ pub fn extract_fixture(openapi: &Value) -> BTreeMap<String, BTreeSet<String>> {
                 // The subtype's own additions can live inside the `allOf`
                 // array (`{$ref}, {properties: {...}}`) or as sibling keys
                 // of `allOf` on the subtype definition itself
-                // (`{properties: {...}, allOf: [{$ref}]}`) — cover both.
+                // (`{properties: {...}, allOf: [{$ref}]}`): cover both.
                 extra.extend(props_of(other));
                 for part in all {
                     extra.extend(props_of(part));
@@ -322,7 +322,7 @@ mod tests {
     }
 
     /// One-off: regenerates the pinned schema fixtures from OpenAPI documents
-    /// on disk. Not run in CI — `RIGG_OPENAPI_DIR=<dir> cargo test -p
+    /// on disk. Not run in CI: `RIGG_OPENAPI_DIR=<dir> cargo test -p
     /// rigg-core regenerate_fixtures -- --ignored`.
     #[test]
     #[ignore]

@@ -100,7 +100,7 @@ async fn resolve_binding_across_all_subscriptions_when_none_given() {
 #[tokio::test]
 async fn resolve_binding_url_needs_no_arm_call() {
     let server = MockServer::start().await;
-    // No mocks mounted at all — resolving a URL binding must not hit the network.
+    // No mocks mounted at all: resolving a URL binding must not hit the network.
     let arm = ArmClient::with_token_and_base("t".into(), server.uri());
     let r = arm
         .resolve_binding(BindingType::Api, "https://api.example.com/v1", None)

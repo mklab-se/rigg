@@ -185,7 +185,7 @@ impl ResourceRef {
         }
     }
 
-    /// Stable string key, e.g. `indexes/my-index` — used in state files.
+    /// Stable string key, e.g. `indexes/my-index`: used in state files.
     pub fn key(&self) -> String {
         format!("{}/{}", self.kind.directory_name(), self.name)
     }

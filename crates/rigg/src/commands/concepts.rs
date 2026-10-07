@@ -1,4 +1,4 @@
-//! `rigg concepts` — print rigg's workspace/project mental model.
+//! `rigg concepts`: print rigg's workspace/project mental model.
 //!
 //! Single-sourced from the repo-root `CONCEPTS.md`, embedded at build time so
 //! the CLI and the docs cannot drift.

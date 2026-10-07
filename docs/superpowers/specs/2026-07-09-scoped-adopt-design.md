@@ -1,7 +1,7 @@
-# rigg — Scoped adoption: `rigg adopt`
+# rigg: Scoped adoption: `rigg adopt`
 
 **Date:** 2026-07-09
-**Status:** Design — approved to implement (decisions locked below)
+**Status:** Design: approved to implement (decisions locked below)
 **Workstream:** B of two (A = concept clarity, merged; B = this).
 
 ## Problem
@@ -9,8 +9,8 @@
 Today adoption is all-or-nothing. `rigg pull <project> --adopt <project>` adopts
 **every** unmanaged remote resource across **both** services (`pull.rs:95-112`,
 `remote.rs:159-177`). There is no way to adopt just one agent, just several
-indexes, or just one knowledge base. The surface is also clunky — the project
-name is typed twice — and buried under `pull`, so it is hard to discover.
+indexes, or just one knowledge base. The surface is also clunky (the project
+name is typed twice) and buried under `pull`, so it is hard to discover.
 
 ## Goals
 
@@ -21,7 +21,7 @@ take a resource's dependency graph:
 - adopt several indexes and nothing else,
 - adopt all data sources (a whole kind),
 - adopt one or several agents without their dependency graph,
-- and *optionally* pull a selected resource's dependency graph — never forced.
+- and *optionally* pull a selected resource's dependency graph, never forced.
 
 ## Non-goals / locked decisions
 
@@ -48,14 +48,14 @@ Same `<kind>/<name>` vocabulary as `rigg diff --only` and `describe` output,
 where `<kind>` is a resource **directory name**
 (`ResourceKind::from_directory_name`):
 
-- **`<kind>`** — all unmanaged resources of that kind: `indexes`,
+- **`<kind>`**: all unmanaged resources of that kind: `indexes`,
   `data-sources`, `agents`, `knowledge-bases`, …
-- **`<kind>/<name>`** — one specific resource: `agents/regulus`.
-- **`all`** — every unmanaged resource across both services (today's behavior,
+- **`<kind>/<name>`**: one specific resource: `agents/regulus`.
+- **`all`**: every unmanaged resource across both services (today's behavior,
   now explicit and opt-in).
 
 If no selector is given, that is a usage error (exit 2) instructing the user to
-name a selector or pass `all` — we never adopt-everything by omission.
+name a selector or pass `all`: we never adopt-everything by omission.
 
 Domain is implied by kind (`agents`→Foundry, `indexes`→Search). Only services
 with a configured connection for the environment are queried; a selector naming
@@ -66,9 +66,9 @@ a kind whose service is not configured is a clear error.
 Parse each selector string into one of:
 
 - `Selector::All`
-- `Selector::Kind(ResourceKind)` — from `from_directory_name`; unknown → error
+- `Selector::Kind(ResourceKind)`: from `from_directory_name`; unknown → error
   listing valid kinds.
-- `Selector::One(ResourceRef)` — `<kind>/<name>`; unknown kind → same error.
+- `Selector::One(ResourceRef)`: `<kind>/<name>`; unknown kind → same error.
 
 Resolve selectors against the remote snapshot (same snapshot `pull`/`status`
 use) to a candidate set of `(ResourceRef, Value)`.
@@ -101,7 +101,7 @@ A selector (specific or kind) that matches nothing unmanaged prints a warning.
 - **Broad selectors** (`all`, or a bare `<kind>`) preview the matched list and
   ask to confirm (interactive). `-y/--yes` skips the prompt. In non-interactive
   mode a broad selector **without** `-y` fails (exit 2) telling the user to pass
-  `-y` or `--dry-run` — so CI is predictable and never silently bulk-adopts.
+  `-y` or `--dry-run`, so CI is predictable and never silently bulk-adopts.
 - **`--dry-run`** lists what would be adopted for any selector, writes nothing,
   exits 0. Works in every mode.
 - Mixed invocations (some specific, some broad selectors in one command) gate on
@@ -124,14 +124,14 @@ A selector (specific or kind) that matches nothing unmanaged prints a warning.
   `Selector` parser lives with it.
 - **Shared snapshot/ownership**: `adopt` computes `owned_by_any` and the snapshot
   the same way `pull`/`status` do. If duplication is more than trivial, factor a
-  helper (e.g. `remote`/`store` helper) — decided during planning.
+  helper (e.g. `remote`/`store` helper): decided during planning.
 - **Docs**: `rigg adopt --help` long_about with examples; update README and
   GETTING_STARTED adopt references; the `pull` help pointer to `rigg concepts`
   stays.
 
 ## Testing
 
-`crates/rigg/tests/sync.rs` (wiremock, no Azure — replace the existing
+`crates/rigg/tests/sync.rs` (wiremock, no Azure: replace the existing
 `pull --adopt` test):
 
 1. `adopt <project> <kind>/<name>` adopts exactly that resource, writes the file,
@@ -149,7 +149,7 @@ A selector (specific or kind) that matches nothing unmanaged prints a warning.
 `crates/rigg/tests/cli_surface.rs`:
 
 8. `rigg adopt --help` lists selectors and shows examples.
-9. `rigg pull --adopt x` now errors (exit 2 — flag removed).
+9. `rigg pull --adopt x` now errors (exit 2: flag removed).
 10. `rigg adopt p bogus-kind` errors cleanly listing valid kinds.
 11. `rigg adopt p` (no selector) errors (exit 2) asking for a selector or `all`.
 

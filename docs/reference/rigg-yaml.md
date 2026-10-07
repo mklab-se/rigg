@@ -1,7 +1,7 @@
 # `rigg.yaml`
 
 `rigg.yaml` is the workspace file. It sits at the root of your repository and
-declares **environments** — named deployments, each with one Azure AI Search
+declares **environments**: named deployments, each with one Azure AI Search
 target, one Microsoft Foundry target, a policy, and a table of *dependency
 bindings* naming the supporting Azure resources its definitions point at. It
 holds no resource definitions of its own and never any secrets, and finding it
@@ -12,10 +12,10 @@ current directory until it finds one.
 
 - [Complete example](#complete-example)
 - [Top level](#top-level)
-- [Environments](#environments) — [resolution](#environment-resolution),
+- [Environments](#environments): [resolution](#environment-resolution),
   [`search`](#the-search-target), [`foundry`](#the-foundry-target)
 - [Policy](#policy)
-- [Dependencies](#dependencies) — [implicit bindings](#implicit-bindings),
+- [Dependencies](#dependencies): [implicit bindings](#implicit-bindings),
   [managing them from the CLI](#managing-bindings-from-the-cli)
 - [Multi-subscription and multi-tenant workspaces](#multi-subscription-and-multi-tenant-workspaces)
 - [Common mistakes](#common-mistakes)
@@ -65,7 +65,7 @@ environments:
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `name` | string | no | — | A label for the workspace. Cosmetic. |
+| `name` | string | no | n/a | A label for the workspace. Cosmetic. |
 | `root` | string | no | alongside `rigg.yaml` | Subdirectory holding `projects/`, `apis/` and `.rigg/` |
 | `environments` | map | no | `{}` | Environment name → [environment](#environments) |
 
@@ -87,20 +87,20 @@ An environment is one deployment target. Its name is the map key (`dev`,
 | `default` | bool | no | `false` | Use this environment when no selection is made |
 | `tenant` | string (GUID or domain) | no | the Azure CLI's current tenant | Entra ID tenant the resources live in |
 | `subscription` | string (GUID) | no | discovered | Azure subscription the resources live in |
-| `search` | map | no | — | The [Azure AI Search target](#the-search-target) |
-| `foundry` | map | no | — | The [Foundry target](#the-foundry-target) |
+| `search` | map | no | n/a | The [Azure AI Search target](#the-search-target) |
+| `foundry` | map | no | n/a | The [Foundry target](#the-foundry-target) |
 | `policy` | map | no | `{}` | [Policy gates](#policy) |
 | `dependencies` | map | no | `{}` | [Dependency bindings](#dependencies) |
 
-**`default`** — at most one environment should set it.
+**`default`**: at most one environment should set it.
 
-**`tenant`** — tokens are minted for this tenant. A tenant you are not signed
+**`tenant`**: tokens are minted for this tenant. A tenant you are not signed
 in to produces an error naming the `az login --tenant <t>` that fixes it.
 
-**`subscription`** — scopes every ARM lookup: binding resolution, role
+**`subscription`** scopes every ARM lookup: binding resolution, role
 assignments, deployments, connections.
 
-**`search` / `foundry`** — omit `search` for a Foundry-only environment, and
+**`search` / `foundry`**: omit `search` for a Foundry-only environment, and
 `foundry` for a Search-only one.
 
 ### Environment resolution
@@ -136,8 +136,8 @@ Error: multiple environments configured (dev, prod); pass --env <name> (or set R
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `service` | string | **yes** | — | Azure AI Search service name |
-| `name` | string | no | — | A label for the target. Cosmetic. |
+| `service` | string | **yes** | n/a | Azure AI Search service name |
+| `name` | string | no | n/a | A label for the target. Cosmetic. |
 | `endpoint` | string (URL) | no | `https://{service}.search.windows.net` | Full base URL override |
 | `api-version` | string | no | `2026-04-01` | Override for the stable data-plane api-version |
 | `preview-api-version` | string | no | `2026-08-01-preview` | Override for the preview data-plane api-version |
@@ -156,9 +156,9 @@ rigg's own tests.
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `account` | string | **yes** | — | Foundry (Azure AI Services) account name |
-| `project` | string | **yes** | — | Foundry project name, e.g. `proj-default` |
-| `name` | string | no | — | A label for the target. Cosmetic. |
+| `account` | string | **yes** | n/a | Foundry (Azure AI Services) account name |
+| `project` | string | **yes** | n/a | Foundry project name, e.g. `proj-default` |
+| `name` | string | no | n/a | A label for the target. Cosmetic. |
 | `endpoint` | string (URL) | no | `https://{account}.services.ai.azure.com` | Full base URL override |
 | `api-version` | string | no | `v1` | Override for the Foundry data-plane api-version |
 
@@ -196,7 +196,7 @@ A `dependencies` entry gives a **name** to a supporting Azure resource that
 this environment's resource definitions point at. Resource files carry the
 physical value (a connection string, a function URL, a vault URI); the
 binding is what lets rigg recognise that value, check you have access to it,
-and — during `rigg promote` — swap it for the target environment's equivalent
+and, during `rigg promote`, swap it for the target environment's equivalent
 of the same name.
 
 Each entry is exactly one `<type>: <value>` pair:
@@ -221,12 +221,12 @@ shape:
 | Shape | Recognised when it | Resolves to |
 |---|---|---|
 | Bare name | is neither of the other two | the resource of that name, discovered via ARM in the environment's subscription |
-| ARM resource id | starts with `/subscriptions/` | exactly that resource — the unambiguous form for multi-subscription workspaces |
+| ARM resource id | starts with `/subscriptions/` | exactly that resource: the unambiguous form for multi-subscription workspaces |
 | URL | starts with `http://` or `https://` | the host; used for `api` bindings and for endpoint matching |
 
 **Binding names** must be lowercase kebab-case: ASCII letters, digits and
 single hyphens, no leading or trailing hyphen, no double hyphen. `search` and
-`foundry` are reserved — they already name the environment's own targets.
+`foundry` are reserved: they already name the environment's own targets.
 Anything else is a load error:
 
 ```text
@@ -247,7 +247,7 @@ infrastructure reference pointing at the search service or the Foundry
 account resolves through them without any `dependencies` entry.
 
 An `ai-services` binding and the implicit `foundry` binding compete for the
-same role — both can host a model deployment — which is why an environment
+same role, both can host a model deployment, which is why an environment
 may legitimately bind both to the same account.
 
 ### Managing bindings from the CLI
@@ -280,16 +280,16 @@ rewrites the [bindings cache](state.md#bindings-cache). It never edits
 > [!WARNING]
 > **Every command that edits `rigg.yaml` rewrites the whole file, and comments
 > do not survive.** The file is parsed, changed and re-serialized, so the
-> hand-written comments in the example above — and any others you add — are
+> hand-written comments in the example above, and any others you add, are
 > gone after the first `rigg env add` / `bind` / `unbind` / `set-default` /
 > `remove`. Only the header block `rigg init` writes is regenerated. If you
 > annotate `rigg.yaml`, either keep the annotations somewhere else or edit the
 > file by hand instead of through `rigg env`.
 
 **`rigg env` is not the only writer: `rigg promote` can edit `rigg.yaml`
-too.** The binding answers a promote collects — `binding.<to-env>.<name>` for
+too.** The binding answers a promote collects: `binding.<to-env>.<name>` for
 a binding the target environment lacks, `promote.bind.<from-env>.<physical>`
-for a physical resource the source has never bound — are held in memory while
+for a physical resource the source has never bound: are held in memory while
 the run works out what it would do, and written into the named environment's
 `dependencies` only once the preview has been confirmed.
 
@@ -304,7 +304,7 @@ Environments are independent: each carries its own `tenant` and
 `subscription`, and tokens are minted per `(tenant, audience)` pair. Two
 patterns are common.
 
-**Same tenant, one subscription per stage** — the usual case. Set
+**Same tenant, one subscription per stage**: the usual case. Set
 `subscription` per environment and use bare binding names; ARM discovery
 stays inside the right subscription:
 
@@ -322,7 +322,7 @@ environments:
       docs-storage: { storage: contosostorageprod }
 ```
 
-**Separate tenants** — set `tenant` per environment and sign in to both
+**Separate tenants**: set `tenant` per environment and sign in to both
 (`az login --tenant <t>`). Prefer full ARM ids for bindings here: a bare name
 is resolved by search, and searching the wrong tenant is the failure mode you
 want to design out.
@@ -339,7 +339,7 @@ Error: rigg.yaml found at /repo/rigg.yaml but could not be read: failed to parse
 `protected` belongs under `policy:`, not under `search:`.
 
 **A binding written as several keys.** A binding is one pair, so this is a
-parse error — *a binding is exactly one `<type>: <value>` pair*:
+parse error, *a binding is exactly one `<type>: <value>` pair*:
 
 ```yaml
 dependencies:
@@ -367,9 +367,9 @@ implicit bindings; pick a descriptive name (`docs-storage`, `enrich-fn`).
 
 ## See also
 
-- [`CONCEPTS.md`](../../CONCEPTS.md) — environments, dependencies and bindings in prose.
-- [Resource files](resource-files.md) — the infrastructure fields a binding resolves.
-- [State](state.md#bindings-cache) — where resolved bindings are cached.
-- [Exit codes and questions](exit-codes-and-questions.md) — the `binding.` / `env.` / `learn.` question ids these flows ask.
-- [CLI reference](cli.md#rigg-env) — every `rigg env` flag.
-- [Tutorial 3 — add an environment and promote](../tutorials/03-add-an-environment-and-promote.md).
+- [`CONCEPTS.md`](../../CONCEPTS.md): environments, dependencies and bindings in prose.
+- [Resource files](resource-files.md): the infrastructure fields a binding resolves.
+- [State](state.md#bindings-cache): where resolved bindings are cached.
+- [Exit codes and questions](exit-codes-and-questions.md): the `binding.` / `env.` / `learn.` question ids these flows ask.
+- [CLI reference](cli.md#rigg-env): every `rigg env` flag.
+- [Tutorial 3: add an environment and promote](../tutorials/03-add-an-environment-and-promote.md).

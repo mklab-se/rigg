@@ -1,4 +1,4 @@
-# rigg 2.0 — Documentation (workstream 5b) design
+# rigg 2.0: Documentation (workstream 5b) design
 
 **Status:** approved for planning (Kristofer's requirement: "documentation
 updated before we release, such that a user of Rigg can understand all the
@@ -58,7 +58,7 @@ docs/
 `docs/README.md`; the reference pages link back to its sections rather than
 repeating them.
 
-## 3. Reference pages — required content
+## 3. Reference pages: required content
 
 Each reference page follows the same shape: a one-paragraph purpose, a
 complete annotated example, then a table with **key · type · required ·
@@ -97,7 +97,7 @@ InfraRef rows as Markdown (§4).
 ### 3.4 `annotations.md`
 
 `x-rigg-api: <spec>`, `x-rigg-auth: function-key | key-vault:<secret>@<binding>`,
-`x-rigg-pin`, `x-rigg-ref: knowledge-bases/<kb>`, `x-rigg-note` — syntax,
+`x-rigg-pin`, `x-rigg-ref: knowledge-bases/<kb>`, `x-rigg-note`: syntax,
 where each is valid, how validate checks it, how promote treats it, how push
 resolves it.
 

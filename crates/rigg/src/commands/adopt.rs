@@ -1,4 +1,4 @@
-//! `rigg adopt` — bring selected unmanaged remote resources into a project.
+//! `rigg adopt`: bring selected unmanaged remote resources into a project.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,7 +51,7 @@ impl Selector {
 }
 
 pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
-    // Parse any given selectors first — cheap, and usage errors must not
+    // Parse any given selectors first: cheap, and usage errors must not
     // require a workspace or network.
     let mut selectors = args
         .selectors
@@ -86,7 +86,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         Some(p) => p.clone(),
         None => match ws.projects.len() {
             0 => {
-                println!("No projects yet — a project groups the resources you manage together.");
+                println!("No projects yet: a project groups the resources you manage together.");
                 if !interactive::confirm_default_yes("Create one now?", plain)? {
                     return Err(anyhow!("aborted"));
                 }
@@ -159,7 +159,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
         let candidates = wizard_candidates(&snapshot, &owned_by_any, &auto_created, &project.name);
         if candidates.is_empty() {
             println!(
-                "Nothing to adopt in environment '{}' — everything visible there is already managed.",
+                "Nothing to adopt in environment '{}': everything visible there is already managed.",
                 env.name
             );
             return Ok(());
@@ -228,7 +228,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
     // Classify each candidate.
     let mut to_adopt: Vec<(ResourceRef, Value)> = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
-    // Explicitly-named resources already owned by THIS project — not adopted
+    // Explicitly-named resources already owned by THIS project, not adopted
     // (they're already managed), but they seed dependency expansion below so
     // `--with-deps` can still pull in their unmanaged deps.
     let mut owned_seeds: Vec<(ResourceRef, Value)> = Vec::new();
@@ -251,7 +251,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                 Some(owner) => {
                     if explicit.contains(key) {
                         return Err(anyhow!(
-                            "{r} is owned by project '{owner}' — a resource belongs to exactly one project"
+                            "{r} is owned by project '{owner}': a resource belongs to exactly one project"
                         ));
                     }
                     // swept in by a kind/all selector → silently skip another project's resource
@@ -262,7 +262,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                             skipped.push((
                                 key.clone(),
                                 format!(
-                                    "auto-created by knowledge source '{ks}' — manage it via the knowledge source"
+                                    "auto-created by knowledge source '{ks}': manage it via the knowledge source"
                                 ),
                             ));
                         }
@@ -271,7 +271,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                         if explicit.contains(key) {
                             skipped.push((
                                 key.clone(),
-                                "platform-managed (provided by Microsoft) — reference it, don't adopt it"
+                                "platform-managed (provided by Microsoft): reference it, don't adopt it"
                                     .to_string(),
                             ));
                         }
@@ -327,7 +327,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
             }
             let labels: Vec<String> = adds.iter().map(|(r, _)| r.to_string()).collect();
             let picked = interactive::multi_select_checked(
-                "Upstream dependencies found — adopt these too? (all selected; space to drop)",
+                "Upstream dependencies found: adopt these too? (all selected; space to drop)",
                 labels,
                 true,
                 plain,
@@ -398,7 +398,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
             for field in rigg_core::schema::unknown_top_level_fields(r.kind, doc) {
                 if unknown_fields_seen.insert((r.key(), field.clone())) {
                     eprintln!(
-                        "{} {r}: field `{field}` is not in rigg's {} schema — Azure may have shipped a newer API; run `rigg dev api-check`",
+                        "{} {r}: field `{field}` is not in rigg's {} schema. Azure may have shipped a newer API; run `rigg dev api-check`",
                         "note:".dimmed(),
                         rigg_core::schema::fixture_for(r.kind).version
                     );
@@ -486,7 +486,7 @@ fn wizard_candidates(
     items
 }
 
-/// `(additions, dep_keys, owned_refs)` — see [`expand_deps`].
+/// `(additions, dep_keys, owned_refs)`: see [`expand_deps`].
 type ExpandDepsResult = (
     Vec<(ResourceRef, Value)>,
     BTreeSet<String>,
@@ -496,7 +496,7 @@ type ExpandDepsResult = (
 /// Expand `to_adopt`'s upstream dependency graph. Returns the additions (not
 /// yet appended to `to_adopt`), their keys, and deduped `(key, owner)` pairs
 /// for references that were encountered but skipped because they're already
-/// owned by some project — so callers (the wizard) can surface "already
+/// owned by some project, so callers (the wizard) can surface "already
 /// managed" instead of silently dropping them. Auto-created/platform-managed
 /// refs are never recorded here (they aren't adoptable dependencies at all).
 /// Same traversal as the `--with-deps` flag path; callers append the result

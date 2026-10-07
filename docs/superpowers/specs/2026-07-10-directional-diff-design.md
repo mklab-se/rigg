@@ -1,7 +1,7 @@
-# rigg — Direction-neutral diff: side-by-side table, dual hints, neutral AI
+# rigg: Direction-neutral diff: side-by-side table, dual hints, neutral AI
 
 **Date:** 2026-07-10
-**Status:** Design — approved (user-directed)
+**Status:** Design: approved (user-directed)
 **Workstream:** F (from live Regulus testing).
 
 ## Problem
@@ -9,7 +9,7 @@
 `rigg diff` renders differences push-framed without saying so. Live repro: the
 user upgraded Regulus to gpt-5.6-luna in the portal; diff printed
 `model: was "gpt-5.6-luna", now "gpt-5.2-chat"` and the AI summary warned
-about a "model downgrade" — because (a) `output.rs` uses temporal words
+about a "model downgrade", because (a) `output.rs` uses temporal words
 ("was/now") for a spatial comparison, (b) `diff.rs` deliberately frames
 old=remote/new=local ("report what pushing would change") without surfacing
 that frame, and (c) the AI system prompt hardcodes "what pushing it would do".
@@ -21,10 +21,10 @@ A user in pull-mode reads the same data as a bug. Also: `metadata.modified_at`
 
 - **Two-column table** per changed resource: `field | local | Azure (<env>)`.
   No temporal language anywhere.
-- **Dual-direction hints** after drift — rigg never assumes intent, it explains
+- **Dual-direction hints** after drift: rigg never assumes intent, it explains
   both actions.
 - **AI summary reframed neutral** and slimmed to interpretation (consequences
-  of each direction, risks) — it must not re-narrate the table.
+  of each direction, risks): it must not re-narrate the table.
 - **Keep table AND AI summary**: the table is deterministic ground truth; the
   AI is fallible interpretation. (User accepted the recommendation.)
 - `metadata.modified_at` becomes an Agent volatile field.
@@ -47,7 +47,7 @@ pub struct SideLabels {
 Text format per resource:
 
 ```
-regulus/agents/Regulus — differs (5 field(s))
+regulus/agents/Regulus: differs (5 field(s))
 
   field                              local                Azure (dev)
   model                              "gpt-5.2-chat"       "gpt-5.6-luna"
@@ -55,7 +55,7 @@ regulus/agents/Regulus — differs (5 field(s))
   metadata.microsoft.voice-live.enabled  (absent)         "false"
 ```
 
-- Column 1 = `new_side` (local), column 2 = `old_side` (Azure) — matching the
+- Column 1 = `new_side` (local), column 2 = `old_side` (Azure): matching the
   approved preview. Added/Removed render as values vs `(absent)`.
 - Changes carrying a pre-set `description` (higher-layer array summaries)
   render as a full-width row under the field column.
@@ -69,8 +69,8 @@ regulus/agents/Regulus — differs (5 field(s))
 After a drifted **local-vs-remote** diff in text format, print:
 
 ```
-hint: rigg pull <project> — update local files to match Azure
-      rigg push <project> — make Azure match your local files
+hint: rigg pull <project> (update local files to match Azure)
+      rigg push <project> (make Azure match your local files)
 ```
 
 Named per drifted project when one project drifted; `<project>` placeholder
@@ -84,7 +84,7 @@ New system prompt, direction-neutral:
 - Explain the differences between the LOCAL files and what is currently in
   AZURE, attributing values to the correct side (the report labels them).
 - Do NOT assume the user intends to push or pull.
-- Then two short sections: "If you pull: …" and "If you push: …" — one or two
+- Then two short sections: "If you pull: …" and "If you push: …", one or two
   lines each, calling out risks (deletions, immutable index fields,
   SKU/capacity/billing) under the relevant direction.
 - Do not restate every field; interpret. Max ~150 words.
@@ -92,7 +92,7 @@ New system prompt, direction-neutral:
 ### 4. Registry
 
 Agent `volatile_fields` gains `"metadata.modified_at"`. (Portal rewrites it on
-every edit; the rest of `metadata` — logo, voice-live config, etc. — remains
+every edit; the rest of `metadata` (logo, voice-live config, etc.) remains
 user-visible config.) Existing local files shed it on next pull/push
 canonicalization; diff ignores it immediately.
 
@@ -108,7 +108,7 @@ README's semantic-diff sample block updated to the new table + hint shape.
   the sanctioned breaking change); a hint-presence test on a drifted diff and
   hint-absence when clean.
 - registry test: agent modified_at volatile.
-- Live acceptance: re-run the user's exact scenario — portal-changed model —
+- Live acceptance: re-run the user's exact scenario, portal-changed model,
   and confirm the table reads correctly in both mindsets and the AI summary
   no longer says "downgrade" unconditionally.
 

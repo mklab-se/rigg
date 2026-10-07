@@ -1,10 +1,10 @@
-//! Wiremock fakes for Microsoft Graph and the Key Vault secrets data plane —
+//! Wiremock fakes for Microsoft Graph and the Key Vault secrets data plane:
 //! reused across test binaries via `#[path = "graph_fake.rs"] mod graph_fake;`.
 //!
 //! Both clients take an explicit base URL in tests
 //! (`GraphClient::with_token_and_base`, `KeyVaultClient::with_token_and_base`)
 //! so the `RIGG_GRAPH_ENDPOINT` / `RIGG_KEYVAULT_ENDPOINT` process env vars
-//! are never touched — wiremock servers are per-test and tests in a binary
+//! are never touched: wiremock servers are per-test and tests in a binary
 //! run in parallel.
 
 #![allow(dead_code)] // included by several test binaries; each uses part of it
@@ -47,7 +47,7 @@ pub async fn mount_graph_existing_sp(
     mount_graph_writes(server).await;
 }
 
-/// Mount `GET /applications?$filter=appId eq '…'` — the `--client-id` reuse
+/// Mount `GET /applications?$filter=appId eq '…'`: the `--client-id` reuse
 /// path. `found` is whether the tenant already has that application.
 pub async fn mount_graph_application_lookup(server: &MockServer, found: bool) {
     let value = if found {
@@ -62,7 +62,7 @@ pub async fn mount_graph_application_lookup(server: &MockServer, found: bool) {
         .await;
 }
 
-/// Mount `GET /servicePrincipals/{objectId}` — how a managed identity's
+/// Mount `GET /servicePrincipals/{objectId}`: how a managed identity's
 /// principal (object) id becomes the client id Easy Auth admits.
 pub async fn mount_graph_service_principal(server: &MockServer, object_id: &str, app_id: &str) {
     Mock::given(method("GET"))
@@ -105,7 +105,7 @@ pub async fn mount_graph_application_roles(server: &MockServer, app_roles: serde
 }
 
 /// Like [`mount_graph_application_roles`], but the application also already
-/// publishes `identifier_uris` — the audiences its existing callers ask
+/// publishes `identifier_uris`: the audiences its existing callers ask
 /// tokens for, which a PATCH must not drop.
 pub async fn mount_graph_application(
     server: &MockServer,
@@ -173,7 +173,7 @@ async fn mount_graph_writes(server: &MockServer) {
 /// Mount a STATEFUL `appRoleAssignedTo` pair (priority 1, so it wins over
 /// [`mount_graph`]'s fire-and-forget POST): the POST records the assignment,
 /// the GET lists what has been recorded. That is how Graph behaves, and it
-/// is what lets a test prove the wiring is idempotent — a second run sees
+/// is what lets a test prove the wiring is idempotent: a second run sees
 /// its own first grant instead of a fresh, empty directory.
 pub async fn mount_graph_app_role_assignments(server: &MockServer) {
     let assignments: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));

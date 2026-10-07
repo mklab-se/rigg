@@ -113,7 +113,7 @@ pub fn diff_text(old: &str, new: &str) -> TextDiffResult {
 
 /// Convert consecutive Delete+Insert runs into Modified entries with word-level diffs.
 ///
-/// Pairs them 1:1 — if there are 3 deletes and 2 inserts, the first 2 become
+/// Pairs them 1:1. If there are 3 deletes and 2 inserts, the first 2 become
 /// Modified pairs and the 3rd remains a standalone Delete.
 fn pair_modifications(lines: Vec<DiffLine>) -> Vec<DiffLine> {
     let mut result = Vec::with_capacity(lines.len());
@@ -276,7 +276,7 @@ pub fn normalize_for_diff(text: &str) -> String {
         } else {
             let sentences = split_at_sentence_boundaries(line);
             if sentences.len() <= 1 {
-                // No sentence boundaries found — word-wrap instead
+                // No sentence boundaries found: word-wrap instead
                 let wrapped = word_wrap(line.trim(), WORD_WRAP_WIDTH);
                 for wrap_line in &wrapped {
                     result.push_str(wrap_line);

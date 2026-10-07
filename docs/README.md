@@ -28,12 +28,12 @@ stack lives in Git.
 
 New to rigg? Read in this order. Each step assumes the one before it.
 
-1. [`CONCEPTS.md`](../CONCEPTS.md) — the mental model: workspace, project,
+1. [`CONCEPTS.md`](../CONCEPTS.md): the mental model: workspace, project,
    environment, logical id vs. physical name. Also available offline as
    `rigg concepts`.
-2. [Tutorial 1 — Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md)
-   — put resources you already have in Azure under version control.
-3. [How rigg works](how-rigg-works.md) — the sync engine, the binding layer,
+2. [Tutorial 1: Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md):
+   put resources you already have in Azure under version control.
+3. [How rigg works](how-rigg-works.md): the sync engine, the binding layer,
    the identity graph, promote-as-translation.
 4. The rest of the tutorials, then the reference pages as you need them.
 
@@ -42,15 +42,15 @@ New to rigg? Read in this order. Each step assumes the one before it.
 Each one is runnable top to bottom against your own subscription, states its
 prerequisites and cost up front, and ends with a clean-up step.
 
-1. [Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md) —
+1. [Put an existing Azure solution under version control](tutorials/01-pull-an-existing-solution.md):
    `rigg init`, `rigg adopt`, the bindings cache, the round trip back to Azure.
-2. [Build from scratch](tutorials/02-build-from-scratch.md) — `rigg new
+2. [Build from scratch](tutorials/02-build-from-scratch.md): `rigg new
    pipeline`, managed identity, `rigg auth doctor`, a Foundry agent grounded
    on a knowledge base.
-3. [Add an environment and promote](tutorials/03-add-an-environment-and-promote.md)
-   — `rigg env add`, binding questions, `rigg promote`.
-4. [Push to protected production](tutorials/04-push-to-protected-production.md)
-   — `policy: protected`, `strict-bindings`, CI with OIDC and no stored
+3. [Add an environment and promote](tutorials/03-add-an-environment-and-promote.md):
+   `rigg env add`, binding questions, `rigg promote`.
+4. [Push to protected production](tutorials/04-push-to-protected-production.md):
+   `policy: protected`, `strict-bindings`, CI with OIDC and no stored
    credentials.
 
 ## Reference
@@ -63,7 +63,7 @@ prerequisites and cost up front, and ends with a clean-up step.
 | [Annotations](reference/annotations.md) | The `x-rigg-*` keys: syntax, where each is valid, how validate/promote/push treat them |
 | [APIs](reference/apis.md) | `apis/<name>.json`, the OpenAPI contract rigg validates for a WebApiSkill |
 | [State](reference/state.md) | `.rigg/`: baselines, the bindings cache, what is safe to delete, `.gitignore` |
-| [CLI reference](reference/cli.md) | Every command, argument and option — generated from the binary |
+| [CLI reference](reference/cli.md) | Every command, argument and option: generated from the binary |
 | [Environment variables](reference/environment-variables.md) | Every `RIGG_*` and `AZURE_*` variable rigg reads |
 | [Exit codes and questions](reference/exit-codes-and-questions.md) | Exit codes 0–6, the `needs-input` protocol, every question id |
 
@@ -92,7 +92,7 @@ prefix the code uses is documented.
 
 ## See also
 
-- [`README.md`](../README.md) — what rigg is, install, 60-second quick start.
-- [`CONCEPTS.md`](../CONCEPTS.md) — the model, also `rigg concepts`.
-- [`MCP.md`](../MCP.md) — the MCP server and its tools.
-- [`CHANGELOG.md`](../CHANGELOG.md) — what changed, per release.
+- [`README.md`](../README.md): what rigg is, install, 60-second quick start.
+- [`CONCEPTS.md`](../CONCEPTS.md): the model, also `rigg concepts`.
+- [`MCP.md`](../MCP.md): the MCP server and its tools.
+- [`CHANGELOG.md`](../CHANGELOG.md): what changed, per release.

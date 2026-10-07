@@ -35,7 +35,7 @@ pub(crate) struct Check {
     spec_path: &'static str,
     supported: &'static str,
     /// ARM registration coordinates, when this provider has one (stable rows
-    /// only — a preview row has no `ArmRegistration` of its own).
+    /// only: a preview row has no `ArmRegistration` of its own).
     arm: Option<rigg_core::registry::ArmRegistration>,
     /// Documented hold, when `supported` is deliberately pinned below the
     /// newest spec-repo version.
@@ -73,7 +73,7 @@ pub(crate) fn checks() -> Vec<Check> {
 }
 
 /// api-check status for one row: `current`, `BEHIND`, `held` (upstream
-/// equals the documented [`Hold::newer`]), or `held — ARM now registers …`
+/// equals the documented [`Hold::newer`]), or `held (ARM now registers …)`
 /// when ARM access confirmed the hold can be lifted. `arm_confirms`: `Some(true)`
 /// when ARM registers `latest` for every resource type of the provider,
 /// `Some(false)` when it does not, `None` without ARM access.
@@ -89,7 +89,7 @@ fn status_for(
     match hold {
         Some(h) if h.newer == latest => match arm_confirms {
             Some(true) => {
-                format!("held — ARM now registers {latest} for every type: lift the hold")
+                format!("held (ARM now registers {latest} for every type: lift the hold)")
             }
             _ => "held".to_string(),
         },
@@ -100,7 +100,7 @@ fn status_for(
 /// Lazily create an ARM client (once per `api_check` run; a failed attempt
 /// is remembered as `Some(None)` so later checks don't retry it) and ask it
 /// whether ARM registers `latest` for every resource type `reg` names.
-/// `None` whenever ARM access isn't available or the lookup fails —
+/// `None` whenever ARM access isn't available or the lookup fails:
 /// api-check must keep working without an Azure CLI login.
 async fn arm_confirms(
     client: &mut Option<Option<(rigg_client::arm::ArmClient, String)>>,
@@ -326,7 +326,7 @@ mod tests {
         let arm_ok = Some(true);
         assert!(
             status_for(m.stable, "2026-07-01", m.hold.as_ref(), arm_ok)
-                .starts_with("held — ARM now registers")
+                .starts_with("held (ARM now registers")
         );
     }
 

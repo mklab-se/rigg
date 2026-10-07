@@ -38,7 +38,7 @@ pub struct AzureSearchClient {
 }
 
 /// Indexer creation validates the data source and AI-services connections
-/// and starts the first run before responding — routinely slower than a
+/// and starts the first run before responding: routinely slower than a
 /// typical management call. 30s produced live false-failure timeouts.
 const HTTP_TIMEOUT_SECS: u64 = 120;
 
@@ -137,7 +137,7 @@ impl AzureSearchClient {
             request = request.json(json);
         } else if method == Method::POST {
             // Azure's front end rejects bodyless POSTs without an explicit
-            // Content-Length (HTTP 411) — indexer run/reset take no body.
+            // Content-Length (HTTP 411): indexer run/reset take no body.
             request = request.header("Content-Length", "0");
         }
 
@@ -447,7 +447,7 @@ mod tests {
             )
         );
         // Knowledge bases are GA, but their retrieval & output configuration
-        // only exists in preview — rigg manages them on the preview channel.
+        // only exists in preview: rigg manages them on the preview channel.
         let url = client.collection_url(ResourceKind::KnowledgeBase);
         assert_eq!(
             url,

@@ -2,7 +2,7 @@
 //! values named by the registry's [`crate::registry::InfraRef`] table.
 //!
 //! [`parse`] turns a raw JSON value into a [`PhysicalRef`] (the physical
-//! Azure resource it names); [`render`] does the inverse — rewrite a value
+//! Azure resource it names); [`render`] does the inverse: rewrite a value
 //! for a different physical resource, keeping everything about the original
 //! that isn't the infrastructure part. [`extract`] walks a whole document
 //! per its kind's `infra_refs` table and returns every reference found, with
@@ -64,7 +64,7 @@ pub struct RenderTarget {
     pub base_url: Option<String>,
     pub kb_name: Option<String>,
     /// The *source* binding's base URL, for [`InfraForm::ApiUri`]'s `Api`
-    /// case — the prefix `render` should replace with `base_url`. When
+    /// case: the prefix `render` should replace with `base_url`. When
     /// absent, only the scheme and host are swapped.
     pub source_base_url: Option<String>,
 }
@@ -89,13 +89,13 @@ pub enum Class {
     /// same physical resource in the listed other environments.
     Shared(String, Vec<String>),
     /// Not bound in this environment, but bound (to `binding`) in the listed
-    /// other environments — the reference "leaked" a value that belongs to
+    /// other environments: the reference "leaked" a value that belongs to
     /// another environment.
     Leak { binding: String, envs: Vec<String> },
     /// Not bound anywhere, and not an `Api` reference (so not presumed
     /// external either).
     Unbound,
-    /// An `Api` reference bound nowhere — presumed to be a genuinely
+    /// An `Api` reference bound nowhere: presumed to be a genuinely
     /// external, environment-independent endpoint.
     External,
 }
@@ -132,7 +132,7 @@ pub fn parse(form: InfraForm, value: &Value) -> Option<PhysicalRef> {
     }
 }
 
-/// Rewrite `original` per `form`, pointing at `target` instead — keeping
+/// Rewrite `original` per `form`, pointing at `target` instead, keeping
 /// everything about `original` that isn't the infrastructure part (e.g. a
 /// connection string's `Database=` tail, a URI's path and query).
 pub fn render(form: InfraForm, original: &Value, target: &RenderTarget) -> Result<Value, String> {
@@ -272,7 +272,7 @@ fn find_wanted<'a>(
 
 /// The declared `api` binding whose base URL prefixes `ref_url`, matched at a
 /// URL boundary (`/`, `?`, `#`, or the end of the URL). The rule
-/// [`classify`] applies to [`Target::Api`] references — `rigg promote` uses
+/// [`classify`] applies to [`Target::Api`] references: `rigg promote` uses
 /// it too, so "which binding does this URL belong to" answers the same
 /// everywhere.
 pub fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a BindingEntry> {
@@ -284,7 +284,7 @@ pub fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a B
                 if origin.is_empty() || !ref_lower.starts_with(&origin) {
                     return false;
                 }
-                // The match must end at a URL boundary — `origin` prefixing
+                // The match must end at a URL boundary: `origin` prefixing
                 // `ref_lower` isn't enough, or `https://api.partner.example`
                 // would match `https://api.partner.example.evil.test/x`.
                 matches!(
@@ -302,7 +302,7 @@ pub fn find_api_binding<'a>(env: &'a EnvBindings, ref_url: &str) -> Option<&'a B
 fn parse_storage(value: &Value) -> Option<PhysicalRef> {
     let s = value.as_str()?;
     // Locate `ResourceId=` case-insensitively, anywhere in the connection
-    // string (aligned with `identity::parse_resource_id`) — it need not be
+    // string (aligned with `identity::parse_resource_id`): it need not be
     // the first key (e.g. `AccountName=x;ResourceId=...`).
     let lower = s.to_ascii_lowercase();
     let start = lower.find("resourceid=")? + "resourceid=".len();
@@ -415,7 +415,7 @@ fn parse_endpoint(value: &Value) -> Option<PhysicalRef> {
         .or_else(|| parse_api_uri(value))
 }
 
-/// A bare `https://X.search.windows.net[/…]` endpoint — the implicit
+/// A bare `https://X.search.windows.net[/…]` endpoint: the implicit
 /// `search` target with no knowledge base. (The KB-MCP shape is recognized
 /// first, by [`parse_kb_mcp`].)
 fn parse_search_endpoint(value: &Value) -> Option<PhysicalRef> {
@@ -599,7 +599,7 @@ fn as_url(value: &Value) -> Option<&str> {
         return None;
     }
     // Reject a placeholder host (e.g. `https://<account>.openai.azure.com`),
-    // same as the storage/identity forms — but only in the host, not the
+    // same as the storage/identity forms, but only in the host, not the
     // path/query, where a literal `<...>` can legitimately appear (e.g. a
     // redacted secret: `?code=<redacted>`).
     let (host, _tail) = host_and_tail(s);
@@ -657,7 +657,7 @@ fn parse_host_suffix(
 
 /// `constraint`'s last dot-segment (e.g. `"AzureOpenAIEmbeddingSkill"` from
 /// `"#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"`) must equal
-/// `actual`'s last dot-segment — so any namespace ending in that exact skill
+/// `actual`'s last dot-segment, so any namespace ending in that exact skill
 /// type name matches, but a same-suffixed-but-different type (e.g.
 /// `MyAzureOpenAIEmbeddingSkill`) does not.
 fn odata_type_matches(constraint: &str, actual: &str) -> bool {
@@ -1104,7 +1104,7 @@ mod tests {
             "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill"
         ));
         // `MyAzureOpenAIEmbeddingSkill` ends with the constraint's tail but
-        // is not the same skill type — must not match.
+        // is not the same skill type: must not match.
         assert!(!odata_type_matches(
             "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
             "#Contoso.Skills.MyAzureOpenAIEmbeddingSkill"
@@ -1197,7 +1197,7 @@ mod tests {
     #[test]
     fn render_api_uri_enforces_the_same_url_boundary_as_matching() {
         // `https://api.partner.example` must not be spliced out of
-        // `https://api.partner.example.evil.test/x` — the same boundary rule
+        // `https://api.partner.example.evil.test/x`: the same boundary rule
         // `find_api_binding` applies when deciding the binding matches.
         let evil = json!("https://api.partner.example.evil.test/x");
         assert!(

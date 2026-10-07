@@ -1,4 +1,4 @@
-//! `rigg describe` — workspace overview: projects, resources, dependency
+//! `rigg describe`: workspace overview: projects, resources, dependency
 //! graph, and the APIs a user (or agent) must implement.
 
 use anyhow::Result;
@@ -138,7 +138,7 @@ pub fn run(ctx: &GlobalContext, args: DescribeArgs) -> Result<()> {
 }
 
 /// `env`'s declared bindings, each with the other environments that bind the
-/// same physical resource — one definition of "shared", shared with
+/// same physical resource: one definition of "shared", shared with
 /// `rigg env show` (see [`shared_with`]).
 fn infrastructure_rows(ws: &Workspace, env_name: &str) -> Vec<(String, Binding, Vec<String>)> {
     let Some(env) = ws.config.environments.get(env_name) else {

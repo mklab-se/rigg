@@ -61,7 +61,7 @@ type Result<T> = std::result::Result<T, WorkspaceError>;
 pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Directory (relative to rigg.yaml) holding rigg's file trees —
+    /// Directory (relative to rigg.yaml) holding rigg's file trees:
     /// `projects/`, `apis/`, `.rigg/`. Default: alongside rigg.yaml.
     /// Set by `rigg init <folder>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,7 +196,7 @@ impl FoundryConnection {
     }
 }
 
-/// `project.yaml` — metadata only; the directory contents are the membership.
+/// `project.yaml`: metadata only; the directory contents are the membership.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectManifest {
@@ -372,7 +372,7 @@ impl Workspace {
             .map(|(n, _)| n.as_str())
     }
 
-    /// Directory holding rigg's file trees (`projects/`, `apis/`, `.rigg/`) —
+    /// Directory holding rigg's file trees (`projects/`, `apis/`, `.rigg/`):
     /// the workspace root unless `root:` in rigg.yaml relocates them.
     pub fn files_root(&self) -> PathBuf {
         match &self.config.root {

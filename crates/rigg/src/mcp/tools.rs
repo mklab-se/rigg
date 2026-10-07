@@ -8,7 +8,7 @@
 //! The needs-input loop: a guided flow (e.g. the protected-environment gate)
 //! that needs an answer it cannot prompt for makes the underlying `rigg`
 //! subprocess exit 6 with a `needs-input` JSON document on stdout; `rigg_cli`
-//! passes that document through unchanged as the tool result (not an error —
+//! passes that document through unchanged as the tool result (not an error:
 //! see its exit-6 arm). A caller answers by re-calling the same tool with
 //! `answers` (question id → value) filled in, which is threaded through to
 //! `--answer <id>=<value>` on the CLI invocation via `with_common_answers`.
@@ -267,7 +267,7 @@ impl RiggMcpServer {
         }
     }
 
-    /// Every tool this server exposes, name-sorted — exactly what a client
+    /// Every tool this server exposes, name-sorted: exactly what a client
     /// gets from `tools/list`. Used by `rigg mcp tools` to generate the
     /// `MCP.md` table so the docs cannot describe a tool that is not here.
     pub fn tool_list(&self) -> Vec<rmcp::model::Tool> {
@@ -300,7 +300,7 @@ fn rigg_cli<S: AsRef<str>>(args: &[S]) -> String {
             match code {
                 0 => stdout,
                 // needs-input: the JSON document on stdout IS the tool
-                // result (not an error) — a caller answers the listed
+                // result (not an error): a caller answers the listed
                 // questions (`answers`, id → value) and calls again. The
                 // mutating tools run the CLI in text mode (push prints no
                 // JSON on success), so the plan narration precedes the
@@ -360,7 +360,7 @@ fn with_common<'a>(args: Vec<&'a str>, env: &'a Option<String>, json: bool) -> V
 /// present, `force` selects `--dry-run` vs `--yes`, `offline` adds
 /// `--offline`, and `--output json --quiet` plus any `--answer` flags are
 /// appended via [`with_common_answers`] (promote has no `env` parameter of
-/// its own — `--from`/`--to` name the environments).
+/// its own: `--from`/`--to` name the environments).
 fn promote_args(params: &PromoteParams) -> Vec<String> {
     let mut args = vec!["promote"];
     if let Some(p) = &params.project {
@@ -379,7 +379,7 @@ fn promote_args(params: &PromoteParams) -> Vec<String> {
 }
 
 /// Like [`with_common`], additionally appending `--answer <id>=<value>` for
-/// every pre-supplied answer — the MCP counterpart of the CLI's `--answer`
+/// every pre-supplied answer: the MCP counterpart of the CLI's `--answer`
 /// flag, letting a caller resolve a prior `needs-input` result by re-calling
 /// the same tool with `answers` filled in.
 fn with_common_answers<'a>(
@@ -496,7 +496,7 @@ impl RiggMcpServer {
                 params.answers.as_ref(),
             ));
             return format!(
-                "PREVIEW (no changes made) — differences between local and remote:\n{preview}\nRun again with force=true to pull."
+                "PREVIEW (no changes made). Differences between local and remote:\n{preview}\nRun again with force=true to pull."
             );
         }
         if params.adopt.unwrap_or(false) {
@@ -526,7 +526,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Plans containing a replace (e.g. a knowledge-source kind change after `rigg migrate`) additionally require allow_replace=true — the replaced index is rebuilt from source data. An identity/RBAC preflight runs before anything is written: missing role assignments rigg may grant are applied (with force=true) and waited out, anything only a human may grant fails with exit 4 and the exact az command — skip_auth_preflight=true bypasses it. verify=true additionally proves the pushed stack works (see rigg_verify). Always rigg_validate first."
+        description = "Push local project files to Azure in dependency order. Without force: returns the push plan (dry run). With force=true: executes (--yes). prune=true also deletes remote resources whose local files were removed. Protected environments additionally require confirm_env to match the environment name (matches `rigg push --confirm-env`). Plans containing a replace (e.g. a knowledge-source kind change after `rigg migrate`) additionally require allow_replace=true: the replaced index is rebuilt from source data. An identity/RBAC preflight runs before anything is written: missing role assignments rigg may grant are applied (with force=true) and waited out, anything only a human may grant fails with exit 4 and the exact az command, skip_auth_preflight=true bypasses it. verify=true additionally proves the pushed stack works (see rigg_verify). Always rigg_validate first."
     )]
     async fn rigg_push(&self, Parameters(params): Parameters<PushParams>) -> String {
         let mut args = vec!["push"];
@@ -562,7 +562,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Prove a pushed project actually works against the live services: every indexer is RUN and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. NOT read-only — it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry) — the runs cost money. all=true verifies every project. Failures that look like an authorization problem are attributed to the identity edge that would explain them. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed."
+        description = "Prove a pushed project actually works against the live services: every indexer is RUN and watched to completion, every knowledge base gets a retrieve, every agent a one-turn question. NOT read-only: it triggers real indexer runs (ingestion, skill and embedding costs) and takes as long as ingestion takes; it changes no configuration. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry): the runs cost money. all=true verifies every project. Failures that look like an authorization problem are attributed to the identity edge that would explain them. Fails (exit 1) when any check fails. The same checks as `rigg push --verify`, for a stack that is already pushed."
     )]
     async fn rigg_verify(&self, Parameters(params): Parameters<VerifyParams>) -> String {
         let mut args = vec!["verify"];
@@ -584,7 +584,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Translate a project's resources from one environment to another (e.g. dev → staging): every infrastructure reference is re-pointed at the target's binding of the same name (shared bindings are reported unchanged), sibling references follow renamed physical names, and the target's own name/x-rigg-pin/Web-API auth carrier are kept. Without force: preview only (--dry-run), writing nothing — shows rewiring, renamed siblings, changed/new/unchanged/kept-only-in-target resources, and checks. With force=true: writes the translated files (--yes). offline=true skips Azure lookups (auth re-derivation, deployment availability/quota) and reports those items as unresolved instead. May return needs-input for an unbound infrastructure reference, a binding missing in the target environment, an external API URL with no binding in either environment, or a deployment availability/quota problem in the target region — answer by re-calling with `answers` filled in. A missing target environment is NOT a needs-input question: the call fails immediately as a usage error (exit 2) whose message gives the exact `rigg env add <to> --like <from>` command to run first; create the environment, then call rigg_promote again (interactively, `rigg promote` offers to create it inline instead of failing). Follow a successful promote with rigg_validate, then rigg_push (preview first) on the target environment."
+        description = "Translate a project's resources from one environment to another (e.g. dev → staging): every infrastructure reference is re-pointed at the target's binding of the same name (shared bindings are reported unchanged), sibling references follow renamed physical names, and the target's own name/x-rigg-pin/Web-API auth carrier are kept. Without force: preview only (--dry-run), writing nothing, shows rewiring, renamed siblings, changed/new/unchanged/kept-only-in-target resources, and checks. With force=true: writes the translated files (--yes). offline=true skips Azure lookups (auth re-derivation, deployment availability/quota) and reports those items as unresolved instead. May return needs-input for an unbound infrastructure reference, a binding missing in the target environment, an external API URL with no binding in either environment, or a deployment availability/quota problem in the target region: answer by re-calling with `answers` filled in. A missing target environment is NOT a needs-input question: the call fails immediately as a usage error (exit 2) whose message gives the exact `rigg env add <to> --like <from>` command to run first; create the environment, then call rigg_promote again (interactively, `rigg promote` offers to create it inline instead of failing). Follow a successful promote with rigg_validate, then rigg_push (preview first) on the target environment."
     )]
     async fn rigg_promote(&self, Parameters(params): Parameters<PromoteParams>) -> String {
         rigg_cli(&promote_args(&params))
@@ -602,14 +602,14 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Trigger a live indexer run. Without force: returns the current status as a preview. With force=true: triggers the run (fire-and-forget) — poll rigg_indexer_status until the run completes. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry). Part of the post-push verification flow: rigg_push → rigg_indexer_run → rigg_indexer_status → rigg_query → rigg_ask."
+        description = "Trigger a live indexer run. Without force: returns the current status as a preview. With force=true: triggers the run (fire-and-forget), poll rigg_indexer_status until the run completes. Protected environments additionally require confirm_env to match the environment name (or the equivalent `answers` entry). Part of the post-push verification flow: rigg_push → rigg_indexer_run → rigg_indexer_status → rigg_query → rigg_ask."
     )]
     async fn rigg_indexer_run(&self, Parameters(params): Parameters<IndexerRunParams>) -> String {
         if !params.force.unwrap_or(false) {
             let args = vec!["az", "indexer", "status", &params.indexer];
             let preview = rigg_cli(&with_common(args, &params.env, true));
             return format!(
-                "PREVIEW (no run triggered) — current status:\n{preview}\nRun again with force=true to trigger a run."
+                "PREVIEW (no run triggered). Current status:\n{preview}\nRun again with force=true to trigger a run."
             );
         }
         let mut args = vec!["az", "indexer", "run", &params.indexer, "--yes"];
@@ -643,7 +643,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Prompt a live knowledge base (agentic retrieval: grounding content + references) or a Foundry agent (single-shot reply). Pass EXACTLY ONE of knowledge_base or agent. Read-only — the end-to-end 'does my RAG stack work' probe."
+        description = "Prompt a live knowledge base (agentic retrieval: grounding content + references) or a Foundry agent (single-shot reply). Pass EXACTLY ONE of knowledge_base or agent. Read-only: the end-to-end 'does my RAG stack work' probe."
     )]
     async fn rigg_ask(&self, Parameters(params): Parameters<AskParams>) -> String {
         let args = match (&params.knowledge_base, &params.agent) {
@@ -655,7 +655,7 @@ impl RiggMcpServer {
     }
 
     #[tool(
-        description = "Delete ALL of a project's resources from Azure (local files are kept — pushing re-creates everything). Without force: preview. With force=true: executes. Protected environments additionally require confirm_env to match the environment name (matches `rigg delete --confirm-env`). For deleting a single resource: delete its local file, then rigg_push with prune=true."
+        description = "Delete ALL of a project's resources from Azure (local files are kept: pushing re-creates everything). Without force: preview. With force=true: executes. Protected environments additionally require confirm_env to match the environment name (matches `rigg delete --confirm-env`). For deleting a single resource: delete its local file, then rigg_push with prune=true."
     )]
     async fn rigg_delete(&self, Parameters(params): Parameters<DeleteParams>) -> String {
         if !params.force.unwrap_or(false) {
@@ -667,7 +667,7 @@ impl RiggMcpServer {
                 }))
                 .await;
             return format!(
-                "PREVIEW (no changes made) — deleting project '{}' would remove its remote resources. Current state:\n{status}\nRun again with force=true to delete.",
+                "PREVIEW (no changes made): deleting project '{}' would remove its remote resources. Current state:\n{status}\nRun again with force=true to delete.",
                 params.project
             );
         }
@@ -698,9 +698,9 @@ impl ServerHandler for RiggMcpServer {
              infrastructure references at the target's own bindings rather than copying \
              source values. Resource definitions are \
              JSON files under projects/<name>/envs/<env>/{search,foundry}/<kind>/; secrets are never \
-             stored in files — identity-based access only. Guided flows can ask questions: a \
+             stored in files: identity-based access only. Guided flows can ask questions: a \
              mutating tool call may come back as a `needs-input` JSON document (the questions, \
-             with ids/prompts/candidates) instead of its usual result — that document IS the \
+             with ids/prompts/candidates) instead of its usual result: that document IS the \
              tool result, not an error. Answer by re-calling the same tool with `answers` \
              (question id → value) filled in; answered questions are never asked again.",
         )

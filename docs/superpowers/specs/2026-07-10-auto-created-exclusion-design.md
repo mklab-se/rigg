@@ -1,7 +1,7 @@
-# rigg — Auto-created sub-resource exclusion + managed-dependency visibility
+# rigg: Auto-created sub-resource exclusion + managed-dependency visibility
 
 **Date:** 2026-07-10
-**Status:** Design — approved (user-directed)
+**Status:** Design: approved (user-directed)
 **Workstream:** E (follows D; both from live Regulus testing).
 
 ## Problems
@@ -12,11 +12,11 @@
    names them in the KS's `createdResources` (verified live: the `regulatory`
    KS created `regulatory-{index,indexer,datasource,skillset}`). rigg's design
    already refuses to manage these (`createdResources` is read-only:
-   "Rigg never manages Azure-created sub-resources") — yet `status`, `pull`,
+   "Rigg never manages Azure-created sub-resources"), yet `status`, `pull`,
    and the adopt wizard list them as unmanaged, inviting exactly that mistake.
    Same defect class as SystemManaged guardrails.
 2. **The dependency step hides already-managed dependencies.** When the wizard
-   offers upstream dependencies, it shows only the adoptable delta — the user
+   offers upstream dependencies, it shows only the adoptable delta: the user
    asked "did we miss the index?" because the full dependency picture
    (deployment already managed, KB already managed, …) is invisible.
 
@@ -41,7 +41,7 @@ member names are ignored (future-proof).
 Applied at the same choke points as platform-managed:
 
 - **adopt classification**: explicitly named → reasoned skip
-  `auto-created by knowledge source '<ks>' — manage it via the knowledge source`;
+  `auto-created by knowledge source '<ks>': manage it via the knowledge source`;
   swept by `all`/kind → silent skip.
 - **wizard menu**: hidden.
 - **dependency expansion**: never added.
@@ -53,7 +53,7 @@ resource, rigg does not retroactively reject it (same stance as guardrails).
 ### 2. Managed-dependency visibility (wizard)
 
 `expand_deps` additionally reports the references it *encountered but skipped
-because they are owned* — as `(key, owner)` pairs. The wizard's dependency
+because they are owned*, as `(key, owner)` pairs. The wizard's dependency
 step prints them before the multi-select:
 
 ```
@@ -64,7 +64,7 @@ Already managed: deployments/gpt-5.2-chat, knowledge-bases/regulatory-kb
 `managed by '<owner>'`). When the adoptable delta is empty but managed
 dependencies exist, print
 `All dependencies of your selection are already managed: <list>` instead of
-silence — this is the "rerun on a fully-captured resource" reassurance case.
+silence: this is the "rerun on a fully-captured resource" reassurance case.
 Auto-created and platform-managed refs are not listed (they are not
 dependencies the user manages). Non-wizard output unchanged.
 

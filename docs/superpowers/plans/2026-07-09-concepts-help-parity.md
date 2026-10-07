@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make rigg explain its own workspace/project model — a single-source `CONCEPTS.md` rendered by a new `rigg concepts` command, help cross-references, and next-step hints on empty workspaces.
+**Goal:** Make rigg explain its own workspace/project model: a single-source `CONCEPTS.md` rendered by a new `rigg concepts` command, help cross-references, and next-step hints on empty workspaces.
 
 **Architecture:** `CONCEPTS.md` at the repo root is the one canonical explanation. The new `concepts` command embeds it via `include_str!` and renders it with `termimad` (styled on a TTY, plain otherwise, raw markdown under `--output json`). Three subcommands gain a one-line pointer to it; `status`/`describe` print a hint when a workspace has no projects yet.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- No backwards-compatibility burden — single user; optimize for clarity.
+- No backwards-compatibility burden: single user; optimize for clarity.
 - Single source of truth: concept prose lives ONLY in `CONCEPTS.md`; the CLI embeds that exact file. README/GETTING_STARTED carry links + a short teaser, never a second copy.
 - JSON output must never contain prose: `describe --output json` on an empty workspace stays `[]`; `concepts --output json` returns raw markdown under a `concepts` key.
 - Load-bearing invariant sentence, verbatim, must appear in `CONCEPTS.md`: **"A resource belongs to exactly one project."**
@@ -49,8 +49,8 @@ split is the key to using rigg well.
 
 - A **workspace** (`rigg.yaml`) is the top level. It declares your
   **environments** (dev, test, prod) and the **service connections** each
-  environment points at — which Azure AI Search service, which Microsoft
-  Foundry account/project — plus shared assets like `apis/`. A workspace holds
+  environment points at (which Azure AI Search service, which Microsoft
+  Foundry account/project) plus shared assets like `apis/`. A workspace holds
   *no* resource definitions itself.
 - A **project** (`projects/<name>/`) is a **named group of resource
   definitions you pull, push, diff, review, and deploy as one unit**. Indexes,
@@ -58,14 +58,14 @@ split is the key to using rigg well.
   files inside a project.
 - **A resource belongs to exactly one project.** rigg enforces this. It is what
   makes sync unambiguous: when you push a project, rigg knows exactly which
-  remote resources that project owns — so it never half-syncs or fights another
+  remote resources that project owns, so it never half-syncs or fights another
   project over the same resource.
 
 ## Why two levels?
 
-The workspace answers *"where do things go?"* — which services and
+The workspace answers *"where do things go?"*, which services and
 environments, shared across everything. Projects answer *"what do I manage
-together?"* — the unit of change, review, and deployment.
+together?"*: the unit of change, review, and deployment.
 
 Separating them means you can promote one coherent project from dev to prod
 without dragging along unrelated resources, and different projects can be owned
@@ -74,15 +74,15 @@ configuration.
 
 ## One or many projects? Choosing boundaries
 
-Use **one** project when your whole stack ships and is reviewed together — for
+Use **one** project when your whole stack ships and is reviewed together: for
 example, a single agent plus the retrieval pipeline it depends on.
 
 Use **several** projects to draw boundaries you care about:
 
-- **By deployable unit** — each agent or app that ships independently.
-- **By ownership / review scope** — a team owns its project; pull requests stay
+- **By deployable unit**: each agent or app that ships independently.
+- **By ownership / review scope**: a team owns its project; pull requests stay
   focused on one project's files.
-- **By lifecycle** — group things that change on the same cadence; separate
+- **By lifecycle**: group things that change on the same cadence; separate
   things that don't.
 
 Rule of thumb: **if you would pull, push, and review it as a unit, it is a
@@ -99,7 +99,7 @@ rather than co-owning it.
 rigg.yaml                     # workspace: environments + service connections
 apis/<name>.json              # shared OpenAPI specs for custom Web API skills
 projects/<name>/
-  project.yaml                # metadata only — the directory IS the membership
+  project.yaml                # metadata only: the directory IS the membership
   search/{data-sources,indexes,skillsets,indexers,synonym-maps,aliases,
           knowledge-sources,knowledge-bases}/<name>.json
   foundry/{agents,deployments,connections,guardrails}/<name>.json
@@ -108,7 +108,7 @@ projects/<name>/
 
 ## See also
 
-- **Getting Started** (`GETTING_STARTED.md`) — build a stack from scratch.
+- **Getting Started** (`GETTING_STARTED.md`): build a stack from scratch.
 - Run `rigg describe` to see how your resources connect, and `rigg status` to
   see what is in sync.
 ~~~
@@ -143,7 +143,7 @@ And in `GlobalContext::from_cli`, after `non_interactive: ...,` add:
 ```rust
 #[test]
 fn concepts_explains_the_model() {
-    // Runs anywhere — no workspace required.
+    // Runs anywhere: no workspace required.
     let tmp = tempfile::tempdir().unwrap();
     rigg()
         .current_dir(tmp.path())
@@ -181,12 +181,12 @@ fn concepts_json_returns_markdown_source() {
 - [ ] **Step 5: Run tests to verify they fail**
 
 Run: `cargo test -p rigg --test cli_surface concepts 2>&1 | tail -20`
-Expected: FAIL — `concepts` is an unknown subcommand (exit 2), predicates unmet.
+Expected: FAIL, `concepts` is an unknown subcommand (exit 2), predicates unmet.
 
 - [ ] **Step 6: Create `crates/rigg/src/commands/concepts.rs`:**
 
 ```rust
-//! `rigg concepts` — print rigg's workspace/project mental model.
+//! `rigg concepts`: print rigg's workspace/project mental model.
 //!
 //! Single-sourced from the repo-root `CONCEPTS.md`, embedded at build time so
 //! the CLI and the docs cannot drift.
@@ -303,7 +303,7 @@ fn help_points_at_concepts() {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p rigg --test cli_surface help_points_at_concepts 2>&1 | tail -15`
-Expected: FAIL — "concepts" not found in help output.
+Expected: FAIL, "concepts" not found in help output.
 
 - [ ] **Step 3: Extend the root `long_about`.** In `crates/rigg/src/cli.rs`, change the `long_about` string (ends with `... operate on projects.`) to append a sentence:
 
@@ -356,7 +356,7 @@ git commit -m "docs: cross-reference rigg concepts from root/new/pull help"
 - Test: `crates/rigg/tests/cli_surface.rs`
 
 **Interfaces:**
-- Produces: `commands::print_no_projects_hint()` — prints the text-mode hint.
+- Produces: `commands::print_no_projects_hint()`, prints the text-mode hint.
 - Consumes: `Workspace { projects }`, `GlobalContext { json() }`.
 
 - [ ] **Step 1: Write the failing tests** (append to `cli_surface.rs`). Add an empty-workspace helper and three tests:
@@ -413,7 +413,7 @@ fn describe_empty_workspace_json_stays_empty_array() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p rigg --test cli_surface empty_workspace 2>&1 | tail -20`
-Expected: FAIL — `status`/`describe` print nothing; "No projects yet" absent.
+Expected: FAIL, `status`/`describe` print nothing; "No projects yet" absent.
 
 - [ ] **Step 3: Add the shared helper.** In `crates/rigg/src/commands/mod.rs`, add a public function near the other free functions (e.g. just after `load_workspace`):
 
@@ -421,7 +421,7 @@ Expected: FAIL — `status`/`describe` print nothing; "No projects yet" absent.
 /// Text-mode hint printed when the workspace has no projects yet.
 pub fn print_no_projects_hint() {
     println!(
-        "No projects yet. A project groups the resources you manage together —\n\
+        "No projects yet. A project groups the resources you manage together:\n\
          see `rigg concepts`, then `rigg new project <name>`."
     );
 }
@@ -460,7 +460,7 @@ git commit -m "feat: next-step hint on empty workspace for status/describe"
 
 ---
 
-### Task 4: Docs — link `CONCEPTS.md` from README & GETTING_STARTED
+### Task 4: Docs: link `CONCEPTS.md` from README & GETTING_STARTED
 
 **Files:**
 - Modify: `README.md`
@@ -475,11 +475,11 @@ git commit -m "feat: next-step hint on empty workspace for status/describe"
 
 rigg has two levels. A **workspace** (`rigg.yaml`) holds your environments and
 service connections; a **project** is a group of resource definitions you pull,
-push, review, and deploy as one unit — and every resource belongs to exactly one
+push, review, and deploy as one unit, and every resource belongs to exactly one
 project. That single rule is what keeps sync unambiguous.
 
 New to the model, or unsure whether to use one project or several? Read
-**[CONCEPTS.md](CONCEPTS.md)** — or run `rigg concepts` for the same guide in
+**[CONCEPTS.md](CONCEPTS.md)**, or run `rigg concepts` for the same guide in
 your terminal.
 ```
 

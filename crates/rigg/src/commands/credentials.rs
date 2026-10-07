@@ -3,7 +3,7 @@
 //! Rigg never stores keys in files; data sources use keyless
 //! `ResourceId=<storage account ARM id>;` references and the search
 //! service's managed identity. Azure's GET responses never return
-//! credentials, so copied/migrated definitions arrive without one — these
+//! credentials, so copied/migrated definitions arrive without one: these
 //! helpers detect that and, since the user is already logged in via Azure
 //! CLI, DISCOVER the right storage account through ARM (by the container
 //! the data source reads) instead of asking the user to hand-type an id.
@@ -40,10 +40,10 @@ pub fn set_connection(doc: &mut Value, connection: &str) {
 }
 
 /// After an identity-based connection is chosen the search service's
-/// managed identity still needs data-plane RBAC — point at the doctor.
+/// managed identity still needs data-plane RBAC: point at the doctor.
 pub fn print_rbac_hint(account: &str) {
     println!(
-        "  hint: the search service's managed identity needs 'Storage Blob Data Reader' on {account} — run `rigg auth doctor --fix` to verify/grant"
+        "  hint: the search service's managed identity needs 'Storage Blob Data Reader' on {account}. Run `rigg auth doctor --fix` to verify/grant"
     );
 }
 
@@ -58,7 +58,7 @@ pub async fn discover_connection_interactive(
 ) -> Result<Option<String>> {
     let Some(container) = container else {
         println!(
-            "  {} {ds_display} declares no container — cannot auto-discover its storage account",
+            "  {} {ds_display} declares no container: cannot auto-discover its storage account",
             "!".yellow()
         );
         return manual_entry(plain);
@@ -70,7 +70,7 @@ pub async fn discover_connection_interactive(
         Ok(arm) => arm,
         Err(e) => {
             println!(
-                "  {} ARM access unavailable ({e}) — enter the connection manually",
+                "  {} ARM access unavailable ({e}): enter the connection manually",
                 "!".yellow()
             );
             return manual_entry(plain);
@@ -92,7 +92,7 @@ pub async fn discover_connection_interactive(
             manual_entry(plain)
         }
         [account] => {
-            println!("  found {} — {}", account.name.bold(), account.id);
+            println!("  found {}: {}", account.name.bold(), account.id);
             if interactive::confirm_default_yes(
                 &format!(
                     "Use identity-based access to '{}' for {ds_display}?",
@@ -109,12 +109,12 @@ pub async fn discover_connection_interactive(
             const MANUAL: &str = "enter manually";
             let mut options: Vec<String> = many
                 .iter()
-                .map(|a| format!("{} — {}", a.name, a.id))
+                .map(|a| format!("{}: {}", a.name, a.id))
                 .collect();
             options.push(MANUAL.to_string());
             let choice = interactive::select(
                 &format!(
-                    "Several storage accounts hold a container '{container}' — which one does {ds_display} read?"
+                    "Several storage accounts hold a container '{container}': which one does {ds_display} read?"
                 ),
                 options,
                 plain,
@@ -133,7 +133,7 @@ pub async fn discover_connection_interactive(
 
 fn manual_entry(plain: bool) -> Result<Option<String>> {
     let entered = interactive::text_with_default(
-        "Storage connection (ResourceId=/subscriptions/.../storageAccounts/<name>;) — empty to skip:",
+        "Storage connection (ResourceId=/subscriptions/.../storageAccounts/<name>;), empty to skip:",
         "",
         plain,
     )?;
@@ -144,7 +144,7 @@ fn manual_entry(plain: bool) -> Result<Option<String>> {
 /// A skillset whose `cognitiveServices` connection is key-based but carries
 /// no usable key (Azure never returns keys on GET, so copied definitions
 /// arrive with a null or `<redacted>` placeholder). Returns the subdomain
-/// URL when one is declared — the ingredient needed for the identity-based
+/// URL when one is declared: the ingredient needed for the identity-based
 /// rewrite.
 pub fn skillset_missing_ai_services_key(doc: &Value) -> Option<Option<String>> {
     let cs = doc.get("cognitiveServices")?.as_object()?;
@@ -154,7 +154,7 @@ pub fn skillset_missing_ai_services_key(doc: &Value) -> Option<Option<String>> {
     }
     let key = cs.get("key").and_then(Value::as_str).unwrap_or("");
     if !key.trim().is_empty() && key != "<redacted>" {
-        return None; // a real key — validate rejects it elsewhere
+        return None; // a real key: validate rejects it elsewhere
     }
     Some(
         cs.get("subdomainUrl")
@@ -192,7 +192,7 @@ pub async fn resolve_ai_services_billing_target(
     };
     let Ok(arm) = ArmClient::new() else {
         println!(
-            "  {} cannot verify account kind (no ARM access) — keeping '{account_name}'",
+            "  {} cannot verify account kind (no ARM access): keeping '{account_name}'",
             "!".yellow()
         );
         return Ok(Some(normalized));
@@ -201,7 +201,7 @@ pub async fn resolve_ai_services_billing_target(
         Ok(acct) if acct.kind.eq_ignore_ascii_case("AIServices") => Ok(Some(normalized)),
         Ok(acct) => {
             println!(
-                "  {} '{}' is a legacy Cognitive Services account (kind: {}) — keyless \
+                "  {} '{}' is a legacy Cognitive Services account (kind: {}). Keyless \
                  identity-based billing requires a Foundry (AI Services) resource",
                 "!".yellow(),
                 acct.name,
@@ -211,7 +211,7 @@ pub async fn resolve_ai_services_billing_target(
         }
         Err(_) => {
             println!(
-                "  {} account '{account_name}' not found via ARM — keeping it (verify manually)",
+                "  {} account '{account_name}' not found via ARM: keeping it (verify manually)",
                 "!".yellow()
             );
             Ok(Some(normalized))
@@ -231,7 +231,7 @@ async fn offer_foundry_accounts(arm: &ArmClient, plain: bool) -> Result<Option<S
     match accounts.as_slice() {
         [] => {
             println!(
-                "  {} no Foundry (AI Services) resource visible to your login — create one, or keep key-based billing",
+                "  {} no Foundry (AI Services) resource visible to your login: create one, or keep key-based billing",
                 "!".yellow()
             );
             Ok(None)
@@ -254,7 +254,7 @@ async fn offer_foundry_accounts(arm: &ArmClient, plain: bool) -> Result<Option<S
             const SKIP: &str = "skip (keep the file as is)";
             let mut options: Vec<String> = many
                 .iter()
-                .map(|a| format!("{} — {}", a.name, endpoint_of(a)))
+                .map(|a| format!("{}: {}", a.name, endpoint_of(a)))
                 .collect();
             options.push(SKIP.to_string());
             let choice = interactive::select(
@@ -286,7 +286,7 @@ pub fn ai_services_account_name(subdomain_url: &str) -> Option<&str> {
 /// RBAC pointer for the identity-based AI services connection.
 pub fn print_ai_services_rbac_hint(account: &str) {
     println!(
-        "  hint: the search service's managed identity needs 'Cognitive Services User' on AI services account '{account}' — run `rigg auth doctor --fix` to verify/grant"
+        "  hint: the search service's managed identity needs 'Cognitive Services User' on AI services account '{account}'. Run `rigg auth doctor --fix` to verify/grant"
     );
 }
 
@@ -297,7 +297,7 @@ pub fn print_ai_services_rbac_hint(account: &str) {
 /// Rigg-local annotation marking a Web API skill whose function key is
 /// resolved through ARM at push time (never stored on disk). Kept in the
 /// file, stripped before any PUT like every `x-rigg-*` key. Defined once,
-/// in the registry — the table every `x-rigg-*` key belongs to.
+/// in the registry: the table every `x-rigg-*` key belongs to.
 pub use rigg_core::registry::{
     X_RIGG_AUTH, X_RIGG_AUTH_FUNCTION_KEY, X_RIGG_AUTH_KEY_VAULT_PREFIX, is_known_auth_annotation,
     parse_key_vault_auth,
@@ -333,7 +333,7 @@ fn unusable_key_value(v: &Value) -> bool {
 enum CarrierSlot {
     /// An `httpHeaders` entry, named exactly as the local document wrote it.
     Header(String),
-    /// The `uri`'s `code` query parameter — the whole uri is the carrier.
+    /// The `uri`'s `code` query parameter: the whole uri is the carrier.
     Uri,
 }
 
@@ -346,7 +346,7 @@ pub struct KeyCarrier {
     /// Index into the document's `skills` array.
     skill: usize,
     slot: CarrierSlot,
-    /// The value the slot held locally — `None` when it held nothing.
+    /// The value the slot held locally: `None` when it held nothing.
     original: Option<Value>,
 }
 
@@ -373,7 +373,7 @@ fn place_function_key_at(skill: &mut Value, key: &str) -> (CarrierSlot, Option<V
 /// baseline.
 ///
 /// Push canonicalization writes the service's PUT echo to disk. Azure Search
-/// redacts stored secrets on the way out — but "local files never contain
+/// redacts stored secrets on the way out, but "local files never contain
 /// secrets" is rigg's invariant, not Azure's promise, so rigg enforces it
 /// here rather than trusting the echo.
 pub fn restore_key_carriers(doc: &mut Value, carriers: &[KeyCarrier]) {
@@ -406,7 +406,7 @@ pub fn restore_key_carriers(doc: &mut Value, carriers: &[KeyCarrier]) {
     }
 }
 
-/// Remove the function-key header (any casing) — the Entra ID counterpart of
+/// Remove the function-key header (any casing): the Entra ID counterpart of
 /// `strip_code_param`.
 pub fn remove_function_key_header(skill: &mut Value) {
     if let Some(headers) = skill.get_mut("httpHeaders").and_then(Value::as_object_mut) {
@@ -479,7 +479,7 @@ pub fn strip_code_param(uri: &str) -> String {
 /// The Entra ID audience a function app's Easy Auth grants, read from its
 /// `authsettingsV2` document: the first allowed audience, else
 /// `api://<clientId>`. `None` when the platform switch or the Microsoft
-/// identity provider is off — i.e. when the app has no Entra auth at all.
+/// identity provider is off, i.e. when the app has no Entra auth at all.
 pub fn easy_auth_audience_of(settings: &Value) -> Option<String> {
     let enabled = settings
         .pointer("/properties/platform/enabled")
@@ -509,11 +509,11 @@ pub fn easy_auth_audience_of(settings: &Value) -> Option<String> {
 /// site's ARM resource id, from [`ArmClient::find_web_site_id`]).
 ///
 /// An ARM failure collapses into `None` here, which is only safe because the
-/// one caller — the interactive [`resolve_webapi_auth`] — offers the user a
+/// one caller, the interactive [`resolve_webapi_auth`], offers the user a
 /// choice either way and never records a decision on the strength of a
 /// `None`. A caller that would WRITE something on "no Entra auth" must call
 /// [`ArmClient::site_auth_settings`] itself and keep the `Err` apart from an
-/// `Ok` document that says the app is anonymous — promote's online phase
+/// `Ok` document that says the app is anonymous: promote's online phase
 /// does exactly that.
 pub async fn easy_auth_audience(arm: &ArmClient, site_id: &str) -> Option<String> {
     easy_auth_audience_of(&arm.site_auth_settings(site_id).await.ok()?)
@@ -521,11 +521,11 @@ pub async fn easy_auth_audience(arm: &ArmClient, site_id: &str) -> Option<String
 
 /// How one Web API skill's authorization got resolved.
 pub enum WebApiAuthOutcome {
-    /// `authResourceId` written — durable, keyless (Entra ID).
+    /// `authResourceId` written: durable, keyless (Entra ID).
     EntraId,
-    /// `x-rigg-auth: function-key` annotated — key injected at push time.
+    /// `x-rigg-auth: function-key` annotated: key injected at push time.
     FunctionKey,
-    /// `x-rigg-auth: key-vault:<secret>@<binding>` annotated — the key is
+    /// `x-rigg-auth: key-vault:<secret>@<binding>` annotated: the key is
     /// read from the vault at push time (spec §6).
     KeyVault,
     /// User skipped; the skill will fail at enrichment time until fixed.
@@ -533,7 +533,7 @@ pub enum WebApiAuthOutcome {
 }
 
 /// Interactively resolve authorization for the Web API skill at `idx`:
-/// Entra ID (`authResourceId`, recommended — offered ready-made when the
+/// Entra ID (`authResourceId`, recommended: offered ready-made when the
 /// function app already has Easy Auth, otherwise with concrete enablement
 /// guidance) or a push-time-resolved function key (never stored on disk).
 pub async fn resolve_webapi_auth(
@@ -563,16 +563,16 @@ pub async fn resolve_webapi_auth(
     }
 
     const ENTRA_READY: &str =
-        "identity-based (Entra ID) — recommended: keyless, verifiable by auth doctor";
+        "identity-based (Entra ID), recommended: keyless, verifiable by auth doctor";
     const ENTRA_SETUP: &str =
-        "identity-based (Entra ID) — set it up now (registers the app and enables Easy Auth)";
-    const ENTRA_GUIDE: &str = "identity-based (Entra ID) — recommended, but the function app has no Entra auth yet (show what's needed)";
-    const KEY: &str = "function key, resolved at push time — key stays in Azure, never on disk";
-    const KEY_VAULT: &str = "function key from a key vault, resolved at push time — you name <secret>@<key-vault \
-         binding>";
+        "identity-based (Entra ID): set it up now (registers the app and enables Easy Auth)";
+    const ENTRA_GUIDE: &str = "identity-based (Entra ID), recommended, but the function app has no Entra auth yet (show what's needed)";
+    const KEY: &str = "function key, resolved at push time (key stays in Azure, never on disk)";
+    const KEY_VAULT: &str = "function key from a key vault, resolved at push time (you name <secret>@<key-vault \
+         binding>)";
     const SKIP: &str = "skip for now (enrichment will fail until authorized)";
     // `rigg auth easy-auth` wires the app end to end, but only when the app
-    // is a declared function-app binding — that is where its scope comes from.
+    // is a declared function-app binding: that is where its scope comes from.
     let wiring = easy_auth_binding_for(ctx, &parsed);
     let entra_option = match (&entra_audience, &wiring) {
         (Some(_), _) => ENTRA_READY,
@@ -592,7 +592,7 @@ pub async fn resolve_webapi_auth(
 
     // Spec §6's fourth option: the key lives in a key vault this environment
     // binds, and push fetches it from there. Nothing is verified against
-    // Azure here — the vault read happens at push time, with the same
+    // Azure here: the vault read happens at push time, with the same
     // "never on disk, never printed" handling as the ARM path.
     if choice == KEY_VAULT {
         let mut asker = ctx.asker("push", serde_json::json!({"skill": ds_display, "uri": uri}));
@@ -606,7 +606,7 @@ pub async fn resolve_webapi_auth(
         let annotation = key_vault_annotation(answer.as_str().unwrap_or_default())?;
         doc["skills"][idx][X_RIGG_AUTH] = Value::String(annotation.clone());
         println!(
-            "  {} the skill is annotated `{X_RIGG_AUTH}: {annotation}` — rigg reads the secret \
+            "  {} the skill is annotated `{X_RIGG_AUTH}: {annotation}`: rigg reads the secret \
              from the vault and injects it whenever the skillset is pushed; the file keeps the \
              placeholder",
             "✓".green()
@@ -618,7 +618,7 @@ pub async fn resolve_webapi_auth(
         let (ws, env, binding) = wiring.expect("offered only when a binding was found");
         // `wire` also rewrites the skillset FILE (every skill calling that
         // app). The same edit is applied to the caller's in-memory document
-        // below, because the caller writes it back after this returns — so
+        // below, because the caller writes it back after this returns, so
         // the two must agree rather than one silently undoing the other.
         let wired = crate::commands::easy_auth::wire(ctx, &ws, &env, &binding, None, None).await?;
         if !wired.applied {
@@ -663,7 +663,7 @@ pub async fn resolve_webapi_auth(
         println!("        --client-id <app-registration-id> --yes");
         println!("    (portal: Function App → Authentication → Add identity provider → Microsoft)");
         println!(
-            "  then run `rigg push` again — rigg will detect it and offer the ready-made option."
+            "  then run `rigg push` again: rigg will detect it and offer the ready-made option."
         );
         // Fall through to offering the key so the user is not stuck.
         if !interactive::confirm_default_yes("Use the push-time function key until then?", plain)? {
@@ -677,14 +677,14 @@ pub async fn resolve_webapi_auth(
     // injection cannot surprise-fail later.
     let (Some(arm), Some((_, function))) = (&arm, &parsed) else {
         println!(
-            "  {} cannot reach ARM or parse the function URI — fix the uri or use Entra auth",
+            "  {} cannot reach ARM or parse the function URI: fix the uri or use Entra auth",
             "!".yellow()
         );
         return Ok(WebApiAuthOutcome::Skipped);
     };
     let Some(site_id) = &site_id else {
         println!(
-            "  {} function app not found via ARM — is it in a subscription this login can see?",
+            "  {} function app not found via ARM: is it in a subscription this login can see?",
             "!".yellow()
         );
         return Ok(WebApiAuthOutcome::Skipped);
@@ -693,7 +693,7 @@ pub async fn resolve_webapi_auth(
         Ok(_) => {
             doc["skills"][idx][X_RIGG_AUTH] = Value::String(X_RIGG_AUTH_FUNCTION_KEY.to_string());
             println!(
-                "  {} key verified retrievable; the skill is annotated `{}: {}` — rigg fetches and injects it whenever the skillset is pushed (or on `rigg push --refresh-credentials`), the file keeps the placeholder",
+                "  {} key verified retrievable; the skill is annotated `{}: {}`: rigg fetches and injects it whenever the skillset is pushed (or on `rigg push --refresh-credentials`), the file keeps the placeholder",
                 "✓".green(),
                 X_RIGG_AUTH,
                 X_RIGG_AUTH_FUNCTION_KEY
@@ -715,13 +715,13 @@ pub async fn resolve_webapi_auth(
 /// thing rigg cannot check against Azure in this flow, and a typo would
 /// otherwise surface as a push failure much later.
 ///
-/// The secret's *value* never appears — only its name and the binding.
+/// The secret's *value* never appears, only its name and the binding.
 fn key_vault_annotation(answer: &str) -> Result<String> {
     let annotation = format!("{X_RIGG_AUTH_KEY_VAULT_PREFIX}{}", answer.trim());
     if parse_key_vault_auth(&annotation).is_none() {
         return Err(anyhow::anyhow!(CommandError::Usage(format!(
-            "'{}' is not a '<secret>@<key-vault binding>' reference — e.g. \
-             `fn-key@secrets`, where `secrets` is a `key-vault` dependency of this environment",
+            "'{}' is not a '<secret>@<key-vault binding>' reference (e.g. \
+             `fn-key@secrets`, where `secrets` is a `key-vault` dependency of this environment)",
             answer.trim()
         ))));
     }
@@ -729,7 +729,7 @@ fn key_vault_annotation(answer: &str) -> Result<String> {
 }
 
 /// The workspace, environment and `function-app` binding name that
-/// `rigg auth easy-auth` would need for the site in `parsed` — `None` when
+/// `rigg auth easy-auth` would need for the site in `parsed`: `None` when
 /// there is no workspace, no environment, or no binding pointing at it.
 fn easy_auth_binding_for(
     ctx: &crate::commands::GlobalContext,
@@ -750,19 +750,19 @@ fn easy_auth_binding_for(
 }
 
 /// Push-time key injection: for every Web API skill annotated with a key
-/// source, fetch the key and place it in the PUSHED body —
+/// source, fetch the key and place it in the PUSHED body:
 /// `function-key` through ARM `listkeys`, `key-vault:<secret>@<binding>`
 /// through the vault's data plane (spec §6). The annotation itself is
 /// stripped with the other `x-rigg-*` keys before the PUT; the file never
 /// changes.
 ///
 /// The fetched value exists only in `body` from here on: it is never
-/// written to disk, printed, or traced — not even in an error, which names
+/// written to disk, printed, or traced, not even in an error, which names
 /// the secret and the vault but never the value.
 ///
 /// Returns the carriers written, so the caller can hand them to
 /// [`restore_key_carriers`] before persisting whatever the service echoes
-/// back — the enforcement behind "local files never contain secrets".
+/// back: the enforcement behind "local files never contain secrets".
 pub async fn inject_function_keys(
     body: &mut Value,
     ws: &Workspace,
@@ -795,7 +795,7 @@ pub async fn inject_function_keys(
         }
         if annotation != X_RIGG_AUTH_FUNCTION_KEY {
             anyhow::bail!(
-                "unknown `{X_RIGG_AUTH}` value '{annotation}' — expected '{X_RIGG_AUTH_FUNCTION_KEY}' \
+                "unknown `{X_RIGG_AUTH}` value '{annotation}': expected '{X_RIGG_AUTH_FUNCTION_KEY}' \
                  or '{X_RIGG_AUTH_KEY_VAULT_PREFIX}<secret>@<key-vault binding>'"
             );
         }
@@ -826,7 +826,7 @@ pub async fn inject_function_keys(
 /// The data-plane URI of the `key-vault` binding named by a
 /// `key-vault:<secret>@<binding>` annotation.
 ///
-/// The binding must be a declared `key-vault` dependency — `rigg validate`
+/// The binding must be a declared `key-vault` dependency: `rigg validate`
 /// says so too, but push must not depend on validate having run. The URI
 /// comes from the resolution cache when it has one, else from a fresh ARM
 /// lookup.
@@ -834,14 +834,14 @@ async fn key_vault_uri(ws: &Workspace, env: &ResolvedEnv, binding: &str) -> Resu
     let declared = env.env.dependencies.get(binding).ok_or_else(|| {
         anyhow::anyhow!(
             "`{X_RIGG_AUTH}: {X_RIGG_AUTH_KEY_VAULT_PREFIX}…@{binding}` names no dependency in \
-             environment '{}' — declare it: `rigg env bind {} {binding} key-vault:<vault-name>`",
+             environment '{}'. Declare it: `rigg env bind {} {binding} key-vault:<vault-name>`",
             env.name,
             env.name
         )
     })?;
     if declared.kind != BindingType::KeyVault {
         anyhow::bail!(
-            "'{binding}' is a {} binding, not a key-vault binding — a `{X_RIGG_AUTH}` key source \
+            "'{binding}' is a {} binding, not a key-vault binding: a `{X_RIGG_AUTH}` key source \
              must name a key vault",
             declared.kind
         );
@@ -1118,7 +1118,7 @@ mod function_key_header_tests {
 
     #[test]
     fn absent_header_is_not_flagged() {
-        // Anonymous functions are legitimate — no header, no code param, no flag.
+        // Anonymous functions are legitimate: no header, no code param, no flag.
         let doc = webapi_skillset(
             URI,
             json!({"httpHeaders": {"content-type": "application/json"}}),
@@ -1144,7 +1144,7 @@ mod function_key_header_tests {
 
     #[test]
     fn real_header_value_is_not_flagged_as_missing() {
-        // A real key is not "missing auth" — validate rejects it separately
+        // A real key is not "missing auth": validate rejects it separately
         // under the no-secrets policy.
         let doc = webapi_skillset(URI, json!({"httpHeaders": {"x-functions-key": "real-key"}}));
         assert!(webapi_skills_missing_auth(&doc).is_empty());

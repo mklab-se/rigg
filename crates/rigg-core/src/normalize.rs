@@ -79,7 +79,7 @@ pub fn semantic_eq(kind: ResourceKind, a: &Value, b: &Value) -> bool {
 ///
 /// - Specs containing `.` or `[]` are paths from the root (e.g.
 ///   `properties.provisioningState`, `models[].apiKey`).
-/// - Bare names are removed at any depth (e.g. `@odata.etag` — note the
+/// - Bare names are removed at any depth (e.g. `@odata.etag`: note the
 ///   leading `@` key itself contains dots but is matched as a literal key).
 fn strip_field(value: &mut Value, spec: &str) {
     let is_literal_key = spec.starts_with('@') || (!spec.contains('.') && !spec.contains("[]"));

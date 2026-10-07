@@ -51,7 +51,7 @@ use crate::cli::{Cli, OutputFormat};
 
 /// Human-readable prose: stdout in text mode, stderr when `--output json`
 /// (stdout must then carry only JSON documents). Every "explain, then act"
-/// narration line — plan items, progress, notes — goes through this so a
+/// narration line (plan items, progress, notes) goes through this so a
 /// scripted `--output json` caller sees nothing on stdout but the JSON
 /// documents it asked for, while a human still sees the same narration (on
 /// stderr) as the command runs.
@@ -98,8 +98,8 @@ pub enum CommandError {
 }
 
 /// Map a command result to the process exit code, printing errors to
-/// stderr. `ask::NeedsInput` — the canonical "I need an answer" error,
-/// produced by a `ScriptedAsker` — is special-cased: the `needs-input`
+/// stderr. `ask::NeedsInput` (the canonical "I need an answer" error,
+/// produced by a `ScriptedAsker`) is special-cased: the `needs-input`
 /// protocol document goes to **stdout** so a scripted caller can parse it,
 /// and the human-readable summary goes to stderr only in text mode.
 pub fn exit_code_for(result: Result<()>, output: OutputFormat) -> ExitCode {
@@ -151,8 +151,8 @@ pub fn is_auth_error(err: &rigg_client::error::ClientError) -> bool {
 }
 
 /// Is `RIGG_NON_INTERACTIVE` set to something that means "yes"? Documented
-/// as "set it to 1", but an empty value — what `FOO=` and many CI templates
-/// produce — and the explicit off-switches `0` / `false` must not silently
+/// as "set it to 1", but an empty value, what `FOO=` and many CI templates
+/// produce, and the explicit off-switches `0` / `false` must not silently
 /// disable prompting.
 fn non_interactive_env() -> bool {
     std::env::var("RIGG_NON_INTERACTIVE").is_ok_and(|v| non_interactive_value(&v))
@@ -245,7 +245,7 @@ pub fn load_workspace_from(start: &Path) -> Result<Workspace> {
     match Workspace::discover(start) {
         Ok(ws) => Ok(ws),
         // A rigg.yaml that exists but cannot be read or parsed is a
-        // different problem from having no workspace at all — saying "run
+        // different problem from having no workspace at all: saying "run
         // `rigg init`" would send the user to overwrite the very file that
         // needs fixing, and would bury the parser's line/column.
         Err(e) => match workspace_file_detail(&e) {
@@ -277,7 +277,7 @@ fn workspace_file_detail(e: &WorkspaceError) -> Option<String> {
 /// Text-mode hint printed when the workspace has no projects yet.
 pub fn print_no_projects_hint() {
     println!(
-        "No projects yet. A project groups the resources you manage together —\n\
+        "No projects yet. A project groups the resources you manage together:\n\
          see `rigg concepts`, then `rigg new project <name>`."
     );
 }
@@ -310,7 +310,7 @@ pub fn select_projects<'w>(
 }
 
 /// Resolve exactly one project: the named one, or the workspace's only one
-/// when the name is omitted — the CLI-wide single-project convention.
+/// when the name is omitted: the CLI-wide single-project convention.
 pub fn select_one_project<'w>(ws: &'w Workspace, project: Option<&str>) -> Result<&'w Project> {
     match project {
         Some(name) => Ok(ws.project(name)?),
@@ -332,7 +332,7 @@ pub fn resolve_env(ws: &Workspace, ctx: &GlobalContext) -> Result<ResolvedEnv> {
 /// Resolve the environment for commands where silently acting on the wrong
 /// one is costly (adopt): an explicit selection (`--env` / `RIGG_ENV`) always
 /// wins and a lone configured environment is used as-is, but with several
-/// environments the user must choose — interactively when possible, otherwise
+/// environments the user must choose: interactively when possible, otherwise
 /// a usage error naming the candidates. The `default: true` marker is
 /// deliberately NOT enough here.
 pub fn resolve_env_or_choose(
@@ -379,7 +379,7 @@ pub fn resolve_env_or_choose(
 /// environment is unprotected and the gate is a no-op.
 ///
 /// Split out of [`confirm_protected_env`] so a guided flow that has several
-/// questions to ask can push this one into its own `ask_all` batch — a
+/// questions to ask can push this one into its own `ask_all` batch: a
 /// caller then gets the protected-env confirmation and its other missing
 /// answers in a single `needs-input` document instead of one per round-trip.
 /// Pair it with [`confirm_env_answer`] to honour a `--confirm-env` flag.
@@ -401,18 +401,18 @@ pub fn confirm_env_answer(env_name: &str, confirm_env: Option<&str>) -> Option<(
 /// `policy.protected` flag, speaking the question protocol: the gate is
 /// [`protected_env_question`] put to `ctx.asker()`, so it composes with
 /// `--answer` / `--answers-file` and `--yes` like any other question. This
-/// is the one-shot wrapper — a flow with more to ask should batch
+/// is the one-shot wrapper: a flow with more to ask should batch
 /// [`protected_env_question`] into its own `ask_all` instead.
 ///
 /// `operation` names the mutation in the prompt ("… to confirm push:");
 /// `command` is what a caller re-runs once it has the answer (`"push"`,
 /// `"delete"`, `"az indexer run"`, …) and `context` is what it needs to
-/// re-run it (`project`, `indexer`, …) — both are echoed in the
+/// re-run it (`project`, `indexer`, …), both are echoed in the
 /// `needs-input` document. `env` is added to `context` when the caller left
 /// it out.
 ///
 /// Returns `Ok(true)` when the operation may proceed, `Ok(false)` when the
-/// user declined via an interactive typed-name mismatch — callers should
+/// user declined via an interactive typed-name mismatch: callers should
 /// print "Aborted." and return `Ok(())`, matching every other decline in the
 /// CLI (e.g. answering `n` to "Apply N change(s)?").
 ///
@@ -426,7 +426,7 @@ pub fn confirm_env_answer(env_name: &str, confirm_env: Option<&str>) -> Option<(
 ///   environment name; a mismatch → `Ok(false)`.
 /// - Non-interactive session (incl. `--yes`) with no answer → the scripted
 ///   asker returns `NeedsInput`, which propagates as `Err` and maps to exit
-///   code 6 — the caller answers with `--confirm-env` / `--answer` and
+///   code 6: the caller answers with `--confirm-env` / `--answer` and
 ///   re-runs.
 ///
 /// `ctx.yes` (`--yes`) is deliberately **not** consulted: `--yes` exists to
@@ -435,7 +435,7 @@ pub fn confirm_env_answer(env_name: &str, confirm_env: Option<&str>) -> Option<(
 /// would be no safer than an unprotected one the moment someone habitually
 /// pipes `-y` into their commands. Protection must be opted into explicitly,
 /// per invocation, via a typed name (interactive) or `--confirm-env` /
-/// `--answer` (non-interactive) — never implied by a blanket "yes to
+/// `--answer` (non-interactive), never implied by a blanket "yes to
 /// everything" flag. `--yes` makes the session non-interactive
 /// ([`GlobalContext::interactive`]), so the scripted asker runs regardless.
 pub fn confirm_protected_env(
@@ -462,7 +462,7 @@ pub fn confirm_protected_env(
     match asker.ask(&question) {
         Ok(answer) => Ok(answer.as_bool().unwrap_or(false)),
         // A pre-supplied `--confirm-env` that fails coercion (wrong name) is
-        // a usage error (exit 2), not a generic failure (exit 1) — it names
+        // a usage error (exit 2), not a generic failure (exit 1): it names
         // the environment `--confirm-env` must match exactly. An answer that
         // came from an interactive prompt instead (confirm_env is None here)
         // is left as-is so NeedsInput (exit 6) still propagates untouched.

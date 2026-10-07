@@ -1,4 +1,4 @@
-# Workstream 1: Environments and infrastructure bindings — Implementation Plan
+# Workstream 1: Environments and infrastructure bindings: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -26,10 +26,10 @@
 
 ---
 
-### Task 1: Workspace model 2.0 — targets, tenant/subscription, policy, dependencies
+### Task 1: Workspace model 2.0: targets, tenant/subscription, policy, dependencies
 
 **Files:**
-- Modify: `crates/rigg-core/src/workspace.rs` (whole model), `crates/rigg-core/src/lib.rs` (`pub mod binding;` added in Task 2 — leave for now), `crates/rigg/src/commands/remote.rs:29-33`, `crates/rigg/src/commands/doctor.rs:36-37`, `crates/rigg/src/commands/push.rs:782,796,1363,1377`, `crates/rigg/src/commands/env.rs` (print_env, add writer), `crates/rigg/src/commands/init.rs` (yaml writer), `samples/rigg.yaml`, `crates/rigg/tests/sync.rs` + `cli_surface.rs` fixtures if any use list-form connections (grep `- name:` / `search-connection`)
+- Modify: `crates/rigg-core/src/workspace.rs` (whole model), `crates/rigg-core/src/lib.rs` (`pub mod binding;` added in Task 2, leave for now), `crates/rigg/src/commands/remote.rs:29-33`, `crates/rigg/src/commands/doctor.rs:36-37`, `crates/rigg/src/commands/push.rs:782,796,1363,1377`, `crates/rigg/src/commands/env.rs` (print_env, add writer), `crates/rigg/src/commands/init.rs` (yaml writer), `samples/rigg.yaml`, `crates/rigg/tests/sync.rs` + `cli_surface.rs` fixtures if any use list-form connections (grep `- name:` / `search-connection`)
 - Test: `workspace.rs` inline; `cli_surface.rs`
 
 **Interfaces:**
@@ -146,7 +146,7 @@ impl Serialize for Binding { /* one-key map */ }
 
 Validate binding names in `Workspace::load` (error `WorkspaceError::Parse`-like `InvalidBindingName { env, name, reason }`). `ProjectManifest` keeps `description` only (`deny_unknown_fields` stays, so old pins error clearly). `ResolvedEnv::search()/foundry()` return `self.env.search.as_ref()` etc. Delete `pick_connection`, the three connection errors, `Defaults`.
 
-Callers: `remote.rs` `Remote::for_project(env, _project)` → `search_conn: env.search().cloned()`; `doctor.rs` → `env.search()` / `env.foundry()`; `push.rs` → `env.search().map(|c| c.service.clone())` and `resolve_cross_service_refs(env.search(), …)`; `env.rs::print_env` iterates the options; `env add`/`init` writers unchanged in shape (they already write single mappings) but `init` now also writes `tenant:` and `subscription:` when `AzCliAuth::check_status()` returns them (`AuthStatus.subscription_id`; tenant from `az account show` — add `tenant_id` to `AuthStatus` in `auth.rs`, parsed from the `tenantId` field).
+Callers: `remote.rs` `Remote::for_project(env, _project)` → `search_conn: env.search().cloned()`; `doctor.rs` → `env.search()` / `env.foundry()`; `push.rs` → `env.search().map(|c| c.service.clone())` and `resolve_cross_service_refs(env.search(), …)`; `env.rs::print_env` iterates the options; `env add`/`init` writers unchanged in shape (they already write single mappings) but `init` now also writes `tenant:` and `subscription:` when `AzCliAuth::check_status()` returns them (`AuthStatus.subscription_id`; tenant from `az account show`, add `tenant_id` to `AuthStatus` in `auth.rs`, parsed from the `tenantId` field).
 
 - [ ] **Step 4: Run the gate**
 
@@ -157,7 +157,7 @@ Expected: green; grep `search_for\|foundry_for\|ConnectionList` in `crates/` ret
 
 ```bash
 git add -A
-git commit -m "feat!(workspace): rigg.yaml 2.0 — single targets, tenant/subscription, policy.strict-bindings, dependencies bindings
+git commit -m "feat!(workspace): rigg.yaml 2.0, single targets, tenant/subscription, policy.strict-bindings, dependencies bindings
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -237,7 +237,7 @@ fn cache_round_trips_under_state_dir() {
 }
 ```
 
-(`SearchConnection`/`FoundryConnection`/`Environment` need `Default` derives — add them; `EnvBindings::of_env(name, &Environment, cache)` is the workspace-free constructor; `of(ws, env_name, …)` loads the cache and delegates.)
+(`SearchConnection`/`FoundryConnection`/`Environment` need `Default` derives: add them; `EnvBindings::of_env(name, &Environment, cache)` is the workspace-free constructor; `of(ws, env_name, …)` loads the cache and delegates.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -260,7 +260,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Registry `InfraRef` table and `infra.rs` — parse, render, extract, classify
+### Task 3: Registry `InfraRef` table and `infra.rs`: parse, render, extract, classify
 
 **Files:**
 - Create: `crates/rigg-core/src/infra.rs`
@@ -400,7 +400,7 @@ Expected: compile errors.
 
 - [ ] **Step 3: Implement**
 
-Registry: the full table from spec §2.3 (27 rows across DataSource, Index, Skillset, Indexer, KnowledgeSource, KnowledgeBase, Agent, Connection; Skillset rows are conditional on `@odata.type` — `extract` applies `skills[].resourceUri` only to `AzureOpenAIEmbeddingSkill`, `skills[].uri`/`authIdentity` only to `WebApiSkill`; encode that as `InfraRef { path, form, only_odata_type: Option<&'static str> }`).
+Registry: the full table from spec §2.3 (27 rows across DataSource, Index, Skillset, Indexer, KnowledgeSource, KnowledgeBase, Agent, Connection; Skillset rows are conditional on `@odata.type`, `extract` applies `skills[].resourceUri` only to `AzureOpenAIEmbeddingSkill`, `skills[].uri`/`authIdentity` only to `WebApiSkill`; encode that as `InfraRef { path, form, only_odata_type: Option<&'static str> }`).
 
 `infra.rs`: `extract` walks paths with `[]` expanding to concrete indices (write a small walker returning `(concrete_path, &Value)` pairs; do not reuse `collect_path`, which loses indices). Host parsing: lowercase the host; strip a trailing `/`. `render` for `StorageResourceId` preserves the original's `;`-tail; for URL forms, rebuild with the original path+query. `classify` as in Interfaces.
 
@@ -425,9 +425,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Interfaces:**
 - `validate` JSON: `{ "valid": bool, "problems": [..], "warnings": [..] }`; text prints `✗` problems, `!` warnings, and with `--show-bindings` `✓ bound` / `= shared (prod)` rows.
 - Messages (exact prefixes, tested):
-  - Leak: `[<file>] <path> references storage 'X', which is bound in environment 'prod' as 'docs-storage' but not in 'dev' — bind it (rigg env bind dev docs-storage storage:X) or fix the file`
-  - Unbound: `[<file>] <path> references function-app 'Y', which no environment binds — run \`rigg env bind dev --learn\` to record it`
-  - External: `[<file>] <path> calls external API 'https://host' — bind it as an api dependency to track it across environments`
+  - Leak: `[<file>] <path> references storage 'X', which is bound in environment 'prod' as 'docs-storage' but not in 'dev', bind it (rigg env bind dev docs-storage storage:X) or fix the file`
+  - Unbound: `[<file>] <path> references function-app 'Y', which no environment binds, run \`rigg env bind dev --learn\` to record it`
+  - External: `[<file>] <path> calls external API 'https://host', bind it as an api dependency to track it across environments`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -489,7 +489,7 @@ In `validate::run`, build `EnvBindings` for every environment in `ws.config.envi
 ```bash
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 git add -A
-git commit -m "feat(validate): classify infrastructure references — leaks are errors, unbound warns (strict in protected envs)
+git commit -m "feat(validate): classify infrastructure references, leaks are errors, unbound warns (strict in protected envs)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -499,8 +499,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 5: ARM resolution per tenant/subscription and the test-only ARM endpoint override
 
 **Files:**
-- Modify: `crates/rigg-client/src/auth.rs` (`get_arm_token_for_tenant`, `AuthStatus.tenant_id`), `crates/rigg-client/src/arm.rs` (`ArmClient::for_tenant`, `base_url` field honouring `RIGG_ARM_ENDPOINT`, `resolve_binding`, list helpers for MSI and Key Vault), `crates/rigg-core/src/registry.rs` (nothing — versions already there)
-- Create: `crates/rigg/tests/arm_fake.rs` (wiremock ARM fake helpers, reused by later workstreams) — a `pub fn mount_arm_fake(server: &MockServer, subs: &[&str], resources: &[(&str /*type*/, &str /*name*/, &str /*rg*/, &str /*location*/)])` that serves `/subscriptions`, and per-subscription provider listings for `Microsoft.Storage/storageAccounts`, `Microsoft.CognitiveServices/accounts`, `Microsoft.Web/sites`, `Microsoft.ManagedIdentity/userAssignedIdentities`, `Microsoft.KeyVault/vaults`, `Microsoft.Search/searchServices`
+- Modify: `crates/rigg-client/src/auth.rs` (`get_arm_token_for_tenant`, `AuthStatus.tenant_id`), `crates/rigg-client/src/arm.rs` (`ArmClient::for_tenant`, `base_url` field honouring `RIGG_ARM_ENDPOINT`, `resolve_binding`, list helpers for MSI and Key Vault), `crates/rigg-core/src/registry.rs` (nothing, versions already there)
+- Create: `crates/rigg/tests/arm_fake.rs` (wiremock ARM fake helpers, reused by later workstreams), a `pub fn mount_arm_fake(server: &MockServer, subs: &[&str], resources: &[(&str /*type*/, &str /*name*/, &str /*rg*/, &str /*location*/)])` that serves `/subscriptions`, and per-subscription provider listings for `Microsoft.Storage/storageAccounts`, `Microsoft.CognitiveServices/accounts`, `Microsoft.Web/sites`, `Microsoft.ManagedIdentity/userAssignedIdentities`, `Microsoft.KeyVault/vaults`, `Microsoft.Search/searchServices`
 - Test: `arm.rs` inline (URL building), `crates/rigg/tests/arm_fake.rs` (`ArmClient` against the fake)
 
 **Interfaces:**
@@ -518,7 +518,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   }
   pub struct ArmResource { pub name: String, pub id: String, pub location: String, pub kind: Option<String>, pub endpoint: Option<String> }
   ```
-  `resolve_binding`: `ArmId` value → `GET {id}` with the type's provider version to confirm and fill location/endpoint (endpoint: storage `properties.primaryEndpoints.blob`, cognitive `properties.endpoint`, sites `https://{name}.azurewebsites.net`, vault `properties.vaultUri`, MSI: `properties.clientId` in `endpoint`? — no: put MSI `principalId` in a new `principal_id: Option<String>` field of `ResolvedBinding` (add it to the core struct now, `#[serde(default)]`); `Name` value → list the type in `subscription` (or every enabled subscription when None), match case-insensitively; zero → `ClientError::NotFound`; more than one → `ClientError::Api { status: 409, message: "ambiguous: <id1>, <id2> — use the full ARM id" }`. `Url` (api) → no ARM: `ResolvedBinding` with `arm_id: None`, `endpoint: Some(url)`.
+  `resolve_binding`: `ArmId` value → `GET {id}` with the type's provider version to confirm and fill location/endpoint (endpoint: storage `properties.primaryEndpoints.blob`, cognitive `properties.endpoint`, sites `https://{name}.azurewebsites.net`, vault `properties.vaultUri`, MSI: `properties.clientId` in `endpoint`?, no: put MSI `principalId` in a new `principal_id: Option<String>` field of `ResolvedBinding` (add it to the core struct now, `#[serde(default)]`); `Name` value → list the type in `subscription` (or every enabled subscription when None), match case-insensitively; zero → `ClientError::NotFound`; more than one → `ClientError::Api { status: 409, message: "ambiguous: <id1>, <id2>, use the full ARM id" }`. `Url` (api) → no ARM: `ResolvedBinding` with `arm_id: None`, `endpoint: Some(url)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -534,7 +534,7 @@ fn arm_base_url_can_be_overridden_for_tests() {
 }
 ```
 
-(add `temp-env = "0.3"` to workspace dev-dependencies, or read the env var in a small `fn arm_base_url() -> String` and test that function with an explicit argument instead — either is fine; prefer the latter to avoid a dependency: `fn base_url_from(env: Option<&str>) -> String`.)
+(add `temp-env = "0.3"` to workspace dev-dependencies, or read the env var in a small `fn arm_base_url() -> String` and test that function with an explicit argument instead, either is fine; prefer the latter to avoid a dependency: `fn base_url_from(env: Option<&str>) -> String`.)
 
 `crates/rigg/tests/arm_fake.rs`:
 
@@ -579,7 +579,7 @@ async fn resolve_binding_by_name_and_by_id() {
 }
 ```
 
-(Setting a process env var in a test is acceptable here because this test binary owns the process; keep all ARM-fake tests in this one file so they share the variable, and use `#[serial]`-free sequencing by setting it once in each test to the same server per test — wiremock servers are per test, so the tests must not run in parallel: add `--test-threads=1` via a `[[test]]` entry? Simpler: put the override on the client — `ArmClient::with_token_and_base(token, base_url)` — and have `with_token` read the env var. Use `with_token_and_base` in tests; keep the env var for the CLI binary tests in Task 6.)
+(Setting a process env var in a test is acceptable here because this test binary owns the process; keep all ARM-fake tests in this one file so they share the variable, and use `#[serial]`-free sequencing by setting it once in each test to the same server per test, wiremock servers are per test, so the tests must not run in parallel: add `--test-threads=1` via a `[[test]]` entry? Simpler: put the override on the client, `ArmClient::with_token_and_base(token, base_url)`, and have `with_token` read the env var. Use `with_token_and_base` in tests; keep the env var for the CLI binary tests in Task 6.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -621,7 +621,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   rigg env show [<env>] [--refresh]                  # targets, policy, bindings with cached ARM ids + "shared with: …"
   ```
 - `bindings::learn(ws, env) -> Vec<Proposal { name, kind: BindingType, value: String /* physical name; ARM id when the file carries one */, sources: Vec<(file, path)> }>`; name proposal = physical name lower-kebab (strip non-alnum → `-`), de-duplicated, never `search`/`foundry`.
-- `bindings::write_binding(ws_root, env, name, binding)`, `remove_binding(..)` — edit `rigg.yaml` via the existing `edit_workspace_yaml` helper (moved from env.rs into bindings.rs).
+- `bindings::write_binding(ws_root, env, name, binding)`, `remove_binding(..)`: edit `rigg.yaml` via the existing `edit_workspace_yaml` helper (moved from env.rs into bindings.rs).
 - Interactive `env add` without flags: tenant/subscription pick-lists (from `az account list` equivalent: ARM `/tenants` + `/subscriptions`), Search/Foundry pick-lists (existing discovery), then for `--like`: per binding a `Question::choice("binding.<new>.<name>", …, [same as <env> (<value>) | pick from ARM list… | skip])` through `ctx.asker("env add", json!({"env": name, "like": like}))` using `ask_all` where possible (all bindings at once), `protected` as `Question::confirm("env.<name>.protected", …, false)`.
 - `describe` text gains, per environment printed, an `Infrastructure:` block listing bindings (`name  type  physical  [shared with prod]`); JSON gains `"infrastructure": [{name, type, value, physical_name, shared_with: []}]`.
 
@@ -673,7 +673,7 @@ fn describe_lists_infrastructure() {
 }
 ```
 
-ARM-backed (new test file `crates/rigg/tests/env_arm.rs`, reusing `mount_arm_fake` — move the helper into `crates/rigg/tests/common/arm_fake.rs` with `#[path]` includes, or duplicate minimally):
+ARM-backed (new test file `crates/rigg/tests/env_arm.rs`, reusing `mount_arm_fake`, move the helper into `crates/rigg/tests/common/arm_fake.rs` with `#[path]` includes, or duplicate minimally):
 
 ```rust
 #[tokio::test]
@@ -690,7 +690,7 @@ async fn env_show_refresh_resolves_bindings_against_arm() {
 }
 ```
 
-(`ArmClient` must accept `RIGG_ACCESS_TOKEN` as the ARM token when set — check `auth.rs`'s static-token path; if `ArmClient::new()` only uses az CLI, make it honour `RIGG_ACCESS_TOKEN` first, like the data-plane clients.)
+(`ArmClient` must accept `RIGG_ACCESS_TOKEN` as the ARM token when set: check `auth.rs`'s static-token path; if `ArmClient::new()` only uses az CLI, make it honour `RIGG_ACCESS_TOKEN` first, like the data-plane clients.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -754,7 +754,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-`adopt.rs`/`pull.rs`: after writing, `bindings::learn(&ws, &env.name)`; if non-empty: interactive → print the proposal table and ask `Question::confirm("learn.<env>.record", "Record these bindings in rigg.yaml?", true)` then write; non-interactive → `eprintln!("hint: {n} infrastructure reference(s) are not bound in '{env}' — run `rigg env bind {env} --learn` to record them")`. `init.rs`: `--tenant`/`--subscription` flags; when absent and az is logged in, take them from `AzCliAuth::check_status()` (`tenant_id`, `subscription_id`); write the two lines under the environment when known.
+`adopt.rs`/`pull.rs`: after writing, `bindings::learn(&ws, &env.name)`; if non-empty: interactive → print the proposal table and ask `Question::confirm("learn.<env>.record", "Record these bindings in rigg.yaml?", true)` then write; non-interactive → `eprintln!("hint: {n} infrastructure reference(s) are not bound in '{env}', run `rigg env bind {env} --learn` to record them")`. `init.rs`: `--tenant`/`--subscription` flags; when absent and az is logged in, take them from `AzCliAuth::check_status()` (`tenant_id`, `subscription_id`); write the two lines under the environment when known.
 
 - [ ] **Step 4: Gate and commit**
 
@@ -771,8 +771,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 8: Docs, samples, live workspace, smoke
 
 **Files:**
-- Modify: `CONCEPTS.md` + `crates/rigg/CONCEPTS.md` ("Environments" chapter rewritten around bindings: targets, dependencies, implicit bindings, shared vs different, learn vs declare, validation classes), `README.md` (environments section; `rigg env` commands; `rigg.yaml` example with `dependencies`), `GETTING_STARTED.md` (the "point it at your storage account" step becomes `rigg env bind dev docs storage:<account>` + `rigg new data-source … --storage docs` is Task-later — for now describe the binding then the file edit), `.claude/skills/rigg-guide/SKILL.md`, `CHANGELOG.md`, `samples/rigg.yaml` (a `dependencies:` block with placeholders), `samples/projects/*/envs/demo/**` (unchanged files; verify `rigg validate` on samples passes with warnings only)
-- Live: `e2e-test/rigg.yaml` (untracked): run `rigg env bind dev --learn --yes` and `rigg env bind staging --learn --yes` there, then `rigg validate`, `rigg env show dev --refresh`, `rigg status` — all read-only against Azure except the local YAML/cache writes
+- Modify: `CONCEPTS.md` + `crates/rigg/CONCEPTS.md` ("Environments" chapter rewritten around bindings: targets, dependencies, implicit bindings, shared vs different, learn vs declare, validation classes), `README.md` (environments section; `rigg env` commands; `rigg.yaml` example with `dependencies`), `GETTING_STARTED.md` (the "point it at your storage account" step becomes `rigg env bind dev docs storage:<account>` + `rigg new data-source … --storage docs` is Task-later, for now describe the binding then the file edit), `.claude/skills/rigg-guide/SKILL.md`, `CHANGELOG.md`, `samples/rigg.yaml` (a `dependencies:` block with placeholders), `samples/projects/*/envs/demo/**` (unchanged files; verify `rigg validate` on samples passes with warnings only)
+- Live: `e2e-test/rigg.yaml` (untracked): run `rigg env bind dev --learn --yes` and `rigg env bind staging --learn --yes` there, then `rigg validate`, `rigg env show dev --refresh`, `rigg status`, all read-only against Azure except the local YAML/cache writes
 
 - [ ] **Step 1: Docs**
 
@@ -788,7 +788,7 @@ Write the chapter and README/GETTING_STARTED updates (copy CONCEPTS to the crate
       enrich-fn:    { function-app: your-function-app }
 ```
 
-Run `cargo run -q --bin rigg -- validate` inside `samples/` — must exit 0 (warnings allowed for placeholder values that do not match: the samples' files carry `<subscription-id>` placeholders, which `parse` ignores).
+Run `cargo run -q --bin rigg -- validate` inside `samples/`, must exit 0 (warnings allowed for placeholder values that do not match: the samples' files carry `<subscription-id>` placeholders, which `parse` ignores).
 
 - [ ] **Step 3: Live smoke (authorised; read-only against Azure)**
 
@@ -799,7 +799,7 @@ From `e2e-test/`: `cargo build -q --manifest-path ../Cargo.toml && ../target/deb
 ```bash
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 git add -A   # never e2e-test/
-git commit -m "docs: environments and infrastructure bindings — concepts, README, getting started, samples
+git commit -m "docs: environments and infrastructure bindings, concepts, README, getting started, samples
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -810,15 +810,15 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 Executed on branch `rigg-2`, commits 6cbe28b..a0fefd8. Rulings:
 
-- | T5 → T6 | ArmClient::{for_tenant, resolve_binding, with_token_and_base}, RIGG_ARM_ENDPOINT, mount_arm_fake | consistent; T5 test env-var ambiguity — Ruling: implement `base_url_from(env: Option<&str>)` (no temp-env dependency) and `with_token_and_base`; the CLI binary honours RIGG_ARM_ENDPOINT via with_token → base_url_from(std::env::var(..).ok()). Cost if wrong: none |
-- | T6 ARM token in tests | ArmClient must honour RIGG_ACCESS_TOKEN — Ruling: yes, static token first (as the data-plane clients), then az CLI | noted in T6 brief |
-- Task 3: implemented 543be67 (DONE_WITH_CONCERNS: Indexer channel bumped to Preview because `cache.*` exists only in the preview schema). Ruling: REVERT — Indexer stays on the stable channel; the indexer enrichment cache is a preview-only feature rigg 2.0 does not model: drop the two `cache.*` InfraRef rows (and note it for the auth spec's cache edge). Cost if wrong: users of incremental enrichment get no binding tracking for the cache account — acceptable, documented.
-- Task 3: review Needs fixes — C1 extract path separator bug (nested arrays); C2 Indexer channel revert + drop cache rows (ruling); I3 odata suffix equality; I4 authIdentity gating — Ruling: spec wins, `only_odata_type: None`; minors 5 (case-insensitive ResourceId= anywhere, aligned with identity.rs), 6 (URL placeholder rejection), 7 (api prefix boundary), 9 (row-count test) folded into fix round 1; minor 8 (Shared name divergence) deferred to the reporting UX.
+- | T5 → T6 | ArmClient::{for_tenant, resolve_binding, with_token_and_base}, RIGG_ARM_ENDPOINT, mount_arm_fake | consistent; T5 test env-var ambiguity, Ruling: implement `base_url_from(env: Option<&str>)` (no temp-env dependency) and `with_token_and_base`; the CLI binary honours RIGG_ARM_ENDPOINT via with_token → base_url_from(std::env::var(..).ok()). Cost if wrong: none |
+- | T6 ARM token in tests | ArmClient must honour RIGG_ACCESS_TOKEN, Ruling: yes, static token first (as the data-plane clients), then az CLI | noted in T6 brief |
+- Task 3: implemented 543be67 (DONE_WITH_CONCERNS: Indexer channel bumped to Preview because `cache.*` exists only in the preview schema). Ruling: REVERT, Indexer stays on the stable channel; the indexer enrichment cache is a preview-only feature rigg 2.0 does not model: drop the two `cache.*` InfraRef rows (and note it for the auth spec's cache edge). Cost if wrong: users of incremental enrichment get no binding tracking for the cache account, acceptable, documented.
+- Task 3: review Needs fixes: C1 extract path separator bug (nested arrays); C2 Indexer channel revert + drop cache rows (ruling); I3 odata suffix equality; I4 authIdentity gating, Ruling: spec wins, `only_odata_type: None`; minors 5 (case-insensitive ResourceId= anywhere, aligned with identity.rs), 6 (URL placeholder rejection), 7 (api prefix boundary), 9 (row-count test) folded into fix round 1; minor 8 (Shared name divergence) deferred to the reporting UX.
 - Task 4: implemented ebb6d56 (DONE_WITH_CONCERNS: global --verbose long form removed to free the name). Ruling: restore the global `--verbose`; validate's flag becomes `--show-bindings` (plan said --verbose; the global flag wins). Fix round after review. Cost if wrong: none.
-- Task 5: review Approved; Important: by-name fan-out aborts on the first subscription error. Ruling: carried into Task 6 (its consumer) — mirror find_storage_accounts_with_container's skip-and-debug-continue. Cost if wrong: none.
-- Task 6: review Approved. Important 1 (function-app candidates ignore --subscription, N×N fan-out) + Important 2 (zero-match reports first_error even when some subscriptions listed) + Minors 3 (targets before dependencies), 4 (--same not asked), 5 (bind/unbind say!), 8 (location in JSON), 9 (tests: rebind replace; yaml round-trip with tenant/subscription/policy), 10 (duplicate renamed proposals), 11 (--like with no targets creates empty env) — Ruling: carried into Task 7. Minors 6 (cache drop on refresh failure) and 7 (describe text prints value) deferred. Cost if wrong: none.
-- Final review (opus): mergeable after fixes. Ruling: ONE fix wave — C1 implement the push binding preflight (spec §4; refuse on Leak/strict errors before any mutation) so the docs are true; I2 hint keywords (ai-services; implicit targets get a target-change hint); I3 hint names the validated env; I4 render symmetry (case-insensitive ResourceId= anywhere; api boundary in render); I5 refresh resolves implicit search/foundry under reserved keys; I6 learn keeps ARM ids for storage/identity; M7 one definition of Shared = same physical value for the same Wanted (names may differ) in classify, env show, describe, CONCEPTS; M8 header comment regenerated + accurate doc comment; M9 render tests for UAMI/AiServicesSubdomain/KeyVault; M10/M11 test assertions; M12 "found but unreadable" error; M13 terminology sweep (incl. CLAUDE.md); M14 example; M15 drop `_ws`, document ResolvedBinding.name, answers_to_bindings length check; CHANGELOG notes (strict-by-default on protected envs; leak errors without bindings; RIGG_ACCESS_TOKEN now used for ARM). Deferred: describe repeats per project; refresh drops cache on transient failure; describe text prints value; pull learn offer before conflict check; Remote::for_project unused param. Task 1 minor (empty ids) already fixed in Task 7.
-- Re-review: 16/16 addressed; open Important: push --dry-run skips the binding preflight entirely. Ruling: one targeted fix — run the preflight before the dry-run return (report at say! level; refuse only on a real push); cover the pending_relinks path; route WorkspaceError::InvalidBindingName through the "found but unreadable" message. Deferred: leak hint for implicit targets could also offer `env bind <env> <name> ai-services:<account>`; hint uses bare names not ARM ids; target-level "shared with"; push/validate prefix difference. Cost if wrong: none.
+- Task 5: review Approved; Important: by-name fan-out aborts on the first subscription error. Ruling: carried into Task 6 (its consumer), mirror find_storage_accounts_with_container's skip-and-debug-continue. Cost if wrong: none.
+- Task 6: review Approved. Important 1 (function-app candidates ignore --subscription, N×N fan-out) + Important 2 (zero-match reports first_error even when some subscriptions listed) + Minors 3 (targets before dependencies), 4 (--same not asked), 5 (bind/unbind say!), 8 (location in JSON), 9 (tests: rebind replace; yaml round-trip with tenant/subscription/policy), 10 (duplicate renamed proposals), 11 (--like with no targets creates empty env), Ruling: carried into Task 7. Minors 6 (cache drop on refresh failure) and 7 (describe text prints value) deferred. Cost if wrong: none.
+- Final review (opus): mergeable after fixes. Ruling: ONE fix wave, C1 implement the push binding preflight (spec §4; refuse on Leak/strict errors before any mutation) so the docs are true; I2 hint keywords (ai-services; implicit targets get a target-change hint); I3 hint names the validated env; I4 render symmetry (case-insensitive ResourceId= anywhere; api boundary in render); I5 refresh resolves implicit search/foundry under reserved keys; I6 learn keeps ARM ids for storage/identity; M7 one definition of Shared = same physical value for the same Wanted (names may differ) in classify, env show, describe, CONCEPTS; M8 header comment regenerated + accurate doc comment; M9 render tests for UAMI/AiServicesSubdomain/KeyVault; M10/M11 test assertions; M12 "found but unreadable" error; M13 terminology sweep (incl. CLAUDE.md); M14 example; M15 drop `_ws`, document ResolvedBinding.name, answers_to_bindings length check; CHANGELOG notes (strict-by-default on protected envs; leak errors without bindings; RIGG_ACCESS_TOKEN now used for ARM). Deferred: describe repeats per project; refresh drops cache on transient failure; describe text prints value; pull learn offer before conflict check; Remote::for_project unused param. Task 1 minor (empty ids) already fixed in Task 7.
+- Re-review: 16/16 addressed; open Important: push --dry-run skips the binding preflight entirely. Ruling: one targeted fix, run the preflight before the dry-run return (report at say! level; refuse only on a real push); cover the pending_relinks path; route WorkspaceError::InvalidBindingName through the "found but unreadable" message. Deferred: leak hint for implicit targets could also offer `env bind <env> <name> ai-services:<account>`; hint uses bare names not ARM ids; target-level "shared with"; push/validate prefix difference. Cost if wrong: none.
 
 Deferred (can wait):
 
@@ -828,5 +828,5 @@ Deferred (can wait):
 - Task 4: minor (deferred): too_many_arguments allows on record_classified/validate_project.
 - Task 7: minor (deferred): pull's learn offer fires before the conflict check.
 - Task 8: minor (deferred): CONCEPTS/SKILL intro still says "service connections".
-- Final review (opus): mergeable after fixes. Ruling: ONE fix wave — C1 implement the push binding preflight (spec §4; refuse on Leak/strict errors before any mutation) so the docs are true; I2 hint keywords (ai-services; implicit targets get a target-change hint); I3 hint names the validated env; I4 render symmetry (case-insensitive ResourceId= anywhere; api boundary in render); I5 refresh resolves implicit search/foundry under reserved keys; I6 learn keeps ARM ids for storage/identity; M7 one definition of Shared = same physical value for the same Wanted (names may differ) in classify, env show, describe, CONCEPTS; M8 header comment regenerated + accurate doc comment; M9 render tests for UAMI/AiServicesSubdomain/KeyVault; M10/M11 test assertions; M12 "found but unreadable" error; M13 terminology sweep (incl. CLAUDE.md); M14 example; M15 drop `_ws`, document ResolvedBinding.name, answers_to_bindings length check; CHANGELOG notes (strict-by-default on protected envs; leak errors without bindings; RIGG_ACCESS_TOKEN now used for ARM). Deferred: describe repeats per project; refresh drops cache on transient failure; describe text prints value; pull learn offer before conflict check; Remote::for_project unused param. Task 1 minor (empty ids) already fixed in Task 7.
-- Re-review: 16/16 addressed; open Important: push --dry-run skips the binding preflight entirely. Ruling: one targeted fix — run the preflight before the dry-run return (report at say! level; refuse only on a real push); cover the pending_relinks path; route WorkspaceError::InvalidBindingName through the "found but unreadable" message. Deferred: leak hint for implicit targets could also offer `env bind <env> <name> ai-services:<account>`; hint uses bare names not ARM ids; target-level "shared with"; push/validate prefix difference. Cost if wrong: none.
+- Final review (opus): mergeable after fixes. Ruling: ONE fix wave, C1 implement the push binding preflight (spec §4; refuse on Leak/strict errors before any mutation) so the docs are true; I2 hint keywords (ai-services; implicit targets get a target-change hint); I3 hint names the validated env; I4 render symmetry (case-insensitive ResourceId= anywhere; api boundary in render); I5 refresh resolves implicit search/foundry under reserved keys; I6 learn keeps ARM ids for storage/identity; M7 one definition of Shared = same physical value for the same Wanted (names may differ) in classify, env show, describe, CONCEPTS; M8 header comment regenerated + accurate doc comment; M9 render tests for UAMI/AiServicesSubdomain/KeyVault; M10/M11 test assertions; M12 "found but unreadable" error; M13 terminology sweep (incl. CLAUDE.md); M14 example; M15 drop `_ws`, document ResolvedBinding.name, answers_to_bindings length check; CHANGELOG notes (strict-by-default on protected envs; leak errors without bindings; RIGG_ACCESS_TOKEN now used for ARM). Deferred: describe repeats per project; refresh drops cache on transient failure; describe text prints value; pull learn offer before conflict check; Remote::for_project unused param. Task 1 minor (empty ids) already fixed in Task 7.
+- Re-review: 16/16 addressed; open Important: push --dry-run skips the binding preflight entirely. Ruling: one targeted fix, run the preflight before the dry-run return (report at say! level; refuse only on a real push); cover the pending_relinks path; route WorkspaceError::InvalidBindingName through the "found but unreadable" message. Deferred: leak hint for implicit targets could also offer `env bind <env> <name> ai-services:<account>`; hint uses bare names not ARM ids; target-level "shared with"; push/validate prefix difference. Cost if wrong: none.

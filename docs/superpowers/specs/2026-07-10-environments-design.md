@@ -1,10 +1,10 @@
-# rigg — Environments: per-env project trees, promote, policies
+# rigg: Environments: per-env project trees, promote, policies
 
 **Date:** 2026-07-10
-**Status:** Design — approved direction by user; open forks resolved by
+**Status:** Design: approved direction by user; open forks resolved by
 delegated judgment (uniform layout; in-file pin annotation). NO backwards
 compatibility required (sole user, explicit instruction).
-**Workstream:** H — the environments redesign.
+**Workstream:** H: the environments redesign.
 
 ## Problem
 
@@ -13,28 +13,28 @@ Environments exist today only as *named connection sets* (`rigg.yaml`
 baselines track sync separately, and `-e`/`RIGG_ENV`/`default: true` select
 the target. That model cannot express the user's real scenarios:
 
-1. **Per-env values** — a data source's `ResourceId=` connection string is
+1. **Per-env values**: a data source's `ResourceId=` connection string is
    dev's; pushing the same file to prod points prod at dev's storage. Only
    `x-rigg-ref` KB URLs get env-injected today.
-2. **Env-specific resources** — experimental dev resources push wholesale to
+2. **Env-specific resources**: experimental dev resources push wholesale to
    prod; nothing scopes a resource to an environment.
-3. **Shared-service environments** — env A and env B may live in the *same*
+3. **Shared-service environments**: env A and env B may live in the *same*
    Search service / Foundry project with different physical resource names.
    Today identity == name, so A's and B's resources collide.
-4. **Free physical naming with remembered correlation** — the user names
+4. **Free physical naming with remembered correlation**: the user names
    resources per environment however they like; rigg must remember that
    Name-A (env A) corresponds to Name-B (env B) without inferring from names.
-5. **Promotion** — a local, reviewable operation taking env A's configuration
+5. **Promotion**: a local, reviewable operation taking env A's configuration
    into env B's, then pushing B when ready. Also symmetric A↔B sync
    (hot-swap scenario).
-6. **Policies** — dev pushes frictionless; prod requires explicit
+6. **Policies**: dev pushes frictionless; prod requires explicit
    confirmation for every cloud-mutating operation.
-7. Nobody is told where "(env: dev)" comes from — `rigg init` silently names
+7. Nobody is told where "(env: dev)" comes from: `rigg init` silently names
    it.
 
 ## Core design: per-environment project trees
 
-### Layout (uniform — no special single-env case)
+### Layout (uniform: no special single-env case)
 
 ```
 projects/<project>/
@@ -50,30 +50,30 @@ projects/<project>/
   dirs materialize on first resource (scaffold/adopt/pull into the resolved
   env).
 - **Env-specific resources fall out for free**: a resource that exists only
-  in `envs/dev/` cannot reach prod — there is no file to push.
+  in `envs/dev/` cannot reach prod: there is no file to push.
 
 ### Identity: file stem = logical, `name` field = physical
 
 - The **relative path** (kind dir + file stem) is the resource's *logical*
-  identity — the correlation across environments. Same path in `envs/a/` and
+  identity: the correlation across environments. Same path in `envs/a/` and
   `envs/b/` = the same logical resource.
 - The **`name` field** inside the file is the *physical* Azure name for that
   environment. By default stem == name (today's behavior); they diverge only
   when the user renames a physical resource in one environment. This is how
   "Name-A belongs to env A, Name-B to env B" is remembered **without
-  inference** — the user just edits the `name` field in one env's copy.
+  inference**: the user just edits the `name` field in one env's copy.
 - Each env dir is a **complete, self-consistent physical description**:
   references between resources inside it use that env's physical names,
   connection strings, and URLs. No push-time rewriting, no overlays.
 
 ### Store semantics (rigg-core)
 
-- `Store::new(project, env)` — the store root becomes
+- `Store::new(project, env)`: the store root becomes
   `<project>/envs/<env>/`.
 - `list()` returns refs keyed by the **physical** name (the `name` field,
   falling back to the file stem when absent), plus the path. Sync machinery
   (baselines, classify, snapshots, adoption ownership) continues to key on
-  physical `kind/name` — per env, as baselines already are.
+  physical `kind/name`: per env, as baselines already are.
 - `read(r)`/`delete(r)` locate the file whose `name` field (or stem) matches
   `r.name` by scanning the kind directory (small dirs; correctness over
   micro-optimization). `write(r, doc)` updates the located file, or creates
@@ -90,7 +90,7 @@ projects/<project>/
 - All resource commands (`adopt`, `pull`, `push`, `status`, `diff`,
   `describe`, `delete`, `validate`, `copy`, `new <resource>`, `new pipeline`)
   operate on the **resolved environment's** tree; output already shows
-  `(env: X)` where relevant — `describe` gains it.
+  `(env: X)` where relevant: `describe` gains it.
 - `validate` (local-only, cheap) validates **every** env dir it finds,
   reporting per env.
 - `copy` stays intra-env (the resolved env), cross-project as today.
@@ -104,28 +104,28 @@ A local, reviewable, direction-explicit copy between env trees. Nothing
 touches Azure.
 
 1. **Preview**: labeled diff table of A's tree vs B's tree (columns = env
-   names — reuses the diff renderer), listing per logical resource: changed /
-   new-in-A (will be created in B) / only-in-B (untouched — env-specific
+   names, reuses the diff renderer), listing per logical resource: changed /
+   new-in-A (will be created in B) / only-in-B (untouched: env-specific
    resources are never deleted by promote).
 2. **Apply** (after confirm; `--dry-run` stops at the preview): for each
    logical resource in A, write A's content into B's file **except pinned
    fields**, which keep B's existing values:
    - Always pinned: `name` (B keeps its physical name).
    - Registry defaults per kind (`env_pinned` = the kind's `secret_fields` ∪
-     `write_only_fields` ∪ an explicit per-kind extra list — e.g. Agent:
+     `write_only_fields` ∪ an explicit per-kind extra list (e.g. Agent):
      `tools[].server_url`, `tools[].project_connection_id`; DataSource:
      `credentials.connectionString`).
    - Per-resource additions via an `x-rigg-pin: ["<dot.path>", …]`
      annotation **in the target env's file** (travels with the resource,
      reviewable in the same diff; stripped on push like all `x-rigg-*`).
    - New-in-B files are created verbatim from A (stem preserved; user then
-     renames/repoints env-specific fields — promote prints a hint listing
+     renames/repoints env-specific fields: promote prints a hint listing
      the pinned-by-default fields worth reviewing on new copies).
-3. Sidecars are promoted as content (inline on read, re-extract on write —
+3. Sidecars are promoted as content (inline on read, re-extract on write:
    existing store behavior).
 4. After apply, hint the natural next steps:
    `rigg diff <p> -e <envB>` / `rigg push <p> -e <envB>`.
-5. Symmetric by construction: A→B and B→A are the same operation — this IS
+5. Symmetric by construction: A→B and B→A are the same operation, this IS
    the A/B sync + hot-swap workflow.
 6. Non-interactive: `--dry-run` or `-y`; JSON output lists promoted /
    created / kept-only-in-B / pinned-fields-kept.
@@ -148,7 +148,7 @@ environments:
 `protected: true` gates every **cloud-mutating** operation against that env
 (`push` apply, `push --prune`, `delete --remote`):
 
-- Interactive: requires typing the environment name (the `delete` pattern —
+- Interactive: requires typing the environment name (the `delete` pattern,
   stronger than y/N). `--yes` does NOT bypass it.
 - Non-interactive: fails with exit 2 unless `--confirm-env <name>` is passed
   (the CI-safe typed equivalent; must match the env name exactly).
@@ -174,14 +174,14 @@ environments:
 
 ## Explicitly rejected / deferred
 
-- Overlay/patch files and inline env-value annotations — rejected in favor of
+- Overlay/patch files and inline env-value annotations: rejected in favor of
   full per-env trees (user's explicit choice; divergence is managed by
   `promote` + preview instead of prevented by sharing).
-- Automatic name suffix rules — rejected; correlation is by path, physical
+- Automatic name suffix rules: rejected; correlation is by path, physical
   names are free (user's explicit requirement).
-- A separate local-vs-local diff mode — `promote --dry-run` IS that preview
+- A separate local-vs-local diff mode: `promote --dry-run` IS that preview
   (YAGNI).
-- Backwards compatibility with the flat layout — none (explicit instruction);
+- Backwards compatibility with the flat layout: none (explicit instruction);
   the binary reads only the new layout.
 
 ## Testing
@@ -195,7 +195,7 @@ environments:
   `--confirm-env`; `--confirm-env prod` passes; `--yes` alone rejected;
   unprotected env unchanged.
 - All existing wiremock/cli tests migrated to the `envs/dev/...` layout and
-  passing — they pin that sync semantics survived the re-rooting.
+  passing: they pin that sync semantics survived the re-rooting.
 - Live acceptance (user, after merge): migrated e2e-test; `rigg env add`
   wizard; promote regulus dev→(new env); protected-env push gate.
 

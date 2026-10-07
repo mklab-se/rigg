@@ -110,7 +110,7 @@ impl FoundryClient {
     /// response object.
     pub async fn agent_respond(&self, agent: &str, input: &str) -> Result<Value, ClientError> {
         // NOTE: the /openai/v1/ route rejects an api-version query parameter
-        // (the version is in the path) — verified live.
+        // (the version is in the path): verified live.
         let url = format!(
             "{}/api/projects/{}/openai/v1/responses",
             self.base_url, self.project

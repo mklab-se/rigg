@@ -3,7 +3,7 @@
 //! pipeline into the explicit `searchIndex` shape plus first-class
 //! data-source/index/skillset/indexer definitions.
 //!
-//! Everything here is a pure document transform — the `rigg migrate` command
+//! Everything here is a pure document transform: the `rigg migrate` command
 //! writes files, and `rigg push` performs the actual replace.
 
 use std::collections::BTreeMap;
@@ -14,7 +14,7 @@ use crate::registry;
 use crate::resources::ResourceKind;
 
 /// The generated sub-resources named by a knowledge source's
-/// `createdResources` object (found at any nesting depth — the live shape
+/// `createdResources` object (found at any nesting depth: the live shape
 /// nests it under `<kind>Parameters`). Unknown member names are ignored.
 pub fn created_resources(ks_doc: &Value) -> BTreeMap<ResourceKind, String> {
     let mut out = BTreeMap::new();

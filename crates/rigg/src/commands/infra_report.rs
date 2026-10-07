@@ -2,7 +2,7 @@
 //!
 //! `rigg validate` and `rigg push`'s binding preflight run the *same*
 //! classification ([`rigg_core::infra::classify`]) over the same documents,
-//! so they must also say the same thing about what they found — this module
+//! so they must also say the same thing about what they found: this module
 //! owns those message texts and their severity.
 
 use rigg_core::binding::RESERVED_BINDING_NAMES;
@@ -20,11 +20,11 @@ pub enum Level {
 /// What to report about one classified reference in `env`, or `None` when
 /// there is nothing to report (`Bound`/`Shared` are healthy).
 ///
-/// `display` names where the reference was found — a workspace-relative file
+/// `display` names where the reference was found: a workspace-relative file
 /// path in `validate`, a resource reference in `push`. `strict` is the
 /// environment's `policy.strict-bindings` (which defaults to `protected`):
 /// it promotes `Unbound`/`External` from warnings to errors. A `Leak` is an
-/// error either way — it means the file points at another environment's
+/// error either way: it means the file points at another environment's
 /// infrastructure.
 pub fn classified_finding(
     c: &Classified,
@@ -44,7 +44,7 @@ pub fn classified_finding(
                 Level::Error,
                 format!(
                     "[{display}] {path} references {target} '{physical}', which is bound in \
-                     environment '{other_env}' as '{binding}' but not in '{env}' — {}",
+                     environment '{other_env}' as '{binding}' but not in '{env}': {}",
                     leak_hint(env, binding, target, physical)
                 ),
             ))
@@ -53,7 +53,7 @@ pub fn classified_finding(
             level(strict),
             format!(
                 "[{display}] {path} references {target} '{physical}', which no environment \
-                 binds — run `rigg env bind {env} --learn` to record it"
+                 binds: run `rigg env bind {env} --learn` to record it"
             ),
         )),
         Class::External => {
@@ -62,7 +62,7 @@ pub fn classified_finding(
             Some((
                 level(strict),
                 format!(
-                    "[{display}] {path} calls external API '{origin}' — bind it as an api \
+                    "[{display}] {path} calls external API '{origin}': bind it as an api \
                      dependency to track it across environments"
                 ),
             ))
@@ -78,7 +78,7 @@ fn level(strict: bool) -> Level {
 /// when the leaked resource *can* be a dependency binding: a match on the
 /// other environment's implicit `search`/`foundry` target (or any reference
 /// to a Search service) means the file names another environment's own
-/// service, which is fixed by changing the target or the file — not by
+/// service, which is fixed by changing the target or the file, not by
 /// declaring a dependency. Otherwise the suggestion must use a real binding
 /// type keyword (`ai-services`, not the `model host` display word).
 fn leak_hint(env: &str, binding: &str, target: Target, physical: &str) -> String {
@@ -90,7 +90,7 @@ fn leak_hint(env: &str, binding: &str, target: Target, physical: &str) -> String
             "Search service"
         };
         return format!(
-            "the file points at another environment's {noun} — change this environment's target \
+            "the file points at another environment's {noun}: change this environment's target \
              or fix the file"
         );
     }
@@ -102,7 +102,7 @@ fn leak_hint(env: &str, binding: &str, target: Target, physical: &str) -> String
     }
 }
 
-/// The scheme + host of a URL, dropping any path/query — `https://host` from
+/// The scheme + host of a URL, dropping any path/query: `https://host` from
 /// `https://host/path?query`.
 pub fn url_origin(url: &str) -> String {
     match url.split_once("://") {

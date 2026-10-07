@@ -6,7 +6,7 @@ independently.
 
 For the same pipeline built from scratch against your own subscription, with
 expected output at every step, follow
-[tutorial 2 — Build from scratch](../../../docs/tutorials/02-build-from-scratch.md).
+[tutorial 2: Build from scratch](../../../docs/tutorials/02-build-from-scratch.md).
 
 ## Files
 
@@ -21,11 +21,11 @@ envs/demo/search/knowledge-bases/quickstart-kb.json   # what agents query (route
 ## Step by step
 
 1. Edit `quickstart-docs.json`: set the storage account `ResourceId=` and the
-   container name. No keys — the search service's managed identity needs
+   container name. No keys: the search service's managed identity needs
    **Storage Blob Data Reader** on the account, which
    `rigg auth doctor --fix` grants.
 2. Shape `quickstart-index.json` to your documents.
-3. Push the project — resources are created in dependency order:
+3. Push the project: resources are created in dependency order:
    `rigg push quickstart-blob`.
 4. Run the indexer and watch it finish:
    `rigg az indexer run quickstart-indexer --watch`, then

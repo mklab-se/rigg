@@ -11,7 +11,7 @@ const VALUE_COL_WIDTH: usize = 20;
 /// Human-readable labels for the two sides of a diff.
 ///
 /// The diff engine itself is direction-neutral internally (`old`/`new`), but
-/// callers know what those sides actually *are* — local project files, a
+/// callers know what those sides actually *are*: local project files, a
 /// specific Azure environment, or another environment in `--compare-env`
 /// mode. Renderers use these labels instead of temporal language ("was"/
 /// "now") so the output never implies a push- or pull-shaped direction that
@@ -34,7 +34,7 @@ pub fn format_text(result: &DiffResult, resource_name: &str, labels: &SideLabels
 
     let mut output = String::new();
     output.push_str(&format!(
-        "{} — differs ({} field(s))\n\n",
+        "{}: differs ({} field(s))\n\n",
         resource_name,
         result.changes.len()
     ));
@@ -576,12 +576,12 @@ pub fn format_markdown(diffs: &[(String, DiffResult)], labels: &SideLabels) -> S
     }
     let mut out = String::new();
     out.push_str(&format!(
-        "## rigg diff — {} resource(s) differ\n\n",
+        "## rigg diff: {} resource(s) differ\n\n",
         changed.len()
     ));
     for (name, result) in changed {
         out.push_str(&format!(
-            "### `{}` — {} change(s)\n\n",
+            "### `{}`: {} change(s)\n\n",
             name,
             result.changes.len()
         ));

@@ -1,4 +1,4 @@
-# rigg 2.0 — Environments and infrastructure bindings
+# rigg 2.0: Environments and infrastructure bindings
 
 **Date:** 2026-09-09
 **Status:** Design, approved direction. Workstream 1 of
@@ -10,8 +10,8 @@ the value-level pin machinery is replaced).
 ## 1. Problem
 
 An environment in rigg 1.x is a Search service plus a Foundry project. The
-infrastructure those services reach — storage accounts, model hosts, AI
-services accounts, function apps, identities, key vaults — exists only as
+infrastructure those services reach (storage accounts, model hosts, AI
+services accounts, function apps, identities, key vaults) exists only as
 opaque strings inside resource files. Consequences:
 
 - `promote` cannot know what should differ between environments; it keeps
@@ -59,27 +59,27 @@ environments:
       partner-api:  { api: https://api.partner.example }
 ```
 
-- **Targets** — `search` and `foundry`. Exactly one of each per environment
+- **Targets**: `search` and `foundry`. Exactly one of each per environment
   (either may be absent when a project only uses one service). The 1.x
   multi-connection lists and `project.yaml` connection pins are removed: one
   Search service and one Foundry project per environment is the supported
   configuration. Two Search services are two environments.
-- **Dependencies** — a map of *binding name* → `{ <type>: <value> }`. Binding
+- **Dependencies**: a map of *binding name* → `{ <type>: <value> }`. Binding
   names correlate across environments exactly as file paths correlate
   resources: the same name in `dev` and `prod` is the same *role* played by
   possibly different physical resources. Physical values are free. "Shared"
-  is simply the same physical value in both environments — explicit, never
+  is simply the same physical value in both environments: explicit, never
   inferred.
-- **Implicit bindings** — every environment also has `search` (its Search
+- **Implicit bindings**: every environment also has `search` (its Search
   service) and `foundry` (its Foundry account), usable wherever a binding of
   type `ai-services` (model host) or the Search endpoint is expected. Most
   workspaces therefore need no `ai-services` binding at all: the Foundry
   account that hosts the project also hosts the models.
-- **Tenant / subscription** — optional. When present, ARM discovery and
+- **Tenant / subscription**: optional. When present, ARM discovery and
   token acquisition are scoped to them; when absent, rigg uses the Azure CLI
   default tenant and searches all subscriptions visible in it. Environments in
   different subscriptions or tenants are fully supported.
-- **Policy** — `protected` (unchanged from 1.x) and `strict-bindings`
+- **Policy**: `protected` (unchanged from 1.x) and `strict-bindings`
   (see §4; defaults to the value of `protected`).
 
 ### 2.2 Binding types and values
@@ -91,7 +91,7 @@ environments:
 | `function-app` | site name, or full ARM id | `Microsoft.Web/sites/{name}` |
 | `identity` | user-assigned identity name, or full ARM id | `Microsoft.ManagedIdentity/userAssignedIdentities/{name}` |
 | `key-vault` | vault name, or full ARM id | `Microsoft.KeyVault/vaults/{name}` |
-| `api` | base URL (`https://host[/path]`) | none — an external REST API; matched by URL prefix; no ARM lookup |
+| `api` | base URL (`https://host[/path]`) | none: an external REST API; matched by URL prefix; no ARM lookup |
 
 A name is resolved through ARM in the environment's subscription (or all
 visible subscriptions when none is declared). Ambiguity (two matches) is an
@@ -175,8 +175,8 @@ embeddingModel, chatCompletionModel, aiServices, assetStore}`,
 `KnowledgeBaseAzureOpenAIModel.azureOpenAIParameters`, `WebApiSkill.{uri,
 authResourceId, authIdentity}`, `AIServicesAccountIdentity.{subdomainUrl,
 identity}` all exist). Deployments, guardrails, synonym maps and aliases have
-no infrastructure references. (Deployments have per-environment *constraints* — region model
-availability, quota, capacity — handled in the promote spec.) Workstream 0
+no infrastructure references. (Deployments have per-environment *constraints* (region model
+availability, quota, capacity) handled in the promote spec.) Workstream 0
 re-verifies every path against the refreshed API schemas before this table is
 frozen.
 
@@ -189,7 +189,7 @@ state (identity & auth spec). The promote spec says how they are re-derived.
 
 - `workspace::Environment { default, tenant, subscription, search: Option<SearchTarget>, foundry: Option<FoundryTarget>, policy, dependencies: BTreeMap<String, Binding> }`.
 - `binding::{Binding, BindingType, ResolvedBinding, BindingCache}`.
-- `registry::infra_refs(kind) -> &[InfraRef]`; `infra::parse(form, value) -> Option<PhysicalRef>`; `infra::render(form, &ResolvedBinding, original_value) -> Value` (keeps everything in the original that is not the infrastructure part — e.g. the path and query of a function URI, the `Database=` tail of a connection string).
+- `registry::infra_refs(kind) -> &[InfraRef]`; `infra::parse(form, value) -> Option<PhysicalRef>`; `infra::render(form, &ResolvedBinding, original_value) -> Value` (keeps everything in the original that is not the infrastructure part, e.g. the path and query of a function URI, the `Database=` tail of a connection string).
 - `infra::extract(kind, doc) -> Vec<(path, PhysicalRef)>` and `infra::classify(env, refs) -> Vec<Classified>` with variants `Bound(name)`, `Shared(name)`, `LeakFrom(other_env, name)`, `Unbound`, `External`.
 - `Store` and baselines are unchanged.
 
@@ -211,7 +211,7 @@ Both entry points must be effortless:
   walks `dev`'s bindings and, per binding, asks: same as `dev` (value shown),
   pick another (ARM list of that type in the chosen subscription), or skip.
   Targets are asked first (tenant, subscription, Search service, Foundry
-  project — ARM pick-lists, same as `init`), then dependencies, then
+  project: ARM pick-lists, same as `init`), then dependencies, then
   `protected`. Flag form: `--search-service`, `--foundry-account`,
   `--foundry-project`, `--tenant`, `--subscription`, `--bind name=type:value`
   (repeatable), `--like <env>` with `--same name` / `--skip name`.
@@ -233,7 +233,7 @@ reference in every file:
 |---|---|---|
 | Bound | matches a binding of this environment (or an implicit one) | ok |
 | Shared | bound here and also in other environments with the same value | ok (listed in `--show-bindings`) |
-| Leak | bound in **another** environment, not in this one | **error** — the file points at another environment's infrastructure |
+| Leak | bound in **another** environment, not in this one | **error**: the file points at another environment's infrastructure |
 | Unbound | matches no binding anywhere | warning; **error** when `policy.strict-bindings: true` (default `true` when `protected`) |
 | External | `api` form with no matching `api` binding | warning (same strictness as Unbound) |
 

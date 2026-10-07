@@ -1,4 +1,4 @@
-# Workstream 0: API refresh, provider table, scope reduction — Implementation Plan
+# Workstream 0: API refresh, provider table, scope reduction: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -85,7 +85,7 @@ pub fn check_datasource_type(ds_type: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "unsupported data source type '{ds_type}' — rigg supports Azure Blob Storage only (valid: {})",
+            "unsupported data source type '{ds_type}', rigg supports Azure Blob Storage only (valid: {})",
             valid.join(", ")
         ))
     }
@@ -135,7 +135,7 @@ fn new_datasource_type_validation() {
 }
 ```
 
-`samples/README.md`: delete the `cosmos-sql-patterns` table row and change "three projects" to "two projects" (two places). `README.md:255`: change `--type cosmosdb` to `--type adlsgen2`; `README.md:291` and `GETTING_STARTED.md:178`: drop the Cosmos mention and the count. `docs/superpowers/specs/2026-05-08-cosmos-ks-wizard-design.md` and `docs/superpowers/plans/2026-05-10-cosmos-ks-wizard-phase-1.md`: add a first line `**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0 — see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**`.
+`samples/README.md`: delete the `cosmos-sql-patterns` table row and change "three projects" to "two projects" (two places). `README.md:255`: change `--type cosmosdb` to `--type adlsgen2`; `README.md:291` and `GETTING_STARTED.md:178`: drop the Cosmos mention and the count. `docs/superpowers/specs/2026-05-08-cosmos-ks-wizard-design.md` and `docs/superpowers/plans/2026-05-10-cosmos-ks-wizard-phase-1.md`: add a first line `**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0, see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**`.
 
 - [ ] **Step 7: Build, run the full gate**
 
@@ -146,7 +146,7 @@ Expected: all green; `grep -rn -i cosmos crates --include='*.rs'` prints nothing
 
 ```bash
 git add -A
-git commit -m "feat!: blob storage is the only data source — remove Cosmos/SQL/OneLake/SharePoint/Table/Files support and the legacy config module
+git commit -m "feat!: blob storage is the only data source, remove Cosmos/SQL/OneLake/SharePoint/Table/Files support and the legacy config module
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -325,7 +325,7 @@ Expected: PASS. (`no_api_version_literals` still fails until Tasks 3–4.)
 
 ```bash
 git add crates/rigg-core Cargo.toml
-git commit -m "feat(registry): provider table — every Azure API version in one place
+git commit -m "feat(registry): provider table, every Azure API version in one place
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -418,14 +418,14 @@ Expected: rigg-client green; the guard now lists only `client.rs` tests and `tes
 
 ```bash
 git add -A
-git commit -m "feat(client): ARM calls on the provider table — Search 2025-05-01, CognitiveServices 2026-07-01, Storage 2026-06-01, Web 2026-07-15; drop storage listKeys
+git commit -m "feat(client): ARM calls on the provider table, Search 2025-05-01, CognitiveServices 2026-07-01, Storage 2026-06-01, Web 2026-07-15; drop storage listKeys
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 4: Search data plane 2026-08-01-preview — paging, MCP URL, immutable networkAccessMode
+### Task 4: Search data plane 2026-08-01-preview: paging, MCP URL, immutable networkAccessMode
 
 **Files:**
 - Modify: `crates/rigg-client/src/client.rs:236-255` (`list`) and tests ~425-475, `crates/rigg/src/commands/remote.rs:285-300`, `crates/rigg-core/src/registry.rs` (KnowledgeSource `immutable_fields`, sample at ~907), `crates/rigg/tests/sync.rs:2824,2830`
@@ -538,7 +538,7 @@ Expected: green, including `no_api_version_literals`.
 
 ```bash
 git add -A
-git commit -m "feat(search): 2026-08-01-preview — follow @odata.nextLink, documented KB MCP URL, networkAccessMode immutable
+git commit -m "feat(search): 2026-08-01-preview, follow @odata.nextLink, documented KB MCP URL, networkAccessMode immutable
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -653,7 +653,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 Download the three OpenAPI documents with `curl` from `https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/search/data-plane/Search/stable/2026-04-01/search.json`, `…/preview/2026-08-01-preview/search.json`, `…/cognitiveservices/resource-manager/Microsoft.CognitiveServices/stable/2026-07-01/cognitiveservices.json` into the scratchpad. Fixtures are produced by `rigg dev api-fixture` in Step 5; for now write `extract_fixture` (Step 3) and a tiny `examples/` -free path: a `#[test] #[ignore]` in `schema.rs` named `regenerate_fixtures` that reads `RIGG_OPENAPI_DIR` and writes the three files. Run it once after Step 3 with `RIGG_OPENAPI_DIR=<scratchpad> cargo test -p rigg-core regenerate_fixtures -- --ignored`.
 
-Fixture format (small — property names only):
+Fixture format (small (property names only)):
 
 ```json
 { "provider": "search-data", "version": "2026-08-01-preview",
@@ -819,7 +819,7 @@ pub fn diff_definitions(old: &Value, new: &Value, names: &[&str]) -> Vec<Definit
 }
 ```
 
-Add `schema_definition` to `KindMeta` and to every entry in `KINDS` per the Interfaces mapping. Register `pub mod schema;` in `lib.rs`. Then run the ignored `regenerate_fixtures` test to write the three fixture files, and `cargo test -p rigg-core` — `registry_paths_exist_in_the_pinned_schema` must pass; if a path fails, the registry path is wrong for this version — fix the registry, not the test.
+Add `schema_definition` to `KindMeta` and to every entry in `KINDS` per the Interfaces mapping. Register `pub mod schema;` in `lib.rs`. Then run the ignored `regenerate_fixtures` test to write the three fixture files, and `cargo test -p rigg-core`: `registry_paths_exist_in_the_pinned_schema` must pass; if a path fails, the registry path is wrong for this version, fix the registry, not the test.
 
 - [ ] **Step 4: Wire the canary into pull and adopt**
 
@@ -828,7 +828,7 @@ In `pull.rs` after every `store.write(r, doc)?` that returns true, and in `adopt
 ```rust
 for field in rigg_core::schema::unknown_top_level_fields(r.kind, doc) {
     eprintln!(
-        "{} {r}: field `{field}` is not in rigg's {} schema — Azure may have shipped a newer API; run `rigg dev api-check`",
+        "{} {r}: field `{field}` is not in rigg's {} schema, Azure may have shipped a newer API; run `rigg dev api-check`",
         "note:".dimmed(),
         rigg_core::schema::fixture_for(r.kind).version
     );
@@ -956,11 +956,11 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 Add at the top of `CHANGELOG.md`:
 
 ```markdown
-## [Unreleased] — 2.0.0
+## [Unreleased]: 2.0.0
 
-rigg 2.0 narrows to the Agentic RAG stack it does best — Microsoft Foundry
+rigg 2.0 narrows to the Agentic RAG stack it does best (Microsoft Foundry
 agents grounded on Azure AI Search, fed from Azure Blob Storage, enriched by
-Azure Functions — and rebuilds environments, promotion and authentication
+Azure Functions) and rebuilds environments, promotion and authentication
 around that. No compatibility with 1.x workspaces.
 
 ### Changed (breaking)
@@ -999,7 +999,7 @@ Run, from `e2e-test/`:
 cargo build -q && ~/.local/bin/rigg status && ~/.local/bin/rigg pull regulus --dry-run
 ```
 
-Expected: status lists dev and staging; pull dry-run shows no unexpected drift and no canary notes (if a canary note appears, record the field in the task result — it is information, not a failure).
+Expected: status lists dev and staging; pull dry-run shows no unexpected drift and no canary notes (if a canary note appears, record the field in the task result, it is information, not a failure).
 
 - [ ] **Step 4: Full gate and commit**
 
@@ -1013,7 +1013,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: ARM-registered versions — hold CognitiveServices at 2026-05-01, teach api-check about ARM registration
+### Task 8: ARM-registered versions: hold CognitiveServices at 2026-05-01, teach api-check about ARM registration
 
 Added 2026-09-10 after the Task 7 live smoke: Azure rejects Microsoft.CognitiveServices `2026-07-01` for `accounts/projects/connections` (ARM registers at most `2026-05-01` stable / `2026-05-15-preview` for connections, while `accounts` and `accounts/projects` accept `2026-07-01`). The 2026-05-01 → 2026-07-01 diff had no changes for rigg's kinds, so one uniform version is correct. The watchdog must know why a pin is held so it does not report BEHIND forever, and it must be able to tell when the hold can be lifted.
 
@@ -1030,7 +1030,7 @@ Added 2026-09-10 after the Task 7 live smoke: Azure rejects Microsoft.CognitiveS
   // ArmClient:
   pub async fn provider_api_versions(&self, subscription_id: &str, namespace: &str) -> Result<BTreeMap<String, Vec<String>>, ClientError> // resourceType → apiVersions
   ```
-- api-check statuses: `current`, `BEHIND`, `held` (spec repo newest == `hold.newer`), `held — ARM now registers <v> for every type: lift the hold` (when ARM access is available and confirms), `?`.
+- api-check statuses: `current`, `BEHIND`, `held` (spec repo newest == `hold.newer`), `held, ARM now registers <v> for every type: lift the hold` (when ARM access is available and confirms), `?`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1069,7 +1069,7 @@ fn status_is_held_when_upstream_equals_the_documented_hold() {
     assert_eq!(status_for(m.stable, m.stable, m.hold.as_ref(), None), "current");
     // ARM confirms the newer version for every resource type → the hold can be lifted
     let arm_ok = Some(true);
-    assert!(status_for(m.stable, "2026-07-01", m.hold.as_ref(), arm_ok).starts_with("held — ARM now registers"));
+    assert!(status_for(m.stable, "2026-07-01", m.hold.as_ref(), arm_ok).starts_with("held: ARM now registers"));
 }
 ```
 
@@ -1116,7 +1116,7 @@ Update `provider_table_is_complete_and_current` (2026-05-01) and the `arm_resour
 ```rust
 /// `resourceType → apiVersions` as ARM registers them for `namespace` in
 /// `subscription_id` (what `az provider show` prints). The ground truth for
-/// which api-version a call may use — the specs repository can be ahead of it.
+/// which api-version a call may use: the specs repository can be ahead of it.
 pub async fn provider_api_versions(&self, subscription_id: &str, namespace: &str) -> Result<BTreeMap<String, Vec<String>>, ClientError> {
     let url = self.url(&format!("/subscriptions/{subscription_id}/providers/{namespace}"), Provider::ResourcesArm);
     let response = self.http.get(&url).header("Authorization", format!("Bearer {}", self.token)).send().await?;
@@ -1147,7 +1147,7 @@ fn status_for(supported: &str, latest: &str, hold: Option<&Hold>, arm_confirms: 
     if !version_newer(latest, supported) { return "current".to_string(); }
     match hold {
         Some(h) if h.newer == latest => match arm_confirms {
-            Some(true) => format!("held — ARM now registers {latest} for every type: lift the hold"),
+            Some(true) => format!("held, ARM now registers {latest} for every type: lift the hold"),
             _ => "held".to_string(),
         },
         _ => "BEHIND".to_string(),
@@ -1159,7 +1159,7 @@ fn status_for(supported: &str, latest: &str, hold: Option<&Hold>, arm_confirms: 
 
 - [ ] **Step 6: Docs and smoke**
 
-CHANGELOG: change the CognitiveServices line to `Microsoft.CognitiveServices 2026-05-01 (the newest version Azure registers for project connections; 2026-07-01 changed nothing rigg uses and is tracked as a documented hold by \`rigg dev api-check\`)`. README "Resource Kinds" section: replace the single-version sentence with one pointing at the provider table and `rigg dev api-check`. Then the live smoke, from `e2e-test/`: `cargo build -q --manifest-path ../Cargo.toml && ../target/debug/rigg status && ../target/debug/rigg diff regulus && ../target/debug/rigg dev api-check` — all read-only. Expected: status lists dev and staging with resources in sync; diff shows no drift (or only known content drift); api-check shows CognitiveServices `held` with the reason line.
+CHANGELOG: change the CognitiveServices line to `Microsoft.CognitiveServices 2026-05-01 (the newest version Azure registers for project connections; 2026-07-01 changed nothing rigg uses and is tracked as a documented hold by \`rigg dev api-check\`)`. README "Resource Kinds" section: replace the single-version sentence with one pointing at the provider table and `rigg dev api-check`. Then the live smoke, from `e2e-test/`: `cargo build -q --manifest-path ../Cargo.toml && ../target/debug/rigg status && ../target/debug/rigg diff regulus && ../target/debug/rigg dev api-check`, all read-only. Expected: status lists dev and staging with resources in sync; diff shows no drift (or only known content drift); api-check shows CognitiveServices `held` with the reason line.
 
 - [ ] **Step 7: Gate and commit**
 
@@ -1177,22 +1177,22 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 Executed on branch `rigg-2`, commits 3ab15aa..e5e50aa (15 commits). Rulings made by the controller during execution:
 
-- Workspace: in-place on branch `rigg-2` (not main). Ruling: no separate worktree — Kristofer's `rigg` symlink points at this checkout's target/debug, and a worktree would build elsewhere; cost if wrong: none beyond convention.
-- | T2 guard test vs Global gate | `no_api_version_literals` fails until T3+T4 land, but every commit must pass the gate | CONFLICT — Ruling: T2 adds the guard with `#[ignore = "enabled in Task 4 once client.rs and sync.rs are migrated"]`; T4 removes the ignore. Cost if wrong: one extra edit. |
-- Task 1: implemented 3ab15aa (DONE_WITH_CONCERNS: test literals 'cosmosdb' kept as rejected inputs — Ruling: acceptable, the grep expectation targeted implementation code; README auth-doctor sentence updated beyond file list — accepted)
-- Task 4: BASE 88eaa2d. Ruling: the literal guard's regex is narrowed to the URL form `api-version=20\d\d-\d\d-\d\d` (the spec's wording) so bare date strings in dev.rs's version_ordering test stop matching; remaining URL-form hits (arm.rs test assertion, error.rs) are rewritten to use registry constants. Cost if wrong: a bare-date literal could slip in unguarded — the provider_table test still pins values.
-- Task 4: review — Important (plan-mandated): list() has no guard against a non-terminating @odata.nextLink chain. Ruling: real and cheap — add a max-pages cap (1000) and a same-link cycle check, error out with a clear message; fix round 1. Cost if wrong: none (a legit listing never hits 1000 pages).
-- Task 6: review — Important (plan-mandated): canary misfires on every Foundry ARM kind (schema_definition names sub-objects; ARM envelope keys never in fixture). Ruling: restrict the canary to Domain::Search kinds (return empty for others) and add a unit test with scaffold_deployment; also apply Minor 2 (assert fixture "version" matches the registry constant in SchemaFixture::parse) in the same fix round because it is one line and protects the drift detector itself. Cost if wrong: Foundry kinds lose the canary (acceptable — their ARM schema rarely adds top-level keys).
-- Ruling: ARM_COGNITIVE_API_VERSION = 2026-05-01 — the newest version ARM registers for EVERY CognitiveServices resource type rigg uses (connections cap it; the 2026-05-01→2026-07-01 diff had no changes for rigg). The watchdog must not report this as BEHIND forever: new Task 8 adds an ARM-registration check to api-check (per provider: namespace + resource types; "held" when the spec repo is ahead but ARM does not register the newer version for all listed types). Smoke test command corrected to `rigg status` + `rigg diff regulus` (both read-only). README "Resource Kinds" API-version sentence to be fixed in Task 8. Cost if wrong: a version bump is one constant edit later.
-- Task 8: implemented e2ed477 (DONE; live smoke green: status/diff/api-check). Deviation: ResourcesArm.spec_path set to None to satisfy every_arm_provider_declares_its_registration — Ruling: restore the spec_path (keep watchdog coverage of the subscriptions API) and exempt ResourcesArm in that test with a comment; handled in the fix round together with review findings. Cost if wrong: none.
+- Workspace: in-place on branch `rigg-2` (not main). Ruling: no separate worktree, Kristofer's `rigg` symlink points at this checkout's target/debug, and a worktree would build elsewhere; cost if wrong: none beyond convention.
+- | T2 guard test vs Global gate | `no_api_version_literals` fails until T3+T4 land, but every commit must pass the gate | CONFLICT, Ruling: T2 adds the guard with `#[ignore = "enabled in Task 4 once client.rs and sync.rs are migrated"]`; T4 removes the ignore. Cost if wrong: one extra edit. |
+- Task 1: implemented 3ab15aa (DONE_WITH_CONCERNS: test literals 'cosmosdb' kept as rejected inputs, Ruling: acceptable, the grep expectation targeted implementation code; README auth-doctor sentence updated beyond file list, accepted)
+- Task 4: BASE 88eaa2d. Ruling: the literal guard's regex is narrowed to the URL form `api-version=20\d\d-\d\d-\d\d` (the spec's wording) so bare date strings in dev.rs's version_ordering test stop matching; remaining URL-form hits (arm.rs test assertion, error.rs) are rewritten to use registry constants. Cost if wrong: a bare-date literal could slip in unguarded, the provider_table test still pins values.
+- Task 4: review: Important (plan-mandated): list() has no guard against a non-terminating @odata.nextLink chain. Ruling: real and cheap, add a max-pages cap (1000) and a same-link cycle check, error out with a clear message; fix round 1. Cost if wrong: none (a legit listing never hits 1000 pages).
+- Task 6: review: Important (plan-mandated): canary misfires on every Foundry ARM kind (schema_definition names sub-objects; ARM envelope keys never in fixture). Ruling: restrict the canary to Domain::Search kinds (return empty for others) and add a unit test with scaffold_deployment; also apply Minor 2 (assert fixture "version" matches the registry constant in SchemaFixture::parse) in the same fix round because it is one line and protects the drift detector itself. Cost if wrong: Foundry kinds lose the canary (acceptable, their ARM schema rarely adds top-level keys).
+- Ruling: ARM_COGNITIVE_API_VERSION = 2026-05-01, the newest version ARM registers for EVERY CognitiveServices resource type rigg uses (connections cap it; the 2026-05-01→2026-07-01 diff had no changes for rigg). The watchdog must not report this as BEHIND forever: new Task 8 adds an ARM-registration check to api-check (per provider: namespace + resource types; "held" when the spec repo is ahead but ARM does not register the newer version for all listed types). Smoke test command corrected to `rigg status` + `rigg diff regulus` (both read-only). README "Resource Kinds" API-version sentence to be fixed in Task 8. Cost if wrong: a version bump is one constant edit later.
+- Task 8: implemented e2ed477 (DONE; live smoke green: status/diff/api-check). Deviation: ResourcesArm.spec_path set to None to satisfy every_arm_provider_declares_its_registration, Ruling: restore the spec_path (keep watchdog coverage of the subscriptions API) and exempt ResourcesArm in that test with a comment; handled in the fix round together with review findings. Cost if wrong: none.
 - Final review (opus): mergeable after fixes. Important 1: CS schema fixture pinned at 2026-07-01 while constant is 2026-05-01 → latent panic. Important 2: KnowledgeSource networkAccessMode immutable entry on a stable-channel kind where the field cannot exist. Ruling: single fix wave covering I1 (regenerate fixture at 2026-05-01 from scratchpad cs-2026-05-01.json, rename include_str + regenerate list), I2 (drop the immutable entry; KnowledgeSource stays on the stable channel; changelog line removed), Minor 3 (CLAUDE.md:57), Minor 5 (migrate guard + help text), Minor 6 (CHANGELOG removed library API), Minor 9 (forward-looking comments), Minor 10 (arm_resources doc comment). Deferred to the polish pass: Minor 4 (deep-path registry guard), 7, 8 and the can-wait ledger items. Cost if wrong: none of the deferred items affect the supported path.
 
 Deferred to a later polish pass (final review: can wait):
 
-- Task 1: minor (deferred): validate.rs warn_missing_deletion_tracking `integrated_sql` branch is now unreachable dead logic — clean up in a later pass.
-- Task 2: minor (deferred): stale #[ignore] reason on no_version_literals guard — Task 4 removes the ignore anyway.
+- Task 1: minor (deferred): validate.rs warn_missing_deletion_tracking `integrated_sql` branch is now unreachable dead logic, clean up in a later pass.
+- Task 2: minor (deferred): stale #[ignore] reason on no_version_literals guard, Task 4 removes the ignore anyway.
 - Task 3: minor (deferred): list_web_sites/find_web_site_id duplicate the per-subscription sites URL loop (pre-existing).
 - Task 4: minor (deferred): mount_empty_lists_except duplicates mock_empty_lists' kind list.
 - Task 5: minor (deferred): route-versioned JSON rows hardcode channel "stable".
-- Task 6: minor (deferred): KS read_only_fields completeness unguarded (registry test idea); Indexer read_only_fields now empty — hand-pasted status fields would reach PUT; parse_provider substring match too loose; api_fixture uses compile-time CARGO_MANIFEST_DIR; SchemaFixture::parse panics on malformed fixture; diff_definitions subtype folding undocumented.
+- Task 6: minor (deferred): KS read_only_fields completeness unguarded (registry test idea); Indexer read_only_fields now empty, hand-pasted status fields would reach PUT; parse_provider substring match too loose; api_fixture uses compile-time CARGO_MANIFEST_DIR; SchemaFixture::parse panics on malformed fixture; diff_definitions subtype folding undocumented.
 - Task 7: minor (deferred): CLAUDE.md sentence carries an extra file-path clause (accurate).

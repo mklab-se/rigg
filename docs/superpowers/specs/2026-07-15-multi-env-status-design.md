@@ -23,17 +23,17 @@ environment, and `promote`/`diff --compare-env` are cross-env verbs. Questions l
 
 ## Output
 
-Text — env becomes the outer grouping, per-project sections unchanged inside:
+Text, env becomes the outer grouping, per-project sections unchanged inside:
 
 ```
 env: dev (default)
   rag
     indexes/products                 in sync
 env: prod
-  auth failed (...) — run `rigg auth doctor`
+  auth failed (...): run `rigg auth doctor`
 ```
 
-JSON — new top-level shape (breaking, accepted):
+JSON (new top-level shape (breaking, accepted)):
 
 ```json
 [
@@ -58,13 +58,13 @@ environments unless `env` is set". No schema change (the `env` param already exi
 
 ## Exit codes
 
-0 normally; 4 only if **all** environments fail auth. A partially degraded run exits 0
-— status observes, it does not gate (drift has never changed status's exit code).
+0 normally; 4 only if **all** environments fail auth. A partially degraded run exits 0:
+status observes, it does not gate (drift has never changed status's exit code).
 
 ## Testing
 
 - `crates/rigg/tests/sync.rs` (wiremock): two-env workspace pointed at two wiremock
-  servers — both env sections present in text and JSON; one env returning 401 →
+  servers, both env sections present in text and JSON; one env returning 401 →
   degraded line + exit 0; all envs failing auth → exit 4.
 - `crates/rigg/tests/cli_surface.rs`: envs without connections → LocalOnly rows per env.
 - Token cache unit test in `auth.rs`.

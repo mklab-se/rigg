@@ -74,7 +74,7 @@ pub struct ArmRegistration {
 }
 
 /// A stable-channel pin held below the newest version the specs repository
-/// publishes, and why — so `rigg dev api-check` can report `held` instead of
+/// publishes, and why, so `rigg dev api-check` can report `held` instead of
 /// `BEHIND` forever, and say when the hold can be lifted.
 #[derive(Debug, Clone, Copy)]
 pub struct Hold {
@@ -350,9 +350,9 @@ pub struct KindMeta {
     /// Stripped on pull and ignored in diff (dot paths, applied at any depth
     /// for `@odata.*`; top-level otherwise).
     pub volatile_fields: &'static [&'static str],
-    /// Returned by GET but rejected by PUT — never written to files.
+    /// Returned by GET but rejected by PUT, never written to files.
     pub read_only_fields: &'static [&'static str],
-    /// Paths that may carry key material — validation rejects files where
+    /// Paths that may carry key material: validation rejects files where
     /// these contain anything but identity-based placeholders.
     pub secret_fields: &'static [&'static str],
     /// Fields the server accepts on PUT but never returns on GET (redacted).
@@ -362,7 +362,7 @@ pub struct KindMeta {
     pub sidecar_fields: &'static [&'static str],
     /// How this kind references other resources.
     pub reference_fields: &'static [RefField],
-    /// Fields the service will not change in place — a differing local value
+    /// Fields the service will not change in place: a differing local value
     /// means an in-place PUT cannot reconcile the documents and the resource
     /// must be deleted and re-created (`rigg push` shows `replace`).
     pub immutable_fields: &'static [&'static str],
@@ -446,7 +446,7 @@ static KINDS: &[KindMeta] = &[
         channel: Channel::Stable,
         volatile_fields: COMMON_VOLATILE,
         // GET /indexers('name') never returns status/lastResult/
-        // executionHistory/limits — those live on the separate
+        // executionHistory/limits: those live on the separate
         // /indexers('name')/status resource (SearchIndexerStatus), fetched
         // by `rigg az indexer status` / `rigg_indexer_status`, never merged
         // into the indexer document itself.
@@ -536,7 +536,7 @@ static KINDS: &[KindMeta] = &[
             to: ResourceKind::Index,
         }],
         // A knowledge source's kind (azureBlob, searchIndex, ...) cannot be
-        // changed by PUT — push replaces (delete + recreate) instead.
+        // changed by PUT: push replaces (delete + recreate) instead.
         immutable_fields: &["kind"],
         schema_definition: "KnowledgeSource",
     },
@@ -548,7 +548,7 @@ static KINDS: &[KindMeta] = &[
         // Preview: the retrieval & output configuration
         // (retrievalInstructions, answerInstructions, outputMode,
         // retrievalReasoningEffort, per-source serving flags) does not
-        // exist in the stable api-version — a stable GET silently omits it
+        // exist in the stable api-version: a stable GET silently omits it
         // and a stable PUT cannot set it.
         channel: Channel::Preview,
         volatile_fields: COMMON_VOLATILE,
@@ -639,7 +639,7 @@ static KINDS: &[KindMeta] = &[
             "properties.provisioningState",
         ],
         read_only_fields: &[],
-        // Identity-based auth only — any credential payload is rejected.
+        // Identity-based auth only: any credential payload is rejected.
         secret_fields: &[
             "properties.credentials.key",
             "properties.credentials.keys",
@@ -698,7 +698,7 @@ pub fn meta(kind: ResourceKind) -> &'static KindMeta {
         .expect("registry entry exists for every ResourceKind")
 }
 
-/// The shape an [`InfraRef`] value takes — how to recognize the physical
+/// The shape an [`InfraRef`] value takes: how to recognize the physical
 /// Azure resource it names, and how to rewrite it for a different
 /// environment. See `infra::parse`/`infra::render` for the per-form rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -725,7 +725,7 @@ pub enum InfraForm {
     /// implicit `search` target, plus a sibling reference to
     /// `knowledge-bases/<kb>`.
     SearchKbMcpUrl,
-    /// A composite endpoint field that may hold any endpoint shape — a
+    /// A composite endpoint field that may hold any endpoint shape: a
     /// connection's `properties.target`, an agent tool's `server_url`.
     /// Recognized in order: the [`InfraForm::SearchKbMcpUrl`] shape, an
     /// OpenAI / AI-services host ([`InfraForm::OpenAiEndpoint`]), a bare
@@ -741,8 +741,8 @@ impl InfraForm {
     ///
     /// This is the [`crate::binding::BindingType`] `infra::binding_type_for`
     /// returns for the [`crate::infra::Target`] this form parses to, spelled
-    /// out for documentation. Composite forms — the ones whose target
-    /// depends on the value's host — list every type they can yield, in the
+    /// out for documentation. Composite forms, the ones whose target
+    /// depends on the value's host, list every type they can yield, in the
     /// order `infra::parse` tries them. `search` is the implicit
     /// environment target rather than a declared dependency.
     pub fn binding_type_label(&self) -> &'static str {
@@ -866,7 +866,7 @@ static SKILLSET_INFRA: &[InfraRef] = &[
 ];
 
 // The indexer's incremental-enrichment cache (`cache.storageConnectionString`,
-// `cache.identity`) is preview-only and out of scope for rigg 2.0 — it is
+// `cache.identity`) is preview-only and out of scope for rigg 2.0: it is
 // deliberately not modelled here.
 static INDEXER_INFRA: &[InfraRef] = &[
     InfraRef {
@@ -1023,7 +1023,7 @@ pub const X_RIGG_AUTH_FUNCTION_KEY: &str = "function-key";
 /// Prefix of the [`X_RIGG_AUTH`] value naming an Azure Key Vault secret as
 /// the key source: `key-vault:<secret-name>@<key-vault binding>` (spec
 /// `2026-09-09-identity-and-auth-design.md` §6). The secret's value is read
-/// at push time and placed in the outgoing body only — never on disk.
+/// at push time and placed in the outgoing body only, never on disk.
 pub const X_RIGG_AUTH_KEY_VAULT_PREFIX: &str = "key-vault:";
 
 /// Split a `key-vault:<secret>@<binding>` [`X_RIGG_AUTH`] value into its
@@ -1074,7 +1074,7 @@ fn collect_path_mut(v: &mut Value, path: &str, f: &mut dyn FnMut(&mut Value)) {
 /// Rewrite reference values in `body`: every `reference_fields` path of
 /// `kind` that points at `to` and currently equals `old` is set to `new`.
 /// Registry-driven so renames (e.g. side-by-side migration) follow the same
-/// table as graph ordering — a reference the graph can see is a reference a
+/// table as graph ordering: a reference the graph can see is a reference a
 /// rename will rewrite.
 pub fn rename_reference(
     kind: ResourceKind,
@@ -1097,7 +1097,7 @@ pub fn rename_reference(
 
 /// Rewrite `x-rigg-ref` annotations: every `x-rigg-ref` value (at any depth)
 /// equal to `"<dir_name>/<old>"` becomes `"<dir_name>/<new>"`. The
-/// annotation counterpart of [`rename_reference`] — `rigg promote` uses both
+/// annotation counterpart of [`rename_reference`]: `rigg promote` uses both
 /// to follow a sibling that is physically named differently in the target
 /// environment.
 pub fn rename_x_rigg_ref(body: &mut Value, dir_name: &str, old: &str, new: &str) {
@@ -1213,8 +1213,8 @@ pub fn is_platform_managed(kind: ResourceKind, body: &Value) -> bool {
 
 /// Managed-ingestion knowledge sources auto-create their backing pipeline
 /// (index, indexer, data source, skillset); Azure names them in the KS's
-/// `createdResources`. Rigg never manages these sub-resources — the knowledge
-/// source definition is their source of truth — so they are excluded from
+/// `createdResources`. Rigg never manages these sub-resources (the knowledge
+/// source definition is their source of truth), so they are excluded from
 /// adoption and unmanaged reporting. Returns resource key → creating KS name.
 pub fn auto_created_by(
     snapshot: &[(ResourceRef, Value)],
@@ -1262,7 +1262,7 @@ fn collect_created_resources(
     }
 }
 
-/// Immutable fields whose local and remote values differ — a non-empty
+/// Immutable fields whose local and remote values differ: a non-empty
 /// result means an in-place PUT cannot reconcile the two documents and the
 /// resource must be replaced (delete + recreate). Returns
 /// `(path, remote value, local value)` per differing field. A value missing
@@ -1347,22 +1347,22 @@ pub fn collect_path(v: &Value, path: &str, f: &mut dyn FnMut(&Value)) {
 }
 
 /// Restore `dst`'s value(s) at `path` from the corresponding value(s) in
-/// `src` at the SAME path — the SET counterpart to [`collect_path`], used to
+/// `src` at the SAME path: the SET counterpart to [`collect_path`], used to
 /// apply `rigg promote`'s pinned fields (keep the target's value at pinned
 /// paths: `dst` is the merged/source-cloned doc, `src` is the target env's
 /// current doc). Mirrors `collect_path`'s traversal (`a.b`, `arr[].field`,
 /// `arr[]`).
 ///
 /// For `[]` segments, `dst` and `src` arrays are paired by POSITION (index),
-/// not by an identity key — pinned paths (e.g. an agent's tool list) may have
+/// not by an identity key: pinned paths (e.g. an agent's tool list) may have
 /// no stable name to match on. When the arrays differ in length:
 ///
 /// - `src` (the target) longer: the extra elements are appended to `dst`
-///   WHOLESALE — they are target-only customizations (e.g. an extra tool
+///   WHOLESALE: they are target-only customizations (e.g. an extra tool
 ///   only prod has) and must survive promote; dropping them would be silent
 ///   data loss.
 /// - `dst` (the merged/source side) longer: its extra elements are left
-///   as-is — they come from the source (that IS the promotion) and there is
+///   as-is: they come from the source (that IS the promotion) and there is
 ///   nothing on the target side to pin from.
 ///
 /// Missing intermediate objects in `dst` are created (mirroring how the
@@ -1400,7 +1400,7 @@ fn restore_path_walk(dst: &mut Value, src: &Value, segments: &[&str]) {
         let Value::Object(dst_map) = dst else { return };
         if rest.is_empty() {
             // Leaf: assign directly rather than inserting a placeholder and
-            // recursing — an inserted `Null` wouldn't be an `Object` yet if
+            // recursing: an inserted `Null` wouldn't be an `Object` yet if
             // some OTHER path later needed to nest under this same key.
             dst_map.insert((*head).to_string(), src_val.clone());
         } else {
@@ -1553,7 +1553,7 @@ mod tests {
             }
         }
 
-        // Total row count across every kind, per the spec table — 31 rows
+        // Total row count across every kind, per the spec table: 31 rows
         // minus the two preview-only Indexer `cache.*` rows this rigg 2.0
         // scope deliberately does not model, plus the six
         // `encryptionKey.identity` siblings.
@@ -1909,7 +1909,7 @@ mod tests {
         assert_eq!(
             dst["tools"][2]["server_url"],
             json!("d3"),
-            "no src counterpart — left untouched"
+            "no src counterpart: left untouched"
         );
     }
 
@@ -1917,7 +1917,7 @@ mod tests {
     fn restore_path_appends_src_only_array_elements_wholesale() {
         // CRITICAL regression (promote data-loss): merged doc = SOURCE clone,
         // so its array has the source's length. When the TARGET (`src` of the
-        // restore) has MORE elements, the extras must be appended wholesale —
+        // restore) has MORE elements, the extras must be appended wholesale,
         // otherwise promote silently deletes the target's extra tools.
         let mut dst = json!({
             "tools": [{"type": "mcp", "server_url": "https://src-a"}]

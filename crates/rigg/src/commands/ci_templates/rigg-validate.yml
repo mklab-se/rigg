@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write      # OIDC federated login — no secrets
+  id-token: write      # OIDC federated login, no secrets
   contents: read
   pull-requests: write # diff comment
 

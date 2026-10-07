@@ -3,8 +3,8 @@
 //! Any string field in a resource JSON file may instead be an object
 //! `{"$file": "relative/path.md"}`. On push (and whenever Rigg loads the
 //! file), the referenced file's content is inlined as the string value. On
-//! pull, fields listed in the kind's registry `sidecar_fields` — or fields
-//! that already have a sidecar file on disk — are extracted back out to the
+//! pull, fields listed in the kind's registry `sidecar_fields` (or fields
+//! that already have a sidecar file on disk) are extracted back out to the
 //! sidecar and replaced with the `$file` reference.
 //!
 //! Sidecar paths are relative to the resource JSON file's directory.
@@ -107,7 +107,7 @@ fn file_ref(map: &Map<String, Value>) -> Option<Result<String, ()>> {
 /// - a sidecar file named `<resource-stem>.<field>.md` already exists next to
 ///   the JSON file (the user opted in by creating it).
 ///
-/// The default sidecar filename is `<resource-stem>.<field>.md` — for agent
+/// The default sidecar filename is `<resource-stem>.<field>.md`: for agent
 /// instructions this yields e.g. `support-agent.instructions.md`.
 pub fn extract_sidecars(
     kind: ResourceKind,

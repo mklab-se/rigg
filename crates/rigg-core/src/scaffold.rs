@@ -37,7 +37,7 @@ pub fn check_datasource_type(ds_type: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "unsupported data source type '{ds_type}' — rigg supports Azure Blob Storage only (valid: {})",
+            "unsupported data source type '{ds_type}': rigg supports Azure Blob Storage only (valid: {})",
             valid.join(", ")
         ))
     }
@@ -50,7 +50,7 @@ fn scaffold_datasource(name: &str, ds_type: &str) -> Result<Value, String> {
         json!({"name": "<container-name>"}),
     );
     // Deletion tracking is on by default: without it, deleted source data
-    // stays in the index forever — almost never what anyone wants.
+    // stays in the index forever, almost never what anyone wants.
     let (change_policy, deletion_policy) = (
         json!(null),
         json!({
@@ -313,7 +313,7 @@ pub fn scaffold_api_spec(name: &str) -> Value {
                                     "recordId": {"type": "string"},
                                     "data": {
                                         "type": "object",
-                                        "description": "Skill inputs — replace with your input fields",
+                                        "description": "Skill inputs: replace with your input fields",
                                         "additionalProperties": true
                                     }
                                 }
@@ -334,7 +334,7 @@ pub fn scaffold_api_spec(name: &str) -> Value {
                                     "recordId": {"type": "string"},
                                     "data": {
                                         "type": "object",
-                                        "description": "Skill outputs — replace with your output fields",
+                                        "description": "Skill outputs: replace with your output fields",
                                         "additionalProperties": true
                                     },
                                     "errors": {"type": "array", "items": {"type": "object"}},
@@ -364,7 +364,7 @@ pub fn identity_object(arm_id: &str) -> Value {
 }
 
 /// The AI services account a `--identity` skillset scaffold bills its
-/// built-in skills to — a placeholder, like every other `<…>` in a scaffold,
+/// built-in skills to: a placeholder, like every other `<…>` in a scaffold,
 /// because only the operator knows which Foundry account it is.
 pub const AI_SERVICES_SUBDOMAIN_PLACEHOLDER: &str =
     "https://<ai-services-account>.cognitiveservices.azure.com";
@@ -373,7 +373,7 @@ pub const AI_SERVICES_SUBDOMAIN_PLACEHOLDER: &str =
 /// `rigg new` writes.
 ///
 /// `KnowledgeSource` scaffolds as `kind: "searchIndex"`, and its only
-/// single-field identity path lives under `azureBlobParameters` — a
+/// single-field identity path lives under `azureBlobParameters`: a
 /// parameter block that contradicts that kind. The blob forms of a knowledge
 /// source come from `rigg env learn` / `rigg pull`, not from `rigg new`.
 const IDENTITY_NOT_A_SCAFFOLD_TARGET: &[ResourceKind] = &[ResourceKind::KnowledgeSource];
@@ -401,7 +401,7 @@ pub fn identity_field(kind: ResourceKind) -> Option<&'static str> {
                 && !r.path.contains("[]")
                 // `encryptionKey.identity` is the identity that fetches the
                 // customer-managed *key*, not the one the resource reaches
-                // data with — `--identity` is about the latter, and a
+                // data with: `--identity` is about the latter, and a
                 // scaffold has no `encryptionKey` block to hang it on.
                 && !r.path.starts_with("encryptionKey.")
         })
@@ -418,7 +418,7 @@ pub fn kinds_accepting_identity() -> Vec<ResourceKind> {
 }
 
 /// Point `kind`'s identity field at the user-assigned identity `arm_id`,
-/// creating the intermediate objects the path needs — and the discriminator
+/// creating the intermediate objects the path needs, and the discriminator
 /// its container needs to be a legal document. Errors when the kind has no
 /// such field.
 ///
@@ -427,11 +427,11 @@ pub fn kinds_accepting_identity() -> Vec<ResourceKind> {
 /// services connection it is: writing the identity alone produces a document
 /// the service rejects at push. `--identity` therefore also declares the
 /// keyless form (`AIServicesByIdentity`) and its required `subdomainUrl`
-/// placeholder — the same pair `rigg validate` recommends.
+/// placeholder: the same pair `rigg validate` recommends.
 pub fn set_identity(kind: ResourceKind, doc: &mut Value, arm_id: &str) -> Result<(), String> {
     let path = identity_field(kind).ok_or_else(|| {
         format!(
-            "{} has no user-assigned identity field — --identity applies to: {}",
+            "{} has no user-assigned identity field. --identity applies to: {}",
             kind.cli_name(),
             kinds_accepting_identity()
                 .iter()
@@ -566,7 +566,7 @@ mod tests {
         // identity path belongs to the blob forms, which come from
         // `rigg env learn` / pull rather than from `rigg new`.
         assert_eq!(identity_field(ResourceKind::KnowledgeSource), None);
-        // Only `vectorSearch.vectorizers[]` / `models[]` carry one — array
+        // Only `vectorSearch.vectorizers[]` / `models[]` carry one: array
         // elements a scaffold does not have.
         assert_eq!(identity_field(ResourceKind::Index), None);
         assert_eq!(identity_field(ResourceKind::KnowledgeBase), None);
@@ -597,7 +597,7 @@ mod tests {
         let cs = &ss["cognitiveServices"];
         assert_eq!(cs["identity"]["userAssignedIdentity"], arm);
         // Without the discriminator (and the subdomain it implies) Azure AI
-        // Search rejects the PUT — see review finding 1.
+        // Search rejects the PUT: see review finding 1.
         assert_eq!(
             cs["@odata.type"],
             "#Microsoft.Azure.Search.AIServicesByIdentity"
@@ -638,7 +638,7 @@ mod tests {
     }
 
     /// A knowledge base with no model cannot answer a `retrieve` call at
-    /// all — Azure rejects it — so the scaffold ships the block with
+    /// all (Azure rejects it), so the scaffold ships the block with
     /// placeholders rather than leaving the reader to discover the 400.
     #[test]
     fn knowledge_base_scaffold_carries_a_model_placeholder() {

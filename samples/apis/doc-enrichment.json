@@ -57,7 +57,7 @@
                 },
                 "data": {
                   "type": "object",
-                  "description": "Skill inputs — replace with your input fields",
+                  "description": "Skill inputs: replace with your input fields",
                   "additionalProperties": true
                 }
               }
@@ -85,7 +85,7 @@
                 },
                 "data": {
                   "type": "object",
-                  "description": "Skill outputs — replace with your output fields",
+                  "description": "Skill outputs: replace with your output fields",
                   "additionalProperties": true
                 },
                 "errors": {

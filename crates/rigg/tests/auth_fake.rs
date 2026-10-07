@@ -86,7 +86,7 @@ fn b64url(bytes: &[u8]) -> String {
     out
 }
 
-/// A bearer token whose payload names `oid` — what the operator checks read.
+/// A bearer token whose payload names `oid`: what the operator checks read.
 fn operator_token(oid: &str) -> String {
     let payload = json!({"oid": oid, "upn": "operator@example.com"}).to_string();
     format!(
@@ -140,7 +140,7 @@ fn workspace(endpoint: &str) -> tempfile::TempDir {
     tmp
 }
 
-/// Like [`workspace`], but `dev` also names a Foundry account and project —
+/// Like [`workspace`], but `dev` also names a Foundry account and project:
 /// what puts `<account>/projects/<project>` in the identity graph.
 fn workspace_with_foundry(endpoint: &str) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
@@ -163,7 +163,7 @@ fn workspace_with_foundry(endpoint: &str) -> tempfile::TempDir {
     tmp
 }
 
-/// A single-environment workspace whose only env is **protected** — the
+/// A single-environment workspace whose only env is **protected**: the
 /// shape the protected-gate ordering is asserted against.
 fn workspace_protected(endpoint: &str) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
@@ -206,7 +206,7 @@ fn write_resource_in(ws: &std::path::Path, env: &str, dir: &str, name: &str, bod
     .unwrap();
 }
 
-/// One Foundry agent in `dev` — the resource kind that makes the operator's
+/// One Foundry agent in `dev`: the resource kind that makes the operator's
 /// Foundry User edge (and therefore the project scope) part of the graph.
 fn write_agent(ws: &std::path::Path, name: &str) {
     let d = ws.join("projects/demo/envs/dev/foundry/agents");
@@ -331,7 +331,7 @@ async fn mount_assignment_listing(server: &MockServer, scope: &str, value: Vec<V
 }
 
 /// One assignment document. `id_scope` is where its ARM id lives, `at` is
-/// `properties.scope` — the scope it was actually made at, which is what
+/// `properties.scope`: the scope it was actually made at, which is what
 /// separates an at-scope grant from an inherited one.
 fn assignment(id_scope: &str, name: &str, role: &str, at: &str, description: &str) -> Value {
     json!({
@@ -1474,7 +1474,7 @@ async fn data_plane_puts(server: &MockServer) -> Vec<String> {
 
 /// The service identity is fully wired, but the *operator* holds nothing:
 /// rigg never grants a caller their own rights, so the preflight refuses
-/// with exit 4 before a single resource is written — even under `--yes`.
+/// with exit 4 before a single resource is written, even under `--yes`.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_refuses_before_writing_when_the_operator_cannot_do_the_push() {
     let server = MockServer::start().await;
@@ -1629,7 +1629,7 @@ async fn push_grants_the_missing_role_waits_for_it_then_pushes() {
     mount_permissions(&server, &storage_id("acct"), true).await;
     mount_assignment_writes(&server).await;
     // The storage scope answers "nothing yet" until the grant lands, then
-    // reports it — the propagation the preflight waits out.
+    // reports it: the propagation the preflight waits out.
     Mock::given(method("GET"))
         .and(path(format!(
             "{}/providers/Microsoft.Authorization/roleAssignments",
@@ -1686,7 +1686,7 @@ async fn role_assignment_puts(server: &MockServer) -> Vec<String> {
 
 /// The preflight *verifies* before the protected-environment gate, but must
 /// not *change* anything before it: `--yes` alone never satisfies that gate,
-/// so the push stops there (exit 6) — and not one role assignment was
+/// so the push stops there (exit 6), and not one role assignment was
 /// created for a push that never happened.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_to_a_protected_env_grants_nothing_before_the_gate() {
@@ -1717,8 +1717,8 @@ async fn push_to_a_protected_env_grants_nothing_before_the_gate() {
     )
     .await;
     // The operator can do the push and can grant at the storage scope, so
-    // the missing Storage Blob Data Reader is a fix rigg would apply itself
-    // — exactly the case that must NOT be applied before the gate.
+    // the missing Storage Blob Data Reader is a fix rigg would apply itself:
+    // exactly the case that must NOT be applied before the gate.
     mount_assignments_for(
         &server,
         &search_service_id(SUB, RG, SEARCH),
@@ -1760,8 +1760,8 @@ async fn push_to_a_protected_env_grants_nothing_before_the_gate() {
     );
 }
 
-/// A preview reports the whole remediation — the `az` lines only a human can
-/// run *and* what rigg would fix itself — and does neither: no refusal, no
+/// A preview reports the whole remediation, the `az` lines only a human can
+/// run *and* what rigg would fix itself, and does neither: no refusal, no
 /// grant, no write.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_dry_run_reports_auth_problems_without_refusing_or_granting() {
@@ -1808,17 +1808,17 @@ async fn push_dry_run_reports_auth_problems_without_refusing_or_granting() {
         .stdout(predicate::str::contains("auth preflight"))
         .stdout(predicate::str::contains("az role assignment create"))
         .stdout(predicate::str::contains("rigg can fix:"))
-        .stdout(predicate::str::contains("dry run — nothing granted"));
+        .stdout(predicate::str::contains("dry run, nothing granted"));
 
     assert!(
         data_plane_puts(&server).await.is_empty(),
-        "a preview writes nothing — neither resources nor grants"
+        "a preview writes nothing: neither resources nor grants"
     );
 }
 
 /// When the PUT-time diagnosis finds requirements rigg may not grant (the
 /// operator's own), the retry loop is pointless: rigg says so, prints the
-/// `az` line, and stops — instead of re-PUTting for five minutes.
+/// `az` line, and stops, instead of re-PUTting for five minutes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_requirement_rigg_may_not_grant_stops_the_retry_loop() {
     let server = MockServer::start().await;
@@ -1847,8 +1847,8 @@ async fn a_requirement_rigg_may_not_grant_stops_the_retry_loop() {
         false,
     )
     .await;
-    // The service identity is fully wired — so the diagnosis has no fix to
-    // offer — while the operator holds nothing.
+    // The service identity is fully wired, so the diagnosis has no fix to
+    // offer, while the operator holds nothing.
     mount_assignments_for(
         &server,
         &storage_id("acct"),
@@ -1864,7 +1864,7 @@ async fn a_requirement_rigg_may_not_grant_stops_the_retry_loop() {
         .mount(&server)
         .await;
     // A 403 is what Azure actually answers here, and `ClientError::Forbidden`
-    // carries Azure's `error.message` into its Display — so the RBAC
+    // carries Azure's `error.message` into its Display, so the RBAC
     // classifier sees the reason and runs the diagnosis.
     Mock::given(method("PUT"))
         .and(path("/datasources/docs"))
@@ -1977,7 +1977,7 @@ async fn verify_runs_every_indexer_knowledge_base_and_agent() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "indexer 'docs-indexer' — 7 processed",
+            "indexer 'docs-indexer': 7 processed",
         ))
         .stdout(predicate::str::contains(
             "knowledge base 'docs-kb' retrieved",
@@ -2112,7 +2112,7 @@ fn read_resource(ws: &std::path::Path, dir: &str, name: &str) -> Value {
 
 /// The whole §5 wiring in one run: Graph registers the application and its
 /// enterprise app, ARM gets a MERGED authsettingsV2, and the local skillset
-/// becomes keyless — without pushing anything.
+/// becomes keyless, without pushing anything.
 #[tokio::test(flavor = "multi_thread")]
 async fn easy_auth_registers_the_app_merges_settings_and_makes_the_skillset_keyless() {
     let server = MockServer::start().await;
@@ -2245,7 +2245,7 @@ async fn easy_auth_admits_the_skillsets_user_assigned_identity_when_it_declares_
 }
 
 /// A gated enterprise application (`appRoleAssignmentRequired`) issues no
-/// token without an assignment — and the second run of the wiring must not
+/// token without an assignment, and the second run of the wiring must not
 /// fail on the grant it made itself, *after* the authsettingsV2 PUT has
 /// already landed. So: run it twice, expect exactly one POST.
 #[tokio::test(flavor = "multi_thread")]
@@ -2298,7 +2298,7 @@ async fn easy_auth_assigns_the_app_role_when_the_enterprise_app_is_gated() {
 }
 
 /// `--client-id` reuses an existing app registration instead of creating
-/// one — no `POST /applications` at all.
+/// one: no `POST /applications` at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn easy_auth_reuses_the_registration_named_by_client_id() {
     let server = MockServer::start().await;
@@ -2425,7 +2425,7 @@ async fn push_injects_the_key_vault_secret_into_the_body_only() {
         .respond_with(ResponseTemplate::new(404).set_body_string("{}"))
         .mount(&server)
         .await;
-    // The fake echoes the pushed document back VERBATIM — key and all.
+    // The fake echoes the pushed document back VERBATIM: key and all.
     // Azure redacts, but "local files never contain secrets" is rigg's
     // invariant to keep, not the service's: with a hostile echo, the on-disk
     // assertion below proves rigg scrubs rather than that the fake is polite.
@@ -2484,7 +2484,7 @@ async fn push_injects_the_key_vault_secret_into_the_body_only() {
         "x-rigg-* keys are stripped before the PUT"
     );
 
-    // The file keeps the annotation and the placeholder — never the value.
+    // The file keeps the annotation and the placeholder, never the value.
     let on_disk = std::fs::read_to_string(
         ws.path()
             .join("projects/demo/envs/dev/search/skillsets/webss.json"),
@@ -2498,7 +2498,7 @@ async fn push_injects_the_key_vault_secret_into_the_body_only() {
 }
 
 /// `validate` accepts the annotation only when the binding really is a key
-/// vault — a typo must not become a push-time failure mid-plan.
+/// vault: a typo must not become a push-time failure mid-plan.
 #[tokio::test(flavor = "multi_thread")]
 async fn validate_checks_the_key_vault_binding_behind_the_annotation() {
     let server = MockServer::start().await;
@@ -2616,7 +2616,7 @@ async fn new_with_identity_writes_the_user_assigned_identity_object() {
 /// Whatever `--identity` writes must be a document rigg accepts and Azure
 /// would too: for a skillset that means the `cognitiveServices`
 /// discriminator, not a bare `identity` under it. Every accepting kind is
-/// scaffolded with `--identity` and put through `rigg validate` — the list
+/// scaffolded with `--identity` and put through `rigg validate`: the list
 /// comes from the library, so a kind added later is covered automatically.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_identity_scaffold_passes_validate() {
@@ -2648,7 +2648,7 @@ async fn every_identity_scaffold_passes_validate() {
         .success();
 
     // The skillset's identity needs the AI services discriminator alongside
-    // it — without it Azure rejects the PUT.
+    // it, without it Azure rejects the PUT.
     let ss = read_resource(ws.path(), "skillsets", "mi-skillset");
     assert_eq!(
         ss["cognitiveServices"]["@odata.type"],
@@ -2691,7 +2691,7 @@ async fn every_identity_scaffold_passes_validate() {
 // role GUID *or* by the caller's effective permissions at the scope covering
 // the role definition (`role`, or any of the edge's `alternatives`). That
 // second path is what makes a subscription Owner stop reading as "missing
-// Search Service Contributor" — and, because Owner carries no `dataActions`,
+// Search Service Contributor", and, because Owner carries no `dataActions`,
 // what correctly leaves Foundry User and Search Index Data Reader missing.
 // No role name is special-cased.
 
@@ -2712,7 +2712,7 @@ fn write_foundry(ws: &std::path::Path, dir: &str, name: &str, body: &Value) {
     .unwrap();
 }
 
-/// The operator role definitions, as ARM serves them — trimmed to the
+/// The operator role definitions, as ARM serves them: trimmed to the
 /// entries the coverage rule reads, and mirroring Azure's real definitions.
 ///
 /// Foundry User, Foundry **Project Manager** and the Search Index Data roles
@@ -2731,7 +2731,7 @@ async fn mount_operator_role_definitions(server: &MockServer) {
     )
     .await;
     // Azure's own definition: a conditioned `roleAssignments/write` on the
-    // control plane, and — the part an Owner does not have — every data
+    // control plane, and, the part an Owner does not have, every data
     // action on Cognitive Services.
     mount_role_definition(
         server,
@@ -2829,10 +2829,10 @@ fn write_operator_edge_tree(ws: &std::path::Path) {
     );
 }
 
-/// Scenario 1 — subscription Owner, no exact role GUID assigned anywhere.
+/// Scenario 1: subscription Owner, no exact role GUID assigned anywhere.
 ///
 /// The three control-plane operator roles go green through the effective
-/// permissions path — Foundry Project Manager through its Cognitive Services
+/// permissions path: Foundry Project Manager through its Cognitive Services
 /// Contributor alternative, since Azure's Project Manager definition itself
 /// carries `dataActions`. Foundry User stays missing, because Owner has no
 /// `dataActions` at all. Exit 4, and Foundry User is the only edge listed.
@@ -2860,7 +2860,7 @@ async fn owner_covers_the_operators_control_plane_roles_but_not_foundry_user() {
         "Enabled",
     )
     .await;
-    // Nobody holds any role by GUID — the exact-GUID path fails everywhere.
+    // Nobody holds any role by GUID: the exact-GUID path fails everywhere.
     mount_no_assignments(&server).await;
     mount_owner_everywhere(&server).await;
     mount_operator_role_definitions(&server).await;
@@ -2888,7 +2888,7 @@ async fn owner_covers_the_operators_control_plane_roles_but_not_foundry_user() {
         .stdout(predicate::str::contains("1 missing, 0 unresolved"));
 }
 
-/// Scenario 2 — the same Owner, plus the one role Owner cannot cover, held
+/// Scenario 2: the same Owner, plus the one role Owner cannot cover, held
 /// explicitly. Everything is green and doctor exits 0 (`--verify` roles off,
 /// so Search Index Data Reader is not part of this graph).
 #[tokio::test(flavor = "multi_thread")]
@@ -2938,7 +2938,7 @@ async fn owner_plus_an_explicit_foundry_user_assignment_is_green() {
         .stdout(predicate::str::contains("0 missing, 0 unresolved"));
 }
 
-/// Scenario 3 — push's preflight no longer refuses the person who owns the
+/// Scenario 3: push's preflight no longer refuses the person who owns the
 /// subscription: Owner covers Search Service Contributor, the service
 /// identity holds its own role, and the push writes.
 #[tokio::test(flavor = "multi_thread")]
@@ -3014,7 +3014,7 @@ async fn push_preflight_accepts_an_owner_with_the_data_roles() {
 }
 
 /// The other half of scenario 3: strip the explicit data-plane assignment and
-/// the same Owner is refused — `dataActions` are not covered by `actions: *`,
+/// the same Owner is refused: `dataActions` are not covered by `actions: *`,
 /// so `push --verify` still names Search Index Data Reader and writes
 /// nothing.
 #[tokio::test(flavor = "multi_thread")]
@@ -3130,7 +3130,7 @@ async fn auth_doctor_fix_on_a_protected_env_is_gated() {
     )
     .await;
     // No role anywhere: the missing Storage Blob Data Reader is a fix rigg
-    // would apply itself, and the caller can grant it — the exact case the
+    // would apply itself, and the caller can grant it: the exact case the
     // gate must stop.
     mount_no_assignments(&server).await;
     mount_permissions(&server, &storage_id("acct"), true).await;
@@ -3351,14 +3351,14 @@ async fn confirm_env_satisfies_the_gate_for_auth_doctor_fix() {
 
 // ---------------- search identity: system vs user-assigned (I-4) ----------
 //
-// Spec §3.3 asks for "a system-assigned identity exists — or the UAMI the
+// Spec §3.3 asks for "a system-assigned identity exists, or the UAMI the
 // files name is attached". Both halves are about the identities *this
 // environment's documents actually use*: a service carrying only a UAMI
 // while every file asks for the system identity is broken, and a file naming
 // a UAMI that is not attached to the service is broken too.
 
 /// A service with only user-assigned identities attached, and files that
-/// name none — so they need the system-assigned identity, which is off.
+/// name none, so they need the system-assigned identity, which is off.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_uami_only_service_is_missing_the_system_identity_its_files_use() {
     let server = MockServer::start().await;
@@ -3436,7 +3436,7 @@ async fn a_uami_only_service_is_missing_the_system_identity_its_files_use() {
 async fn a_named_uami_that_is_not_attached_is_missing_and_fixable() {
     let server = MockServer::start().await;
     mount_base(&server).await;
-    // `SystemAssigned, UserAssigned` attaches the fake's own `uami` — not
+    // `SystemAssigned, UserAssigned` attaches the fake's own `uami`, not
     // the `rigg-mi` the data source names.
     mount_search_service(
         &server,
@@ -3657,7 +3657,7 @@ async fn standard3_high_density_cannot_host_knowledge_bases() {
         "idx",
         &json!({"name": "idx", "fields": [{"name": "id", "type": "Edm.String", "key": true}]}),
     );
-    // (The operator's own rows are beside the point here — only the SKU
+    // (The operator's own rows are beside the point here, only the SKU
     // check's verdict is asserted.)
     rigg(ws.path(), &server.uri())
         .args(["auth", "doctor", "-e", "dev"])
@@ -3686,7 +3686,7 @@ async fn standard3_high_density_cannot_host_knowledge_bases() {
 
 const FOUNDRY_PROJECT_PID: &str = "00000000-0000-0000-0000-0000000000fp";
 
-/// Mount the Foundry *project* resource with a system-assigned identity —
+/// Mount the Foundry *project* resource with a system-assigned identity,
 /// the one row spec §11 called unverifiable without a live account:
 /// `identity.principalId` on `accounts/{a}/projects/{p}`.
 async fn mount_foundry_project_identity(server: &MockServer, principal_id: &str) {

@@ -1,4 +1,4 @@
-# rigg 2.0 — Interaction model: guided flows, question protocol, onboarding
+# rigg 2.0: Interaction model: guided flows, question protocol, onboarding
 
 **Date:** 2026-09-09
 **Status:** Design, approved direction. Workstream 4 of

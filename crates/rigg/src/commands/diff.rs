@@ -1,4 +1,4 @@
-//! `rigg diff` — semantic comparison of local project files vs live Azure
+//! `rigg diff`: semantic comparison of local project files vs live Azure
 //! (or one environment vs another with --compare-env).
 
 use anyhow::{Result, anyhow};
@@ -61,8 +61,8 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
     if has_drift && args.format == DiffFormat::Text && args.compare_env.is_none() {
         let p = drifted_project_hint(&diffs);
         println!();
-        println!("hint: rigg pull {p} — update local files to match Azure");
-        println!("      rigg push {p} — make Azure match your local files");
+        println!("hint: rigg pull {p} (update local files to match Azure)");
+        println!("      rigg push {p} (make Azure match your local files)");
     }
     if args.exit_code && has_drift {
         return Err(anyhow!(CommandError::DriftOrConflict(
@@ -74,7 +74,7 @@ pub async fn run(ctx: &GlobalContext, args: DiffArgs) -> Result<()> {
 
 /// Build the labels for the two sides of the diff: local-vs-Azure by
 /// default, or the two named environments in `--compare-env` mode. Mirrors
-/// the env resolution in `diff_project` — new=local/env_a, old=Azure/env_b
+/// the env resolution in `diff_project`: new=local/env_a, old=Azure/env_b
 /// (see the diff-orientation comment there).
 fn side_labels(ws: &Workspace, ctx: &GlobalContext, args: &DiffArgs) -> Result<SideLabels> {
     let env_b = ws.resolve_env(args.compare_env.as_deref().or(ctx.env.as_deref()))?;
@@ -164,7 +164,7 @@ async fn diff_project(
             pairs.push((r, a, b));
         }
     } else {
-        // local vs remote — union of local files and remote resources owned here
+        // local vs remote: union of local files and remote resources owned here
         let local_files = store.list()?;
         let mut seen: std::collections::BTreeSet<ResourceRef> = Default::default();
         for (r, _) in &local_files {
@@ -202,7 +202,7 @@ async fn diff_project(
             continue;
         }
         // Immutable-field drift (local vs Azure only): pushing this is not an
-        // update — surface the replace consequence alongside the diff.
+        // update: surface the replace consequence alongside the diff.
         if args.compare_env.is_none()
             && let (Some(local), Some(remote)) = (&left, &right)
         {
@@ -210,7 +210,7 @@ async fn diff_project(
                 rigg_core::registry::immutable_diff(r.kind, local, remote)
             {
                 notes.push(format!(
-                    "note: {}/{r} — '{path}' is immutable ({remote_val} → {local_val}): \
+                    "note: {}/{r}: '{path}' is immutable ({remote_val} → {local_val}): \
                          push will REPLACE this resource (delete + recreate; a knowledge \
                          source's index is rebuilt from source data)",
                     project.name
@@ -219,7 +219,7 @@ async fn diff_project(
         }
         // Compare the way `status` does: `normalize_for_compare` also strips
         // write-only fields (a data source's connection string), which the
-        // server never echoes back — comparing them would report drift on
+        // server never echoes back: comparing them would report drift on
         // every data source forever.
         let mut left_n = left
             .as_ref()
@@ -230,7 +230,7 @@ async fn diff_project(
             .map(|v| normalize_for_compare(r.kind, v))
             .unwrap_or(Value::Null);
         // …but a write-only field the user edited locally IS a pending change,
-        // and the baseline — not the redacted remote — is what `status` and
+        // and the baseline, not the redacted remote, is what `status` and
         // `push` classify it against. Put both sides' recorded values back so
         // a re-pointed connection string reads as `old → new`.
         if let (Some(state), Some(local)) = (baselines.as_ref(), left.as_ref())

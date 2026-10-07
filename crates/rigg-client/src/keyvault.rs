@@ -1,9 +1,9 @@
-//! Key Vault secrets data plane — the `key-vault:<secret>@<binding>` key
+//! Key Vault secrets data plane: the `key-vault:<secret>@<binding>` key
 //! source (spec `2026-09-09-identity-and-auth-design.md` §6).
 //!
 //! The operator's own token is used (Key Vault Secrets User,
 //! `4633458b-17de-408a-b874-0445c86b69e6`); the secret's value is returned to
-//! the caller for injection and is **never logged** — not at any level, not
+//! the caller for injection and is **never logged**, not at any level, not
 //! in an error.
 
 use std::time::Duration;
@@ -50,7 +50,7 @@ impl KeyVaultClient {
     }
 
     /// Build a client from an already-obtained token and an explicit base
-    /// URL — for tests, so Key Vault tests never touch the process env var.
+    /// URL: for tests, so Key Vault tests never touch the process env var.
     pub fn with_token_and_base(token: String, base_url: String) -> Self {
         Self {
             http: Client::builder()
@@ -64,7 +64,7 @@ impl KeyVaultClient {
 
     /// Read the current version of a secret.
     ///
-    /// Only the URL is traced — never the response body.
+    /// Only the URL is traced, never the response body.
     pub async fn get_secret(&self, name: &str) -> Result<String, ClientError> {
         let url = format!(
             "{}/secrets/{}?api-version={}",
@@ -82,7 +82,7 @@ impl KeyVaultClient {
         let status = response.status();
         if !status.is_success() {
             // The body of a Key Vault error never contains the secret, but
-            // it does name the vault and the caller — enough to act on.
+            // it does name the vault and the caller: enough to act on.
             let body = response.text().await?;
             return Err(ClientError::from_response(status.as_u16(), &body));
         }
@@ -99,7 +99,7 @@ impl KeyVaultClient {
     }
 }
 
-/// Read one secret from one vault — the shape the push-time key injection
+/// Read one secret from one vault: the shape the push-time key injection
 /// uses. The value is returned to the caller and never logged.
 pub async fn get_secret(
     tenant: Option<&str>,

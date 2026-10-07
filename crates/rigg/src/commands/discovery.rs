@@ -100,12 +100,12 @@ fn manual_entry(plain: bool) -> Result<Discovered> {
     Ok((search, foundry))
 }
 
-const SKIP: &str = "(skip — none)";
+const SKIP: &str = "(skip: none)";
 
 /// Arrow-key pick from a list, with an explicit skip row; empty list skips.
 fn pick(label: &str, options: &[String], plain: bool) -> Result<Option<String>> {
     if options.is_empty() {
-        println!("  No {} found — skipping.", label.trim_end_matches(':'));
+        println!("  No {} found, skipping.", label.trim_end_matches(':'));
         return Ok(None);
     }
     let mut rows = options.to_vec();
@@ -120,7 +120,7 @@ fn optional(answer: String) -> Option<String> {
 }
 
 /// Names of every resource of `kind` visible in `subscription` (or every
-/// enabled subscription when `None`) — the pick-list `rigg env add --like`
+/// enabled subscription when `None`): the pick-list `rigg env add --like`
 /// offers per binding. Best-effort: any ARM failure yields an empty list so
 /// the caller falls back to free-form entry.
 pub(crate) async fn binding_candidates(

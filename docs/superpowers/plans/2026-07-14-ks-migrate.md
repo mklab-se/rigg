@@ -15,7 +15,7 @@
 - Pre-push verification: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` must all pass.
 - Local files never contain secrets; `x-rigg-*` stripped before PUT; push canonicalization (GET-back after every PUT) is never skipped.
 - `--yes` never satisfies the replace gate (mirrors `--confirm-env` philosophy).
-- Sub-resource names come ONLY from the live KS `createdResources` — never derived by pattern.
+- Sub-resource names come ONLY from the live KS `createdResources`, never derived by pattern.
 - Live testing only on `test-ks` in mklabsrch; `regulatory` untouched.
 
 ---
@@ -28,11 +28,11 @@
 **Interfaces:**
 - Produces: `KindMeta.immutable_fields: &'static [&'static str]`; `pub fn immutable_diff(kind, local, remote) -> Vec<(&'static str, String, String)>` (path, remote value, local value; only differing, both-present-or-one-missing fields).
 
-- [ ] Add `immutable_fields` to `KindMeta` (doc: "Fields the service will not change in place — a differing local value means the resource must be deleted and re-created (push shows `replace`)."). Set `&["kind"]` for `KnowledgeSource`, `&[]` for all others.
+- [ ] Add `immutable_fields` to `KindMeta` (doc: "Fields the service will not change in place, a differing local value means the resource must be deleted and re-created (push shows `replace`)."). Set `&["kind"]` for `KnowledgeSource`, `&[]` for all others.
 - [ ] Add extractor:
 
 ```rust
-/// Immutable fields whose local and remote values differ — a non-empty
+/// Immutable fields whose local and remote values differ: a non-empty
 /// result means an in-place PUT cannot reconcile the two documents and the
 /// resource must be replaced (delete + recreate). Missing-on-either-side
 /// counts as a difference only when the other side has a value.
@@ -72,12 +72,12 @@ pub fn immutable_diff(
 
 **Interfaces:**
 - Produces:
-  - `pub fn created_resources(ks_doc: &Value) -> BTreeMap<ResourceKind, String>` — kind → generated name from the doc's (nested) `createdResources`.
-  - `pub fn to_search_index_ks(ks_doc: &Value, index_name: &str) -> Value` — `{name, kind:"searchIndex", description?, searchIndexParameters:{searchIndexName}}` preserving name/description.
-  - `pub fn derive_names(old_ks: &str, new_ks: &str, created: &BTreeMap<ResourceKind, String>) -> BTreeMap<ResourceKind, String>` — prefix swap when the generated name starts with `old_ks`, else `{new_ks}-{index|indexer|datasource|skillset}`.
+  - `pub fn created_resources(ks_doc: &Value) -> BTreeMap<ResourceKind, String>`: kind → generated name from the doc's (nested) `createdResources`.
+  - `pub fn to_search_index_ks(ks_doc: &Value, index_name: &str) -> Value`: `{name, kind:"searchIndex", description?, searchIndexParameters:{searchIndexName}}` preserving name/description.
+  - `pub fn derive_names(old_ks: &str, new_ks: &str, created: &BTreeMap<ResourceKind, String>) -> BTreeMap<ResourceKind, String>`: prefix swap when the generated name starts with `old_ks`, else `{new_ks}-{index|indexer|datasource|skillset}`.
   - `pub fn is_indexed_with_created(ks_doc: &Value) -> bool`.
 
-- [ ] Implement (reuse `registry::collect_created_resources` walk logic — refactor it to expose a per-doc variant rather than duplicating: change registry's private walker to call this module or move the walker here and have registry call it; keep `auto_created_by` behavior identical).
+- [ ] Implement (reuse `registry::collect_created_resources` walk logic, refactor it to expose a per-doc variant rather than duplicating: change registry's private walker to call this module or move the walker here and have registry call it; keep `auto_created_by` behavior identical).
 - [ ] Unit tests: nested `azureBlobParameters.createdResources` fixture (same shape as registry test) → 4 entries; name derivation prefix swap (`regulatory-index`/`regulatory`→`reg2` gives `reg2-index`) and non-prefix fallback (`weird-name` → `reg2-index` style default); `to_search_index_ks` preserves description, drops `azureBlobParameters`; ignores unknown createdResources members.
 - [ ] `cargo test -p rigg-core migrate` passes; commit `feat(core): migrate doc transforms`.
 
@@ -124,16 +124,16 @@ pub struct MigrateKsArgs {
 
 **commands/migrate.rs flow (complete):**
 1. `load_workspace`, `resolve_env`, project = `select_projects(&ws, args.project.as_deref(), false)?[0]` (reuse single-project selection), `Remote::for_project`, `ensure_any_connection`.
-2. `remote.get(&ks_ref)` → None → error "knowledge source '<n>' not found remotely". `kind == "searchIndex"` → println "already searchIndex — nothing to migrate", Ok. `migrate::is_indexed_with_created` false → error "kind '<k>' has no generated pipeline (remote knowledge sources have nothing to migrate)".
+2. `remote.get(&ks_ref)` → None → error "knowledge source '<n>' not found remotely". `kind == "searchIndex"` → println "already searchIndex, nothing to migrate", Ok. `migrate::is_indexed_with_created` false → error "kind '<k>' has no generated pipeline (remote knowledge sources have nothing to migrate)".
 3. Ownership: `store.locate(&ks_ref)?` is Some OR `state.has_baseline(&ks_ref)` else error suggesting `rigg adopt`.
-4. Mode: flags, else interactive `interactive::select("Migration mode:", ["in-place (same names — next push REBUILDS the index)", "side-by-side (new names — old keeps serving until you cut over)"])`; non-interactive without flags → `CommandError::Usage`.
+4. Mode: flags, else interactive `interactive::select("Migration mode:", ["in-place (same names, next push REBUILDS the index)", "side-by-side (new names, old keeps serving until you cut over)"])`; non-interactive without flags → `CommandError::Usage`.
 5. `let created = migrate::created_resources(&remote_ks)`; fetch each sub-resource doc `remote.get`; missing one → warn and skip it (it may have been deleted manually).
-6. In-place: for each sub-doc `store.write(&r, &normalize_for_disk(...))` + `state.set_baseline` (they exist remotely with this content); rewrite KS file `store.write(&ks_ref, &migrate::to_search_index_ks(&remote_ks, &created[Index]))` (baseline NOT touched — stays azureBlob so status shows LocalAhead).
+6. In-place: for each sub-doc `store.write(&r, &normalize_for_disk(...))` + `state.set_baseline` (they exist remotely with this content); rewrite KS file `store.write(&ks_ref, &migrate::to_search_index_ks(&remote_ks, &created[Index]))` (baseline NOT touched, stays azureBlob so status shows LocalAhead).
 7. Side-by-side: names = `migrate::derive_names(...)`; interactive: `interactive::text` per name pre-filled hint with default (accept empty → default); validate each name unused locally (`store.locate`) and remotely (`remote.get`); write new sub-resources (renamed `name` field, indexer rewired: `dataSourceName`, `targetIndexName`, `skillsetName` remapped to the new names) and new KS (`to_search_index_ks` with new names); NO baselines (they're new). Old KS file untouched.
 8. Credentials: after writing the data source file, if `credentials.connectionString` is null/missing/non-`ResourceId=`: interactive → offer `interactive::text("Storage connection (identity-based, e.g. ResourceId=/subscriptions/...):")`, write into file if given; always print warning otherwise.
 9. Summary print + warnings (in-place: rebuild on push; side-by-side: next steps list).
 
-- [ ] Write failing wiremock test `migrate_in_place_writes_explicit_pipeline` in sync.rs: mock KS GET (azureBlob with nested createdResources naming 4 resources), GETs for the 4 sub-docs, run `rigg migrate knowledge-source test-ks --in-place --yes` in a workspace where the KS file exists (write it first + push baseline via adopt-like: simplest — write the KS file before running; ownership check accepts file presence), assert: 4 new files exist with normalized content; KS file now `kind == "searchIndex"`, `searchIndexParameters.searchIndexName` = generated index name.
+- [ ] Write failing wiremock test `migrate_in_place_writes_explicit_pipeline` in sync.rs: mock KS GET (azureBlob with nested createdResources naming 4 resources), GETs for the 4 sub-docs, run `rigg migrate knowledge-source test-ks --in-place --yes` in a workspace where the KS file exists (write it first + push baseline via adopt-like: simplest, write the KS file before running; ownership check accepts file presence), assert: 4 new files exist with normalized content; KS file now `kind == "searchIndex"`, `searchIndexParameters.searchIndexName` = generated index name.
 - [ ] Implement; test passes.
 - [ ] Add sync.rs test `migrate_side_by_side_creates_new_files`: `--rename test-ks2` non-interactive → files `test-ks2.json` (searchIndex) + derived-name sub-resources with rewired indexer; old file untouched; remote-collision mock (GET 200 for one derived name) → command errors.
 - [ ] Add cli_surface tests: `rigg migrate` without subcommand → usage error; `migrate knowledge-source x --in-place --rename y` → clap conflict error.
@@ -148,7 +148,7 @@ pub struct MigrateKsArgs {
 **Interfaces:**
 - Produces: `struct ReplaceBundle { ks: ResourceRef, new_body: Value, remote_ks: Value, subresources: Vec<(ResourceRef, Value)>, kbs: Vec<Value> /* filled at exec */ }` (private to push.rs).
 
-- [ ] During classification loop: when `kind == KnowledgeSource` and `remote_doc` is Some and `!registry::immutable_diff(r.kind, body, remote).is_empty()` → route into `replaces: Vec<ReplaceBundle>` instead of `to_push`. Bundle sub-resources: `migrate::created_resources(&remote_doc)` filtered to names having a local file in `items` — REMOVE those from `to_push` (they re-create inside the bundle regardless of their own SyncClass; note an InSync copy would otherwise be skipped and then lost to the cascade).
+- [ ] During classification loop: when `kind == KnowledgeSource` and `remote_doc` is Some and `!registry::immutable_diff(r.kind, body, remote).is_empty()` → route into `replaces: Vec<ReplaceBundle>` instead of `to_push`. Bundle sub-resources: `migrate::created_resources(&remote_doc)` filtered to names having a local file in `items`, REMOVE those from `to_push` (they re-create inside the bundle regardless of their own SyncClass; note an InSync copy would otherwise be skipped and then lost to the cascade).
 - [ ] Plan print after normal verbs:
 
 ```
@@ -176,8 +176,8 @@ pub struct MigrateKsArgs {
 { "ks": "test-ks", "knowledge_bases": [ { ...original KB doc... } ] }
 ```
 
-- [ ] Execution, after normal creates/updates, before prune — per bundle:
-  1. `remote.list(KnowledgeBase)` → kbs referencing `ks.name` in `knowledgeSources[].name`. Print notice for each KB not owned by this project ("temporarily unlinking foreign knowledge base '<n>' — restored afterwards").
+- [ ] Execution, after normal creates/updates, before prune (per bundle):
+  1. `remote.list(KnowledgeBase)` → kbs referencing `ks.name` in `knowledgeSources[].name`. Print notice for each KB not owned by this project ("temporarily unlinking foreign knowledge base '<n>': restored afterwards").
   2. Write recovery file (original docs).
   3. For each KB: build unlinked doc (filter the array); if array now empty → try PUT; on error → DELETE (both paths tested).
   4. `remote.delete(&ks_ref)`; `state.clear_baseline` for KS and each cascade-deleted sub-resource.
@@ -185,7 +185,7 @@ pub struct MigrateKsArgs {
   6. PUT new KS, canonicalize.
   7. Relink: for each saved KB, PUT the ORIGINAL doc (normalize_for_push'd); if the KB has a local file in this project, re-canonicalize it too.
   8. Remove recovery file. Print "index repopulating; knowledge bases may return thin results until the indexer finishes".
-- [ ] Resume: at push start (after `ensure_any_connection`), glob `replace-*.json` in the state dir; for each: if the KS now exists remotely → relink its saved KBs (PUT), delete file, print "resumed: restored N knowledge base link(s)"; else keep the file and print that the replace will resume this run (bundle re-detection or plain creates handle the rest; relink retried at end of run — implement as: load leftover obligations into the run's relink queue).
+- [ ] Resume: at push start (after `ensure_any_connection`), glob `replace-*.json` in the state dir; for each: if the KS now exists remotely → relink its saved KBs (PUT), delete file, print "resumed: restored N knowledge base link(s)"; else keep the file and print that the replace will resume this run (bundle re-detection or plain creates handle the rest; relink retried at end of run, implement as: load leftover obligations into the run's relink queue).
 - [ ] Error paths: any step failure → save state, print "replace of '<ks>' interrupted after <step>; re-run `rigg push` to resume (recovery file kept)". Return the error.
 - [ ] Tests (wiremock, assert exact request order via `server.received_requests()`):
   - `push_replace_full_choreography`: KB referencing KS + another KS too (unlink keeps array non-empty). Assert order: PUT kb(unlinked) → DELETE ks → PUT ds → PUT idx → PUT ss → PUT idxr → PUT ks → PUT kb(original). Files canonicalized; recovery file gone; baselines updated.
@@ -200,8 +200,8 @@ pub struct MigrateKsArgs {
 - Modify: `crates/rigg/src/commands/diff.rs`, `crates/rigg/src/commands/validate.rs`
 - Test: `crates/rigg/tests/sync.rs` (diff), validate unit/integration as per existing patterns
 
-- [ ] diff (text format): when `immutable_diff` non-empty for a resource, append line: `note: 'kind' is immutable — push will REPLACE this resource (delete + recreate; for knowledge sources the index is rebuilt)`. Test: diff output contains "REPLACE".
-- [ ] validate: data-source files whose `credentials.connectionString` is null/missing → warning (not error): "no credentials — push will fail; use identity-based ResourceId=..." (Follow validate's existing warning conventions.) Test per existing validate test patterns.
+- [ ] diff (text format): when `immutable_diff` non-empty for a resource, append line: `note: 'kind' is immutable, push will REPLACE this resource (delete + recreate; for knowledge sources the index is rebuilt)`. Test: diff output contains "REPLACE".
+- [ ] validate: data-source files whose `credentials.connectionString` is null/missing → warning (not error): "no credentials, push will fail; use identity-based ResourceId=..." (Follow validate's existing warning conventions.) Test per existing validate test patterns.
 - [ ] Commit `feat: replace notices in diff and validate`.
 
 ### Task 7: MCP + docs
@@ -209,7 +209,7 @@ pub struct MigrateKsArgs {
 **Files:**
 - Modify: `crates/rigg/src/mcp/tools.rs` (PushParams + rigg_push), `CHANGELOG.md`, `.claude/skills/rigg-guide/SKILL.md`, `.claude/skills/rigg-push/SKILL.md`, `crates/rigg/src/commands/concepts.rs` (if it enumerates verbs)
 
-- [ ] `PushParams` gains `allow_replace: Option<bool>`; when `force` && `allow_replace` → push `--allow-replace`. Tool description sentence: "Plans containing a replace (e.g. knowledge-source kind change) additionally require allow_replace=true — the index is rebuilt."
+- [ ] `PushParams` gains `allow_replace: Option<bool>`; when `force` && `allow_replace` → push `--allow-replace`. Tool description sentence: "Plans containing a replace (e.g. knowledge-source kind change) additionally require allow_replace=true: the index is rebuilt."
 - [ ] Skills + CHANGELOG (## Unreleased → migration feature, replace verb, --allow-replace).
 - [ ] Full verification: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`. Commit `docs+mcp: knowledge-source migration surface`.
 

@@ -8,7 +8,7 @@ for both.
 ## Contents
 
 - [Exit codes](#exit-codes)
-- [`needs-input`](#needs-input) — [the document](#the-document),
+- [`needs-input`](#needs-input): [the document](#the-document),
   [answering](#answering), [coercion](#how-answers-are-coerced),
   [the protected-environment gate](#the-protected-environment-gate)
 - [Question ids](#question-ids)
@@ -64,18 +64,18 @@ rigg diff --all --exit-code
 
 > [!NOTE]
 > `rigg diff` reports drift on stdout but exits 0 **unless** `--exit-code` is
-> given — the flag is what makes it a CI gate.
+> given: the flag is what makes it a CI gate.
 
 Four boundaries are worth spelling out.
 
 **Declining a confirmation is success.** Answering `n` to "Apply 3 change(s)?"
 prints `  aborted`; typing the wrong name at a protected-environment prompt
-prints `Aborted.` — both exit 0. Nothing was asked for, nothing failed.
+prints `Aborted.`, both exit 0. Nothing was asked for, nothing failed.
 
 **Cancelling is not declining.** Esc or Ctrl-C aborts the command with an
 error (exit **1**), and so does declining a prompt whose "no" leaves the
 command with nothing to do (`rigg adopt`'s "Create one now?" when there is no
-project yet). A *wrong pre-supplied answer* is different again — that is exit
+project yet). A *wrong pre-supplied answer* is different again: that is exit
 2, because you told rigg something and it was not usable.
 
 **401/403 from any Azure plane is 4**, not 1, even when it surfaces in the
@@ -86,8 +86,8 @@ principal a role" from "retry later".
 
 ## `needs-input`
 
-Guided flows — `promote`, `env bind --learn`, `auth doctor --fix`,
-`auth easy-auth`, the protected-environment gate — ask questions. At a
+Guided flows (`promote`, `env bind --learn`, `auth doctor --fix`,
+`auth easy-auth`, the protected-environment gate) ask questions. At a
 terminal rigg prompts. When it cannot prompt, it prints a JSON document
 describing every outstanding question to **stdout** and exits 6, so the
 caller can answer and re-run.
@@ -127,7 +127,7 @@ rigg push contoso-docs --env prod --non-interactive
 ```
 
 A different flow, a different document. `rigg promote` asks about the bindings
-the target environment is missing — every open question in one document, one
+the target environment is missing: every open question in one document, one
 entry in `questions` each:
 
 ```bash
@@ -172,15 +172,15 @@ rigg promote contoso-docs --from dev --to prod --non-interactive
 
 > [!NOTE]
 > These are two *different* documents, and never one. `rigg promote` has no
-> protected-environment gate at all — it writes the target environment's
-> files, not Azure — so a promote document never carries a
+> protected-environment gate at all (it writes the target environment's
+> files, not Azure) so a promote document never carries a
 > `confirm.protected.*` question, and the gate (which builds its own asker,
 > with its own `command` and `context`) never carries a binding question.
 > Answer each document with the questions it actually contains.
 
 | Key | Type | Always present | Meaning |
 |---|---|---|---|
-| `status` | string | yes | Always `"needs-input"` — the discriminator to key on |
+| `status` | string | yes | Always `"needs-input"`: the discriminator to key on |
 | `command` | string | yes | What to re-run (`"push"`, `"promote"`, `"az indexer run"`, …) |
 | `context` | object | yes | What that re-run needs: `project`, `from`, `to`, `indexer`, … |
 | `questions` | array | yes | Every outstanding question, in one document |
@@ -234,11 +234,11 @@ what is left.
 | Kind | Accepted | Rejected |
 |---|---|---|
 | `choice` | any `candidates[].value`; anything at all when `allow_other` is true | a value that is not offered, when `allow_other` is absent |
-| `text` | any string | — |
+| `text` | any string | n/a |
 | `confirm` | `yes`, `y`, `true`, `no`, `n`, `false` (case-insensitive) | anything else |
 | `confirm-env` | the environment's name, exactly | anything else, including a different case |
 
-A rejected answer is a **usage error (exit 2)**, on a terminal too — rigg
+A rejected answer is a **usage error (exit 2)**, on a terminal too: rigg
 deliberately does not fall back to prompting for a value you already tried to
 give:
 
@@ -278,7 +278,7 @@ typed back before any cloud mutation. Every command behind the gate:
 
 Three commands are deliberately outside it. `rigg env remove --clean-roles`
 removes role assignments without the gate: the flag names the removal and the
-environment is going away anyway. `rigg push --verify` is not gated twice —
+environment is going away anyway. `rigg push --verify` is not gated twice:
 the push's own gate covered it. And `rigg promote` writes the target
 environment's files, so the push that follows is where the gate fires.
 
@@ -330,8 +330,8 @@ environment lacks, and by `rigg env add --like` for a binding to carry over.
 **`learn.<env>.record`** is the `confirm` that writes the accepted names to
 `rigg.yaml`.
 
-**The variable segment is always the thing the question is about** — an
-environment name, a binding name, a resource stem, a host — so an agent can
+**The variable segment is always the thing the question is about** (an
+environment name, a binding name, a resource stem, a host) so an agent can
 construct the id it needs to answer without parsing the prompt.
 
 In a `learn.<env>.<proposed-name>` id that segment is the **binding name rigg
@@ -350,12 +350,12 @@ Three sentinel answers recur:
 Anything else on a deployment question is rejected:
 
 ```text
-Error: invalid answer for 'promote.deployment.gpt-5.2-chat': 'maybe' — expected 'continue', 'skip' or 'capacity:<number>' (a whole number of units, at least 1)
+Error: invalid answer for 'promote.deployment.gpt-5.2-chat': 'maybe', expected 'continue', 'skip' or 'capacity:<number>' (a whole number of units, at least 1)
 ```
 
 ## Scripting recipes
 
-**Answer-and-retry loop** — the shape an agent implements once and reuses for
+**Answer-and-retry loop**: the shape an agent implements once and reuses for
 every command:
 
 ```bash
@@ -365,7 +365,7 @@ rigg push contoso-docs --env prod --output json --yes \
 
 Exit 6 → parse stdout, answer each `questions[].id`, re-run with the
 `--answer` flags appended. Exit 2 → the invocation is wrong; fix it, do not
-retry blindly (an answer that was rejected, or a missing flag — a
+retry blindly (an answer that was rejected, or a missing flag: a
 non-interactive `push` with changes to apply needs `--yes`, which is why it
 is there from the first attempt). Exit 5 → a real conflict; a human decides
 between `rigg pull` and `rigg push`.
@@ -395,7 +395,7 @@ rigg push --all --env prod --confirm-env prod --yes
 ```
 
 `--yes` covers the routine apply prompt, `--confirm-env` covers the protected
-gate. Any *other* question still exits 6 — which is the point: CI should stop
+gate. Any *other* question still exits 6, which is the point: CI should stop
 and ask rather than guess at a binding.
 
 ## Common mistakes
@@ -412,7 +412,7 @@ never get past its first new binding.
 
 **Answering with a candidate's `label`.** Answer with its `value`.
 
-**Assuming a question id is stable across environments.** It is not — the id
+**Assuming a question id is stable across environments.** It is not: the id
 embeds the environment or resource name, which is what makes it
 unambiguous. Read the ids out of the document rather than hard-coding them.
 
@@ -421,9 +421,9 @@ invocation will fail the same way.
 
 ## See also
 
-- [`CONCEPTS.md`](../../CONCEPTS.md) — exit codes and "when rigg needs an answer" in prose (`rigg concepts`).
-- [rigg.yaml § Policy](rigg-yaml.md#policy) — `protected` and `strict-bindings`.
-- [Environment variables](environment-variables.md) — `RIGG_NON_INTERACTIVE` and the rest of the session controls.
-- [`MCP.md`](../../MCP.md) — how the MCP server surfaces this protocol to an agent.
-- [CLI reference](cli.md#global-options) — `--answer`, `--answers-file`, `--yes`, `--non-interactive`, `--output`.
-- [Tutorial 4 — push to protected production](../tutorials/04-push-to-protected-production.md).
+- [`CONCEPTS.md`](../../CONCEPTS.md): exit codes and "when rigg needs an answer" in prose (`rigg concepts`).
+- [rigg.yaml § Policy](rigg-yaml.md#policy): `protected` and `strict-bindings`.
+- [Environment variables](environment-variables.md): `RIGG_NON_INTERACTIVE` and the rest of the session controls.
+- [`MCP.md`](../../MCP.md): how the MCP server surfaces this protocol to an agent.
+- [CLI reference](cli.md#global-options): `--answer`, `--answers-file`, `--yes`, `--non-interactive`, `--output`.
+- [Tutorial 4: push to protected production](../tutorials/04-push-to-protected-production.md).

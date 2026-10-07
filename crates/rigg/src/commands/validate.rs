@@ -1,4 +1,4 @@
-//! `rigg validate` — structural, referential, ownership, and no-secrets checks.
+//! `rigg validate`: structural, referential, ownership, and no-secrets checks.
 //!
 //! Use `--show-bindings` to list bound and shared infrastructure references.
 //! Exit code 3 when any check fails.
@@ -54,7 +54,7 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
     let mut binding_rows: Vec<BindingRow> = Vec::new();
 
     // One EnvBindings (declared + implicit search/foundry, enriched from
-    // the resolution cache) per environment in rigg.yaml — built once so
+    // the resolution cache) per environment in rigg.yaml: built once so
     // classification can check every other environment for sharing/leaks.
     let mut env_bindings: BTreeMap<String, EnvBindings> = BTreeMap::new();
     for (name, env) in &ws.config.environments {
@@ -81,7 +81,7 @@ pub fn run(ctx: &GlobalContext, args: ValidateArgs) -> Result<()> {
         }
 
         // All resources in this env across the workspace (for reference
-        // resolution — references resolve within the SAME env).
+        // resolution: references resolve within the SAME env).
         let mut workspace_refs: Vec<ResourceRef> = Vec::new();
         for project in &ws.projects {
             if let Ok(list) = Store::new(project, env).list() {
@@ -236,7 +236,7 @@ fn select_projects_lenient<'w>(
 }
 
 /// Validate one project's tree in one environment. Returns problems,
-/// warnings, and (verbose-only) bound/shared rows found — all without the
+/// warnings, and (verbose-only) bound/shared rows found: all without the
 /// `[env <name>]` prefix, which the caller adds uniformly.
 #[allow(clippy::too_many_arguments)]
 fn validate_project(
@@ -280,7 +280,7 @@ fn validate_project(
         };
 
         // "name" identifies the physical resource; it no longer needs to
-        // match the file stem (the stem is the logical/cross-env id — they
+        // match the file stem (the stem is the logical/cross-env id: they
         // may legitimately diverge when a resource is renamed in one env).
         // A file with no "name" field at all still needs one to push.
         if value.get("name").and_then(Value::as_str).is_none() {
@@ -294,7 +294,7 @@ fn validate_project(
         for (kind, name) in registry::extract_references(r.kind, &value) {
             if name.starts_with('<') {
                 problems.push(format!(
-                    "[{display}] placeholder reference '{name}' — replace the scaffold placeholder"
+                    "[{display}] placeholder reference '{name}': replace the scaffold placeholder"
                 ));
                 continue;
             }
@@ -315,7 +315,7 @@ fn validate_project(
                     ));
                 } else {
                     eprintln!(
-                        "{} [{display}] references {target} — not in this workspace (must already exist in Azure)",
+                        "{} [{display}] references {target}, not in this workspace (must already exist in Azure)",
                         "warning:".yellow()
                     );
                 }
@@ -348,7 +348,7 @@ fn validate_project(
             && !crate::commands::credentials::webapi_skills_missing_auth(&value).is_empty()
         {
             eprintln!(
-                "{} [{display}] a custom Web API skill's key was redacted — enrichment will fail; run `rigg push` interactively to choose Entra ID auth or a push-time function key",
+                "{} [{display}] a custom Web API skill's key was redacted: enrichment will fail; run `rigg push` interactively to choose Entra ID auth or a push-time function key",
                 "warning:".yellow()
             );
         }
@@ -365,13 +365,13 @@ fn validate_project(
                     .to_string(),
             };
             eprintln!(
-                "{} [{display}] key-based cognitiveServices connection without a usable key — push will fail; {hint}",
+                "{} [{display}] key-based cognitiveServices connection without a usable key: push will fail; {hint}",
                 "warning:".yellow()
             );
         }
 
         // infrastructure references (storage, identity, model host, ...):
-        // classify against this environment's bindings — leaks are always
+        // classify against this environment's bindings: leaks are always
         // problems; unbound/external are problems only in strict-bindings
         // environments (default: protected), warnings otherwise.
         if let Some(this) = this_bindings {
@@ -398,7 +398,7 @@ fn validate_project(
     }
 }
 
-/// Warn when a data source has no usable connection at all — typical after
+/// Warn when a data source has no usable connection at all: typical after
 /// copying an Azure-generated definition (GET never returns credentials).
 /// Pushing it would create a data source that cannot reach its source.
 fn warn_missing_credentials(value: &Value, display: &str) {
@@ -408,7 +408,7 @@ fn warn_missing_credentials(value: &Value, display: &str) {
         .unwrap_or("");
     if conn.trim().is_empty() {
         eprintln!(
-            "{} [{display}] no credentials.connectionString — the indexer cannot reach the source; \
+            "{} [{display}] no credentials.connectionString: the indexer cannot reach the source; \
              use identity-based access (ResourceId=/subscriptions/.../storageAccounts/<name>;)",
             "warning:".yellow()
         );
@@ -435,7 +435,7 @@ fn warn_missing_deletion_tracking(ds_type: &str, value: &Value, display: &str) {
             _ => "add a dataDeletionDetectionPolicy suited to the source",
         };
         eprintln!(
-            "{} [{display}] no deletion tracking — documents removed from the source will remain in the index; {hint}",
+            "{} [{display}] no deletion tracking: documents removed from the source will remain in the index; {hint}",
             "warning:".yellow()
         );
     }
@@ -452,7 +452,7 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
                 && !s.starts_with('<')
             {
                 problems.push(format!(
-                        "[{display}] field '{spec}' contains a credential — rigg never stores secrets locally. \
+                        "[{display}] field '{spec}' contains a credential: rigg never stores secrets locally. \
                          Use a managed identity (connection string 'ResourceId=/subscriptions/...') and grant the \
                          identity RBAC access instead; secrets belong in Azure Key Vault, never in files"
                     ));
@@ -463,13 +463,13 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
     let text = value.to_string();
     if text.contains("AccountKey=") {
         problems.push(format!(
-            "[{display}] contains an 'AccountKey=' connection string — replace it with an identity-based \
+            "[{display}] contains an 'AccountKey=' connection string: replace it with an identity-based \
              'ResourceId=...' connection and delete/rotate the leaked key"
         ));
     }
     // Azure Functions keys in Web API skill headers. The header name is
     // matched case-insensitively, which the registry's path table cannot
-    // express — hence checked here instead of via `secret_fields`.
+    // express, hence checked here instead of via `secret_fields`.
     if kind == ResourceKind::Skillset
         && let Some(skills) = value.get("skills").and_then(Value::as_array)
     {
@@ -480,7 +480,7 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
                     .is_some_and(|s| !s.is_empty() && !s.starts_with('<'));
                 if real {
                     problems.push(format!(
-                            "[{display}] header '{name}' contains a function key — rigg never stores secrets locally. \
+                            "[{display}] header '{name}' contains a function key: rigg never stores secrets locally. \
                              Keep the '<redacted>' placeholder and run `rigg push` interactively to choose Entra ID \
                              auth (authResourceId) or push-time key resolution (x-rigg-auth: function-key)"
                         ));
@@ -495,7 +495,7 @@ fn check_secrets(kind: ResourceKind, value: &Value, display: &str, problems: &mu
 /// binding is a `key-vault` dependency of this environment (spec §6).
 ///
 /// The binding check is what keeps a typo from becoming a push-time failure
-/// halfway through a plan — and it never reads the secret, only the
+/// halfway through a plan, and it never reads the secret, only the
 /// declaration.
 fn check_auth_annotations(
     value: &Value,
@@ -515,7 +515,7 @@ fn check_auth_annotations(
         }
         let Some((_, binding)) = registry::parse_key_vault_auth(annotation) else {
             problems.push(format!(
-                "[{display}] unknown \"{X_RIGG_AUTH}\" value '{annotation}' — expected \
+                "[{display}] unknown \"{X_RIGG_AUTH}\" value '{annotation}': expected \
                  '{}' or '{}<secret-name>@<key-vault binding>'",
                 registry::X_RIGG_AUTH_FUNCTION_KEY,
                 registry::X_RIGG_AUTH_KEY_VAULT_PREFIX
@@ -532,8 +532,8 @@ fn check_auth_annotations(
                  is not a key-vault dependency"
             )),
             None => problems.push(format!(
-                "[{display}] \"{X_RIGG_AUTH}\": '{annotation}' names no dependency '{binding}' — \
-                 declare it with `rigg env bind <env> {binding} key-vault:<vault-name>`"
+                "[{display}] \"{X_RIGG_AUTH}\": '{annotation}' names no dependency '{binding}'. \
+                 Declare it with `rigg env bind <env> {binding} key-vault:<vault-name>`"
             )),
         }
     }

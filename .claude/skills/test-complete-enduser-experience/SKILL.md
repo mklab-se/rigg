@@ -10,10 +10,10 @@ The acceptance criterion for rigg is that a reader who follows
 *is* the tutorials: run each page's commands in order, against live Azure,
 and compare what the terminal prints with the block printed under it.
 
-Anything that differs is a bug in one of the two — fix rigg, or fix the page.
+Anything that differs is a bug in one of the two: fix rigg, or fix the page.
 Never fix it by relaxing a test or a docs guard.
 
-## Live resources — the rules
+## Live resources: the rules
 
 - Services: Search `mklabsrch`, Foundry `mklabaifndr`/`proj-default`, storage
   `mklabstorageacc`. Never create a new service, account or model deployment;
@@ -33,7 +33,7 @@ Never fix it by relaxing a test or a docs guard.
   `inquire` cancels on EOF, and `--non-interactive` takes a different code
   path from the one the page documents.
 
-## Tutorial 1 — adopt an existing solution
+## Tutorial 1: adopt an existing solution
 
 Fresh workspace. `rigg init .` → `rigg new project` → `rigg adopt <p> all` →
 `env bind --learn` → `status` → `describe`.
@@ -51,9 +51,9 @@ What must hold:
   and changes nothing.
 - `rigg verify <p>` runs every indexer, retrieves from every knowledge base
   and asks every agent. Expect `0 processed` on indexers whose corpus has not
-  changed — that is the high-water mark, not a failure.
+  changed: that is the high-water mark, not a failure.
 
-## Tutorial 2 — build a stack from scratch
+## Tutorial 2: build a stack from scratch
 
 Fresh workspace. Create the container and corpus first:
 `az storage container create --account-name mklabstorageacc -n tut-docs
@@ -82,9 +82,9 @@ What must hold:
 - A `remote ahead (pull pending)` on the skillset right after the first push
   is expected: Azure back-fills a skill's optional defaults after the create.
   `rigg pull` settles it; a push in the meantime prints
-  `skip skillsets/… (remote changed since last sync — pull first)`.
+  `skip skillsets/… (remote changed since last sync: pull first)`.
 
-## Tutorial 3 — add an environment and promote
+## Tutorial 3: add an environment and promote
 
 Copy tutorial 2's workspace (including `.rigg/`). `rigg env add staging
 --like dev` (answer "same as dev" for every binding) → `env show staging
@@ -97,7 +97,7 @@ What must hold:
 
 - The rewiring table marks every shared binding `= … shared`, never `→`.
 - After the rename, the second promote prints a **Renamed siblings** table and
-  rewrites every reference — including the agent's `x-rigg-ref`,
+  rewrites every reference, including the agent's `x-rigg-ref`,
   `project_connection_id` and `server_url`, and the connection's
   `properties.target`. A third run reports `0 changed, 0 new, 8 unchanged`.
 - The staging push plan names `tut-staging-*` resources. If it names the dev
@@ -105,7 +105,7 @@ What must hold:
   resources.
 - `status` with no argument reports both environments.
 
-## Tutorial 4 — protected production
+## Tutorial 4: protected production
 
 Copy tutorial 3's workspace. Add `prod` to `rigg.yaml` by hand with
 `policy.protected: true`, pointed at the same services → `env show prod` →
@@ -127,7 +127,7 @@ What must hold:
 Do **not** create new prod resources: the prod tree is the staging content
 re-pointed at the same services, so the only write is the one agent update.
 
-## Teardown checklist — run all of it, in this order
+## Teardown checklist: run all of it, in this order
 
 ```bash
 # 1. rigg-created role assignments, per environment that has any
@@ -169,14 +169,14 @@ Rules for the teardown, not suggestions:
 - Remove only the role assignments rigg created (`rigg auth roles remove`
   matches on the `rigg:<workspace>:<env>:` description). Never
   `az role assignment delete` by hand.
-- Model deployments are never yours to delete here — the tutorials reuse an
+- Model deployments are never yours to delete here: the tutorials reuse an
   existing one. Confirm it is still listed at the end.
 - The local `e2e-test/tutorials/<n>/` workspaces may stay; nothing in them is
   committed.
 
 ## Finally
 
-- `cargo run -q --bin rigg -- dev docs-check --root .` — the docs guards.
+- `cargo run -q --bin rigg -- dev docs-check --root .`: the docs guards.
 - `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.
 - Record every command, its exit code and its trimmed output. A tutorial block
   that no longer matches is a defect to file, not a transcript to edit by

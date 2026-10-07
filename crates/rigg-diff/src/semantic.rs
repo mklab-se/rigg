@@ -50,7 +50,7 @@ pub fn diff(old: &Value, new: &Value, identity_key: &str) -> DiffResult {
     let mut changes = Vec::new();
     diff_values(old, new, "", identity_key, &mut changes);
     // Deterministic output: object-key iteration goes through HashSets, so
-    // change order would otherwise vary between runs — confusing in tables
+    // change order would otherwise vary between runs: confusing in tables
     // and noisy for scripts consuming JSON/markdown reports.
     changes.sort_by(|a, b| a.path.cmp(&b.path));
 

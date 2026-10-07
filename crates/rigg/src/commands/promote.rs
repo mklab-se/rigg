@@ -1,4 +1,4 @@
-//! `rigg promote` — translate one environment's project tree into another.
+//! `rigg promote`: translate one environment's project tree into another.
 //!
 //! The translation itself is [`rigg_core::promote::translate`], which is
 //! pure: it takes both environments' binding tables and documents and
@@ -6,20 +6,20 @@
 //! plus what it could not decide. This module is the I/O around it:
 //!
 //! 1. load both environments (bindings + documents, correlated by LOGICAL
-//!    id — the file stem — never by physical name);
+//!    id, the file stem, never by physical name);
 //! 2. turn everything the engine left [`Pending`] into a question, apply the
 //!    answers as bindings IN MEMORY, and re-translate (up to [`MAX_ROUNDS`]
 //!    times, so a question that does not settle cannot loop);
 //! 3. run the [`online_phase`] (unless `--offline`), which asks the TARGET's
 //!    Azure what only it can answer (a Web API skill's auth carrier, a
 //!    deployment's model availability and quota), folds the answers into the
-//!    documents, and appends its decisions to the Checks — they are part of
+//!    documents, and appends its decisions to the Checks: they are part of
 //!    the plan, not a side note after it;
-//! 4. show the preview — what points where after the translation, which
+//! 4. show the preview: what points where after the translation, which
 //!    sibling references were renamed, what changes per resource, and the
 //!    Checks (now including the online decisions). `--dry-run` stops here:
 //!    it still ran the online phase, so it may itself exit 6 on an
-//!    unanswered deployment question — a question is part of the plan, and
+//!    unanswered deployment question: a question is part of the plan, and
 //!    this happens before anything is written;
 //! 5. once the run proceeds, persist the answered bindings to `rigg.yaml`
 //!    and write the merged documents through the target environment's
@@ -112,7 +112,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
         round += 1;
         if round > MAX_ROUNDS {
             bail!(
-                "promote still has open questions after {MAX_ROUNDS} rounds — \
+                "promote still has open questions after {MAX_ROUNDS} rounds: \
                  record the bindings it needs with `rigg env bind` and re-run"
             );
         }
@@ -121,7 +121,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
             "promote",
             json!({"project": project_name, "from": args.from, "to": args.to}),
         );
-        // An unanswered question leaves here as `NeedsInput` (exit 6) —
+        // An unanswered question leaves here as `NeedsInput` (exit 6),
         // nothing has been written to `rigg.yaml` at this point, and
         // nothing will be.
         let answers = asker.ask_all(&questions)?;
@@ -139,7 +139,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     // Everything that needs the TARGET's Azure to decide, folded into the
     // Checks BEFORE the preview is built: the online decisions are part of
     // the plan, not a side note after it, so `--dry-run` previews them too
-    // (and may itself exit 6 on an unanswered deployment question — a
+    // (and may itself exit 6 on an unanswered deployment question: a
     // question is part of the plan, and this happens before anything is
     // written). A document whose ONLY difference is a missing auth carrier
     // is `Unchanged` until this phase derives one, and skipping it would
@@ -169,7 +169,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
                 println!("{}", preview.to_json(true));
             } else {
                 println!();
-                println!("(dry run — nothing written)");
+                println!("(dry run, nothing written)");
             }
             return Ok(());
         }
@@ -179,7 +179,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     // carrier) and takes items away (a declined deployment).
     if pending_writes(&plan) == 0 {
         // The run reached its end without aborting, so the answers are worth
-        // keeping even though no document changed — otherwise the same
+        // keeping even though no document changed, otherwise the same
         // question comes back on every run.
         answered.persist()?;
         if ctx.json() {
@@ -199,7 +199,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
                 println!("Nothing written into '{}'.", args.to);
             } else {
                 println!(
-                    "nothing to promote — '{}' already matches '{}'",
+                    "nothing to promote: '{}' already matches '{}'",
                     args.to, args.from
                 );
             }
@@ -223,7 +223,7 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     answered.persist()?;
 
     // `write_exact`, not `write`: the merged document is already the finished
-    // target file — it carries the target's own pins and annotations
+    // target file: it carries the target's own pins and annotations
     // deliberately, and its write-only fields (a data source's translated
     // `credentials.connectionString`) are exactly what promote rewired.
     // Carrying anything over from the file being replaced would silently
@@ -262,13 +262,13 @@ pub async fn run(ctx: &GlobalContext, args: PromoteArgs) -> Result<()> {
     say!(ctx, "Promoted {written} resource(s) into '{}'.", args.to);
     // A promote can succeed having written a document that still points at
     // the source environment (a skipped or unresolved binding). Exit 0 is
-    // right — push's preflight refuses a leak — but the run must say so
+    // right, push's preflight refuses a leak, but the run must say so
     // rather than end on an unqualified success line.
     let kept = kept_from_source(&checks, &args.from);
     if kept > 0 {
         say!(
             ctx,
-            "! {kept} reference(s) kept from '{}' — run rigg validate {project_name} before \
+            "! {kept} reference(s) kept from '{}': run rigg validate {project_name} before \
              pushing",
             args.from
         );
@@ -318,7 +318,7 @@ fn missing_env_message(ws: &Workspace, from: &str, to: &str) -> String {
         }
     }
     format!(
-        "environment '{to}' does not exist — create it first: {command} (adjust the targets for \
+        "environment '{to}' does not exist. Create it first: {command} (adjust the targets for \
          '{to}')"
     )
 }
@@ -393,8 +393,8 @@ struct Settled {
 /// actually proceeds.
 ///
 /// Each round applies them to the loaded [`Workspace`]'s config so the next
-/// translation sees them, and only [`AnsweredBindings::persist`] — called
-/// after the preview, once the user has said yes — writes them to
+/// translation sees them, and only [`AnsweredBindings::persist`] (called
+/// after the preview, once the user has said yes) writes them to
 /// `rigg.yaml`. That is what keeps `--dry-run`, an aborted confirmation and
 /// the `needs-input` (exit 6) path from editing the workspace file. An
 /// aborted interactive run loses its answers; that is the trade.
@@ -511,7 +511,7 @@ async fn build_asks(
                     continue;
                 }
                 // An implicit `search`/`foundry` target cannot be declared as
-                // a dependency binding — it is reported, not asked about.
+                // a dependency binding: it is reported, not asked about.
                 let Some(binding_type) = *binding_type else {
                     continue;
                 };
@@ -583,7 +583,7 @@ async fn build_asks(
 }
 
 /// The value to record for a reference the source does not bind: the ARM id
-/// the file already carries when it has one, else the physical name — the
+/// the file already carries when it has one, else the physical name: the
 /// same rule `rigg env bind --learn` applies.
 fn reference_value(
     source: &EnvDocs,
@@ -615,8 +615,8 @@ fn declared_value(ws: &Workspace, env: &str, name: &str) -> Option<String> {
 /// Resources of `kind` visible in the target environment's subscription, as
 /// extra candidates. Gated on `--offline` alone: a scripted caller reading
 /// the `needs-input` document deserves the same pick-list a person gets, and
-/// `--offline` is the one flag that says "do not talk to Azure". Best-effort
-/// — [`discovery::binding_candidates`] returns an empty list when ARM is not
+/// `--offline` is the one flag that says "do not talk to Azure". Best-effort:
+/// [`discovery::binding_candidates`] returns an empty list when ARM is not
 /// reachable.
 async fn arm_candidates(
     args: &PromoteArgs,
@@ -657,8 +657,8 @@ fn apply_answers(
                 value,
             } => {
                 let raw = answer.as_str().unwrap_or_default().trim().to_string();
-                // `skip` is therefore not a name a binding can be given here
-                // — declining always wins over naming.
+                // `skip` is therefore not a name a binding can be given here:
+                // declining always wins over naming.
                 if raw.is_empty() || raw.eq_ignore_ascii_case(SKIP) {
                     settled.unbound_skipped.insert(physical.clone());
                     continue;
@@ -698,7 +698,7 @@ fn apply_answers(
                     settled.external_kept.insert(host.clone());
                 } else {
                     return Err(anyhow!(CommandError::Usage(format!(
-                        "'{host}' is not bound in either environment — bind it before promoting: \
+                        "'{host}' is not bound in either environment. Bind it before promoting: \
                          `rigg env bind {} <name> api:https://{host}` (and the same in '{}')",
                         args.from, args.to
                     ))));
@@ -719,18 +719,18 @@ fn apply_answers(
 /// account's region.
 ///
 /// It mutates the merged documents in place and appends what it decided to
-/// `checks`, so the run's final Checks — text and JSON alike — say what
+/// `checks`, so the run's final Checks, text and JSON alike, say what
 /// happened. **Not reaching Azure is never an error**: promote's product is
 /// files, and every skipped decision is reported and left to `rigg push`.
 /// The one thing that does stop the run is an unanswered question (exit 6),
 /// which by construction happens before anything is written.
 ///
-/// It runs before the preview is built — and so before both the `--dry-run`
-/// stop and the "nothing to promote" exit — because a document whose only
+/// It runs before the preview is built, and so before both the `--dry-run`
+/// stop and the "nothing to promote" exit, because a document whose only
 /// difference from the target's is a missing auth carrier is `Unchanged`
 /// until this phase supplies one, and its Checks belong in the one preview
 /// the run shows. To keep an ordinary no-op promote off the network, it
-/// returns here — before building an ARM client — whenever there is nothing
+/// returns here, before building an ARM client, whenever there is nothing
 /// to check.
 async fn online_phase(
     ctx: &GlobalContext,
@@ -819,7 +819,7 @@ fn needs_capacity_check(item: &Item) -> bool {
 }
 
 /// The target's own carrier for this skill was kept ([`AuthCarrier::Kept`]),
-/// so there is nothing to re-derive — the file already says how the target
+/// so there is nothing to re-derive: the file already says how the target
 /// authenticates.
 fn target_kept_carrier(item: &Item, path: &str) -> bool {
     item.auth
@@ -856,7 +856,7 @@ async fn rederive_auth(
         let Some(index) = skill_index(path) else {
             report(
                 false,
-                "auth carrier unresolved — unrecognized skill path: resolved on push".to_string(),
+                "auth carrier unresolved (unrecognized skill path): resolved on push".to_string(),
             );
             continue;
         };
@@ -870,7 +870,7 @@ async fn rederive_auth(
         let Some((site, _)) = credentials::parse_function_uri(&uri) else {
             report(
                 false,
-                format!("auth carrier unresolved — '{uri}' is not an Azure Functions endpoint"),
+                format!("auth carrier unresolved: '{uri}' is not an Azure Functions endpoint"),
             );
             continue;
         };
@@ -880,7 +880,7 @@ async fn rederive_auth(
                 report(
                     false,
                     format!(
-                        "auth carrier unresolved — function app '{site}' ({e}): resolved on push"
+                        "auth carrier unresolved for function app '{site}' ({e}): resolved on push"
                     ),
                 );
                 continue;
@@ -894,7 +894,7 @@ async fn rederive_auth(
             Err(e) => {
                 report(
                     false,
-                    format!("auth carrier unresolved — '{site}' ({e}): resolved on push"),
+                    format!("auth carrier unresolved for '{site}' ({e}): resolved on push"),
                 );
                 continue;
             }
@@ -902,7 +902,7 @@ async fn rederive_auth(
         let Some(skill) = plan.items[*item].merged.pointer_mut(&pointer) else {
             report(
                 false,
-                format!("auth carrier unresolved — no '{path}' in the target document"),
+                format!("auth carrier unresolved: no '{path}' in the target document"),
             );
             continue;
         };
@@ -962,9 +962,9 @@ enum DeploymentAnswer {
     Capacity(i64),
 }
 
-/// Parse one answer. All three forms are matched case-insensitively — the
+/// Parse one answer. All three forms are matched case-insensitively (the
 /// answer may come from a person typing or from a script echoing a candidate
-/// back — and a capacity must be a whole number of units, at least one.
+/// back), and a capacity must be a whole number of units, at least one.
 /// `None` is a usage error, never a silent fallback.
 fn parse_deployment_answer(raw: &str) -> Option<DeploymentAnswer> {
     let raw = raw.trim();
@@ -1020,7 +1020,7 @@ async fn check_deployments(
         skip_all(
             checks,
             format!(
-                "'{}' has no Foundry account — availability not checked",
+                "'{}' has no Foundry account: availability not checked",
                 args.to
             ),
         );
@@ -1040,7 +1040,7 @@ async fn check_deployments(
                 skip_all(
                     checks,
                     format!(
-                        "Foundry account '{}' not resolved ({e}) — availability not checked",
+                        "Foundry account '{}' not resolved ({e}): availability not checked",
                         foundry.account
                     ),
                 );
@@ -1052,7 +1052,7 @@ async fn check_deployments(
         skip_all(
             checks,
             format!(
-                "subscription of '{}' unknown — run `rigg env show {} --refresh`",
+                "subscription of '{}' unknown: run `rigg env show {} --refresh`",
                 foundry.account, args.to
             ),
         );
@@ -1063,7 +1063,7 @@ async fn check_deployments(
         Err(e) => {
             skip_all(
                 checks,
-                format!("models of {location} not listed ({e}) — availability not checked"),
+                format!("models of {location} not listed ({e}): availability not checked"),
             );
             return Ok(());
         }
@@ -1073,7 +1073,7 @@ async fn check_deployments(
         Err(e) => {
             checks.push(Check {
                 ok: false,
-                message: format!("quota in {location} not read ({e}) — capacity not checked"),
+                message: format!("quota in {location} not read ({e}): capacity not checked"),
             });
             Vec::new()
         }
@@ -1106,14 +1106,11 @@ async fn check_deployments(
                     vec![
                         Candidate {
                             value: CONTINUE.to_string(),
-                            label: "continue — promote it as it is".to_string(),
+                            label: "continue, promote it as it is".to_string(),
                         },
                         Candidate {
                             value: SKIP.to_string(),
-                            label: format!(
-                                "skip — leave it out of this promote into '{}'",
-                                args.to
-                            ),
+                            label: format!("skip: leave it out of this promote into '{}'", args.to),
                         },
                     ],
                 )
@@ -1130,7 +1127,7 @@ async fn check_deployments(
         "promote",
         json!({"project": project_name, "from": args.from, "to": args.to}),
     );
-    // Unanswered, this leaves as `NeedsInput` (exit 6) — before `persist`
+    // Unanswered, this leaves as `NeedsInput` (exit 6), before `persist`
     // and before the first file write, so the workspace is untouched.
     let answers = asker.ask_all(&questions)?;
 
@@ -1141,7 +1138,7 @@ async fn check_deployments(
         let reason = &ask.reason;
         let Some(parsed) = parse_deployment_answer(&raw) else {
             return Err(anyhow!(CommandError::Usage(format!(
-                "invalid answer for 'promote.deployment.{}': '{raw}' — expected \
+                "invalid answer for 'promote.deployment.{}': '{raw}', expected \
                  '{CONTINUE}', '{SKIP}' or '{CAPACITY}<number>' (a whole number of units, \
                  at least 1)",
                 plan.items[ask.item].stem
@@ -1220,7 +1217,7 @@ fn verdict(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if model.is_empty() {
-        return Ok(format!("no model named — nothing to check in {location}"));
+        return Ok(format!("no model named, nothing to check in {location}"));
     }
     let version = doc
         .pointer("/properties/model/version")
@@ -1339,7 +1336,7 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
     if args.offline {
         for item in &plan.items {
             for carrier in &item.auth {
-                // A carrier the target already had is kept, not re-derived —
+                // A carrier the target already had is kept, not re-derived:
                 // the file itself says how '{to}' authenticates.
                 let AuthCarrier::Stripped { path, .. } = carrier else {
                     continue;
@@ -1350,7 +1347,7 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
                 out.push(Check {
                     ok: false,
                     message: format!(
-                        "{} {path}: Web API auth carrier unresolved (it authorizes '{}') — \
+                        "{} {path}: Web API auth carrier unresolved (it authorizes '{}'), \
                          resolved against '{}' on push",
                         item.label(),
                         args.from,
@@ -1378,7 +1375,7 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
                 out.push(Check {
                     ok: false,
                     message: format!(
-                        "binding '{binding}' in '{}' is declared by name only — run `rigg env \
+                        "binding '{binding}' in '{}' is declared by name only: run `rigg env \
                          show {} --refresh` (or declare the full ARM id)",
                         args.to, args.to
                     ),
@@ -1439,7 +1436,7 @@ fn checks(plan: &Plan, args: &PromoteArgs, settled: &Settled) -> Vec<Check> {
                 out.push(Check {
                     ok: false,
                     message: format!(
-                        "{}/{stem} {path}: {target} '{physical}' is not bound in '{}' — kept as is",
+                        "{}/{stem} {path}: {target} '{physical}' is not bound in '{}', kept as is",
                         kind.directory_name(),
                         args.from
                     ),
@@ -1631,7 +1628,7 @@ impl Preview<'_> {
         }
         if !self.plan.kept_only_in_to.is_empty() {
             println!();
-            println!("kept (only in '{to}' — never touched by promote):");
+            println!("kept (only in '{to}', never touched by promote):");
             for (kind, stem) in &self.plan.kept_only_in_to {
                 println!("  {}/{stem}", kind.directory_name());
             }

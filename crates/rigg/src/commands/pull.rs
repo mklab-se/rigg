@@ -1,4 +1,4 @@
-//! `rigg pull` — bring remote resource definitions into project files.
+//! `rigg pull`: bring remote resource definitions into project files.
 //!
 //! Ownership rules (spec §5.3):
 //! - a project pulls only resources it owns (file or baseline exists)
@@ -99,7 +99,7 @@ async fn pull_project(
     let mut any_conflict = false;
     let mut unmanaged = 0usize;
     let mut written = 0usize;
-    // (resource, field) reported once per run — the canary is a note, not noise.
+    // (resource, field) reported once per run: the canary is a note, not noise.
     let mut unknown_fields_seen: BTreeSet<(String, String)> = BTreeSet::new();
 
     for (r, doc) in &snapshot {
@@ -119,7 +119,7 @@ async fn pull_project(
         let local = store.read(r).ok();
         match state.classify(r, local.as_ref(), Some(doc)) {
             SyncClass::InSync => {
-                // Content equal — refresh the baseline unconditionally so a
+                // Content equal: refresh the baseline unconditionally so a
                 // stale baseline (e.g. after both sides converged) self-heals.
                 state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
             }
@@ -132,7 +132,7 @@ async fn pull_project(
                 state.set_baseline(r, &baseline_doc(r.kind, doc, local.as_ref()));
             }
             SyncClass::LocalAhead => {
-                println!("  {} {} (local ahead — push pending)", "≠".yellow(), r);
+                println!("  {} {} (local ahead: push pending)", "≠".yellow(), r);
             }
             SyncClass::Untracked | SyncClass::Conflict => {
                 let summary = local
@@ -147,7 +147,7 @@ async fn pull_project(
                     println!("  {} overwrote {}", "~".cyan(), r);
                     written += 1;
                 } else if ctx.interactive() {
-                    println!("  {} {} — {}", "conflict".red().bold(), r, summary);
+                    println!("  {} {}: {}", "conflict".red().bold(), r, summary);
                     const OVERWRITE: &str = "overwrite local with remote";
                     const KEEP: &str = "keep local";
                     const DIFF: &str = "show diff";
@@ -211,7 +211,7 @@ async fn pull_project(
                     }
                 } else {
                     println!(
-                        "  {} {} — {} (run `rigg diff {}` to inspect; pass --yes to overwrite)",
+                        "  {} {}: {} (run `rigg diff {}` to inspect; pass --yes to overwrite)",
                         "conflict".red().bold(),
                         r,
                         summary,
@@ -262,7 +262,7 @@ async fn pull_project(
     state.save(ws, &env.name, &project.name)?;
     if unmanaged > 0 {
         println!(
-            "  {} {unmanaged} unmanaged remote resource(s) — adopt with `rigg adopt {} <selector>` (e.g. `all`, `indexes`, `agents/name`)",
+            "  {} {unmanaged} unmanaged remote resource(s): adopt with `rigg adopt {} <selector>` (e.g. `all`, `indexes`, `agents/name`)",
             "i".blue(),
             project.name,
         );
@@ -275,13 +275,13 @@ async fn pull_project(
 
 /// API-drift canary: note (stderr, once per resource+field per run) any
 /// top-level field Azure returned that rigg's pinned schema doesn't know
-/// about. Never blocks or strips anything — the document is written through
+/// about. Never blocks or strips anything: the document is written through
 /// unchanged; this is purely a heads-up to run `rigg dev api-check`.
 fn report_unknown_fields(r: &ResourceRef, doc: &Value, seen: &mut BTreeSet<(String, String)>) {
     for field in rigg_core::schema::unknown_top_level_fields(r.kind, doc) {
         if seen.insert((r.key(), field.clone())) {
             eprintln!(
-                "{} {r}: field `{field}` is not in rigg's {} schema — Azure may have shipped a newer API; run `rigg dev api-check`",
+                "{} {r}: field `{field}` is not in rigg's {} schema. Azure may have shipped a newer API; run `rigg dev api-check`",
                 "note:".dimmed(),
                 rigg_core::schema::fixture_for(r.kind).version
             );
@@ -299,7 +299,7 @@ fn conflict_summary(kind: ResourceKind, local: &Value, remote: &Value) -> String
     );
     let n = result.changes.len();
     // The diff engine walks a HashSet internally, so change order is not
-    // stable across runs — sort for deterministic, readable output.
+    // stable across runs: sort for deterministic, readable output.
     let mut paths: Vec<&str> = result.changes.iter().map(|c| c.path.as_str()).collect();
     paths.sort_unstable();
     let mut fields: Vec<&str> = paths.into_iter().take(3).collect();

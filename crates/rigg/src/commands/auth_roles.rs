@@ -1,4 +1,4 @@
-//! `rigg auth roles list|remove` (spec §4.4) — the role assignments rigg
+//! `rigg auth roles list|remove` (spec §4.4): the role assignments rigg
 //! itself created, found by the description prefix it stamps on them
 //! (`rigg:<workspace>:<env>`) at every scope the environment's identity
 //! graph knows about.
@@ -32,7 +32,7 @@ struct Found {
     assignment: RoleAssignmentInfo,
 }
 
-/// Every distinct resolved scope the environment's graph mentions — the
+/// Every distinct resolved scope the environment's graph mentions: the
 /// places rigg could ever have created an assignment. The Foundry project
 /// id is resolved exactly as `auth doctor` resolves it, so the assignment
 /// doctor creates at `<account>/projects/<project>` is reachable here.
@@ -75,7 +75,7 @@ async fn find(
     let prefix = auth_engine::description_prefix(&ws, &env.name);
     // The trailing colon is load-bearing: `rigg:acme:dev` is a prefix of
     // `rigg:acme:dev2:…`, and a neighbouring environment's grants are not
-    // this environment's to list — let alone to delete.
+    // this environment's to list: let alone to delete.
     let filter = auth_engine::role_description(&prefix, "");
 
     let scopes = scopes_of(&ws, &env, &bindings, &arm).await;
@@ -144,7 +144,7 @@ pub async fn list(ctx: &GlobalContext) -> Result<()> {
     say!(ctx);
     say!(
         ctx,
-        "{} assignment(s) — remove them with `rigg auth roles remove`",
+        "{} assignment(s): remove them with `rigg auth roles remove`",
         found.len()
     );
     Ok(())
@@ -179,7 +179,7 @@ async fn remove_inner(ctx: &GlobalContext, confirm_env: Option<&str>, gate: bool
     }
     // Protected-environment gate before the first DELETE: removing a role
     // assignment is a change to the environment, so it sits behind the same
-    // typed confirmation as `push` — `--yes` does not satisfy it.
+    // typed confirmation as `push`: `--yes` does not satisfy it.
     if gate
         && !confirm_protected_env(
             ctx,
@@ -238,7 +238,7 @@ async fn remove_inner(ctx: &GlobalContext, confirm_env: Option<&str>, gate: bool
 }
 
 /// `rigg env remove --clean-roles`: remove `env`'s rigg-created assignments
-/// before the environment itself goes away. Reported, never fatal — the
+/// before the environment itself goes away. Reported, never fatal: the
 /// environment must still be removable when the caller has no rights on the
 /// scopes any more.
 pub async fn clean_for_env(ctx: &GlobalContext, env: &str) -> Result<()> {

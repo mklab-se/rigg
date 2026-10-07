@@ -1,4 +1,4 @@
-# `.rigg/` — local state
+# `.rigg/`: local state
 
 `.rigg/` is rigg's scratch directory. It holds two kinds of thing: **sync
 baselines** (what each resource looked like the last time local and remote
@@ -8,13 +8,13 @@ points at in Azure, so ARM does not have to be re-discovered on every run).
 
 Everything in `.rigg/` is derived and machine-local. It is **not** committed:
 `rigg init` adds it to [`.gitignore`](#gitignore) for you. Nothing in it is
-authoritative — the resource files are the truth, Azure is the other truth,
+authoritative: the resource files are the truth, Azure is the other truth,
 and `.rigg/` only remembers where the two last met.
 
 ## Contents
 
 - [Layout](#layout)
-- [Baselines (`state.json`)](#baselines-statejson) —
+- [Baselines (`state.json`)](#baselines-statejson):
   [how one is used](#how-a-baseline-is-used),
   [when one is written](#when-a-baseline-is-written)
 - [Bindings cache](#bindings-cache)
@@ -49,7 +49,7 @@ If `rigg.yaml` sets `root:`, `.rigg/` lives under that subdirectory alongside
 `projects/` and `apis/`.
 
 **`rigg promote` is deliberately absent from that table.** It writes the
-target environment's **files** and never touches a baseline — which is
+target environment's **files** and never touches a baseline, which is
 exactly why a promoted resource shows as `local-ahead` until it is pushed.
 
 It can, however, write `rigg.yaml`: binding answers accepted during a promote
@@ -90,14 +90,14 @@ are persisted to the workspace file once the preview is confirmed (see
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `baselines` | object | no | `{}` | `<kind-dir>/<physical name>` → the baseline for that resource |
-| `baselines.<key>` | object **or** string | — | — | The push-normalized document as of the last sync, or a legacy checksum |
+| `baselines.<key>` | object **or** string | n/a | n/a | The push-normalized document as of the last sync, or a legacy checksum |
 
 **`baselines.<key>`** keeps write-only fields in the document form. The string
 form is a frozen checksum of the same document, written by older versions of
 rigg.
 
 The keys are the same `<kind-dir>/<name>` form used by `x-rigg-ref`,
-`rigg status` and every diagnostic — `indexes/contoso-docs`,
+`rigg status` and every diagnostic: `indexes/contoso-docs`,
 `agents/contoso-assistant`.
 
 **Why the document and not only a checksum.** A baseline is stored
@@ -108,7 +108,7 @@ removed, object keys sorted, arrays of named objects sorted by name.
 **Write-only fields are kept.** A data source's `ResourceId=…` connection
 string is recorded here so that a local edit changing only that field is seen
 as local-ahead and pushed (Azure never returns it). `.rigg/` therefore holds
-the same identity-based reference your resource file holds — never a key —
+the same identity-based reference your resource file holds, never a key,
 and stays gitignored.
 
 **Keeping the document means the checksum can be recomputed under today's
@@ -121,8 +121,8 @@ documents.
 
 ### How a baseline is used
 
-`rigg status` and `rigg diff` compare three things — local file, remote
-document, baseline — and classify each resource:
+`rigg status` and `rigg diff` compare three things (local file, remote
+document, baseline) and classify each resource:
 
 | Class | Local vs. baseline | Remote vs. baseline | Meaning |
 |---|---|---|---|
@@ -132,7 +132,7 @@ document, baseline — and classify each resource:
 | `conflict` | changed | changed | Both moved. `rigg push`/`rigg pull` stop with exit 5 |
 | `local-only` | exists | absent | New resource, or deleted in Azure |
 | `remote-only` | absent | exists | Unmanaged, or deleted locally (prune candidate) |
-| `untracked` | exists | exists | No baseline, and the two differ — never synced |
+| `untracked` | exists | exists | No baseline, and the two differ, never synced |
 
 `untracked` is what you see before the first sync, and it is why a fresh
 clone shows differences that are not really drift: the baselines are not in
@@ -141,7 +141,7 @@ Git. One `rigg pull` (or `rigg push`) re-establishes them.
 ### When a baseline is written
 
 Every successful sync of a resource rewrites its baseline, from the document
-the **server** returned — after a push, rigg GETs the resource back,
+the **server** returned, after a push, rigg GETs the resource back,
 normalizes it and writes both the file and the baseline from that. That
 round trip is what keeps server-side defaults, reordering and canonicalization
 from reading as drift on the next `rigg status`.
@@ -152,8 +152,8 @@ from reading as drift on the next `rigg status`.
 
 ## Bindings cache
 
-`.rigg/<env>/bindings.json` is what each of the environment's bindings — the
-declared `dependencies` plus the implicit `search` and `foundry` targets —
+`.rigg/<env>/bindings.json` is what each of the environment's bindings, the
+declared `dependencies` plus the implicit `search` and `foundry` targets,
 resolved to in Azure, so that ARM discovery is done once instead of on every
 command.
 
@@ -203,28 +203,28 @@ command.
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `bindings` | object | no | `{}` | Binding name → resolution |
-| `bindings.<name>.name` | string | yes | — | The binding's name in `rigg.yaml` |
-| `bindings.<name>.kind` | string | yes | — | `storage`, `ai-services`, `function-app`, `identity`, `key-vault`, `api`, `search` or `foundry` |
-| `bindings.<name>.physical_name` | string | yes | — | The Azure resource's own name |
+| `bindings.<name>.name` | string | yes | n/a | The binding's name in `rigg.yaml` |
+| `bindings.<name>.kind` | string | yes | n/a | `storage`, `ai-services`, `function-app`, `identity`, `key-vault`, `api`, `search` or `foundry` |
+| `bindings.<name>.physical_name` | string | yes | n/a | The Azure resource's own name |
 | `bindings.<name>.arm_id` | string or null | yes | `null` | Full ARM resource id |
 | `bindings.<name>.subscription` | string or null | yes | `null` | Subscription the resource lives in |
 | `bindings.<name>.resource_group` | string or null | yes | `null` | Resource group |
 | `bindings.<name>.location` | string or null | yes | `null` | Azure region, as ARM reports it |
 | `bindings.<name>.endpoint` | string or null | yes | `null` | Data-plane URL |
 | `bindings.<name>.principal_id` | string or null | no | `null` | Object id of the resource's managed identity |
-| `bindings.<name>.resolved_at` | RFC 3339 timestamp | yes | — | When this row was captured |
+| `bindings.<name>.resolved_at` | RFC 3339 timestamp | yes | n/a | When this row was captured |
 
 **`bindings.<name>.name`** is `search` or `foundry` for the implicit bindings.
 
 **`bindings.<name>.endpoint`** is the blob endpoint, the vault URI, the
-function app's host — whichever applies to the kind.
+function app's host: whichever applies to the kind.
 
 **`bindings.<name>.principal_id`** is filled in where a managed identity
 applies.
 
 **The cache is a cache**: never authoritative, safe to delete, and rebuilt on
 demand. It is also what makes rigg usable without ARM read access on every
-run — `rigg push` can resolve a key vault URI or a storage account's id from
+run: `rigg push` can resolve a key vault URI or a storage account's id from
 here instead of calling ARM.
 
 Refresh it explicitly after moving a resource, changing a subscription, or
@@ -248,14 +248,14 @@ follows on the next resolution.
 
 Changing a knowledge source's `kind` cannot be done with a PUT, so `rigg push`
 deletes and re-creates it. Knowledge bases that link to it must be unlinked
-first and relinked afterwards — including knowledge bases in other projects,
+first and relinked afterwards, including knowledge bases in other projects,
 whose original documents exist nowhere else while the replace is in flight.
 Before unlinking, push writes `.rigg/<env>/<project>/replace-<ks>.json` with
 those originals, and removes it once they are restored.
 
 > [!WARNING]
-> If one of these files is present, a push was interrupted. Do not delete it
-> — run `rigg push` again for that project and it will finish the relink and
+> If one of these files is present, a push was interrupted. Do not delete it:
+> run `rigg push` again for that project and it will finish the relink and
 > clean up. Deleting it instead loses the linkage, and the affected knowledge
 > bases have to be repaired by hand.
 
@@ -277,8 +277,8 @@ knowing.
 
 ## `.gitignore`
 
-`rigg init` appends the right line for your layout — `.rigg/`, or
-`<root>/.rigg/` when `rigg.yaml` sets `root:` — if it is not already there:
+`rigg init` appends the right line for your layout: `.rigg/`, or
+`<root>/.rigg/` when `rigg.yaml` sets `root:` (if it is not already there):
 
 ```gitignore
 .rigg/
@@ -316,8 +316,8 @@ directory too, or accept one `untracked` pass.
 
 ## See also
 
-- [`CONCEPTS.md`](../../CONCEPTS.md) — the sync classes in prose.
-- [How rigg works](../how-rigg-works.md) — baselines, normalization and the binding layer end to end.
-- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies) — the bindings this cache resolves.
-- [Resource files](resource-files.md) — which fields are volatile and therefore absent from a baseline.
-- [Exit codes and questions](exit-codes-and-questions.md) — exit 5, the conflict exit code.
+- [`CONCEPTS.md`](../../CONCEPTS.md): the sync classes in prose.
+- [How rigg works](../how-rigg-works.md): baselines, normalization and the binding layer end to end.
+- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies): the bindings this cache resolves.
+- [Resource files](resource-files.md): which fields are volatile and therefore absent from a baseline.
+- [Exit codes and questions](exit-codes-and-questions.md): exit 5, the conflict exit code.

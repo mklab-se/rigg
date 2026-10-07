@@ -103,7 +103,7 @@ impl std::str::FromStr for BindingType {
 }
 
 /// Serialized as a plain string (its kebab name) for use as an ordinary JSON
-/// field, e.g. in [`ResolvedBinding::kind`] — distinct from [`Binding`]'s
+/// field, e.g. in [`ResolvedBinding::kind`]: distinct from [`Binding`]'s
 /// one-key-map encoding.
 impl Serialize for BindingType {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
@@ -118,7 +118,7 @@ impl<'de> Deserialize<'de> for BindingType {
     }
 }
 
-/// Reserved dependency binding names — these name the `search`/`foundry`
+/// Reserved dependency binding names: these name the `search`/`foundry`
 /// targets, not `dependencies` entries.
 pub const RESERVED_BINDING_NAMES: [&str; 2] = ["search", "foundry"];
 
@@ -264,7 +264,7 @@ fn url_host(u: &str) -> String {
     host.to_string()
 }
 
-/// The last path segment of an ARM resource id — the resource's own name.
+/// The last path segment of an ARM resource id: the resource's own name.
 pub fn arm_resource_name(id: &str) -> Option<&str> {
     let trimmed = id.trim_end_matches('/');
     trimmed.rsplit('/').next().filter(|s| !s.is_empty())
@@ -390,7 +390,7 @@ pub enum Wanted {
 }
 
 impl Wanted {
-    /// What a declared binding of `kind` competes for — the same mapping
+    /// What a declared binding of `kind` competes for: the same mapping
     /// [`crate::infra::classify`] uses, so "shared" means exactly one thing
     /// everywhere: an `ai-services` binding and the implicit `foundry`
     /// target are both model hosts and can therefore share a value.
@@ -421,7 +421,7 @@ pub struct EnvBindings {
 }
 
 impl EnvBindings {
-    /// Build the binding table for one environment. Workspace-free — takes
+    /// Build the binding table for one environment. Workspace-free: takes
     /// the environment directly, so callers that already have it (and
     /// tests) don't need a full [`Workspace`].
     pub fn of_env(name: &str, env: &Environment, cache: Option<&BindingCache>) -> EnvBindings {
@@ -472,7 +472,7 @@ impl EnvBindings {
         }
     }
 
-    /// Alias for [`EnvBindings::of_env`]. Loads nothing itself — pass an
+    /// Alias for [`EnvBindings::of_env`]. Loads nothing itself: pass an
     /// already-loaded [`BindingCache`] as `cache`.
     pub fn of(env_name: &str, env: &Environment, cache: Option<&BindingCache>) -> EnvBindings {
         Self::of_env(env_name, env, cache)

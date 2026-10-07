@@ -1,4 +1,4 @@
-//! `rigg az indexer` — run, reset, and inspect live indexers.
+//! `rigg az indexer`: run, reset, and inspect live indexers.
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
@@ -33,7 +33,7 @@ fn confirm_reset(ctx: &GlobalContext, name: &str) -> Result<bool> {
     if !ctx.interactive() {
         return Err(anyhow!(CommandError::Usage(format!(
             "resetting '{name}' makes the next run reprocess EVERY document \
-             (ingestion, skill and embedding costs) — pass --yes to confirm non-interactively"
+             (ingestion, skill and embedding costs): pass --yes to confirm non-interactively"
         ))));
     }
     interactive::confirm_default_no(
@@ -92,7 +92,7 @@ async fn run_indexer(ctx: &GlobalContext, args: AzIndexerRunArgs) -> Result<()> 
 
 /// How one watched indexer run ended.
 pub struct IndexerOutcome {
-    /// The last execution's `status` — `success`, `error`, `transientFailure`.
+    /// The last execution's `status`: `success`, `error`, `transientFailure`.
     pub status: String,
     /// The run's error text, when it failed (messages joined with `; `).
     pub error: Option<String>,
@@ -113,7 +113,7 @@ impl IndexerOutcome {
 /// Trigger `name` and poll its execution status until it reaches a terminal
 /// state. Shared by `rigg az indexer run --watch` and the post-push
 /// verification (`rigg push --verify` / `rigg verify`), which need the same
-/// loop but render the outcome differently — hence an `Ok` outcome even for
+/// loop but render the outcome differently, hence an `Ok` outcome even for
 /// a failed run: only an unreachable service is an `Err`.
 pub async fn run_and_watch(
     remote: &Remote,
@@ -150,14 +150,14 @@ pub async fn run_and_watch(
                 run,
             });
         }
-        // inProgress / reset / pending — keep polling
+        // inProgress / reset / pending: keep polling
     }
     Err(anyhow!(
-        "gave up watching '{name}' after an hour — check `rigg az indexer status {name}`"
+        "gave up watching '{name}' after an hour: check `rigg az indexer status {name}`"
     ))
 }
 
-/// Every error message a failed run reports, joined — the text the auth
+/// Every error message a failed run reports, joined: the text the auth
 /// attribution matches against. Falls back to the state name so a caller
 /// always has something to print.
 fn run_error_text(run: &Value, state: &str) -> String {
@@ -200,7 +200,7 @@ async fn reset_indexer(ctx: &GlobalContext, args: AzIndexerResetArgs) -> Result<
     }
     remote.indexer_reset(&args.name).await?;
     println!(
-        "  {} reset {} — run it with: rigg az indexer run {}",
+        "  {} reset {}. Run it with: rigg az indexer run {}",
         "✓".green(),
         args.name,
         args.name

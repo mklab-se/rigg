@@ -1,4 +1,4 @@
-# rigg 2.0 — API refresh, provider table and currency
+# rigg 2.0: API refresh, provider table and currency
 
 **Date:** 2026-09-09
 **Status:** Design, approved direction. Workstream 0 of
@@ -29,11 +29,11 @@ State on 2026-09-09 (from the azure-rest-api-specs repository):
 | Microsoft.Web ARM | 2023-12-01 | 2026-07-15 | 2026-07-15 |
 | Microsoft.Authorization role assignments / permissions | 2022-04-01 | 2022-04-01 | 2022-04-01 |
 | Microsoft.Resources subscriptions / tenants | 2022-12-01 | 2022-12-01 | 2022-12-01 |
-| Microsoft.ManagedIdentity ARM | — | 2024-11-30 | 2024-11-30 |
-| Microsoft.KeyVault ARM | — | 2026-02-01 | 2026-02-01 |
-| Key Vault data plane (secrets) | — | 2025-07-01 (stable) | 2025-07-01 |
+| Microsoft.ManagedIdentity ARM | n/a | 2024-11-30 | 2024-11-30 |
+| Microsoft.KeyVault ARM | n/a | 2026-02-01 | 2026-02-01 |
+| Key Vault data plane (secrets) | n/a | 2025-07-01 (stable) | 2025-07-01 |
 | Microsoft Foundry data plane | v1 | v1 | v1 |
-| Microsoft Graph | — | v1.0 | v1.0 |
+| Microsoft Graph | n/a | v1.0 | v1.0 |
 
 ## 2. Provider table (registry)
 
@@ -83,7 +83,7 @@ Graph `v1.0`) are listed as informational.
 
 Two mechanisms, both cheap:
 
-1. **`rigg dev api-diff <provider> [--from v] [--to v]`** — downloads the
+1. **`rigg dev api-diff <provider> [--from v] [--to v]`**: downloads the
    OpenAPI documents for two versions of a provider from the specs
    repository and prints, for the definitions rigg's kinds map to (a small
    static list per provider: e.g. `SearchIndexerDataSource`,
@@ -93,13 +93,13 @@ Two mechanisms, both cheap:
    type-changed properties, plus new/removed enum values (e.g. new
    `@odata.type` skills, new data-source types). This is how the maintainer
    decides what to support when the watchdog fires.
-2. **Unknown-field canary** — on `pull` and `adopt`, after normalization,
+2. **Unknown-field canary**: on `pull` and `adopt`, after normalization,
    rigg compares each document's keys (recursively, per known `@odata.type`
    or kind) against the schema fixture captured for the pinned version
    (`crates/rigg-core/fixtures/schema/<provider>-<version>.json`, a trimmed
    extraction of property names produced by `rigg dev api-fixture`). Keys
    not in the fixture are reported once per run: "`knowledge-bases/kb`: field
-   `retrievalMode` not in rigg's 2026-08-01-preview schema — Azure may have
+   `retrievalMode` not in rigg's 2026-08-01-preview schema: Azure may have
    shipped a newer API; run `rigg dev api-check`". Never an error; never
    strips anything (documents remain pass-through).
 
@@ -171,7 +171,7 @@ it on 2026-07-01.
   `properties.endpoint`.
 - `sharedPrivateLinkResources` list: `properties { privateLinkResourceId,
   groupId, requestMessage, status: Pending|Approved|Rejected|Disconnected,
-  provisioningState }` — used by the auth spec's network checks.
+  provisioningState }`: used by the auth spec's network checks.
 
 ### 6.4 Microsoft.Storage ARM → 2026-06-01
 

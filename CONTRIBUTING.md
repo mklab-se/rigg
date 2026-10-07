@@ -32,9 +32,9 @@ cargo clippy                  # Lint check
 
 ### Code Style
 
-- Run `cargo clippy` before submitting — CI will check this
+- Run `cargo clippy` before submitting: CI will check this
 - Follow existing patterns in the codebase
-- Use `serde_json` with `preserve_order` — Azure's property ordering is intentionally maintained
+- Use `serde_json` with `preserve_order`: Azure's property ordering is intentionally maintained
 - Add tests for new functionality
 
 ## Making Changes
@@ -70,12 +70,12 @@ To add support for a new Azure AI Search resource type:
 
 - **Volatile fields**: Stripped during normalization (both pull and push). Examples: `@odata.etag`, credentials.
 - **Read-only fields**: Kept in local files for documentation, stripped only before push. Examples: `createdResources`, `startTime`.
-- **Identity keys**: Used for array diffing — arrays are matched by a key field (usually `name`) rather than position.
+- **Identity keys**: Used for array diffing: arrays are matched by a key field (usually `name`) rather than position.
 - **Checksums**: Pull uses checksums to skip unchanged resources, but always verifies the file exists on disk.
 
 ## Pull Requests
 
-- Keep PRs focused — one feature or fix per PR
+- Keep PRs focused: one feature or fix per PR
 - Include tests for new code paths
 - Write a clear description of what changed and why
 - CI must pass (build, test, clippy)

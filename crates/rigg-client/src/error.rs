@@ -21,7 +21,7 @@ pub enum ClientError {
     // source chain (TLS `UnknownIssuer`, connect-refused detail, ...), so
     // this variant keeps a `#[source]` (without `#[from]`) and does NOT
     // embed `{0}` in its message. anyhow's `{:#}` then renders
-    // `HTTP request failed: <reqwest display>: <deeper causes>` — prefix
+    // `HTTP request failed: <reqwest display>: <deeper causes>`: prefix
     // plus the full chain, each segment exactly once.
     #[error("HTTP request failed")]
     Request(#[source] reqwest::Error),
@@ -31,7 +31,7 @@ pub enum ClientError {
 
     // Azure's own `error.message` says WHICH access is missing, and push's
     // RBAC classifier reads the rendered message to decide whether a
-    // diagnosis is worth running — so it belongs in the Display. The raw
+    // diagnosis is worth running, so it belongs in the Display. The raw
     // body never does: it may carry more than the message.
     #[error("Access denied (403 Forbidden): {service}{}", forbidden_detail(.message))]
     Forbidden {
@@ -62,11 +62,11 @@ pub enum ClientError {
     LocalAgent(String),
 }
 
-// Manual `From` impls replacing `#[from]` for the variants above — see the
+// Manual `From` impls replacing `#[from]` for the variants above: see the
 // comments on `ClientError::Auth` and `ClientError::Request` for why. These
 // preserve `?`-based conversion exactly as `#[from]` would, while letting
 // each variant choose independently whether the cause lives in its Display
-// (`Auth`, `Json`) or in `source()` (`Request`) — never both, which is what
+// (`Auth`, `Json`) or in `source()` (`Request`), never both, which is what
 // duplicated the cause when rendering anyhow chains.
 impl From<AuthError> for ClientError {
     fn from(err: AuthError) -> Self {
@@ -225,14 +225,14 @@ impl ClientError {
     }
 }
 
-/// The ` — <message>` tail of a [`ClientError::Forbidden`] Display, empty
+/// The `. <message>` tail of a [`ClientError::Forbidden`] Display, empty
 /// when Azure said nothing beyond the status.
 fn forbidden_detail(message: &str) -> String {
     let message = message.trim();
     if message.is_empty() {
         String::new()
     } else {
-        format!(" — {message}")
+        format!(". {message}")
     }
 }
 
@@ -406,11 +406,14 @@ mod tests {
         let display = format!("{}", err);
         assert!(display.contains("403 Forbidden"));
         assert!(display.contains("my-svc.search.windows.net"));
-        assert!(!display.contains('—'), "no empty tail: {display}");
+        assert_eq!(
+            display, "Access denied (403 Forbidden): my-svc.search.windows.net",
+            "no empty tail"
+        );
     }
 
-    /// Azure's own message is what says which access is missing — push's
-    /// RBAC classifier reads it off the rendered error — but the raw body
+    /// Azure's own message is what says which access is missing (push's
+    /// RBAC classifier reads it off the rendered error), but the raw body
     /// stays out of the Display.
     #[test]
     fn test_forbidden_display_carries_azures_message_not_the_body() {

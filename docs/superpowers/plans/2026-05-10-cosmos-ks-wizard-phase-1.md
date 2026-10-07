@@ -1,4 +1,4 @@
-**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0 — see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**
+**Superseded (2026-09-09): Cosmos DB support was removed in rigg 2.0, see 2026-09-09-rigg-2.0-scope-and-principles-design.md.**
 
 # Cosmos DB → Knowledge Source: Phase 1 Implementation Plan
 
@@ -6,7 +6,7 @@
 
 **Goal:** Make rigg able to scaffold a complete Cosmos DB data source and Cosmos-backed Knowledge Source via `rigg new`, plus a sampling library (`rigg-client::cosmos`) ready for Phase 2's `rigg analyze` command. After this phase the user can manually wire a Cosmos → KS configuration and push it to Azure with `rigg push`.
 
-**Architecture:** Three changes across three crates: (1) `rigg-client::cosmos` — new module with AAD/connection-string auth and document sampling; (2) `rigg-core::scaffold` — Cosmos-aware data source template + a typed KS scaffold function; (3) `rigg/commands/scaffold` and `rigg/cli` — wire `--type cosmosdb` through `rigg new knowledgesource`. Lint rules updated to validate Cosmos data sources. No new top-level commands.
+**Architecture:** Three changes across three crates: (1) `rigg-client::cosmos`, new module with AAD/connection-string auth and document sampling; (2) `rigg-core::scaffold`, Cosmos-aware data source template + a typed KS scaffold function; (3) `rigg/commands/scaffold` and `rigg/cli`, wire `--type cosmosdb` through `rigg new knowledgesource`. Lint rules updated to validate Cosmos data sources. No new top-level commands.
 
 **Tech Stack:** Rust 1.85 (edition 2024). reqwest (existing workspace dep). serde_json with `preserve_order` (existing). Add `hmac`, `sha2`, `base64` to `rigg-client` for Cosmos master-key signing. `chrono` (existing workspace dep) for RFC1123 dates.
 
@@ -19,16 +19,16 @@
 ## File map
 
 **Create:**
-- `crates/rigg-client/src/cosmos.rs` — Cosmos REST sampling: `CosmosAuth` enum, connection-string parser, master-key HMAC signer, `sample_documents()` async fn.
+- `crates/rigg-client/src/cosmos.rs`: Cosmos REST sampling: `CosmosAuth` enum, connection-string parser, master-key HMAC signer, `sample_documents()` async fn.
 
 **Modify:**
-- `crates/rigg-client/Cargo.toml` — add `hmac`, `sha2`, `base64` deps.
-- `crates/rigg-client/src/lib.rs` — declare and re-export the `cosmos` module.
-- `crates/rigg-client/src/auth.rs` — add `AzCliAuth::for_cosmos()` factory.
-- `crates/rigg-core/src/scaffold.rs` — extend `scaffold_datasource` for `cosmosdb` type; add `scaffold_knowledge_source_typed`.
-- `crates/rigg/src/cli.rs` — extend `NewCommands::KnowledgeSource` with `--type` and `--container` flags.
-- `crates/rigg/src/commands/scaffold.rs` — pass `--type` and `--container` through to the new typed KS scaffold.
-- `crates/rigg/src/commands/validate/lint.rs` — add Cosmos-specific lints to `lint_datasource`.
+- `crates/rigg-client/Cargo.toml`: add `hmac`, `sha2`, `base64` deps.
+- `crates/rigg-client/src/lib.rs`: declare and re-export the `cosmos` module.
+- `crates/rigg-client/src/auth.rs`: add `AzCliAuth::for_cosmos()` factory.
+- `crates/rigg-core/src/scaffold.rs`: extend `scaffold_datasource` for `cosmosdb` type; add `scaffold_knowledge_source_typed`.
+- `crates/rigg/src/cli.rs`: extend `NewCommands::KnowledgeSource` with `--type` and `--container` flags.
+- `crates/rigg/src/commands/scaffold.rs`: pass `--type` and `--container` through to the new typed KS scaffold.
+- `crates/rigg/src/commands/validate/lint.rs`: add Cosmos-specific lints to `lint_datasource`.
 
 **Tests:** inline `#[cfg(test)] mod tests` blocks in each modified file (existing rigg convention).
 
@@ -53,7 +53,7 @@ At minimum, run all three before declaring the plan complete. (CLAUDE.md mandate
 
 - [ ] **Step 1: Write the failing test**
 
-Add at the end of the existing `mod tests` block in `auth.rs` (or create one if it doesn't exist — search for `#[cfg(test)]` first):
+Add at the end of the existing `mod tests` block in `auth.rs` (or create one if it doesn't exist (search for `#[cfg(test)]` first)):
 
 ```rust
 #[test]
@@ -63,7 +63,7 @@ fn test_for_cosmos_uses_cosmos_scope() {
 }
 ```
 
-If `resource_scope` is private, also add a `#[cfg(test)] pub(crate)` test-only accessor or relax the field visibility within the impl block — pick whichever matches the existing test pattern in `auth.rs`.
+If `resource_scope` is private, also add a `#[cfg(test)] pub(crate)` test-only accessor or relax the field visibility within the impl block: pick whichever matches the existing test pattern in `auth.rs`.
 
 - [ ] **Step 2: Run the test and verify it fails**
 
@@ -124,7 +124,7 @@ base64 = "0.22"
 cargo build -p rigg-client
 ```
 
-Expected: build succeeds (no warnings about unused deps yet — they'll be used in Task 4).
+Expected: build succeeds (no warnings about unused deps yet, they'll be used in Task 4).
 
 - [ ] **Step 3: Commit**
 
@@ -265,13 +265,13 @@ git commit -m "rigg-client: cosmos connection-string parser"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to the `mod tests` block in `cosmos.rs`. The test uses a known input/output pair — the master key, date, and resource link below produce a deterministic signature; the expected sig was computed by hand following the [Cosmos REST signing algorithm](https://learn.microsoft.com/en-us/rest/api/cosmos-db/access-control-on-cosmosdb-resources):
+Append to the `mod tests` block in `cosmos.rs`. The test uses a known input/output pair: the master key, date, and resource link below produce a deterministic signature; the expected sig was computed by hand following the [Cosmos REST signing algorithm](https://learn.microsoft.com/en-us/rest/api/cosmos-db/access-control-on-cosmosdb-resources):
 
 ```rust
 #[test]
 fn build_master_key_authorization_token_is_deterministic() {
     // Hand-derived golden input/output pair.
-    // Master key: base64("0123456789012345678901234567890123456789012345==") — 32 bytes after decode.
+    // Master key: base64("0123456789012345678901234567890123456789012345=="), 32 bytes after decode.
     let master_key_b64 = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Ng==";
     let date = "Fri, 10 May 2026 12:00:00 GMT";
     let token = build_master_key_authorization_token(
@@ -356,7 +356,7 @@ pub fn build_master_key_authorization_token(
         "{}\n{}\n{}\n{}\n\n",
         verb.to_lowercase(),
         resource_type.to_lowercase(),
-        resource_link, // case-sensitive — DO NOT lowercase
+        resource_link, // case-sensitive: DO NOT lowercase
         date.to_lowercase(),
     );
 
@@ -779,7 +779,7 @@ pub fn scaffold_datasource(name: &str, ds_type: &str, container: &str) -> Value 
 cargo test -p rigg-core scaffold:: -- --nocapture
 ```
 
-Expected: all `scaffold::tests::*` PASS, including the existing `test_scaffold_datasource` and `test_scaffold_datasource_types` tests (the latter loops over types and asserts only `type` matches — unchanged behavior).
+Expected: all `scaffold::tests::*` PASS, including the existing `test_scaffold_datasource` and `test_scaffold_datasource_types` tests (the latter loops over types and asserts only `type` matches, unchanged behavior).
 
 - [ ] **Step 5: Commit**
 
@@ -833,7 +833,7 @@ fn test_scaffold_knowledge_source_typed_with_kb() {
 
 #[test]
 fn test_scaffold_knowledge_source_typed_no_container_omits_parameters() {
-    // Defensive: if no container is supplied, no parameters block is emitted —
+    // Defensive: if no container is supplied, no parameters block is emitted,
     // the user can fill it in manually.
     let ks = scaffold_knowledge_source_typed("my-ks", "my-ks-index", None, "azureCosmosDB", None);
     assert!(ks.get("azureCosmosDBParameters").is_none());
@@ -858,7 +858,7 @@ Add to `crates/rigg-core/src/scaffold.rs` directly below the existing `scaffold_
 /// `"azureBlob"`, `"azureCosmosDB"`).
 ///
 /// When `container` is `Some`, a `<kind>Parameters` block is emitted with
-/// `containerName`. The `kind` value is used verbatim — pass the same casing
+/// `containerName`. The `kind` value is used verbatim: pass the same casing
 /// Azure expects (`azureBlob`, `azureCosmosDB`, etc.).
 pub fn scaffold_knowledge_source_typed(
     name: &str,
@@ -951,7 +951,7 @@ KnowledgeSource {
 cargo build -p rigg
 ```
 
-Expected: compile FAILS in `commands/scaffold.rs` because the destructuring pattern for `KnowledgeSource` no longer matches. **This is expected** — Task 10 fixes it.
+Expected: compile FAILS in `commands/scaffold.rs` because the destructuring pattern for `KnowledgeSource` no longer matches. **This is expected**: Task 10 fixes it.
 
 - [ ] **Step 3: Do not commit yet**
 
@@ -1031,12 +1031,12 @@ Expected: all tests PASS (no new tests added, but pattern-match tests should sti
 
 - [ ] **Step 4: Manual smoke check**
 
-In a scratch directory **outside** the rigg repo (e.g., `/tmp/rigg-test`), set up a minimal `rigg.yaml` and verify the command runs end-to-end. Skip this step if you don't have a valid project handy — the next task adds an integration test against the existing `test-projects/` machinery.
+In a scratch directory **outside** the rigg repo (e.g., `/tmp/rigg-test`), set up a minimal `rigg.yaml` and verify the command runs end-to-end. Skip this step if you don't have a valid project handy: the next task adds an integration test against the existing `test-projects/` machinery.
 
 ```bash
 cd /tmp && mkdir -p rigg-test && cd rigg-test
 # Create a minimal rigg.yaml with at least one search service if needed,
-# OR just observe the error message — it should mention 'No search service'
+# OR just observe the error message: it should mention 'No search service'
 # and not panic.
 cargo run --manifest-path /Users/kristofer/repos/rigg/Cargo.toml --bin rigg -- \
   new knowledgesource demo --index demo-idx --type azureCosmosDB --container demo-container
@@ -1151,7 +1151,7 @@ fn test_lint_azureblob_unchanged_by_cosmos_rules() {
 cargo test -p rigg test_lint_cosmosdb -- --nocapture
 ```
 
-Expected: 2 FAILs (`test_lint_cosmosdb_warns_when_missing_change_detection`, `test_lint_cosmosdb_warns_when_missing_query`); 1 PASS (`test_lint_cosmosdb_no_warning_when_complete`); 1 PASS (`test_lint_azureblob_unchanged_by_cosmos_rules`) — these latter two pass because no Cosmos lint exists yet to misbehave.
+Expected: 2 FAILs (`test_lint_cosmosdb_warns_when_missing_change_detection`, `test_lint_cosmosdb_warns_when_missing_query`); 1 PASS (`test_lint_cosmosdb_no_warning_when_complete`); 1 PASS (`test_lint_azureblob_unchanged_by_cosmos_rules`), these latter two pass because no Cosmos lint exists yet to misbehave.
 
 - [ ] **Step 4: Implement the lint extension**
 
@@ -1183,7 +1183,7 @@ Add the new Cosmos-specific block at the end of the function, **before its closi
         let has_change_detection = value.get("dataChangeDetectionPolicy").is_some();
         if !has_change_detection {
             warnings.push(format!(
-                "data-sources/{name}.json: cosmosdb data source has no \"dataChangeDetectionPolicy\" — \
+                "data-sources/{name}.json: cosmosdb data source has no \"dataChangeDetectionPolicy\", \
                  incremental indexing will not work; consider adding a HighWaterMark policy on \"_ts\""
             ));
         }
@@ -1195,7 +1195,7 @@ Add the new Cosmos-specific block at the end of the function, **before its closi
             .unwrap_or(false);
         if !has_query {
             warnings.push(format!(
-                "data-sources/{name}.json: cosmosdb data source has no \"container.query\" — \
+                "data-sources/{name}.json: cosmosdb data source has no \"container.query\", \
                  a query (e.g., \"SELECT * FROM c\") is recommended"
             ));
         }
@@ -1230,7 +1230,7 @@ git commit -m "rigg: lint Cosmos data sources for missing query and change-detec
 
 ## Task 12: Manual end-to-end verification against a real Cosmos account
 
-This task is a manual procedure — no code, no automated test. It validates that the scaffolds and the existing `rigg push` actually work against Azure with a Cosmos-backed KS.
+This task is a manual procedure: no code, no automated test. It validates that the scaffolds and the existing `rigg push` actually work against Azure with a Cosmos-backed KS.
 
 **Files:** none (manual procedure).
 
@@ -1290,7 +1290,7 @@ Expected: no errors. May show warnings about empty connection strings if you for
 cargo run --manifest-path /Users/kristofer/repos/rigg/Cargo.toml --bin rigg -- push --all
 ```
 
-Confirm preview, accept, and watch it push. If the Azure preview API rejects the KS payload, capture the error message — the spec's "Open implementation questions" section anticipates discovering schema details here.
+Confirm preview, accept, and watch it push. If the Azure preview API rejects the KS payload, capture the error message: the spec's "Open implementation questions" section anticipates discovering schema details here.
 
 - [ ] **Step 7: Verify the KS exists in Azure**
 

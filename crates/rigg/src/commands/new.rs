@@ -1,4 +1,4 @@
-//! `rigg new` — scaffold projects, resources, pipelines, and API specs.
+//! `rigg new`: scaffold projects, resources, pipelines, and API specs.
 
 use anyhow::{Result, anyhow, bail};
 use colored::Colorize;
@@ -118,7 +118,7 @@ fn new_pipeline(ctx: &GlobalContext, args: &NewArgs) -> Result<()> {
         .map_err(|e| anyhow!(CommandError::Validation(e)))?;
     for (kind, name, value) in &parts {
         let r = ResourceRef::new(*kind, name.clone());
-        // Existence is by PHYSICAL name (locate), not file stem — a renamed
+        // Existence is by PHYSICAL name (locate), not file stem: a renamed
         // resource may occupy the stem while the name itself is free.
         if store.locate(&r)?.is_some() {
             bail!("{r} already exists in project '{}'", project.name);
@@ -154,7 +154,7 @@ async fn new_resource(ctx: &GlobalContext, kind: ResourceKind, args: &NewArgs) -
     let project = resolve_project(&ws, args)?;
     let store = Store::new(project, &env.name);
     let r = ResourceRef::new(kind, args.name.clone());
-    // Existence is by PHYSICAL name (locate), not file stem — a renamed
+    // Existence is by PHYSICAL name (locate), not file stem: a renamed
     // resource may occupy the stem while the name itself is free.
     if store.locate(&r)?.is_some() {
         bail!("{r} already exists in project '{}'", project.name);
@@ -221,14 +221,14 @@ async fn identity_arm_id(
 ) -> Result<String> {
     let declared = env.env.dependencies.get(binding).ok_or_else(|| {
         anyhow!(CommandError::Validation(format!(
-            "environment '{}' has no dependency named '{binding}' — declare it first: \
+            "environment '{}' has no dependency named '{binding}'. Declare it first: \
              `rigg env bind {} {binding} identity:<managed-identity-name>`",
             env.name, env.name
         )))
     })?;
     if declared.kind != BindingType::Identity {
         return Err(anyhow!(CommandError::Validation(format!(
-            "'{binding}' is a {} binding, not an identity binding — --identity names a \
+            "'{binding}' is a {} binding, not an identity binding: --identity names a \
              user-assigned managed identity",
             declared.kind
         ))));
@@ -241,7 +241,7 @@ async fn identity_arm_id(
     }
     let arm = ArmClient::for_tenant(env.env.tenant.as_deref()).map_err(|e| {
         anyhow!(CommandError::AuthDenied(format!(
-            "identity '{binding}' is not resolved yet and ARM is unreachable ({e}) — run \
+            "identity '{binding}' is not resolved yet and ARM is unreachable ({e}): run \
              `rigg env bind {} --learn` or `rigg env show {} --refresh`",
             env.name, env.name
         )))
@@ -255,14 +255,14 @@ async fn identity_arm_id(
         .await
         .map_err(|e| {
             anyhow!(CommandError::AuthDenied(format!(
-                "could not resolve identity binding '{binding}' ({e}) — run `rigg env bind {} \
+                "could not resolve identity binding '{binding}' ({e}): run `rigg env bind {} \
                  --learn` or `rigg env show {} --refresh`",
                 env.name, env.name
             )))
         })?;
     resolved.arm_id.ok_or_else(|| {
         anyhow!(CommandError::AuthDenied(format!(
-            "identity binding '{binding}' resolved without an ARM id — run `rigg env show {} \
+            "identity binding '{binding}' resolved without an ARM id: run `rigg env show {} \
              --refresh`",
             env.name
         )))
@@ -283,7 +283,7 @@ pub async fn ai_draft(
     }
     let system = format!(
         "You generate Azure {} definitions as raw JSON for the Azure AI Search / Microsoft Foundry REST APIs (api-version {}). \
-         NEVER include API keys, connection strings with AccountKey, or any secret — use managed-identity patterns (ResourceId=...) only. \
+         NEVER include API keys, connection strings with AccountKey, or any secret: use managed-identity patterns (ResourceId=...) only. \
          Respond with ONLY the JSON document, no prose, no code fences.",
         kind.display_name(),
         rigg_core::registry::SEARCH_STABLE_API_VERSION,

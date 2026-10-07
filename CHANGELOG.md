@@ -48,7 +48,7 @@ All notable changes to this project will be documented in this file.
 - Dependencies refreshed to current versions: `ailloy` 2.1.2 (lockfile-only
   patch of the AI hub, no API change) plus 15 transitive patch bumps. Every
   root dependency's version requirement already covered the latest release,
-  so this is a lockfile-only refresh — no manifest changes, no behaviour
+  so this is a lockfile-only refresh: no manifest changes, no behaviour
   changes. MSRV stays at Rust 1.88. `cargo audit` reports no advisories.
 
 ### Docs
@@ -57,7 +57,7 @@ All notable changes to this project will be documented in this file.
   to re-run clippy after `cargo fmt` fixes formatting, an INSTALL.md review
   step, and fuller post-release verification (archive/SBOM count, crates.io,
   Homebrew formula). `ci.yml` and `release.yml` already matched the template
-  (action majors, per-target SBOMs) — no workflow changes were needed.
+  (action majors, per-target SBOMs): no workflow changes were needed.
 
 ## [2.1.0] - 2026-09-16
 
@@ -91,9 +91,9 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.0] - 2026-09-10
 
-rigg 2.0 narrows to the Agentic RAG stack it does best — Microsoft Foundry
+rigg 2.0 narrows to the Agentic RAG stack it does best (Microsoft Foundry
 agents grounded on Azure AI Search, fed from Azure Blob Storage, enriched by
-Azure Functions — and rebuilds environments, promotion and authentication
+Azure Functions) and rebuilds environments, promotion and authentication
 around that. No compatibility with 1.x workspaces.
 
 ### Changed (breaking)
@@ -122,16 +122,16 @@ around that. No compatibility with 1.x workspaces.
   exit 6 rather than a prompt nobody can see.
 - **`push` and `delete` prose goes to stderr under `--output json`** (the
   plan, the target banner, progress), so stdout carries only JSON documents.
-  `rigg az` commands print their target banner in every output mode — on
-  stderr in json mode — where json mode previously suppressed it.
-- **New environment variable `RIGG_NON_INTERACTIVE`** — set it to `1` (any
+  `rigg az` commands print their target banner in every output mode, on
+  stderr in json mode, where json mode previously suppressed it.
+- **New environment variable `RIGG_NON_INTERACTIVE`**: set it to `1` (any
   non-empty value other than `0`/`false`) to force non-interactive behaviour
   on a terminal, equivalent to `--non-interactive`.
 - **One Search service and one Foundry account/project per environment.**
   The 1.x multi-connection lists (`ConnectionList`) are removed; two Search
   services are now two environments, not one environment with a list.
 - **`project.yaml` no longer pins connections.** The `search-connection`/
-  `foundry-connection` fields are gone — a project's environment is chosen by
+  `foundry-connection` fields are gone: a project's environment is chosen by
   `-e/--env`, not recorded per project.
 - **`defaults.identity` is removed from `rigg.yaml`**, replaced by `identity`
   bindings in an environment's `dependencies:`.
@@ -144,18 +144,18 @@ around that. No compatibility with 1.x workspaces.
 - **A leaked infrastructure reference is an error even with no
   `dependencies` declared.** An environment's `search` service and `foundry`
   account are bindings in their own right, so a file that points at another
-  environment's service or account is a leak — always an error, in every
+  environment's service or account is a leak, always an error, in every
   environment, whether or not anything is declared under `dependencies:`.
   `push` runs the same classification as a preflight and refuses before any
   mutation.
 - **`RIGG_ACCESS_TOKEN` is now honoured for every audience**, not just the
-  Search and Foundry data planes — one static token covers ARM (binding
+  Search and Foundry data planes: one static token covers ARM (binding
   resolution, discovery, RBAC reads), Cognitive Services, Key Vault,
   Microsoft Graph and the `rigg az` commands (intended for CI and tests).
 - **Service-principal environment variables mint their own tokens.**
   `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` plus either `AZURE_CLIENT_SECRET`
   or `AZURE_FEDERATED_TOKEN_FILE` (OIDC) now go straight to Entra ID's
-  `oauth2/v2.0/token` endpoint per audience — the Azure CLI no longer has to
+  `oauth2/v2.0/token` endpoint per audience: the Azure CLI no longer has to
   be installed in CI. Tokens are cached for five minutes per
   `(tenant, audience)`; the Azure CLI login remains the fallback, and an
   environment naming a `tenant` you are not signed in to says so and prints
@@ -195,7 +195,7 @@ around that. No compatibility with 1.x workspaces.
   storage accounts, AI Services accounts, function apps, managed identities,
   Key Vaults and external APIs a project's files may reference, keyed by a
   binding name that correlates across environments (the same name in `dev`
-  and `prod` may resolve to the same or a different physical resource — the
+  and `prod` may resolve to the same or a different physical resource: the
   former case is "shared"). Every environment also gets implicit `search`/
   `foundry` bindings for free. `rigg env bind <env> <name> <type>:<value>`
   declares one; `rigg env bind <env> --learn [--yes]` scans an environment's
@@ -213,7 +213,7 @@ around that. No compatibility with 1.x workspaces.
   non-interactively); `--tenant`/`--subscription`/`--bind
   <name=type:value>` (repeatable) round out the flag form.
 - `rigg validate [--show-bindings]` classifies every infrastructure
-  reference as Bound, Shared, Leak, Unbound, or External — Leak (a
+  reference as Bound, Shared, Leak, Unbound, or External: Leak (a
   reference bound in another environment, not this one) is always an error;
   Unbound and External are warnings that become errors under
   `policy.strict-bindings: true`. `push` runs the same classification as a
@@ -227,14 +227,14 @@ around that. No compatibility with 1.x workspaces.
 - Pull and adopt report fields Azure returns that rigg's pinned schema does
   not know (API-drift canary; documents stay untouched).
 - **Question protocol**: guided flows (starting with the protected-environment
-  gate) ask questions through a shared `Asker` — interactively on a terminal,
+  gate) ask questions through a shared `Asker`: interactively on a terminal,
   or via `--answer <id>=<value>` / `--answers-file <path>` in scripts and from
   AI agents. An unanswered question prints a `needs-input` JSON document and
   exits 6 (new exit code) instead of hanging or failing blind. MCP tools
   accept the same answers through an `answers` parameter, and a `needs-input`
   tool result is the raw JSON document, not an error.
 - **Promote v2**: `rigg promote [<project>] --from <A> --to <B>` now
-  **translates** rather than copies — every infrastructure reference is
+  **translates** rather than copies: every infrastructure reference is
   re-pointed at the target environment's binding of the same name (shared
   bindings are reported unchanged), and every sibling reference (indexer →
   data source/index/skillset, knowledge base → knowledge sources, agent →
@@ -244,10 +244,10 @@ around that. No compatibility with 1.x workspaces.
   changed/new/unchanged/kept-only-in-target summary before writing
   (`--dry-run` stops there); `--output json` carries the same shape
   (`targets`, `rewiring[]`, `renamed[]`, `resources{…}`, `checks[]`,
-  `questions[]`, `dry_run`). Anything it can't decide — an unbound
+  `questions[]`, `dry_run`). Anything it can't decide (an unbound
   reference, a binding missing in the target, an external API URL with no
   binding in either environment, or a deployment unavailable or short on
-  quota in the target region — is asked as a question through the same
+  quota in the target region) is asked as a question through the same
   protocol as everything else (`--answer <id>=<value>` non-interactively,
   exit 6 on anything unanswered). A target environment that doesn't exist
   yet is not a question: it's a usage error (exit 2) up front, naming the
@@ -261,7 +261,7 @@ around that. No compatibility with 1.x workspaces.
   `rigg_push`/`rigg_pull`.
 - **`rigg auth doctor` v2**: the report is now built from the environment's
   *bindings*, so every scope is a real ARM id rather than a guessed default,
-  and it covers three things 1.x never did — the settings and network
+  and it covers three things 1.x never did: the settings and network
   conditions a keyless connection depends on (search SKU, managed identity,
   `authOptions`, storage firewall/bypass/resource-instance rules, blob soft
   delete, AI Services account kind, function-app access restrictions and
@@ -283,8 +283,8 @@ around that. No compatibility with 1.x workspaces.
   the fix that enables it (it used to read green while every `search-system`
   edge stayed unresolved and unfixable). A file that *does* name a
   user-assigned identity is checked for that identity being **attached** to
-  the search service — holding the role is no use if the service cannot act
-  as it — with a new fix that attaches it, keeping every identity already
+  the search service, holding the role is no use if the service cannot act
+  as it, with a new fix that attaches it, keeping every identity already
   there.
 - **A customer-managed key's `encryptionKey.identity` is honoured**: the CMK
   edge (and therefore `--fix`) names the user-assigned identity that fetches
@@ -313,17 +313,17 @@ around that. No compatibility with 1.x workspaces.
 - **Your own role requirements count your effective permissions**, not just
   exact role assignments: a subscription Owner or Contributor now satisfies
   the operator's control-plane roles (Search Service Contributor, Foundry
-  Account Owner, and — through the Cognitive Services Contributor
-  alternative the edge lists — creating project connections) because ARM
+  Account Owner, and, through the Cognitive Services Contributor
+  alternative the edge lists, creating project connections) because ARM
   reports actions that cover those role definitions, so doctor stops
   reporting them missing and push's preflight stops refusing the person who
   owns the subscription. Roles whose permissions live in `dataActions` are
-  unaffected — Foundry User, Search Index Data Reader **and Foundry Project
+  unaffected: Foundry User, Search Index Data Reader **and Foundry Project
   Manager itself**, whose Azure definition carries
   `dataActions: ["Microsoft.CognitiveServices/*"]`. No role name is
   special-cased, and managed-identity edges still require the exact role.
 - **Printed `az role assignment create` lines name the role by definition
-  GUID**, with the display name as a trailing `# <name>` comment — the same
+  GUID**, with the display name as a trailing `# <name>` comment: the same
   ids rigg's own PUTs use. Microsoft is renaming the Foundry roles (Azure AI
   User / Project Manager / Account Owner → **Foundry User / Foundry Project
   Manager / Foundry Account Owner**) and advises using the id rather than the
@@ -340,11 +340,11 @@ around that. No compatibility with 1.x workspaces.
 - **Role assignments rigg creates are tagged** with
   `description: "rigg:<workspace>:<env>:<reason>"` and an explicit
   `principalType`, so **`rigg auth roles list|remove`** can find and undo
-  exactly rigg's own grants at every scope the environment's graph knows —
+  exactly rigg's own grants at every scope the environment's graph knows,
   and nothing anyone else made. `rigg env remove <name> --clean-roles`
   removes them as the environment goes away.
 - **`rigg status --auth`** adds one identity line per environment
-  (`identity: ok` / `identity: N missing — rigg auth doctor -e <env>`), from
+  (`identity: ok` / `identity: N missing, rigg auth doctor -e <env>`), from
   the same verification `auth doctor` runs; `--output json` gains an
   `identity` object per environment.
 - **`rigg push` verifies the identity graph before it writes anything, and
@@ -352,16 +352,16 @@ around that. No compatibility with 1.x workspaces.
   preflight runs after the binding preflight and before the protected gate:
   it is `auth doctor --plan` on exactly the bodies this push would send.
   Anything only a human may grant (the operator's own rights) ends the push
-  right there — exit 4, the exact `az` line, and nothing written. Missing role
+  right there: exit 4, the exact `az` line, and nothing written. Missing role
   assignments rigg may grant are reported there too, but applied only once
-  every gate has been cleared — the protected-environment confirmation, the
-  replace gate, the apply confirmation — so a push that is never confirmed
+  every gate has been cleared (the protected-environment confirmation, the
+  replace gate, the apply confirmation) so a push that is never confirmed
   changes nothing at all. They are then offered as one confirmation
   (`auth.fix.all`, `--yes` non-interactively), applied, and **waited out**:
   rigg polls `atScope()` until each granted role is visible before continuing
   (`RIGG_RBAC_RETRY_SECS`, default 10 s × `RIGG_RBAC_MAX_RETRIES`, default
-  18). `--dry-run` reports the whole remediation — the `az` lines and what
-  rigg would fix itself — and refuses nothing; unresolved items never refuse.
+  18). `--dry-run` reports the whole remediation, the `az` lines and what
+  rigg would fix itself, and refuses nothing; unresolved items never refuse.
   `--skip-auth-preflight` opts out. The existing PUT-retry loop remains the
   safety net, and now diagnoses through the same binding-aware engine instead
   of its own ARM walk: a requirement rigg may not grant ends the push with
@@ -371,16 +371,16 @@ around that. No compatibility with 1.x workspaces.
   knowledge base gets a retrieve, every agent a one-turn question. Failures
   that look like an authorization problem are attributed to the identity edge
   that would explain them (`→ likely <edge>`); exit 1 on any failure. A
-  protected environment is gated (`--confirm-env`) — the runs cost money. New
+  protected environment is gated (`--confirm-env`): the runs cost money. New
   MCP tool `rigg_verify` (`project?`, `all?`, `env?`, `confirm_env?`,
   `answers?`) and new `rigg_push` parameters `verify` / `skip_auth_preflight`
   bring the MCP surface to 14 tools.
 - **`rigg auth easy-auth <function-app binding> [--client-id <id>]`** wires
   Microsoft Entra authentication onto a bound function app end to end: it
   registers (or reuses) an application with `api://<app-id>` and a `Caller`
-  app role — merged into what the application already publishes, so neither
-  an existing app role nor an existing identifier URI is dropped — creates
-  the enterprise application, and PUTs a **merged** `authsettingsV2` — every
+  app role (merged into what the application already publishes, so neither
+  an existing app role nor an existing identifier URI is dropped) creates
+  the enterprise application, and PUTs a **merged** `authsettingsV2`: every
   other identity provider and unrelated setting is kept, `allowedAudiences`
   and `allowedApplications` are unioned, never replaced. The caller it
   admits is the search service's system-assigned identity, or the
@@ -388,15 +388,15 @@ around that. No compatibility with 1.x workspaces.
   document is shown as a diff and confirmed (`auth.easyauth.<site>`, exit 6
   non-interactively without `--yes`) before anything is written. Every
   skillset in the environment whose WebApiSkill calls that app then becomes
-  keyless on disk — `authResourceId` set, the `code=` parameter,
-  `x-functions-key` header and `x-rigg-auth` carrier removed — and rigg
+  keyless on disk (`authResourceId` set, the `code=` parameter,
+  `x-functions-key` header and `x-rigg-auth` carrier removed) and rigg
   tells you to `rigg push`; it never pushes for you. The same wiring is
-  offered inline from push's Web API auth question ("identity-based — set it
+  offered inline from push's Web API auth question ("identity-based: set it
   up now").
 - **Key Vault as a key source**: `"x-rigg-auth": "key-vault:<secret>@<key-vault
   binding>"` on a WebApiSkill. At push time the secret is read from the
   vault's data plane with the operator's token and placed in the skill's own
-  carrier **in the outgoing body only** — never on disk, in output, or in a
+  carrier **in the outgoing body only**, never on disk, in output, or in a
   trace. `rigg validate` accepts the annotation only when the binding really
   is a `key-vault` dependency, and rejects any `x-rigg-auth` value rigg
   cannot resolve.
@@ -411,14 +411,14 @@ around that. No compatibility with 1.x workspaces.
   naming those. A skillset's identity lives on `cognitiveServices`, so
   `--identity` also declares the keyless connection form
   (`AIServicesByIdentity` plus a `subdomainUrl` placeholder) that Azure AI
-  Search requires alongside it — the scaffold passes `rigg validate` as
-  written. Independent of `--describe` — both may be given, and the identity
+  Search requires alongside it: the scaffold passes `rigg validate` as
+  written. Independent of `--describe`, both may be given, and the identity
   is applied after the AI draft.
 - **`rigg ci init` prints the roles the CI identity actually needs.** The
   finishing steps no longer name a fixed trio of roles: the list is built
   from the same `identity::operator_edges` graph `rigg auth doctor`
   verifies, over the target environment's own tree, and every entry carries
-  the ARM scope to grant it at — resolved through the bindings cache, or
+  the ARM scope to grant it at: resolved through the bindings cache, or
   named as unresolved with the `rigg env bind <env> --learn` that would
   resolve it. The scopes where the identity needs
   `Microsoft.Authorization/roleAssignments/write` (so a push can grant the
@@ -427,7 +427,7 @@ around that. No compatibility with 1.x workspaces.
   to the deploy job. `rigg ci init` also honours `-e/--env` now, instead of
   always baking in the default environment.
 - **Documentation**: CONCEPTS.md gains a *How rigg handles authentication*
-  chapter — the four principals, the requirement graph and the file evidence
+  chapter: the four principals, the requirement graph and the file evidence
   behind each edge, where the graph runs (doctor, push preflight, verify),
   what rigg grants and the two things it never does, Easy Auth, key sources,
   the storage trusted-services caveat, and the token chain. README's
@@ -440,23 +440,23 @@ around that. No compatibility with 1.x workspaces.
 - **`rigg diff` no longer reports phantom drift on data-source connection
   strings.** Azure redacts `credentials.connectionString` to null on every
   GET, and `diff` compared both sides with `normalize_for_push`, which keeps
-  write-only fields — so `status` said "in sync" while `diff` reported the
+  write-only fields, so `status` said "in sync" while `diff` reported the
   connection string as drift on every data source, forever. `diff` now
   normalizes the way `semantic_eq` and the baselines already did.
 - **`validate --strict` accepts built-in `Microsoft.*` guardrails.** Every
   scaffolded model deployment names Azure's built-in RAI policy
   (`Microsoft.DefaultV2`), a platform resource that can never be a workspace
-  file. Strict mode — which a protected environment turns on by default —
+  file. Strict mode, which a protected environment turns on by default:
   counted it as a dangling reference and rejected rigg's own scaffold output
   with exit 3.
 - **An agent's MCP tool gets its `server_label` from `x-rigg-ref`.** Foundry
   rejects an agent whose MCP tool has no `server_label`, so an agent file
-  carrying only `x-rigg-ref` and an empty `server_url` — the documented
-  shape — could not be pushed. The label is derived from the same annotation
+  carrying only `x-rigg-ref` and an empty `server_url`, the documented
+  shape, could not be pushed. The label is derived from the same annotation
   that supplies `server_url`; an explicit label is left alone.
 - **A scaffolded knowledge base carries a `models` block.** Azure refuses to
-  answer from a knowledge base with no model, so every scaffold — including
-  the one `rigg new pipeline` writes — was dead on arrival. The block ships
+  answer from a knowledge base with no model, so every scaffold, including
+  the one `rigg new pipeline` writes, was dead on arrival. The block ships
   with placeholders, like the data source's connection string.
 - **`rigg adopt` and `rigg env bind --learn` name proposal sources relative
   to the workspace.** Absolute paths wrapped the proposal table past
@@ -464,7 +464,7 @@ around that. No compatibility with 1.x workspaces.
 - **A change to a data source's connection string alone is pushed.** Write-only
   fields (`credentials.connectionString`) never come back from Azure, so a
   local edit that changed nothing else classified as in sync and `push` skipped
-  it — a data source could not be re-pointed at another storage account without
+  it: a data source could not be re-pointed at another storage account without
   delete and recreate. `status`, `diff` and `push` now compare write-only
   fields against the baseline stored in `.rigg/`; the first run after
   upgrading classifies every data source as local-ahead once, and one
@@ -473,8 +473,8 @@ around that. No compatibility with 1.x workspaces.
 ### Docs
 
 - **A `docs/` tree replaces the wall of README prose.** Four runnable
-  tutorials — [pull an existing solution][t1], [build from scratch][t2],
-  [add an environment and promote][t3], [push to protected production][t4] —
+  tutorials ([pull an existing solution][t1], [build from scratch][t2],
+  [add an environment and promote][t3], [push to protected production][t4])
   each with prerequisites (roles, Azure resources, cost), the expected output
   of every command, and *what you have now* / *clean up* sections.
   `docs/how-rigg-works.md` is the connective narrative: sync classes and
@@ -490,7 +490,7 @@ around that. No compatibility with 1.x workspaces.
   (`rigg dev cli-reference`), the InfraRef table inside
   `docs/reference/resource-files.md` (`rigg dev infra-table`) and the tool
   table in `MCP.md` (`rigg mcp tools --markdown`).
-- **`rigg dev docs-check`** — the mechanical honesty check for the docs: every
+- **`rigg dev docs-check`**: the mechanical honesty check for the docs: every
   `rigg …` line in a shell fence is parsed through clap, every relative link
   and `#anchor` is resolved, and every `RIGG_*`/`AZURE_*` variable and
   question-id prefix the code uses must be documented. The docs can no longer
@@ -548,23 +548,23 @@ broken ([#5](https://github.com/mklab-se/rigg/issues/5)).
 ### Fixed
 
 - **Knowledge bases are now managed on the preview api-version
-  (`2026-05-01-preview`).** The retrieval & output configuration —
+  (`2026-05-01-preview`).** The retrieval & output configuration:
   `retrievalInstructions`, `answerInstructions`, `outputMode`,
   `retrievalReasoningEffort`, per-source `enableImageServing`/
-  `enableFreshness` — does not exist in the stable `2026-04-01` API: a
+  `enableFreshness`, does not exist in the stable `2026-04-01` API: a
   stable GET silently omits it and a stable PUT cannot set it, so adopt and
   pull captured an incomplete document and push never carried these
   settings. Existing knowledge-base files stay in sync (comparisons are
   null-insensitive); a `rigg pull` refreshes them with the full
   configuration.
 - **An in-sync skillset with a server-redacted Function key is no longer
-  reported broken (#5).** Azure redacts stored secrets on every GET —
+  reported broken (#5).** Azure redacts stored secrets on every GET:
   that says nothing about the remote key. The Web API auth gate now covers
   only planned mutations (uniform with the other credential preflights):
   ordinary pushes of in-sync resources stay quiet no-ops with a one-line
   informational note, no failure claim, no forced prompt, zero PUTs. New or
   changed skillsets with an unusable key still block before any mutation.
-- **`rigg push` is idempotent again for `x-rigg-auth` annotated skillsets** —
+- **`rigg push` is idempotent again for `x-rigg-auth` annotated skillsets**:
   they are no longer re-PUT on every push. Key refresh is explicit:
 
 ### Added
@@ -583,14 +583,14 @@ environments.
 ### Changed
 
 - **`rigg promote` no longer requires the project name** when the workspace
-  has exactly one project — same convention as every other command. With
+  has exactly one project: same convention as every other command. With
   several projects and no name it is a usage error (exit 2).
 - **Each environment keeps its own Web API function endpoint on promote.**
   A skill's `uri`, `authResourceId`, `x-functions-key` header, and
   `x-rigg-auth` annotation are now registry env-pinned (like an agent's
   `tools[].server_url`): promoting over an existing target skillset
   preserves the target's function URL and auth method. The source's
-  `x-rigg-auth` annotation never crosses environments — it would silence
+  `x-rigg-auth` annotation never crosses environments: it would silence
   push's Web API auth gate while pointing at the wrong env's function.
 - **New-in-target skillsets resolve their function URLs during promote.**
   Interactively, rigg keeps the URL automatically when your login sees only
@@ -612,7 +612,7 @@ migration could leave the new skillset projecting into the OLD index.
   `code=<redacted>` uri form already was: migration offers the
   authentication choices (Entra ID / push-time key / skip), interactive
   push runs the same resolution, and non-interactive push blocks with
-  exit 3 before any mutation — uniform with the data-source and AI-services
+  exit 3 before any mutation: uniform with the data-source and AI-services
   credential preflights. Header names match case-insensitively; empty and
   null values count as unusable.
 - **Push-time key injection respects the skill's carrier**: the real key
@@ -624,18 +624,18 @@ migration could leave the new skillset projecting into the OLD index.
   old generated sub-resources to the new names. The registry gains the
   previously missing skillset→index reference
   (`indexProjections.selectors[].targetIndexName`), so enrichment now
-  projects into the NEW side-by-side index — and dependency-ordered push
+  projects into the NEW side-by-side index, and dependency-ordered push
   sees the edge too. The old hardcoded indexer field list is gone in favor
   of a registry-driven `rename_reference`.
 - **`validate` rejects a real function key** in a skill's `httpHeaders`
-  (exit 3) — same no-secrets policy as connection strings; the
+  (exit 3): same no-secrets policy as connection strings; the
   `<redacted>` placeholder plus `x-rigg-auth: function-key` remains the
   supported on-disk shape.
 
 ## [1.6.1] - 2026-07-15
 
 `rigg status` now answers the question it always should have: what is the
-state of the WHOLE workspace — every environment, not just the default one.
+state of the WHOLE workspace: every environment, not just the default one.
 And adopt finally tells you (and asks you) which environment it is acting on.
 
 ### Changed
@@ -656,7 +656,7 @@ And adopt finally tells you (and asks you) which environment it is acting on.
   the configured service" legend is gone.
 - **`rigg adopt` no longer guesses the environment.** With several
   environments configured and no `--env`/`RIGG_ENV`, interactive runs get an
-  environment picker and non-interactive runs exit 2 naming the candidates —
+  environment picker and non-interactive runs exit 2 naming the candidates:
   the `default: true` marker alone is not enough for adoption.
 - "Nothing to adopt/delete" messages name the environment they inspected.
 - MCP `rigg_status` tool description updated for the multi-env behavior.
@@ -665,46 +665,46 @@ And adopt finally tells you (and asks you) which environment it is acting on.
 
 - **Azure CLI tokens are cached per resource scope** (5-minute reuse,
   process-wide). Previously every REST request spawned
-  `az account get-access-token`; now it is one spawn per scope per run —
+  `az account get-access-token`; now it is one spawn per scope per run:
   noticeable on multi-env status and large pulls.
 
 ## [1.6.0] - 2026-07-15
 
 Rigg grows an operations plane: `rigg az` acts on the LIVE cloud resources
-that the config commands version-control — and the CLI now tab-completes
+that the config commands version-control, and the CLI now tab-completes
 resource names straight from your workspace files.
 
 ### Added
 
-- **`rigg az` — operate the live resources.** Noun-first subcommands,
+- **`rigg az`: operate the live resources.** Noun-first subcommands,
   addressed by physical name (no project ownership required), env-resolved
   like everything else:
-  - `rigg az indexer run <name> [--watch] [--reset]` — trigger a run;
+  - `rigg az indexer run <name> [--watch] [--reset]`: trigger a run;
     `--watch` polls until it completes, prints state transitions and
     per-document errors, and exits non-zero on a failed run. `--reset`
     (and `rigg az indexer reset`) clears change-tracking state behind a
     confirmation that spells out the full-reprocess cost.
-  - `rigg az indexer status <name>` — execution state, last run, errors and
+  - `rigg az indexer status <name>`: execution state, last run, errors and
     warnings with document keys.
-  - `rigg az index query <name> <text> [--top] [--filter] [--select]` —
+  - `rigg az index query <name> <text> [--top] [--filter] [--select]`:
     smoke-test retrieval without the portal; `rigg az index stats <name>`
     for document count and storage size.
-  - `rigg az kb ask <name> <prompt>` — agentic retrieval (grounding content
+  - `rigg az kb ask <name> <prompt>`: agentic retrieval (grounding content
     + numbered references with reranker scores; the stable API is
     extractive). `kb` is an alias for `knowledge-base`.
-  - `rigg az agent ask <name> <prompt>` — single-shot prompt to a Foundry
+  - `rigg az agent ask <name> <prompt>`: single-shot prompt to a Foundry
     agent via the responses API.
   - `--output json` on all of them for scripting; protected environments
     gate the mutating verbs.
 - **MCP runtime tools.** `rigg_indexer_status`, `rigg_query`, `rigg_ask`
   (knowledge base or agent) read-only, plus `rigg_indexer_run` behind the
-  force pattern — an AI agent can now verify a deployment end-to-end after
+  force pattern: an AI agent can now verify a deployment end-to-end after
   `rigg_push` without a human in the portal.
 - **Dynamic tab completion.** One line in your shell rc
   (`source <(COMPLETE=zsh rigg)`; bash/fish equivalents) and rigg completes
   not just subcommands and flags but VALUES: project names, environment
   names, `<kind>/<name>` selectors, `rigg new` kinds, and the resource
-  names in every `rigg az` and `rigg migrate` command — resolved offline
+  names in every `rigg az` and `rigg migrate` command: resolved offline
   from your local workspace files, the quiet payoff of config-as-code.
   The static `rigg completion <shell>` scripts remain for subcommand/flag
   completion without registration.
@@ -730,15 +730,15 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 - **Custom Web API skill authorization, two ways.** Azure redacts a
   WebApiSkill's `?code=` key on GET, so migrated skillsets fail at
   enrichment time with no visible reason. Push and the migrate wizard now
-  detect the redacted marker — even on "in sync" skillsets, where both
-  sides agree on a broken placeholder — and offer:
+  detect the redacted marker, even on "in sync" skillsets, where both
+  sides agree on a broken placeholder (and offer):
   - **Entra ID (recommended):** `authResourceId`, pre-resolved from the
     function app's Easy Auth configuration via ARM when enabled; concrete
     enablement guidance when not.
   - **Push-time function key:** the skill is annotated
     `x-rigg-auth: function-key` (stripped from PUTs like all `x-rigg-*`
     keys); rigg fetches the key via ARM `listKeys` on every push and
-    injects it into the request body only — the file keeps the placeholder
+    injects it into the request body only: the file keeps the placeholder
     forever, and key rotation heals itself.
 - **Keyless skillset billing targets the right kind of account.**
   `AIServicesByIdentity` only works against Foundry (ARM kind `AIServices`)
@@ -749,8 +749,8 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 ### Fixed
 
 - **Search HTTP timeout raised to 120s + timed-out PUTs resolved.** Indexer
-  creation validates connections and starts its first run before responding
-  — 30s produced false failures twice in live testing. A PUT that still
+  creation validates connections and starts its first run before responding:
+  30s produced false failures twice in live testing. A PUT that still
   times out is now resolved by GETting the resource and accepting
   semantically matching server state.
 - **`auth doctor --fix` messaging** no longer suggests the flag you just
@@ -762,7 +762,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 - **`auth doctor` can now resolve plain Cognitive Services accounts.** The
   AI-services-account edge resolution reused Foundry discovery, which
-  filters to accounts of kind `AIServices` — an enrichment account of kind
+  filters to accounts of kind `AIServices`: an enrichment account of kind
   `CognitiveServices` (the common case for skillsets) could not be resolved,
   so `--fix` reported a problem it should have fixed. Resolution now matches
   any Microsoft.CognitiveServices account by name.
@@ -777,7 +777,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
   rewrite), push offers to run `auth doctor --fix` inline so the required
   roles exist before anything is pushed. Freshly granted roles take a
   moment to propagate, so RBAC-shaped rejections are then retried twice at
-  20s intervals — and if a push still fails on a missing role, the error
+  20s intervals, and if a push still fails on a missing role, the error
   says to run `rigg auth doctor --fix` rather than leaving a bare API error.
 
 ## [1.4.2] - 2026-07-14
@@ -786,7 +786,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 - **Credential-only file writes were silently dropped.** `Store::write`'s
   no-op detection uses the semantic comparison, which deliberately excludes
-  write-only fields (the server never echoes them) — so a write whose only
+  write-only fields (the server never echoes them), so a write whose only
   change was a new `credentials.connectionString` was skipped as "no
   change". The migrate wizard's and push's credential fixups applied the
   connection to Azure but never persisted it to the file, leaving validate,
@@ -799,7 +799,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 - **Skillset AI services connections join the credential preflight.** A
   copied/migrated skillset carries a key-based `cognitiveServices` connection
-  whose key Azure never returned (`"<redacted>"`) — pushing it failed with
+  whose key Azure never returned (`"<redacted>"`): pushing it failed with
   `Provided key is not a valid key`. Push and the migrate wizard now detect
   this before anything mutates and offer the keyless identity-based rewrite
   (`AIServicesByIdentity`, subdomain preserved); non-interactive pushes exit 3
@@ -826,11 +826,11 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
   and writes the keyless `ResourceId=<account-id>;` reference (confirm on a
   single match, pick-list on several, manual entry as fallback). No key is
   ever fetched or stored. Wired into:
-  - `rigg migrate knowledge-source` — the credential step of the wizard;
-  - `rigg push` — interactively offered for any credential-less data source
+  - `rigg migrate knowledge-source`: the credential step of the wizard;
+  - `rigg push`: interactively offered for any credential-less data source
     about to be created (see below).
   After a connection is set, rigg reminds you the search service's managed
-  identity needs *Storage Blob Data Reader* on the account —
+  identity needs *Storage Blob Data Reader* on the account:
   `rigg auth doctor --fix` verifies/grants it.
 
 ### Fixed
@@ -838,7 +838,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 - **Push refuses to destroy before it can rebuild.** A data source about to
   be *created* (plain create, or the re-create half of a knowledge-source
   replace) with no `credentials.connectionString` previously failed at PUT
-  time — for a replace, *after* the old knowledge source and its pipeline
+  time: for a replace, *after* the old knowledge source and its pipeline
   were already deleted. Push now preflights this before any remote mutation:
   interactively it offers the ARM auto-discovery above; non-interactively it
   exits 3 (validation) with the file named and nothing touched. Updates that
@@ -848,11 +848,11 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 ### Added
 
-- **`rigg migrate knowledge-source <name>`** (alias `ks`) — convert a
+- **`rigg migrate knowledge-source <name>`** (alias `ks`): convert a
   portal-created indexed knowledge source (azureBlob, azureSql, oneLake, ...)
   into the explicit `searchIndex` kind, materializing its Azure-generated
   pipeline (data source, index, skillset, indexer) as first-class project
-  files. Names come from the live `createdResources` — never guessed.
+  files. Names come from the live `createdResources`, never guessed.
   Local-only: nothing mutates Azure until you push.
   - **In-place** (`--in-place`): keeps every name. The next push *replaces*
     the knowledge source.
@@ -861,25 +861,25 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
     interactively) while the old knowledge source keeps serving; cut over
     your knowledge bases at your own pace, then delete the old files and
     `push --prune`.
-  - The copied data source has no credentials (Azure never returns them) —
+  - The copied data source has no credentials (Azure never returns them):
     the wizard offers an identity-based `ResourceId=` connection, and
     `rigg validate` warns until one is set.
 
 - **Push `replace` verb.** A knowledge source whose immutable `kind` differs
   between local file and remote is now planned as `replace` (delete +
-  recreate) instead of a doomed in-place update — whether it got that way via
+  recreate) instead of a doomed in-place update, whether it got that way via
   `rigg migrate` or a hand edit. The plan spells out the consequence: the
   generated pipeline is cascade-deleted and the index is **rebuilt from
   source data** (time, ingestion/embedding cost, and the source is
   unavailable to knowledge bases until repopulated).
   - Gated separately: interactively a dedicated default-No confirmation;
-    non-interactively the new `--allow-replace` flag is required — `--yes`
+    non-interactively the new `--allow-replace` flag is required: `--yes`
     alone never executes a replace (same philosophy as `--confirm-env`).
   - Push orchestrates the whole dance: temporarily unlinks every referencing
     knowledge base (Azure refuses to delete a knowledge source in use),
     deletes the old knowledge source, recreates the explicit pipeline in
     dependency order, creates the new `searchIndex` knowledge source, and
-    restores the knowledge bases byte-for-byte — including ones owned by
+    restores the knowledge bases byte-for-byte, including ones owned by
     other projects (with a notice). A knowledge base left with an empty
     `knowledgeSources` list is deleted and re-created afterwards.
   - Crash-safe: a recovery file under `.rigg/<env>/<project>/` records the
@@ -893,7 +893,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 ### Added
 
 - **Cloud operations name their actual Azure targets** (#3). `push`, `pull`,
-  and `delete --remote` print a target banner under the header — service
+  and `delete --remote` print a target banner under the header: service
   names and the exact base URLs the clients request against:
 
   ```
@@ -913,10 +913,10 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 ### Changed
 
 - **One interaction style everywhere.** All interactive prompts now use the
-  same arrow-key UI (inquire) that the adopt wizard introduced — no more
+  same arrow-key UI (inquire) that the adopt wizard introduced: no more
   type-a-number pick lists or raw `[y/N]`/single-letter prompts:
   - `rigg init` / `rigg env add` service discovery: arrow-key selection with
-    an explicit "(skip — none)" row; manual fallback uses styled text inputs.
+    an explicit "(skip: none)" row; manual fallback uses styled text inputs.
   - Pull conflicts: select between "overwrite local with remote" /
     "keep local" / "show diff" / "abort pull" instead of `[o/k/d/a]`.
   - Push conflicts: select between "push local" / "keep remote" /
@@ -953,7 +953,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 - CI/release builds failed on the latest stable Rust toolchain due to a new
   clippy lint in `rigg-core::graph` (`iter_mut()` over map values). This had
-  silently blocked the v1.1.0 and v1.2.0 release workflows — neither
+  silently blocked the v1.1.0 and v1.2.0 release workflows: neither
   published binaries, crates.io versions, or Homebrew updates; v1.2.1 is the
   first release since v1.0.x to ship.
 
@@ -961,25 +961,25 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 ### Added
 
-- **`rigg promote`** — reviewable environment-to-environment promotion.
+- **`rigg promote`**: reviewable environment-to-environment promotion.
   Copies a project's definitions from a source env to a target env while
   preserving *pinned* fields (env-specific values like connection strings,
   deployment capacity, and knowledge-source blob connections) on the target
   side, including target-only array elements. The plan is previewed as a
   diff before anything is written.
-- **Protected environments** — mark an environment `protected: true` in
+- **Protected environments**: mark an environment `protected: true` in
   `rigg.yaml` and every cloud mutation against it (push, delete, prune)
   requires explicit consent: typing the environment name interactively or
   passing `--confirm-env <name>` in scripts. MCP mutating tools surface the
   same consent requirement, and the generated CI deploy template passes
   `--confirm-env` for the target environment.
-- **`rigg env add` wizard** — interactive environment creation with
+- **`rigg env add` wizard**: interactive environment creation with
   connection selection; `rigg init` now explains the environment model, and
   `rigg concepts` covers environments alongside workspaces and projects.
 
 ### Changed
 
-- **BREAKING:** projects now keep one definition tree per environment —
+- **BREAKING:** projects now keep one definition tree per environment:
   `projects/<name>/envs/<env>/{search,foundry}/...` replaces the single
   flat tree. A resource's identity is its physical file name within an
   environment. Samples, skills, and docs are migrated to the new layout.
@@ -995,23 +995,23 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 ### Added
 
-- **`rigg adopt`** — a first-class verb for bringing existing Azure resources
+- **`rigg adopt`**: a first-class verb for bringing existing Azure resources
   under management, replacing the all-or-nothing `pull --adopt`. Selectors
   pick exactly what to adopt (`all`, a kind like `indexes`, or
   `<kind>/<name>`); `--with-deps` optionally follows a resource's upstream
-  dependency graph — across the Foundry→Search boundary for portal-built
+  dependency graph: across the Foundry→Search boundary for portal-built
   agents (KB MCP `server_url`, `project_connection_id`); `--dry-run`
   previews. Naming an already-managed resource with `--with-deps` adopts its
   missing dependencies (e.g. after portal changes).
-- **Interactive adopt wizard** — run `rigg adopt` with missing arguments on a
+- **Interactive adopt wizard**: run `rigg adopt` with missing arguments on a
   terminal: pick the project (created on the spot if none exists), multi-select
   unmanaged resources queried live from both services, choose individual
   dependencies (pre-checked), confirm, and get the equivalent scriptable
   command as a hint.
-- **`rigg concepts`** — the workspace/project mental model rendered in the
+- **`rigg concepts`**: the workspace/project mental model rendered in the
   terminal, single-sourced from the new `CONCEPTS.md`. Cross-referenced from
   `--help`; empty workspaces now print next-step guidance instead of nothing.
-- **Informed pull conflicts** — a conflicting resource shows a field summary
+- **Informed pull conflicts**: a conflicting resource shows a field summary
   and offers `[o]verwrite / [k]eep / [d]iff / [a]bort`, rendering the full
   labeled diff table in place.
 - Dual-direction hints after drifted diffs (`rigg pull …` / `rigg push …`),
@@ -1019,7 +1019,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
 
 ### Changed
 
-- **BREAKING:** `rigg pull --adopt` is removed — use `rigg adopt`.
+- **BREAKING:** `rigg pull --adopt` is removed: use `rigg adopt`.
   The MCP `rigg_pull` tool's `adopt: true` now routes to `rigg adopt <project>
   all --yes`.
 - **Diff output is direction-neutral**: a labeled two-column table
@@ -1034,7 +1034,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
   upgrade on the next sync.
 - Platform-managed resources (Microsoft's built-in `SystemManaged`
   guardrails) and sub-resources auto-created by managed-ingestion knowledge
-  sources are excluded from adoption and unmanaged reporting — rigg only
+  sources are excluded from adoption and unmanaged reporting: rigg only
   tracks configuration you can actually change. Explicitly naming one
   explains why it is skipped.
 - The wizard's dependency step lists already-managed dependencies for full
@@ -1069,7 +1069,7 @@ files. Battle-tested end-to-end on a live knowledge-source migration.
   family gets `NativeBlobSoftDeleteDeletionDetectionPolicy`, Cosmos DB gets a
   `_ts` high-water-mark change policy + soft-delete column policy, Azure SQL
   gets `SqlIntegratedChangeTrackingPolicy` (which covers deletes). Without
-  deletion tracking, documents removed from the source stay in the index —
+  deletion tracking, documents removed from the source stay in the index,
   almost never what anyone wants.
 - `rigg validate` warns about data sources with no deletion tracking, with a
   per-type hint for how to add it.
@@ -1080,13 +1080,13 @@ The first stable release. Rigg 1.0 completes the redesign begun in 0.18
 (see docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md):
 workspaces and projects, explicit resources on GA APIs, no secrets on disk,
 identity tooling, CI/CD workflows, OpenAPI-validated custom skills, and
-AI assistance — verified end-to-end against live Azure AI Search and
+AI assistance: verified end-to-end against live Azure AI Search and
 Microsoft Foundry (full agentic-stack deploy, drift cycle, blob ingestion,
 agent round-trip, reverse-order teardown).
 
 ### Added
 
-- **`samples/`** — one workspace, three documented projects:
+- **`samples/`** (one workspace, three documented projects):
   `quickstart-blob` (minimal explicit pipeline), `agentic-stack` (skillset
   with OpenAPI-linked custom Web API skill, knowledge base, Foundry agent +
   deployment + guardrail), `cosmos-sql-patterns` (Cosmos DB / Azure SQL
@@ -1097,7 +1097,7 @@ agent round-trip, reverse-order teardown).
 ### Fixed
 
 - Write-only fields (data source connection strings) survive push
-  canonicalization and are excluded from drift comparison — Azure redacts
+  canonicalization and are excluded from drift comparison: Azure redacts
   them in GET responses.
 - Foundry agent version-create responses are flattened correctly (top-level
   `definition` shape); agents canonicalize losslessly.
@@ -1108,19 +1108,19 @@ agent round-trip, reverse-order teardown).
 
 ### Added
 
-- **OpenAPI contract validation** — `rigg validate` now checks WebApiSkills
+- **OpenAPI contract validation**: `rigg validate` now checks WebApiSkills
   linked via `x-rigg-api` against their spec in `apis/`: the skill URI must
   match a spec path, and (for closed contracts) skill inputs/outputs must
   exist in the request/response `data` schemas.
-- **AI diff summaries** — `rigg diff` (text format) appends a plain-language
+- **AI diff summaries**: `rigg diff` (text format) appends a plain-language
   summary of what pushing would do, including cost/risk callouts.
-- **AI conflict-merge proposals** — the interactive push conflict menu gains
+- **AI conflict-merge proposals**: the interactive push conflict menu gains
   `[a] AI merge proposal`: ailloy merges both versions, rigg shows the
   proposal diffed against local AND remote, and only a confirmed proposal is
   written and pushed.
-- **AI doctor advice** — `rigg auth doctor` failures get tailored remediation
+- **AI doctor advice**: `rigg auth doctor` failures get tailored remediation
   notes when AI is enabled.
-- **`--no-ai` global flag** — disable AI assistance per invocation.
+- **`--no-ai` global flag**: disable AI assistance per invocation.
 
 ### Fixed
 
@@ -1131,16 +1131,16 @@ agent round-trip, reverse-order teardown).
 
 ### Added
 
-- **`rigg auth doctor [--fix]`** — derives the service-to-service identity
+- **`rigg auth doctor [--fix]`**: derives the service-to-service identity
   graph from workspace files (data source connection strings, knowledge-base
   model wiring, agent→KB grounding, encryption keys), verifies managed
   identities and RBAC role assignments via ARM, and repairs with `--fix`
   (enable system identity, create role assignments) or prints exact `az`
   commands. Cosmos/SQL data-plane permissions are reported with guidance.
-- **`rigg ci init github`** — scaffolds three workflows: PR validation with a
+- **`rigg ci init github`**: scaffolds three workflows: PR validation with a
   markdown diff comment, deploy-on-merge (OIDC federated login, no secrets),
   and nightly drift detection that opens/updates an issue.
-- **`rigg dev api-check`** — compares rigg's pinned Azure api-versions against
+- **`rigg dev api-check`**: compares rigg's pinned Azure api-versions against
   the newest in Azure/azure-rest-api-specs; exit 1 when behind. Wired to a
   session-start skill (`.claude/skills/api-watchdog`) and a weekly GitHub
   Action that opens an issue on drift.
@@ -1148,36 +1148,36 @@ agent round-trip, reverse-order teardown).
 ## [0.18.0] - 2026-07-07
 
 Complete re-architecture around the workspace/project model (first phase of the
-Rigg 1.0 redesign — see docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md).
+Rigg 1.0 redesign: see docs/superpowers/specs/2026-07-07-rigg-1.0-redesign-design.md).
 **Breaking release: no backward compatibility with 0.17 workspaces.**
 Re-initialize with `rigg init` and adopt existing resources with `rigg pull --adopt`.
 
 ### Added
 
-- **Workspaces & projects** — a `rigg.yaml` workspace holds environments and
+- **Workspaces & projects**: a `rigg.yaml` workspace holds environments and
   service connections; resources live in `projects/<name>/` and belong to
   exactly one project (enforced). Pull/push/diff operate on whole projects.
-- **Metadata registry** (`rigg-core::registry`) — one declarative table drives
+- **Metadata registry** (`rigg-core::registry`): one declarative table drives
   API routing, volatile/read-only/secret fields, reference extraction, and
   data-source type validity per api-version channel.
 - **New Foundry resource kinds**: model `deployments` (ARM, with LRO polling),
   project `connections` (identity-auth only), `guardrails` (RAI policies).
-- **`$file` sidecars** — long text fields (agent instructions) live in
+- **`$file` sidecars**: long text fields (agent instructions) live in
   Markdown files next to the JSON and are inlined on push.
-- **`x-rigg-*` annotations** — rigg-local metadata (`x-rigg-api` links
+- **`x-rigg-*` annotations**: rigg-local metadata (`x-rigg-api` links
   skillsets to OpenAPI specs in `apis/`; `x-rigg-ref` names cross-service
   references), stripped before push.
-- **Push canonicalization** — after every push the server document is fetched
+- **Push canonicalization**: after every push the server document is fetched
   back, normalized, and written to disk + baseline, eliminating false-positive
   drift permanently. Baseline checksums are order- and null-insensitive.
-- **No-secrets enforcement** — `rigg validate` rejects key-based credentials;
+- **No-secrets enforcement**: `rigg validate` rejects key-based credentials;
   scaffolds are identity-first (`ResourceId=` connection strings,
   `ProjectManagedIdentity` connections).
-- **Standardized exit codes** — 0 ok, 1 error, 2 usage, 3 validation,
+- **Standardized exit codes**: 0 ok, 1 error, 2 usage, 3 validation,
   4 auth/permission, 5 drift/conflict; `--non-interactive` contract for CI.
-- **`rigg new pipeline`** — scaffolds the full explicit chain (data source →
+- **`rigg new pipeline`**: scaffolds the full explicit chain (data source →
   index → skillset → indexer → knowledge source → knowledge base).
-- **`rigg new api`** — OpenAPI 3.1 spec scaffold matching the custom
+- **`rigg new api`**: OpenAPI 3.1 spec scaffold matching the custom
   WebApiSkill contract, shared workspace-wide in `apis/`.
 - **`diff --format markdown`** for PR comments; `--compare-env` for
   environment-to-environment diffs; `--only <kind>/<name>` lens.
@@ -1186,11 +1186,11 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Changed
 
-- **Azure AI Search api-version: `2026-04-01` (stable)** — agentic retrieval
+- **Azure AI Search api-version: `2026-04-01` (stable)**: agentic retrieval
   (knowledge sources/bases) is GA; preview `2026-05-01-preview` used only for
   preview-gated features. Fixes the 0.17 behavior of routing everything
   through the preview API.
-- **Microsoft Foundry: `v1` data plane** — replaces `2025-05-15-preview`;
+- **Microsoft Foundry: `v1` data plane**: replaces `2025-05-15-preview`;
   the assistants API (retired by Microsoft on 2026-08-26) is gone.
 - Knowledge sources are **explicit-only**: they reference an existing index
   (`searchIndex` kind); Azure-managed sub-resources are no longer supported.
@@ -1202,7 +1202,7 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 - Managed knowledge-source machinery (`createdResources` tracking, cascade
   ordering, recreate workarounds).
 - Resource-selection flags (`--indexes`, `--index <name>`, `--search-only`,
-  …) — the project is the unit of sync.
+  …): the project is the unit of sync.
 - `rigg config` (edit `rigg.yaml` directly), `rigg pull-watch`
   (→ `rigg pull --watch`), the `agentic-rag` scaffold (→ `rigg new pipeline`),
   drop-and-recreate prompts.
@@ -1211,16 +1211,16 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Added
 
-- **Cosmos DB → Knowledge Source scaffolding (Phase 1)** — `rigg new knowledgesource` now supports `--type cosmos` with a `--container` flag to scaffold a Cosmos DB-backed data source and knowledge source, including a generated query and change-detection policy
-- **Cosmos DB client support in `rigg-client`** — connection-string parsing, master-key HMAC-SHA256 request signing, an `AzCliAuth::for_cosmos` auth scope, a Cosmos request builder, and an async `sample_documents` call, laying the groundwork for a future `rigg analyze` command
-- **Lint rule for Cosmos data sources** — flags Cosmos-backed data sources that are missing a query or a change-detection policy
+- **Cosmos DB → Knowledge Source scaffolding (Phase 1)**: `rigg new knowledgesource` now supports `--type cosmos` with a `--container` flag to scaffold a Cosmos DB-backed data source and knowledge source, including a generated query and change-detection policy
+- **Cosmos DB client support in `rigg-client`**: connection-string parsing, master-key HMAC-SHA256 request signing, an `AzCliAuth::for_cosmos` auth scope, a Cosmos request builder, and an async `sample_documents` call, laying the groundwork for a future `rigg analyze` command
+- **Lint rule for Cosmos data sources**: flags Cosmos-backed data sources that are missing a query or a change-detection policy
 
 ## [0.16.2] - 2026-05-04
 
 ### Changed
 
-- **Bumped ailloy dependency to 0.7** — aligns rigg's workspace version with quelch's, allowing quelch to depend on `rigg-core` and `rigg-client` without duplicate-crate-version conflicts
-- **Bumped GitHub Actions to v5** — `actions/checkout` and `actions/upload-artifact` updated from v4 to v5 in CI and release workflows
+- **Bumped ailloy dependency to 0.7**: aligns rigg's workspace version with quelch's, allowing quelch to depend on `rigg-core` and `rigg-client` without duplicate-crate-version conflicts
+- **Bumped GitHub Actions to v5**: `actions/checkout` and `actions/upload-artifact` updated from v4 to v5 in CI and release workflows
 
 ### Documentation
 
@@ -1230,49 +1230,49 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Changed
 
-- **Renamed from Hoist to Rigg** — the CLI tool, crate names, and all references have been renamed from `hoist` to `rigg` to reflect the project's identity
+- **Renamed from Hoist to Rigg**: the CLI tool, crate names, and all references have been renamed from `hoist` to `rigg` to reflect the project's identity
 
 ## [0.15.0] - 2026-03-20
 
 ### Changed
 
-- **Replaced custom AI commands with ailloy config TUI** — `rigg ai config` now launches the interactive ailloy configuration UI instead of opening the config file in an editor. The `rigg ai init`, `rigg ai status`, and `rigg ai remove` subcommands are removed — ailloy handles all provider/model configuration through its built-in TUI. This eliminates ~160 lines of custom AI setup code
-- **Added `rigg ai status` shortcut** — `rigg ai status` is now an alias that shows AI status (same as running `rigg ai` without a subcommand)
-- **Added `rigg ai skill` subcommand** — generates AI agent skill files and reference documentation for rigg. `--emit` outputs a ready-to-save skill markdown file; `--reference` outputs full command reference. Without flags, shows a setup guide
+- **Replaced custom AI commands with ailloy config TUI**: `rigg ai config` now launches the interactive ailloy configuration UI instead of opening the config file in an editor. The `rigg ai init`, `rigg ai status`, and `rigg ai remove` subcommands are removed: ailloy handles all provider/model configuration through its built-in TUI. This eliminates ~160 lines of custom AI setup code
+- **Added `rigg ai status` shortcut**: `rigg ai status` is now an alias that shows AI status (same as running `rigg ai` without a subcommand)
+- **Added `rigg ai skill` subcommand**: generates AI agent skill files and reference documentation for rigg. `--emit` outputs a ready-to-save skill markdown file; `--reference` outputs full command reference. Without flags, shows a setup guide
 
 ## [0.14.0] - 2026-03-06
 
 ### Changed
 
-- **Replaced custom AI providers with ailloy** — removed the `local_agent`, `ollama`, and `openai` modules from rigg-client in favor of the [`ailloy`](https://crates.io/crates/ailloy) crate for multi-provider AI support. This eliminates ~580 lines of custom provider code while maintaining the same functionality
+- **Replaced custom AI providers with ailloy**: removed the `local_agent`, `ollama`, and `openai` modules from rigg-client in favor of the [`ailloy`](https://crates.io/crates/ailloy) crate for multi-provider AI support. This eliminates ~580 lines of custom provider code while maintaining the same functionality
 
 ## [0.13.1] - 2026-03-03
 
 ### Improved
 
-- **AI explanation prompts** — rewrote system prompts for diff/push/pull AI explanations to be factual and proportional. Explanations now state what changed without speculating about purpose or impact. Obvious intent is stated plainly (e.g., "added Norwegian support") but editorializing is eliminated (no "this enhances...", "this improves..."). Single-line changes get 1-2 sentences; large restructurings get longer explanations. Unchanged parts of resources are no longer described
+- **AI explanation prompts**: rewrote system prompts for diff/push/pull AI explanations to be factual and proportional. Explanations now state what changed without speculating about purpose or impact. Obvious intent is stated plainly (e.g., "added Norwegian support") but editorializing is eliminated (no "this enhances...", "this improves..."). Single-line changes get 1-2 sentences; large restructurings get longer explanations. Unchanged parts of resources are no longer described
 
 ## [0.13.0] - 2026-03-03
 
 ### Fixed
 
-- **Azure CLI auth scope bug** — `rigg ai status` reported "Not logged in" even after `az login` because the Cognitive Services scope included an invalid `/.default` suffix. Removed the suffix so `az account get-access-token --resource https://cognitiveservices.azure.com` works correctly
-- **AADSTS error swallowed** — Azure AD token errors (AADSTS codes) were mapped to a generic "Not logged in" message. Now shows the actual error detail, the `az` debug command to run manually, and a fix suggestion (e.g., assign 'Cognitive Services User' role)
+- **Azure CLI auth scope bug**: `rigg ai status` reported "Not logged in" even after `az login` because the Cognitive Services scope included an invalid `/.default` suffix. Removed the suffix so `az account get-access-token --resource https://cognitiveservices.azure.com` works correctly
+- **AADSTS error swallowed**: Azure AD token errors (AADSTS codes) were mapped to a generic "Not logged in" message. Now shows the actual error detail, the `az` debug command to run manually, and a fix suggestion (e.g., assign 'Cognitive Services User' role)
 
 ### Added
 
-- **Multi-provider AI support** — `rigg ai init` now offers a choice of AI providers for diff explanations: Claude, Codex, Copilot, Ollama, and Azure OpenAI. Previously only Azure OpenAI was available
-- **`AiProvider` enum** — new type in rigg-core with 5 variants, display names, descriptions, binary detection, and default model recommendations
-- **Local CLI agent integration** — new `local_agent` module in rigg-client invokes claude/codex/copilot as subprocesses with timeout, output capture, and error handling
-- **Ollama support** — new `ollama` module in rigg-client with HTTP API client for listing models and chat completions against locally running LLMs
-- **Unified AI dispatcher** — new `ai::generate_text()` / `ai::generate_text_with_limit()` functions route to the correct backend based on the configured provider
+- **Multi-provider AI support**: `rigg ai init` now offers a choice of AI providers for diff explanations: Claude, Codex, Copilot, Ollama, and Azure OpenAI. Previously only Azure OpenAI was available
+- **`AiProvider` enum**: new type in rigg-core with 5 variants, display names, descriptions, binary detection, and default model recommendations
+- **Local CLI agent integration**: new `local_agent` module in rigg-client invokes claude/codex/copilot as subprocesses with timeout, output capture, and error handling
+- **Ollama support**: new `ollama` module in rigg-client with HTTP API client for listing models and chat completions against locally running LLMs
+- **Unified AI dispatcher**: new `ai::generate_text()` / `ai::generate_text_with_limit()` functions route to the correct backend based on the configured provider
 - **`--provider` and `--model` flags** on `rigg ai init` for non-interactive setup
-- **Provider-specific status** — `rigg ai status` shows provider name, model, and checks availability (binary on PATH for CLI agents, TCP connectivity for Ollama, token acquisition for Azure OpenAI)
+- **Provider-specific status**: `rigg ai status` shows provider name, model, and checks availability (binary on PATH for CLI agents, TCP connectivity for Ollama, token acquisition for Azure OpenAI)
 
 ### Changed
 
-- **`AiConfig` fields** — `account` and `deployment` are now `Option<String>` (only needed for Azure OpenAI). Added `provider`, `model`, and `ollama_url` fields. Backward compatible: existing configs without `provider` default to Azure OpenAI
-- **AI call sites use unified dispatcher** — `explain.rs`, `diff/ai.rs`, `push/explain.rs`, and `pull/output.rs` now route through `ai::generate_text()` instead of calling `AzureOpenAIClient` directly
+- **`AiConfig` fields**: `account` and `deployment` are now `Option<String>` (only needed for Azure OpenAI). Added `provider`, `model`, and `ollama_url` fields. Backward compatible: existing configs without `provider` default to Azure OpenAI
+- **AI call sites use unified dispatcher**: `explain.rs`, `diff/ai.rs`, `push/explain.rs`, and `pull/output.rs` now route through `ai::generate_text()` instead of calling `AzureOpenAIClient` directly
 
 ### Tests
 
@@ -1282,9 +1282,9 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Changed
 
-- **Narrative AI explanations** — AI-powered diff explanations are now generated as a single cohesive narrative covering all changed resources, replacing the previous per-resource 2-3 sentence summaries. The AI receives full local and remote resource content (not just change paths) and frames its explanation based on the operation direction (push, pull, or diff). This produces much more useful explanations that describe what configurations actually *do* and how they differ, rather than listing which JSON fields changed
-- **Richer AI prompts** — value summaries sent to the AI now include array item names and object keys (e.g., `[3 items: field1, field2, field3]` instead of `[3 items]`), and long strings include up to 2,000 characters of content. Simple scalar changes are filtered from raw details to reduce noise
-- **Configurable token limit for AI completions** — the Azure OpenAI client now supports a custom `max_tokens` parameter via `chat_completion_with_limit()`, allowing narrative explanations to use up to 4,000 tokens while keeping per-resource summaries at 500
+- **Narrative AI explanations**: AI-powered diff explanations are now generated as a single cohesive narrative covering all changed resources, replacing the previous per-resource 2-3 sentence summaries. The AI receives full local and remote resource content (not just change paths) and frames its explanation based on the operation direction (push, pull, or diff). This produces much more useful explanations that describe what configurations actually *do* and how they differ, rather than listing which JSON fields changed
+- **Richer AI prompts**: value summaries sent to the AI now include array item names and object keys (e.g., `[3 items: field1, field2, field3]` instead of `[3 items]`), and long strings include up to 2,000 characters of content. Simple scalar changes are filtered from raw details to reduce noise
+- **Configurable token limit for AI completions**: the Azure OpenAI client now supports a custom `max_tokens` parameter via `chat_completion_with_limit()`, allowing narrative explanations to use up to 4,000 tokens while keeping per-resource summaries at 500
 
 ### Tests
 
@@ -1294,26 +1294,26 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Changed
 
-- **Improved readability of text diffs** — consecutive Modified pairs (side-by-side `-`/`+` comparisons) in long text diffs are now separated by blank lines, making it much easier to visually parse which old line corresponds to which new line. Applies to both colored terminal output and plain text output
+- **Improved readability of text diffs**: consecutive Modified pairs (side-by-side `-`/`+` comparisons) in long text diffs are now separated by blank lines, making it much easier to visually parse which old line corresponds to which new line. Applies to both colored terminal output and plain text output
 
 ## [0.11.0] - 2026-02-25
 
 ### Added
 
-- **AI-enhanced explanations** — `rigg diff`, `rigg pull`, and `rigg push` now provide natural language explanations of configuration changes using Azure OpenAI. Instead of just showing structural diffs, rigg explains *what the changes mean* — e.g., "The agent's instructions were refined to emphasize a polite tone" instead of just "instructions differ (3 lines changed)"
-- **`rigg ai init` command** — interactive setup for Azure OpenAI integration. Discovers AI Services accounts and model deployments via ARM, recommends gpt-4o-mini, and stores configuration in the `ai:` section of `rigg.yaml`
-- **`rigg ai status` command** — check AI configuration and test connectivity to the Azure OpenAI endpoint
-- **`rigg ai remove` command** — remove AI configuration from `rigg.yaml`
-- **`AiConfig` in `rigg.yaml`** — new top-level `ai:` section for Azure OpenAI configuration (account, deployment, endpoint, subscription, resource group, api_version)
-- **Azure OpenAI client** — new `AzureOpenAIClient` in rigg-client with `chat_completion()` for LLM calls via Cognitive Services auth scope
-- **ARM discovery for model deployments** — `list_model_deployments()` and `create_model_deployment()` on the ARM client for Azure AI Services accounts
-- **`explain` parameter on MCP `rigg_diff` tool** — AI agents can request AI-enhanced explanations by passing `explain: true` (opt-in for MCP, opt-out for CLI)
-- **`--no-explain` flag** — disable AI explanations on `rigg diff`, `rigg pull`, and `rigg push` when AI is configured (AI explanations are on by default when the `ai:` config exists)
+- **AI-enhanced explanations**: `rigg diff`, `rigg pull`, and `rigg push` now provide natural language explanations of configuration changes using Azure OpenAI. Instead of just showing structural diffs, rigg explains *what the changes mean*, e.g., "The agent's instructions were refined to emphasize a polite tone" instead of just "instructions differ (3 lines changed)"
+- **`rigg ai init` command**: interactive setup for Azure OpenAI integration. Discovers AI Services accounts and model deployments via ARM, recommends gpt-4o-mini, and stores configuration in the `ai:` section of `rigg.yaml`
+- **`rigg ai status` command**: check AI configuration and test connectivity to the Azure OpenAI endpoint
+- **`rigg ai remove` command**: remove AI configuration from `rigg.yaml`
+- **`AiConfig` in `rigg.yaml`**: new top-level `ai:` section for Azure OpenAI configuration (account, deployment, endpoint, subscription, resource group, api_version)
+- **Azure OpenAI client**: new `AzureOpenAIClient` in rigg-client with `chat_completion()` for LLM calls via Cognitive Services auth scope
+- **ARM discovery for model deployments**: `list_model_deployments()` and `create_model_deployment()` on the ARM client for Azure AI Services accounts
+- **`explain` parameter on MCP `rigg_diff` tool**: AI agents can request AI-enhanced explanations by passing `explain: true` (opt-in for MCP, opt-out for CLI)
+- **`--no-explain` flag**: disable AI explanations on `rigg diff`, `rigg pull`, and `rigg push` when AI is configured (AI explanations are on by default when the `ai:` config exists)
 
 ### Changed
 
-- **AI explanations are opt-out on CLI** — when the `ai:` section is configured in `rigg.yaml`, diff/pull/push commands include AI explanations by default. Use `--no-explain` to disable. MCP tools remain opt-in (`explain: true`)
-- **Concurrent LLM calls** — AI explanations for multiple resources are fetched concurrently using `futures::future::join_all` for faster results
+- **AI explanations are opt-out on CLI**: when the `ai:` section is configured in `rigg.yaml`, diff/pull/push commands include AI explanations by default. Use `--no-explain` to disable. MCP tools remain opt-in (`explain: true`)
+- **Concurrent LLM calls**: AI explanations for multiple resources are fetched concurrently using `futures::future::join_all` for faster results
 
 ### Tests
 
@@ -1323,23 +1323,23 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Changed
 
-- **Word-level highlighting for text diffs** — long text properties (like agent instructions) now highlight individual changed words within lines instead of showing entire lines as changed. Uses bold + color for changed words within context
-- **Truncated context in text diffs** — large text diffs show only the relevant changed sections with `... (N lines unchanged) ...` markers instead of displaying the entire text
-- **Visual separation for diff sections** — clearer visual distinction between structural JSON diffs and inline text diffs
+- **Word-level highlighting for text diffs**: long text properties (like agent instructions) now highlight individual changed words within lines instead of showing entire lines as changed. Uses bold + color for changed words within context
+- **Truncated context in text diffs**: large text diffs show only the relevant changed sections with `... (N lines unchanged) ...` markers instead of displaying the entire text
+- **Visual separation for diff sections**: clearer visual distinction between structural JSON diffs and inline text diffs
 
 ## [0.10.0] - 2026-02-24
 
 ### Added
 
-- **Line-level text diffs for long text properties** — properties with multi-line text (like agent instructions, skillset descriptions) now show line-by-line diffs instead of just "values differ (N lines)". Uses the `similar` crate for unified diff output with +/- markers, integrated into both text and JSON output formats
+- **Line-level text diffs for long text properties**: properties with multi-line text (like agent instructions, skillset descriptions) now show line-by-line diffs instead of just "values differ (N lines)". Uses the `similar` crate for unified diff output with +/- markers, integrated into both text and JSON output formats
 
 ## [0.9.0] - 2026-02-23
 
 ### Added
 
-- **Non-interactive `rigg init`** — `rigg init` can now be run fully non-interactively by passing `--search <name>` and/or `--foundry <name> --project <project>` flags, enabling CI/CD and scripted setups
-- **Edm type validation** — `rigg validate` now checks index field `type` values against the set of valid Azure Search Edm types and warns about unrecognized types
-- **E2E test skill** — comprehensive end-to-end test skill for validating the full rigg user experience against live Azure services
+- **Non-interactive `rigg init`**: `rigg init` can now be run fully non-interactively by passing `--search <name>` and/or `--foundry <name> --project <project>` flags, enabling CI/CD and scripted setups
+- **Edm type validation**: `rigg validate` now checks index field `type` values against the set of valid Azure Search Edm types and warns about unrecognized types
+- **E2E test skill**: comprehensive end-to-end test skill for validating the full rigg user experience against live Azure services
 
 ### Changed
 
@@ -1350,20 +1350,20 @@ Re-initialize with `rigg init` and adopt existing resources with `rigg pull --ad
 
 ### Added
 
-- **Human-readable diff descriptions** — `rigg diff` now produces clear English descriptions instead of cryptic symbols and arrows. Every change includes context-aware language: `"Index field 'language' is enabled on the server for filtering (was disabled locally)"` instead of `filterable: false → true`. Covers all resource types with 100+ specific description patterns for fields, skills, mappings, schedules, and more
-- **Enhanced diff JSON format** — JSON diff output now includes `resource_type`, `resource_name`, `status` (`modified`/`local_only`/`remote_only`/`unchanged`), `summary`, and per-change `description` fields. AI agents get structured, self-describing output without needing to interpret raw JSON paths
-- **Expressive pull/push previews** — pull and push previews now show action-oriented descriptions: `"Index 'products' has 3 differences — pulling will update your local file"` with per-change detail lines. Push previews warn about immutable field changes that require drop-and-recreate
-- **`rigg_delete` MCP tool** — AI agents can now delete resources via MCP. Supports `target='remote'` (Azure only) and `target='local'` (local files only) with the same preview/force pattern as push and pull. 9 MCP tools total (up from 8)
-- **`rigg mcp install --scope` flag** — workspace-level (`--scope workspace`, default) and global (`--scope global`) MCP installation. Workspace scope registers rigg for the current project only; global scope registers for all sessions. Works with both Claude Code and VS Code targets
-- **Knowledge source creation fix** — creating a new knowledge source from scratch no longer fails. Previously, rigg pushed managed sub-resources (index, indexer, data source, skillset) before the KS, causing Azure to reject the KS creation with "resources already exist." Now detects new-vs-existing KS and skips sub-resource push for new ones (Azure auto-provisions them)
-- **Knowledge source update guidance** — when a KS push fails due to the known Azure managed-resource recreation bug, rigg now detects the error pattern and provides specific workaround steps with environment name. Push previews proactively warn when updating existing knowledge sources
+- **Human-readable diff descriptions**: `rigg diff` now produces clear English descriptions instead of cryptic symbols and arrows. Every change includes context-aware language: `"Index field 'language' is enabled on the server for filtering (was disabled locally)"` instead of `filterable: false → true`. Covers all resource types with 100+ specific description patterns for fields, skills, mappings, schedules, and more
+- **Enhanced diff JSON format**: JSON diff output now includes `resource_type`, `resource_name`, `status` (`modified`/`local_only`/`remote_only`/`unchanged`), `summary`, and per-change `description` fields. AI agents get structured, self-describing output without needing to interpret raw JSON paths
+- **Expressive pull/push previews**: pull and push previews now show action-oriented descriptions: `"Index 'products' has 3 differences, pulling will update your local file"` with per-change detail lines. Push previews warn about immutable field changes that require drop-and-recreate
+- **`rigg_delete` MCP tool**: AI agents can now delete resources via MCP. Supports `target='remote'` (Azure only) and `target='local'` (local files only) with the same preview/force pattern as push and pull. 9 MCP tools total (up from 8)
+- **`rigg mcp install --scope` flag**: workspace-level (`--scope workspace`, default) and global (`--scope global`) MCP installation. Workspace scope registers rigg for the current project only; global scope registers for all sessions. Works with both Claude Code and VS Code targets
+- **Knowledge source creation fix**: creating a new knowledge source from scratch no longer fails. Previously, rigg pushed managed sub-resources (index, indexer, data source, skillset) before the KS, causing Azure to reject the KS creation with "resources already exist." Now detects new-vs-existing KS and skips sub-resource push for new ones (Azure auto-provisions them)
+- **Knowledge source update guidance**: when a KS push fails due to the known Azure managed-resource recreation bug, rigg now detects the error pattern and provides specific workaround steps with environment name. Push previews proactively warn when updating existing knowledge sources
 
 ### Changed
 
-- **Breaking: `rigg delete` requires `--target`** — the delete command no longer deletes from Azure and removes local files in one operation. You must specify `--target remote` (deletes from Azure only, local files kept) or `--target local` (removes local files only, Azure untouched). This prevents accidental dual-deletion and makes each operation's scope explicit
-- **Local file deletion messaging** — `rigg delete --target local` now clearly states that local files are shared across all environments and that Azure resources are not affected in any environment
-- **MCP server instructions** — updated with environment guidance, delete tool documentation, and knowledge source lifecycle information. All references now use MCP tool names instead of CLI commands
-- **Description engine rewrite** — `describe.rs` replaced with a resource-aware English description engine. Labels adapt to context: diff uses `"locally"` / `"on the server"`, push uses `"on the server"` / `"locally"`, cross-env diff uses environment names
+- **Breaking: `rigg delete` requires `--target`**: the delete command no longer deletes from Azure and removes local files in one operation. You must specify `--target remote` (deletes from Azure only, local files kept) or `--target local` (removes local files only, Azure untouched). This prevents accidental dual-deletion and makes each operation's scope explicit
+- **Local file deletion messaging**: `rigg delete --target local` now clearly states that local files are shared across all environments and that Azure resources are not affected in any environment
+- **MCP server instructions**: updated with environment guidance, delete tool documentation, and knowledge source lifecycle information. All references now use MCP tool names instead of CLI commands
+- **Description engine rewrite**: `describe.rs` replaced with a resource-aware English description engine. Labels adapt to context: diff uses `"locally"` / `"on the server"`, push uses `"on the server"` / `"locally"`, cross-env diff uses environment names
 
 ### Tests
 
@@ -1377,17 +1377,17 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **MCP server (`rigg mcp serve`)** — built-in [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI coding tools (Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI) interact with rigg directly through structured tool calls. Exposes 8 tools: `rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_list`, `rigg_diff`, `rigg_pull`, `rigg_push`. Communicates over stdio using JSON-RPC
-- **`rigg mcp install` command** — register rigg as an MCP server with `claude-code` or `vs-code` targets. Creates user-level MCP configuration so rigg is available across all projects
-- **`.mcp.json` auto-discovery** — projects with `.mcp.json` in the repo root are automatically discovered by Claude Code and VS Code. No manual setup needed
-- **`rigg list` command** — list resource names by type from local disk, remote Azure, or both. Useful for quick enumeration and drift detection without the full detail of `rigg describe`
-- **Agent skills (`.claude/skills/`)** — cross-platform [agent skills](https://agentskills.io/) that work with Claude Code, GitHub Copilot, Codex, Cursor, and Gemini CLI. Three user-invocable workflows (`/rigg-pull`, `/rigg-push`, `/rigg-status`) plus an auto-loaded reference guide
-- **`rigg describe` precision for AI** — JSON output now includes `file_path` for every resource and full `instructions` for agents (previously truncated to first line). AI agents can read any file path for complete content
-- **[MCP.md](MCP.md)** — comprehensive documentation for AI agent integration: setup, tool reference, parameters, example workflows
+- **MCP server (`rigg mcp serve`)**: built-in [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI coding tools (Claude Code, GitHub Copilot, Cursor, Codex, Gemini CLI) interact with rigg directly through structured tool calls. Exposes 8 tools: `rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_list`, `rigg_diff`, `rigg_pull`, `rigg_push`. Communicates over stdio using JSON-RPC
+- **`rigg mcp install` command**: register rigg as an MCP server with `claude-code` or `vs-code` targets. Creates user-level MCP configuration so rigg is available across all projects
+- **`.mcp.json` auto-discovery**: projects with `.mcp.json` in the repo root are automatically discovered by Claude Code and VS Code. No manual setup needed
+- **`rigg list` command**: list resource names by type from local disk, remote Azure, or both. Useful for quick enumeration and drift detection without the full detail of `rigg describe`
+- **Agent skills (`.claude/skills/`)**: cross-platform [agent skills](https://agentskills.io/) that work with Claude Code, GitHub Copilot, Codex, Cursor, and Gemini CLI. Three user-invocable workflows (`/rigg-pull`, `/rigg-push`, `/rigg-status`) plus an auto-loaded reference guide
+- **`rigg describe` precision for AI**: JSON output now includes `file_path` for every resource and full `instructions` for agents (previously truncated to first line). AI agents can read any file path for complete content
+- **[MCP.md](MCP.md)**: comprehensive documentation for AI agent integration: setup, tool reference, parameters, example workflows
 
 ### Changed
 
-- **Breaking: `--dry-run` removed** — mutating commands (`pull`, `push`) now use a unified `--force` pattern. Without `--force`, the command shows a preview and asks for confirmation. With `--force`, it executes immediately. This replaces the confusing three-mode system (`--dry-run`, default, `--force`)
+- **Breaking: `--dry-run` removed**: mutating commands (`pull`, `push`) now use a unified `--force` pattern. Without `--force`, the command shows a preview and asks for confirmation. With `--force`, it executes immediately. This replaces the confusing three-mode system (`--dry-run`, default, `--force`)
 
 ### Tests
 
@@ -1397,14 +1397,14 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **`rigg delete` command** — delete a resource from Azure and remove the corresponding local file in one step. Supports all resource types (`--index <name>`, `--agent <name>`, etc.). Knowledge source deletion warns about managed sub-resources and cleans up the entire KS directory. Includes confirmation prompt (skippable with `--force`)
-- **Push conflict detection** — `rigg push` now detects when a resource has been modified on the server since your last pull (by comparing the remote checksum against the stored pull baseline). Shows a clear warning listing conflicting resources and suggests running `rigg pull` first to review remote changes before overwriting
-- **Pull overwrite warning** — `rigg pull` now detects when local files have been modified since the last pull (by comparing the on-disk checksum against the stored pull baseline). Shows a warning listing locally modified resources before overwriting, so you can commit or stash local changes first
+- **`rigg delete` command**: delete a resource from Azure and remove the corresponding local file in one step. Supports all resource types (`--index <name>`, `--agent <name>`, etc.). Knowledge source deletion warns about managed sub-resources and cleans up the entire KS directory. Includes confirmation prompt (skippable with `--force`)
+- **Push conflict detection**: `rigg push` now detects when a resource has been modified on the server since your last pull (by comparing the remote checksum against the stored pull baseline). Shows a clear warning listing conflicting resources and suggests running `rigg pull` first to review remote changes before overwriting
+- **Pull overwrite warning**: `rigg pull` now detects when local files have been modified since the last pull (by comparing the on-disk checksum against the stored pull baseline). Shows a warning listing locally modified resources before overwriting, so you can commit or stash local changes first
 
 ### Fixed
 
-- **Release workflow Windows build** — GitHub Actions release builds now work on Windows. The build and package steps explicitly use `shell: bash` to avoid PowerShell environment variable expansion issues (`$TARGET` vs `$env:TARGET`)
-- **README directory structure** — the directory layout example now matches the actual categorized directory structure (`search-management/`, `agentic-retrieval/`) instead of the old flat layout
+- **Release workflow Windows build**: GitHub Actions release builds now work on Windows. The build and package steps explicitly use `shell: bash` to avoid PowerShell environment variable expansion issues (`$TARGET` vs `$env:TARGET`)
+- **README directory structure**: the directory layout example now matches the actual categorized directory structure (`search-management/`, `agentic-retrieval/`) instead of the old flat layout
 
 ### Changed
 
@@ -1418,9 +1418,9 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- **Foundry client API version** — updated to `2025-05-15-preview` (was `2025-05-01`)
-- **Resource files path** — `files_path` config option now correctly resolves the files root relative to the project root
-- **Init categorized directories** — `rigg init` now creates the correct categorized directory structure (`search-management/indexes/`, `agentic-retrieval/knowledge-sources/`) matching pull output
+- **Foundry client API version**: updated to `2025-05-15-preview` (was `2025-05-01`)
+- **Resource files path**: `files_path` config option now correctly resolves the files root relative to the project root
+- **Init categorized directories**: `rigg init` now creates the correct categorized directory structure (`search-management/indexes/`, `agentic-retrieval/knowledge-sources/`) matching pull output
 
 ### Changed
 
@@ -1430,31 +1430,31 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **`--files-path` on `rigg init`** — separate config location (`rigg.yaml`, `.rigg/`) from resource files (`search/`, `foundry/`). Useful for monorepos where search config lives in a subdirectory
+- **`--files-path` on `rigg init`**: separate config location (`rigg.yaml`, `.rigg/`) from resource files (`search/`, `foundry/`). Useful for monorepos where search config lives in a subdirectory
 
 ### Changed
 
-- **Categorized directory structure** — resource directories restored to categorized layout: `search-management/indexes/`, `agentic-retrieval/knowledge-sources/` etc. The v0.5.0 flat layout (`search/indexes/`) was too shallow for clarity
+- **Categorized directory structure**: resource directories restored to categorized layout: `search-management/indexes/`, `agentic-retrieval/knowledge-sources/` etc. The v0.5.0 flat layout (`search/indexes/`) was too shallow for clarity
 - `ResourceKind::directory_name()` now returns categorized paths
 
 ## [0.5.0] - 2026-02-13
 
 ### Added
 
-- **Deployment environments** — named environments (prod, test, staging, etc.) are now first-class config concepts. Each environment has its own set of search and foundry services, enabling multi-target management from a single project
-- **`rigg env` subcommand** — `rigg env list`, `rigg env show [name]`, `rigg env set-default <name>`, `rigg env add <name>`, `rigg env remove <name>` for managing environments
-- **`--env` global flag** — target a specific environment on any command (also available via `RIGG_ENV` environment variable). When omitted, uses the environment marked `default: true`
-- **Cross-environment diff** — `rigg diff --env test --compare-env prod` fetches resources from both environments' remote servers and diffs them in memory, without involving local files
-- **Per-environment state** — state and checksum files are now stored per environment in `.rigg/<env>/state.json` and `.rigg/<env>/checksums.json`
-- **Service labels** — when an environment has multiple services in the same domain, each must have a `label` that creates a subdirectory (e.g., `search/primary/indexes/`, `search/analytics/indexes/`)
+- **Deployment environments**: named environments (prod, test, staging, etc.) are now first-class config concepts. Each environment has its own set of search and foundry services, enabling multi-target management from a single project
+- **`rigg env` subcommand**: `rigg env list`, `rigg env show [name]`, `rigg env set-default <name>`, `rigg env add <name>`, `rigg env remove <name>` for managing environments
+- **`--env` global flag**: target a specific environment on any command (also available via `RIGG_ENV` environment variable). When omitted, uses the environment marked `default: true`
+- **Cross-environment diff**: `rigg diff --env test --compare-env prod` fetches resources from both environments' remote servers and diffs them in memory, without involving local files
+- **Per-environment state**: state and checksum files are now stored per environment in `.rigg/<env>/state.json` and `.rigg/<env>/checksums.json`
+- **Service labels**: when an environment has multiple services in the same domain, each must have a `label` that creates a subdirectory (e.g., `search/primary/indexes/`, `search/analytics/indexes/`)
 
 ### Changed
 
-- **Breaking: config format switched to YAML** — `rigg.toml` replaced by `rigg.yaml`. The new format uses an `environments:` map instead of flat `[[services.search]]` arrays. No migration from v0.4.0 — delete old config and re-init
-- **Breaking: flat directory structure** — resource directories simplified from `search-resources/<service>/search-management/indexes/` to `search/indexes/`. Foundry from `foundry-resources/<service>/<project>/agents/` to `foundry/agents/`. Re-pull after upgrading
-- **Breaking: state directory restructured** — `.rigg/state.json` replaced by `.rigg/<env>/state.json`. State is now per-environment
-- **`ResolvedEnvironment` abstraction** — all commands now work through `ResolvedEnvironment` instead of accessing config directly, providing consistent environment resolution across the codebase
-- **Client construction** — `AzureSearchClient::from_service_config()` replaces the old `new(&Config)` constructor, enabling per-environment client creation
+- **Breaking: config format switched to YAML**: `rigg.toml` replaced by `rigg.yaml`. The new format uses an `environments:` map instead of flat `[[services.search]]` arrays. No migration from v0.4.0: delete old config and re-init
+- **Breaking: flat directory structure**: resource directories simplified from `search-resources/<service>/search-management/indexes/` to `search/indexes/`. Foundry from `foundry-resources/<service>/<project>/agents/` to `foundry/agents/`. Re-pull after upgrading
+- **Breaking: state directory restructured**: `.rigg/state.json` replaced by `.rigg/<env>/state.json`. State is now per-environment
+- **`ResolvedEnvironment` abstraction**: all commands now work through `ResolvedEnvironment` instead of accessing config directly, providing consistent environment resolution across the codebase
+- **Client construction**: `AzureSearchClient::from_service_config()` replaces the old `new(&Config)` constructor, enabling per-environment client creation
 - Removed legacy `[service]` config format migration (was auto-migrating since v0.2.0)
 - Removed `toml` dependency from rigg-core, replaced by `serde_yaml`
 
@@ -1466,7 +1466,7 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Changed
 
-- **Agent YAML format** — Foundry agents are now stored as a single `.yaml` file per agent (e.g., `agents/research-assistant.yaml`), matching the Foundry portal's YAML view. The previous 4-file decomposition (`config.json`, `instructions.md`, `tools.json`, `knowledge.json`) is removed
+- **Agent YAML format**: Foundry agents are now stored as a single `.yaml` file per agent (e.g., `agents/research-assistant.yaml`), matching the Foundry portal's YAML view. The previous 4-file decomposition (`config.json`, `instructions.md`, `tools.json`, `knowledge.json`) is removed
 - Added `serde_yaml` dependency for agent YAML serialization
 - `strip_agent_empty_fields()` normalizes empty optional fields for consistent diff/push behavior
 
@@ -1478,20 +1478,20 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **Managed sub-resources for knowledge sources** — knowledge sources auto-provision index, indexer, data source, and skillset sub-resources. These are now stored nested under the parent KS directory (`agentic-retrieval/knowledge-sources/<ks-name>/`) instead of mixed into `search-management/`. Rigg detects managed resources from the `createdResources` field in the KS definition and routes files automatically
-- **Cascade push** — `rigg push --knowledgesources` pushes the KS first (triggering Azure to provision/reset sub-resources), then overlays customizations for the managed index, skillset, data source, and indexer in dependency order
-- **Drop-and-recreate for immutable index changes** — when an index has removed or changed fields that Azure won't allow in-place, push now offers to drop and recreate the index (with a clear data-loss warning)
-- **Knowledge source drop-and-recreate** — when a KS cascade push fails due to Azure's managed resource conflict bug (can't update a managed index with fewer fields), push offers to delete and re-provision the KS and all its sub-resources
-- **`rigg copy` command** — local-only resource copying that replaces `push --copy`. Copies files and rewrites all names and cross-references without making network calls. Supports knowledge source copy (KS + all managed sub-resources) and standalone resource copy
-- **Data source credential auto-discovery** — push now auto-discovers Azure Blob Storage connection strings via ARM `listKeys` API when credentials are missing (previously only worked in copy mode)
-- **Managed-aware diff/status/describe/validate** — all commands understand the nested directory layout and distinguish managed vs standalone resources
+- **Managed sub-resources for knowledge sources**: knowledge sources auto-provision index, indexer, data source, and skillset sub-resources. These are now stored nested under the parent KS directory (`agentic-retrieval/knowledge-sources/<ks-name>/`) instead of mixed into `search-management/`. Rigg detects managed resources from the `createdResources` field in the KS definition and routes files automatically
+- **Cascade push**: `rigg push --knowledgesources` pushes the KS first (triggering Azure to provision/reset sub-resources), then overlays customizations for the managed index, skillset, data source, and indexer in dependency order
+- **Drop-and-recreate for immutable index changes**: when an index has removed or changed fields that Azure won't allow in-place, push now offers to drop and recreate the index (with a clear data-loss warning)
+- **Knowledge source drop-and-recreate**: when a KS cascade push fails due to Azure's managed resource conflict bug (can't update a managed index with fewer fields), push offers to delete and re-provision the KS and all its sub-resources
+- **`rigg copy` command**: local-only resource copying that replaces `push --copy`. Copies files and rewrites all names and cross-references without making network calls. Supports knowledge source copy (KS + all managed sub-resources) and standalone resource copy
+- **Data source credential auto-discovery**: push now auto-discovers Azure Blob Storage connection strings via ARM `listKeys` API when credentials are missing (previously only worked in copy mode)
+- **Managed-aware diff/status/describe/validate**: all commands understand the nested directory layout and distinguish managed vs standalone resources
 
 ### Changed
 
-- **Breaking: directory layout** — managed sub-resources moved from `search-management/` to `agentic-retrieval/knowledge-sources/<ks-name>/`. Existing v0.2 projects should re-pull to migrate
-- **Breaking: `push --copy` removed** — use `rigg copy` followed by `rigg push` instead. The `--suffix` and `--answers` flags are also removed
-- **`--knowledgesources` flag expands scope** — on pull, push, and diff, this flag now automatically includes managed sub-resource types (index, indexer, data source, skillset)
-- **Standalone flags skip managed** — `--indexes`, `--skillsets`, etc. only operate on standalone resources in `search-management/`, not managed sub-resources
+- **Breaking: directory layout**: managed sub-resources moved from `search-management/` to `agentic-retrieval/knowledge-sources/<ks-name>/`. Existing v0.2 projects should re-pull to migrate
+- **Breaking: `push --copy` removed**: use `rigg copy` followed by `rigg push` instead. The `--suffix` and `--answers` flags are also removed
+- **`--knowledgesources` flag expands scope**: on pull, push, and diff, this flag now automatically includes managed sub-resource types (index, indexer, data source, skillset)
+- **Standalone flags skip managed**: `--indexes`, `--skillsets`, etc. only operate on standalone resources in `search-management/`, not managed sub-resources
 
 ### Tests
 
@@ -1501,7 +1501,7 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- **Reverted `2025-08-01-preview` API pin for knowledge resources** — v0.2.11 pinned knowledge base and knowledge source operations to `2025-08-01-preview`, but that API version uses different endpoint paths (`/agents/` instead of `/knowledgebases/`), causing all knowledge resource operations to fail with "api-version does not exist". All resources now use `2025-11-01-preview` again, matching the Azure portal's current API version
+- **Reverted `2025-08-01-preview` API pin for knowledge resources**: v0.2.11 pinned knowledge base and knowledge source operations to `2025-08-01-preview`, but that API version uses different endpoint paths (`/agents/` instead of `/knowledgebases/`), causing all knowledge resource operations to fail with "api-version does not exist". All resources now use `2025-11-01-preview` again, matching the Azure portal's current API version
 
 ### Note
 
@@ -1515,7 +1515,7 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- **Knowledge source corruption with `2025-11-01-preview` API** — knowledge base and knowledge source API calls are now pinned to `2025-08-01-preview`, which is compatible with existing agentic retrieval resources. The `2025-11-01-preview` API introduced breaking schema changes (fields like `language`, `production_family`, `embeddingModel`, `chatCompletionModel` reorganized into `ingestionParameters`; `sourceDataSelect` renamed to `sourceDataFields`) that made it impossible to update knowledge sources created with the older schema — even from the Azure portal. Other resource types (indexes, indexers, skillsets, etc.) continue to use `2025-11-01-preview`
+- **Knowledge source corruption with `2025-11-01-preview` API**: knowledge base and knowledge source API calls are now pinned to `2025-08-01-preview`, which is compatible with existing agentic retrieval resources. The `2025-11-01-preview` API introduced breaking schema changes (fields like `language`, `production_family`, `embeddingModel`, `chatCompletionModel` reorganized into `ingestionParameters`; `sourceDataSelect` renamed to `sourceDataFields`) that made it impossible to update knowledge sources created with the older schema, even from the Azure portal. Other resource types (indexes, indexers, skillsets, etc.) continue to use `2025-11-01-preview`
 
 ### Tests
 
@@ -1525,11 +1525,11 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- **Skillset push with preview skills** — all Azure Search API calls now use the preview API version (`2025-11-01-preview`), which is a superset of the stable version. This fixes `rigg push --skillsets` failing with a 400 error when a skillset contains preview-only skill types like `ChatCompletionSkill`
+- **Skillset push with preview skills**: all Azure Search API calls now use the preview API version (`2025-11-01-preview`), which is a superset of the stable version. This fixes `rigg push --skillsets` failing with a 400 error when a skillset contains preview-only skill types like `ChatCompletionSkill`
 
 ### Changed
 
-- Removed the `api_version` field from the internal search client struct — only `preview_api_version` is needed since all requests use it
+- Removed the `api_version` field from the internal search client struct: only `preview_api_version` is needed since all requests use it
 
 ### Tests
 
@@ -1539,25 +1539,25 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- **False drift on agents with empty tools/tool_resources** — `rigg diff` no longer reports phantom changes for agents after a fresh `rigg init` + `rigg pull`. Both `compose_agent()` (local side) and `flatten_agent_response()` (remote side) now always include `tools` and `tool_resources` fields with empty defaults (`[]`/`{}`), ensuring consistent shape regardless of whether the API omits or includes these fields
+- **False drift on agents with empty tools/tool_resources**: `rigg diff` no longer reports phantom changes for agents after a fresh `rigg init` + `rigg pull`. Both `compose_agent()` (local side) and `flatten_agent_response()` (remote side) now always include `tools` and `tool_resources` fields with empty defaults (`[]`/`{}`), ensuring consistent shape regardless of whether the API omits or includes these fields
 
 ## [0.2.8] - 2026-02-09 [yanked]
 
 ### Fixed
 
-- **False drift on agents with empty tools** — partial fix; only addressed `compose_agent()` but not the remote side (`flatten_agent_response()`), which could still omit `tool_resources` when the API doesn't return it
+- **False drift on agents with empty tools**: partial fix; only addressed `compose_agent()` but not the remote side (`flatten_agent_response()`), which could still omit `tool_resources` when the API doesn't return it
 
 ## [0.2.7] - 2026-02-09
 
 ### Changed
 
-- **Single README.md** — consolidated `RIGG.md` and category `README.md` files (previously generated in `search-management/` and `agentic-retrieval/` subdirectories) into the project root `README.md`. The root README now includes the directory layout, JSON file conventions, and full resource type reference with links to API docs. Foundry agent documentation is also included when Foundry services are configured
+- **Single README.md**: consolidated `RIGG.md` and category `README.md` files (previously generated in `search-management/` and `agentic-retrieval/` subdirectories) into the project root `README.md`. The root README now includes the directory layout, JSON file conventions, and full resource type reference with links to API docs. Foundry agent documentation is also included when Foundry services are configured
 
 ## [0.2.6] - 2026-02-09
 
 ### Changed
 
-- **Preserve original array order in pulled JSON** — removed automatic sorting of JSON arrays by identity key during normalization. Pulled configuration files now preserve the exact element order returned by the Azure API, making it easier to compare local files with the portal. Volatile field stripping, credential redaction, and property order preservation are unchanged
+- **Preserve original array order in pulled JSON**: removed automatic sorting of JSON arrays by identity key during normalization. Pulled configuration files now preserve the exact element order returned by the Azure API, making it easier to compare local files with the portal. Volatile field stripping, credential redaction, and property order preservation are unchanged
 
 ### Tests
 
@@ -1567,17 +1567,17 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **ASCII art banner** — `rigg init` and `rigg version` now display a bold block-letter RIGG logo
-- **`rigg logo` easter egg** — hidden command that prints the banner
+- **ASCII art banner**: `rigg init` and `rigg version` now display a bold block-letter RIGG logo
+- **`rigg logo` easter egg**: hidden command that prints the banner
 
 ## [0.2.4] - 2026-02-09
 
 ### Added
 
-- **Native TLS root certificates** — switched from bundled Mozilla CA roots to OS-native certificate stores (`rustls-tls-native-roots`). Fixes `UnknownIssuer` TLS errors on corporate networks using TLS inspection with custom CA certificates. Certificates are now read from macOS Keychain, Windows Certificate Store, or Linux system cert paths
-- **Re-runnable `rigg init`** — running `rigg init` in an existing project now discovers and adds new services instead of bailing with "already initialized". Shows already-configured services, lists newly-discovered ones, and lets you select which to add. Existing configuration is preserved
-- **Multi-select during init** — `rigg init` now supports selecting multiple search services and Foundry projects at once (comma-separated numbers)
-- **Foundry endpoint refresh** — re-running `rigg init` refreshes endpoint URLs for existing Foundry configs using current ARM data
+- **Native TLS root certificates**: switched from bundled Mozilla CA roots to OS-native certificate stores (`rustls-tls-native-roots`). Fixes `UnknownIssuer` TLS errors on corporate networks using TLS inspection with custom CA certificates. Certificates are now read from macOS Keychain, Windows Certificate Store, or Linux system cert paths
+- **Re-runnable `rigg init`**: running `rigg init` in an existing project now discovers and adds new services instead of bailing with "already initialized". Shows already-configured services, lists newly-discovered ones, and lets you select which to add. Existing configuration is preserved
+- **Multi-select during init**: `rigg init` now supports selecting multiple search services and Foundry projects at once (comma-separated numbers)
+- **Foundry endpoint refresh**: re-running `rigg init` refreshes endpoint URLs for existing Foundry configs using current ARM data
 
 ### Tests
 
@@ -1585,17 +1585,17 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Improved
 
-- **TLS error diagnostics** — certificate verification failures now show a specific message explaining the likely cause (corporate TLS inspection) with OS-specific fix instructions for macOS, Linux, and Windows
+- **TLS error diagnostics**: certificate verification failures now show a specific message explaining the likely cause (corporate TLS inspection) with OS-specific fix instructions for macOS, Linux, and Windows
 
 ## [0.2.3] - 2026-02-09
 
 ### Fixed
 
-- **Foundry endpoint discovery from ARM** — `rigg init` now reads the actual endpoint URL from the AI Services account's ARM properties instead of constructing it from the resource name. This fixes connection failures when the account's custom subdomain differs from its resource name. The discovered endpoint is stored in `rigg.toml` as `endpoint` under `[[services.foundry]]`
+- **Foundry endpoint discovery from ARM**: `rigg init` now reads the actual endpoint URL from the AI Services account's ARM properties instead of constructing it from the resource name. This fixes connection failures when the account's custom subdomain differs from its resource name. The discovered endpoint is stored in `rigg.toml` as `endpoint` under `[[services.foundry]]`
 
 ### Improved
 
-- **Connection error diagnostics** — HTTP connection failures now explain the likely cause (DNS resolution, private endpoint/VNet, firewall) and suggest re-running `rigg init` to rediscover the endpoint. The full error source chain is written to `rigg-error.log`
+- **Connection error diagnostics**: HTTP connection failures now explain the likely cause (DNS resolution, private endpoint/VNet, firewall) and suggest re-running `rigg init` to rediscover the endpoint. The full error source chain is written to `rigg-error.log`
 
 ### Tests
 
@@ -1605,15 +1605,15 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Improved
 
-- **Better 403 troubleshooting guidance** — error message now explains the three most common causes: RBAC not enabled on the data plane (with the exact portal and CLI steps to enable it), missing role assignments (now recommends both Search Service Contributor and Search Index Data Contributor), and IP firewall restrictions
+- **Better 403 troubleshooting guidance**: error message now explains the three most common causes: RBAC not enabled on the data plane (with the exact portal and CLI steps to enable it), missing role assignments (now recommends both Search Service Contributor and Search Index Data Contributor), and IP firewall restrictions
 
 ## [0.2.1] - 2026-02-09
 
 ### Improved
 
-- **Rich 403 error handling** — access-denied errors now show the service name, a clear explanation, the exact `az role assignment create` command to fix it, common RBAC role names, and a link to Microsoft's RBAC documentation. Previously displayed as an empty `Error: API error (403):` with no guidance
-- **Error log file** — when a client error occurs, detailed diagnostics (timestamp, response body, suggestion) are appended to `rigg-error.log` instead of flooding the terminal
-- **Empty error body fallback** — API errors with no response body now show `HTTP <status> with no error details` instead of a blank message
+- **Rich 403 error handling**: access-denied errors now show the service name, a clear explanation, the exact `az role assignment create` command to fix it, common RBAC role names, and a link to Microsoft's RBAC documentation. Previously displayed as an empty `Error: API error (403):` with no guidance
+- **Error log file**: when a client error occurs, detailed diagnostics (timestamp, response body, suggestion) are appended to `rigg-error.log` instead of flooding the terminal
+- **Empty error body fallback**: API errors with no response body now show `HTTP <status> with no error details` instead of a blank message
 
 ### Tests
 
@@ -1623,26 +1623,26 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **Microsoft Foundry support** — manage Foundry agent configurations alongside search resources in a single Git repository. Pull/push agent definitions including instructions, tools, and knowledge configurations
-- **Multi-service configuration** — new `[[services.search]]` and `[[services.foundry]]` config format supports multiple services. Legacy `[service]` format auto-migrates on load
-- **Symmetric init flow** — `rigg init` now discovers both Azure AI Search services and Microsoft Foundry projects via ARM APIs. Auto-selects when there's only one option. Either service type is optional — you can use rigg for Search only, Foundry only, or both together
-- **ARM discovery for Foundry** — `rigg init` lists AI Services accounts and Microsoft Foundry projects from Azure subscriptions, matching the existing Search service discovery
-- **Agent file decomposition** — Foundry agents are stored as human-friendly decomposed files: `config.json`, `instructions.md` (editable Markdown), `tools.json`, and `knowledge.json`
-- **`--agents` / `--agent <NAME>` flags** — pull, push, diff, and pull-watch commands support Foundry agent resources
-- **`--search-only` / `--foundry-only` flags** — scope operations to a single service domain
-- **`ServiceDomain` enum** — internal architecture for routing operations to Search vs Foundry APIs
-- **`FoundryClient`** — new REST API client for Microsoft Foundry project-scoped `/agents` endpoint (API version `2025-05-15-preview`)
-- **Agent sections in `rigg status` and `rigg describe`** — shows Foundry service info, agent counts, model, tool count, and instruction previews
-- **Agentic RAG Flows in `rigg describe`** — traces the full dependency chain from agent through knowledge base to knowledge source to index, showing descriptions and retrieval instructions at each level
-- **Agent tools parsing** — `rigg describe` extracts knowledge base connections from MCP tool definitions in agent `tools.json`
-- **Foundry agent push diff check** — `rigg push --agents` now compares local vs remote agent definitions and only pushes agents that have actually changed, matching how search resources work
-- **Foundry API payload wrapping** — agent create/update uses the correct `{"definition": {...}}` wrapper format and `/agents/{name}/versions` endpoint
+- **Microsoft Foundry support**: manage Foundry agent configurations alongside search resources in a single Git repository. Pull/push agent definitions including instructions, tools, and knowledge configurations
+- **Multi-service configuration**: new `[[services.search]]` and `[[services.foundry]]` config format supports multiple services. Legacy `[service]` format auto-migrates on load
+- **Symmetric init flow**: `rigg init` now discovers both Azure AI Search services and Microsoft Foundry projects via ARM APIs. Auto-selects when there's only one option. Either service type is optional: you can use rigg for Search only, Foundry only, or both together
+- **ARM discovery for Foundry**: `rigg init` lists AI Services accounts and Microsoft Foundry projects from Azure subscriptions, matching the existing Search service discovery
+- **Agent file decomposition**: Foundry agents are stored as human-friendly decomposed files: `config.json`, `instructions.md` (editable Markdown), `tools.json`, and `knowledge.json`
+- **`--agents` / `--agent <NAME>` flags**: pull, push, diff, and pull-watch commands support Foundry agent resources
+- **`--search-only` / `--foundry-only` flags**: scope operations to a single service domain
+- **`ServiceDomain` enum**: internal architecture for routing operations to Search vs Foundry APIs
+- **`FoundryClient`**: new REST API client for Microsoft Foundry project-scoped `/agents` endpoint (API version `2025-05-15-preview`)
+- **Agent sections in `rigg status` and `rigg describe`**: shows Foundry service info, agent counts, model, tool count, and instruction previews
+- **Agentic RAG Flows in `rigg describe`**: traces the full dependency chain from agent through knowledge base to knowledge source to index, showing descriptions and retrieval instructions at each level
+- **Agent tools parsing**: `rigg describe` extracts knowledge base connections from MCP tool definitions in agent `tools.json`
+- **Foundry agent push diff check**: `rigg push --agents` now compares local vs remote agent definitions and only pushes agents that have actually changed, matching how search resources work
+- **Foundry API payload wrapping**: agent create/update uses the correct `{"definition": {...}}` wrapper format and `/agents/{name}/versions` endpoint
 
 ### Changed
 
-- `rigg init` no longer requires Azure AI Search — at least one of Search or Foundry must be selected
+- `rigg init` no longer requires Azure AI Search: at least one of Search or Foundry must be selected
 - CLI description updated to reflect dual-service support: "Configuration-as-code for Azure AI Search and Microsoft Foundry"
-- CLI resource type flags deduplicated via `clap(flatten)` — eliminates ~200 lines of repeated flag definitions across pull, push, diff, and pull-watch commands
+- CLI resource type flags deduplicated via `clap(flatten)`: eliminates ~200 lines of repeated flag definitions across pull, push, diff, and pull-watch commands
 - `ResourceKind` enum extended with `Agent` variant (9 total kinds)
 - Authentication refactored to support multiple resource scopes (`search.azure.com` vs `ai.azure.com`)
 
@@ -1654,7 +1654,7 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Fixed
 
-- Alias resource now correctly uses the preview API version — the aliases endpoint only exists in preview, so requesting it with the stable `2024-07-01` version caused `rigg pull` to fail with "api-version does not exist"
+- Alias resource now correctly uses the preview API version: the aliases endpoint only exists in preview, so requesting it with the stable `2024-07-01` version caused `rigg pull` to fail with "api-version does not exist"
 - `--aliases` flag now respects `include_preview` setting, consistent with other preview resource flags
 
 ### Changed
@@ -1671,13 +1671,13 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- **`rigg describe` command** — unified summary of all local resource definitions with text and JSON output, including field schemas, indexer wiring, skillset pipelines, and cross-resource dependency graph
-- **SEARCH_CONFIG.md generation** — auto-generated markdown overview of the entire search configuration after `pull --all` when `sync.generate_docs = true`
-- **Index alias support** — new `Alias` resource type for zero-downtime index swapping, with `--aliases`/`--alias` flags on pull, push, diff, and pull-watch
-- **Parallel API calls** — concurrent resource fetching in pull (max 5 in-flight requests) for faster operations on large services
-- **Retry logic** — automatic exponential backoff retry for transient Azure API errors (429 rate limiting, 503 service unavailable), max 3 retries
-- **Resource linting** — `rigg validate` now warns about common misconfigurations: missing key fields, indexers without schedules, indexes with >50 fields, empty container names
-- **`--output json` for status and validate** — machine-readable structured output for CI/CD and AI agent consumption
+- **`rigg describe` command**: unified summary of all local resource definitions with text and JSON output, including field schemas, indexer wiring, skillset pipelines, and cross-resource dependency graph
+- **SEARCH_CONFIG.md generation**: auto-generated markdown overview of the entire search configuration after `pull --all` when `sync.generate_docs = true`
+- **Index alias support**: new `Alias` resource type for zero-downtime index swapping, with `--aliases`/`--alias` flags on pull, push, diff, and pull-watch
+- **Parallel API calls**: concurrent resource fetching in pull (max 5 in-flight requests) for faster operations on large services
+- **Retry logic**: automatic exponential backoff retry for transient Azure API errors (429 rate limiting, 503 service unavailable), max 3 retries
+- **Resource linting**: `rigg validate` now warns about common misconfigurations: missing key fields, indexers without schedules, indexes with >50 fields, empty container names
+- **`--output json` for status and validate**: machine-readable structured output for CI/CD and AI agent consumption
 
 ### Fixed
 
@@ -1692,7 +1692,7 @@ See git tag `v0.7.0` for details. Resource scaffolding, agentic-rag composite co
 
 ### Added
 
-- Background update notification — checks for newer versions and notifies the user
+- Background update notification: checks for newer versions and notifies the user
 - Document release process in CLAUDE.md
 
 ### Changed

@@ -5,7 +5,7 @@ The connective narrative: what rigg actually computes when you run `status`,
 [tutorial 1](tutorials/01-pull-an-existing-solution.md) and wants to know why
 the commands behave the way they do.
 
-[CONCEPTS.md](../CONCEPTS.md) is the model — workspace, project, environment,
+[CONCEPTS.md](../CONCEPTS.md) is the model: workspace, project, environment,
 logical vs. physical identity. This page is the mechanism. The exact flags
 live in [the CLI reference](reference/cli.md).
 
@@ -21,14 +21,14 @@ live in [the CLI reference](reference/cli.md).
 ## Three states, not two: sync classes and baselines
 
 **A naive config tool compares two things:** the file and the cloud. That
-cannot tell "I edited this" apart from "someone edited it in the portal" —
+cannot tell "I edited this" apart from "someone edited it in the portal",
 both look like "they differ".
 
 **rigg compares three:** the local file, the live remote document, and a
-**baseline** — the document as it was the last time the two agreed.
+**baseline**: the document as it was the last time the two agreed.
 
 The baseline for every resource a project owns lives in
-`.rigg/<env>/<project>/state.json` (gitignored — it is a cache, not a source
+`.rigg/<env>/<project>/state.json` (gitignored: it is a cache, not a source
 of truth). Every successful `pull`, `push` and `adopt` rewrites it.
 
 The three-way comparison yields exactly one class per resource, which is what
@@ -90,8 +90,8 @@ Every command that touches infrastructure walks the same table:
 
 - `rigg validate` classifies each reference as Bound, Shared, Leak, Unbound or
   External (see [CONCEPTS](../CONCEPTS.md#validation-classes) for the
-  severities; a Leak — a file pointing at *another* environment's
-  infrastructure — is always an error).
+  severities; a Leak, a file pointing at *another* environment's
+  infrastructure, is always an error).
 - `rigg env bind <env> --learn` runs the extraction in reverse: it collects
   every reference in the environment's files, groups them by physical
   resource, and proposes a binding name per group. `adopt` and `pull` offer
@@ -113,9 +113,9 @@ connection it manages is a managed identity plus a role assignment. That turns
 files and the bindings, the set of `(principal, role, scope)` edges the
 environment requires; then ask Azure which of them exist.
 
-The graph and the principals behind it are documented in CONCEPTS —
-**[How rigg handles authentication](../CONCEPTS.md#how-rigg-handles-authentication)**
-— and that chapter is the reference. What matters here is where the same graph
+The graph and the principals behind it are documented in CONCEPTS:
+**[How rigg handles authentication](../CONCEPTS.md#how-rigg-handles-authentication)**,
+and that chapter is the reference. What matters here is where the same graph
 is used, because it is one computation with four entry points:
 
 | Command | Scope | What it does with the result |
@@ -150,7 +150,7 @@ Three consequences are worth stating plainly:
 1. **A→B and B→A are the same operation.** There is no "deploy direction"; a
    hotfix promoted back from prod to dev uses the same command.
 2. **Nothing is deleted, and target-only resources are never touched.**
-3. **Anything rigg cannot decide becomes a question, not a guess** — an
+3. **Anything rigg cannot decide becomes a question, not a guess**: an
    unbound reference in the source, a binding the target lacks, an external
    API URL bound in neither environment.
 
@@ -178,9 +178,9 @@ The protected-environment gate covers `push`, `delete --remote`,
 `verify`, `az indexer run/reset`, `auth doctor --fix`, `auth easy-auth` and
 `auth roles remove`.
 
-**On a terminal, questions are prompted.** Everywhere else —
+**On a terminal, questions are prompted.** Everywhere else:
 `--non-interactive`, `RIGG_NON_INTERACTIVE`, `--output json`, no TTY on stdin,
-an MCP tool call — an unanswered question makes the command exit **6** and
+an MCP tool call: an unanswered question makes the command exit **6** and
 print one `needs-input` document instead of failing blind:
 
 ```json
@@ -222,7 +222,7 @@ environment.
   only to discover and verify. `rigg init` finds your services; it never
   creates one.
 - **It does not put secrets in files.** No admin key, no connection-string
-  password, no function key is ever written to disk — `rigg validate` rejects
+  password, no function key is ever written to disk: `rigg validate` rejects
   a file that contains key material, and `rigg push` strips `x-rigg-*`
   annotations before the request. Where Azure still insists on a runtime key,
   the file carries a key *source*
@@ -242,8 +242,8 @@ environment.
 
 ## Where to next
 
-- [Tutorials](tutorials/01-pull-an-existing-solution.md) — four end-to-end
+- [Tutorials](tutorials/01-pull-an-existing-solution.md): four end-to-end
   walkthroughs.
-- [CONCEPTS.md](../CONCEPTS.md) — the model, and the authentication chapter.
-- [Reference index](README.md) — every file, field, flag, variable and exit
+- [CONCEPTS.md](../CONCEPTS.md): the model, and the authentication chapter.
+- [Reference index](README.md): every file, field, flag, variable and exit
   code.

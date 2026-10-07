@@ -2,7 +2,7 @@
 //! auth gates (spec `2026-09-09-identity-and-auth-design.md` §3.3, §4).
 //!
 //! These are further `impl ArmClient` blocks on the struct defined in
-//! [`crate::arm`] — a second file for the same client, so `arm.rs` stays the
+//! [`crate::arm`]: a second file for the same client, so `arm.rs` stays the
 //! discovery/binding surface and this one holds the constraint-and-RBAC
 //! surface. Every URL goes through `ArmClient::url` + a registry
 //! [`Provider`], so no api-version is ever spelled out here.
@@ -24,17 +24,17 @@ pub struct SearchServiceInfo {
     pub id: String,
     pub name: String,
     pub location: String,
-    /// `sku.name` — `free`, `basic`, `standard`, `standard2`, … (Free has no
+    /// `sku.name`: `free`, `basic`, `standard`, `standard2`, … (Free has no
     /// managed identity; knowledge bases need Basic+).
     pub sku: String,
-    /// `properties.hostingMode` — `default` or `highDensity`. Standard3 in
+    /// `properties.hostingMode`: `default` or `highDensity`. Standard3 in
     /// high-density mode hosts many small indexes and no knowledge bases.
     pub hosting_mode: String,
     pub identity: ResourceIdentity,
     /// Entra ID authentication is accepted: `authOptions.aadOrApiKey` is
     /// present, or local auth is disabled outright (RBAC-only).
     pub rbac_enabled: bool,
-    /// `properties.disableLocalAuth` — RBAC-only when true.
+    /// `properties.disableLocalAuth`: RBAC-only when true.
     pub disable_local_auth: bool,
     /// `Enabled` / `Disabled`.
     pub public_network_access: String,
@@ -48,16 +48,16 @@ pub struct StorageAccountInfo {
     pub id: String,
     pub name: String,
     pub location: String,
-    /// `networkAcls.defaultAction` — `Allow` or `Deny` (firewalled).
+    /// `networkAcls.defaultAction`: `Allow` or `Deny` (firewalled).
     pub default_action: String,
-    /// `networkAcls.bypass` — a comma-separated set, e.g. `Logging, Metrics,
+    /// `networkAcls.bypass`: a comma-separated set, e.g. `Logging, Metrics,
     /// AzureServices`.
     pub bypass: String,
-    /// `networkAcls.resourceAccessRules` — the resource-instance exceptions.
+    /// `networkAcls.resourceAccessRules`: the resource-instance exceptions.
     pub resource_access_rules: Vec<ResourceAccessRule>,
     /// `Enabled` / `Disabled` (Disabled ⇒ only a shared private link works).
     pub public_network_access: String,
-    /// `allowSharedKeyAccess` — `None` when the account does not report it.
+    /// `allowSharedKeyAccess`: `None` when the account does not report it.
     pub allow_shared_key_access: Option<bool>,
     /// Hierarchical namespace (ADLS Gen2).
     pub is_hns_enabled: bool,
@@ -94,7 +94,7 @@ pub struct ResourceAccessRule {
 pub struct BlobServiceInfo {
     pub soft_delete_enabled: bool,
     pub soft_delete_days: Option<u32>,
-    /// Blob versioning — must be **off** for
+    /// Blob versioning: must be **off** for
     /// `NativeBlobSoftDeleteDeletionDetectionPolicy`.
     pub versioning_enabled: bool,
 }
@@ -104,11 +104,11 @@ pub struct BlobServiceInfo {
 pub struct RoleAssignmentInfo {
     /// The assignment's own ARM id (what `delete_role_assignment` takes).
     pub id: String,
-    /// `properties.roleDefinitionId` — the full role definition ARM id.
+    /// `properties.roleDefinitionId`: the full role definition ARM id.
     pub role_definition_id: String,
-    /// `properties.description` — rigg stamps its own assignments here.
+    /// `properties.description`: rigg stamps its own assignments here.
     pub description: String,
-    /// `properties.scope` — the scope the assignment was **made** at, which
+    /// `properties.scope`: the scope the assignment was **made** at, which
     /// an `atScope()` listing reports for inherited assignments too.
     pub scope: String,
 }
@@ -124,7 +124,7 @@ impl RoleAssignmentInfo {
 }
 
 /// A role definition's permission lists, unioned across its `permissions[]`
-/// entries — what an "are my effective permissions at least this role?"
+/// entries: what an "are my effective permissions at least this role?"
 /// comparison needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoleDefinition {
@@ -137,7 +137,7 @@ pub struct RoleDefinition {
 }
 
 impl RoleDefinition {
-    /// A definition rigg cannot compare against — no permission of any kind.
+    /// A definition rigg cannot compare against: no permission of any kind.
     /// Vacuous coverage ("every one of zero actions is granted") would say
     /// *yes* to everything, so this is checked first.
     pub fn is_empty(&self) -> bool {
@@ -148,9 +148,9 @@ impl RoleDefinition {
 /// Who the operator's token says they are.
 #[derive(Debug, Clone)]
 pub struct CallerIdentity {
-    /// The `oid` claim — the directory object id to assign roles to.
+    /// The `oid` claim: the directory object id to assign roles to.
     pub object_id: String,
-    /// `User` or `ServicePrincipal` — what `principalType` a role assignment
+    /// `User` or `ServicePrincipal`: what `principalType` a role assignment
     /// for this caller must carry.
     pub principal_type: String,
     /// A human label: UPN, preferred username, name, or the app id.
@@ -214,7 +214,7 @@ impl ArmClient {
     ///
     /// The current `identity` block is read back and merged: PATCHing
     /// `identity` replaces it, so sending only the new entry would detach
-    /// every other user-assigned identity and — where one exists — the
+    /// every other user-assigned identity and, where one exists, the
     /// system-assigned identity, which is the only one the storage
     /// trusted-services exception accepts (spec §7). A system identity that
     /// is already on stays on; one that is not is not switched on here.
@@ -228,8 +228,8 @@ impl ArmClient {
         let current = self.get_json(&url).await?;
         // Every entry is sent as `{}`: what ARM reads back carries the
         // identity's `principalId`/`clientId`, which are read-only and are
-        // rejected (or silently ignored) on the way in. Only the keys —
-        // the identities' ARM ids — are the request's payload.
+        // rejected (or silently ignored) on the way in. Only the keys
+        // (the identities' ARM ids) are the request's payload.
         let mut map: serde_json::Map<String, Value> = current
             .pointer("/identity/userAssignedIdentities")
             .and_then(Value::as_object)
@@ -255,7 +255,7 @@ impl ArmClient {
         .map(|_| ())
     }
 
-    /// The service's `sharedPrivateLinkResources` — what a storage account
+    /// The service's `sharedPrivateLinkResources`: what a storage account
     /// with `publicNetworkAccess: Disabled` needs (spec §3.3).
     pub async fn list_shared_private_links(
         &self,
@@ -289,7 +289,7 @@ impl ArmClient {
             default_action: str_at(&acls, "/defaultAction").unwrap_or_else(|| "Allow".to_string()),
             // ARM always reports `bypass` (a new account defaults to
             // `AzureServices`), so an absent value is not a default to
-            // reconstruct — it is a value rigg has not seen. `None` is the
+            // reconstruct: it is a value rigg has not seen. `None` is the
             // conservative reading: it makes the trusted-services check say
             // "not bypassed", which at worst proposes a fix that is already
             // in place, where assuming `AzureServices` would silently pass a
@@ -374,7 +374,7 @@ impl ArmClient {
         .map(|_| ())
     }
 
-    /// Add `AzureServices` to a storage account's firewall bypass — the
+    /// Add `AzureServices` to a storage account's firewall bypass: the
     /// trusted-services exception the search service's *system* identity
     /// needs (spec §3.3).
     ///
@@ -400,7 +400,7 @@ impl ArmClient {
     }
 
     /// Add a resource-instance rule admitting `resource_id` (a search
-    /// service) through a storage account's firewall — the alternative to
+    /// service) through a storage account's firewall: the alternative to
     /// the trusted-services bypass, and the only one that works for a
     /// user-assigned identity (spec §3.3).
     ///
@@ -440,7 +440,7 @@ impl ArmClient {
 
     // ------------------------------------------------ cognitive services --
 
-    /// Read a Microsoft.CognitiveServices account by ARM id — the `kind`
+    /// Read a Microsoft.CognitiveServices account by ARM id: the `kind`
     /// check for `AIServicesByIdentity` (spec §3.3) needs the account the
     /// file's `subdomainUrl` resolves to, not a name lookup.
     pub async fn get_cognitive_account_by_id(
@@ -472,7 +472,7 @@ impl ArmClient {
     /// The caller's effective permission sets at `scope`, verbatim.
     ///
     /// `Microsoft.Authorization/permissions` answers for the **calling**
-    /// principal only — there is no way to ask it about somebody else — so
+    /// principal only, there is no way to ask it about somebody else, so
     /// every consumer must already know the principal in question is the
     /// caller.
     pub async fn effective_permissions(&self, scope: &str) -> Result<Vec<Value>, ClientError> {
@@ -491,7 +491,7 @@ impl ArmClient {
     /// One built-in (or custom) role definition by GUID.
     ///
     /// `scope_or_sub` supplies the subscription the definition is read
-    /// under — an ARM scope (any depth) or a bare subscription id.
+    /// under: an ARM scope (any depth) or a bare subscription id.
     pub async fn role_definition(
         &self,
         scope_or_sub: &str,
@@ -511,15 +511,15 @@ impl ArmClient {
         Ok(role_definition_from(&self.get_json(&url).await?))
     }
 
-    /// Every role assignment that applies to one principal **at** `scope` —
+    /// Every role assignment that applies to one principal **at** `scope`:
     /// the ones made here and the ones inherited from an ancestor scope.
     ///
     /// `atScope() and assignedTo('{id}')` is the filter doctor needs:
     /// `assignedTo` also matches assignments the principal holds through
     /// group membership, and `atScope()` includes what a parent scope grants,
     /// which is just as effective as a grant made here. Each entry reports
-    /// the scope it was made at, so a caller that *writes* — `rigg auth roles
-    /// remove` — can keep to the ones at this scope; see
+    /// the scope it was made at, so a caller that *writes*, `rigg auth roles
+    /// remove`, can keep to the ones at this scope; see
     /// [`Self::list_rigg_role_assignments`].
     pub async fn role_assignments_for(
         &self,
@@ -619,14 +619,14 @@ impl ArmClient {
     }
 
     /// Remove one role assignment by its ARM id. A missing assignment is
-    /// success — the desired state is "gone".
+    /// success: the desired state is "gone".
     pub async fn delete_role_assignment(&self, id: &str) -> Result<(), ClientError> {
         self.delete_ok(&self.url(id, Provider::AuthorizationArm))
             .await
     }
 
     /// Role assignments made **at** `scope` whose description starts with
-    /// `description_prefix` — the ones rigg stamped here, for
+    /// `description_prefix`: the ones rigg stamped here, for
     /// `rigg auth roles list|remove`.
     ///
     /// `atScope()` also returns what ancestor scopes grant, so the result is
@@ -696,7 +696,7 @@ impl ArmClient {
     ///
     /// Unlike the read ([`crate::arm::ArmClient::site_auth_settings`], an ARM
     /// *action* and therefore a POST), the write is an ordinary PUT on the
-    /// config sub-resource — and it REPLACES the document, which is why
+    /// config sub-resource, and it REPLACES the document, which is why
     /// every caller must send a merge of the current one.
     pub async fn put_site_auth_settings(
         &self,
@@ -713,7 +713,7 @@ impl ArmClient {
         .await
     }
 
-    /// A site's `properties.defaultHostName` — the host a Web API skill's
+    /// A site's `properties.defaultHostName`: the host a Web API skill's
     /// `uri` carries when it calls this function app.
     pub async fn site_default_hostname(&self, site_id: &str) -> Result<String, ClientError> {
         let value = self.get_json(&self.url(site_id, Provider::WebArm)).await?;
@@ -724,7 +724,7 @@ impl ArmClient {
 
     /// Who the bearer token belongs to, decoded from the token itself.
     ///
-    /// The JWT payload is read without verifying the signature — the token
+    /// The JWT payload is read without verifying the signature: the token
     /// is one Azure just issued to *this* process, and ARM verifies it on
     /// every call anyway; this only avoids a Graph round-trip for the
     /// caller's own `oid`. A token that is not a JWT (a test token, or a
@@ -811,7 +811,7 @@ fn role_definition_from(value: &Value) -> RoleDefinition {
 ///
 /// This is what makes a subscription **Owner** (`actions: ["*"]`) satisfy a
 /// pure control-plane role such as Search Service Contributor while still
-/// *failing* a data-plane one such as Search Index Data Reader — Owner
+/// *failing* a data-plane one such as Search Index Data Reader: Owner
 /// carries no `dataActions` at all. No role name is ever special-cased.
 ///
 /// The role's own entries may themselves be patterns (`Microsoft.Search/*`);
@@ -840,7 +840,7 @@ fn permission_grants(set: &Value, action: &str) -> bool {
 /// Whether one permission entry grants `action` through the `allow` list
 /// without `deny` taking it back. The field pair is what separates the
 /// control plane (`actions`/`notActions`) from the data plane
-/// (`dataActions`/`notDataActions`) — the matching rules are identical.
+/// (`dataActions`/`notDataActions`): the matching rules are identical.
 fn permission_grants_in(set: &Value, action: &str, allow: &str, deny: &str) -> bool {
     let matches_any = |field: &str| {
         set.get(field)
@@ -860,7 +860,7 @@ fn permission_grants_in(set: &Value, action: &str, allow: &str, deny: &str) -> b
 /// and a pattern without one is an exact match.
 ///
 /// The general form matters for `notActions`: Contributor's
-/// `Microsoft.Authorization/*/Write` — a wildcard in the *middle* — is
+/// `Microsoft.Authorization/*/Write`: a wildcard in the *middle*, is
 /// exactly what takes the role-assignment grant back from a caller whose
 /// `actions` say `*`.
 fn action_matches(pattern: &str, action: &str) -> bool {
@@ -991,9 +991,9 @@ mod tests {
 
     #[test]
     fn action_matches_star_prefix_and_exact() {
-        // `*` — Owner.
+        // `*`: Owner.
         assert!(action_matches("*", ROLE_ASSIGNMENT_WRITE));
-        // trailing-`*` prefix — User Access Administrator's grant.
+        // trailing-`*` prefix: User Access Administrator's grant.
         assert!(action_matches(
             "Microsoft.Authorization/*",
             ROLE_ASSIGNMENT_WRITE
@@ -1008,7 +1008,7 @@ mod tests {
             "microsoft.authorization/roleassignments/write",
             ROLE_ASSIGNMENT_WRITE
         ));
-        // a wildcard in the middle — Contributor's notAction.
+        // a wildcard in the middle: Contributor's notAction.
         assert!(action_matches(
             "Microsoft.Authorization/*/Write",
             ROLE_ASSIGNMENT_WRITE
@@ -1073,7 +1073,7 @@ mod tests {
         };
         assert!(permissions_cover_role(&owner, &search_service_contributor));
 
-        // Search Index Data Reader is dataActions-only — Owner has none.
+        // Search Index Data Reader is dataActions-only: Owner has none.
         let index_data_reader = RoleDefinition {
             name: "Search Index Data Reader".into(),
             data_actions: vec!["Microsoft.Search/searchServices/indexes/documents/read".into()],
@@ -1116,7 +1116,7 @@ mod tests {
         };
         assert!(!permissions_cover_role(&contributor, &uaa));
 
-        // A definition rigg could not read grants nothing — never vacuously
+        // A definition rigg could not read grants nothing, never vacuously
         // "covered".
         assert!(!permissions_cover_role(&owner, &RoleDefinition::default()));
         // A mixed role needs both halves: Owner fails on the data half.

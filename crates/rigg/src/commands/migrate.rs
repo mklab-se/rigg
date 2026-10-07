@@ -1,9 +1,9 @@
-//! `rigg migrate knowledge-source` — convert an indexed blob knowledge
+//! `rigg migrate knowledge-source`: convert an indexed blob knowledge
 //! source (azureBlob) into the explicit `searchIndex` shape, materializing
 //! its Azure-generated pipeline as first-class project files.
 //!
 //! Local-only: this command never mutates Azure. The next `rigg push`
-//! applies the change — for an in-place migration that is a REPLACE
+//! applies the change: for an in-place migration that is a REPLACE
 //! (delete + recreate, index rebuild) gated behind --allow-replace.
 
 use std::collections::BTreeMap;
@@ -57,7 +57,7 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
     let kind = remote_ks.get("kind").and_then(Value::as_str).unwrap_or("");
     if kind == "searchIndex" {
         println!(
-            "Knowledge source '{}' is already kind searchIndex — nothing to migrate.",
+            "Knowledge source '{}' is already kind searchIndex: nothing to migrate.",
             args.name
         );
         return Ok(());
@@ -65,13 +65,13 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
     if !core_migrate::is_indexed_with_created(&remote_ks) {
         return Err(anyhow!(
             "knowledge source '{}' (kind: {kind}) has no Azure-generated pipeline to migrate \
-             (remote knowledge sources connect to external content — there is no index to take over)",
+             (remote knowledge sources connect to external content: there is no index to take over)",
             args.name
         ));
     }
     if store.locate(&ks_ref)?.is_none() && !state.has_baseline(&ks_ref) {
         return Err(anyhow!(
-            "knowledge source '{}' is not managed by project '{}' — adopt it first: \
+            "knowledge source '{}' is not managed by project '{}'. Adopt it first: \
              rigg adopt {} knowledge-sources/{}",
             args.name,
             project.name,
@@ -83,7 +83,7 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
     let created = core_migrate::created_resources(&remote_ks);
     let Some(index_name) = created.get(&ResourceKind::Index).cloned() else {
         return Err(anyhow!(
-            "knowledge source '{}' names no generated index in createdResources — cannot migrate",
+            "knowledge source '{}' names no generated index in createdResources: cannot migrate",
             args.name
         ));
     };
@@ -97,7 +97,7 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
                 sub_docs.insert(*kind, doc);
             }
             None => println!(
-                "  {} generated {} '{}' no longer exists remotely — skipped",
+                "  {} generated {} '{}' no longer exists remotely: skipped",
                 "!".yellow(),
                 kind.directory_name(),
                 name
@@ -106,7 +106,7 @@ async fn knowledge_source(ctx: &GlobalContext, args: MigrateKsArgs) -> Result<()
     }
 
     // The generated data source may be a type rigg no longer supports
-    // (e.g. azureSql, oneLake) — reject before writing anything `validate`
+    // (e.g. azureSql, oneLake): reject before writing anything `validate`
     // would reject anyway.
     if let Some(ds_doc) = sub_docs.get(&ResourceKind::DataSource) {
         let ds_type = ds_doc.get("type").and_then(Value::as_str).unwrap_or("");
@@ -162,9 +162,9 @@ fn resolve_mode(ctx: &GlobalContext, args: &MigrateKsArgs) -> Result<Mode> {
         )));
     }
     const IN_PLACE: &str =
-        "in-place — same names; next push REPLACES the knowledge source and REBUILDS the index";
+        "in-place: same names; next push REPLACES the knowledge source and REBUILDS the index";
     const SIDE: &str =
-        "side-by-side — new names; old knowledge source keeps serving until you cut over";
+        "side-by-side: new names; old knowledge source keeps serving until you cut over";
     let choice = interactive::select(
         "Migration mode:",
         vec![IN_PLACE.to_string(), SIDE.to_string()],
@@ -198,7 +198,7 @@ async fn in_place(
     );
     // Materialize the generated definitions as explicit project files. They
     // exist remotely with exactly this content, so baselines are seeded too
-    // (like adopt) — push replaces them as part of the knowledge-source
+    // (like adopt): push replaces them as part of the knowledge-source
     // replace bundle.
     for (kind, doc) in sub_docs {
         let r = ResourceRef::new(*kind, created[kind].clone());
@@ -224,7 +224,7 @@ async fn in_place(
         "REPLACE".red().bold()
     );
     println!("  old one (Azure cascades away the generated pipeline) and recreates it");
-    println!("  explicitly. The index is REBUILT from source data — this takes time,");
+    println!("  explicitly. The index is REBUILT from source data: this takes time,");
     println!("  costs ingestion/embeddings, and the source is unavailable to knowledge");
     println!("  bases until the indexer repopulates it. Push requires --allow-replace");
     println!("  non-interactively.");
@@ -275,12 +275,12 @@ async fn side_by_side(
     for r in &new_refs {
         if store.locate(r)?.is_some() {
             return Err(anyhow!(
-                "{} already exists in this project — pick another name",
+                "{} already exists in this project: pick another name",
                 r
             ));
         }
         if remote.get(r).await?.is_some() {
-            return Err(anyhow!("{} already exists remotely — pick another name", r));
+            return Err(anyhow!("{} already exists remotely: pick another name", r));
         }
     }
 
@@ -317,7 +317,7 @@ async fn side_by_side(
 
     println!();
     println!("Next steps:");
-    println!("  1. rigg push               — builds the new pipeline (fresh index ingestion)");
+    println!("  1. rigg push: builds the new pipeline (fresh index ingestion)");
     println!("  2. verify retrieval quality against '{new_name}'");
     println!(
         "  3. point your knowledge base(s) at '{new_name}' instead of '{}'",
@@ -330,7 +330,7 @@ async fn side_by_side(
     Ok(())
 }
 
-/// Custom Web API skills lose their function key to Azure's redaction —
+/// Custom Web API skills lose their function key to Azure's redaction:
 /// offer the authorization choice (Entra ID / push-time key) right away.
 async fn check_webapi_auth(
     ctx: &GlobalContext,
@@ -351,7 +351,7 @@ async fn check_webapi_auth(
     }
     if !ctx.interactive() {
         println!(
-            "  {} {} calls a custom Web API with a redacted key — run `rigg push` interactively to authorize it",
+            "  {} {} calls a custom Web API with a redacted key: run `rigg push` interactively to authorize it",
             "!".yellow(),
             r
         );
@@ -372,7 +372,7 @@ async fn check_webapi_auth(
     Ok(())
 }
 
-/// The generated skillset's AI services key never leaves Azure either —
+/// The generated skillset's AI services key never leaves Azure either:
 /// offer the keyless identity-based connection (subdomain preserved).
 async fn check_skillset_ai_services(
     ctx: &GlobalContext,
@@ -414,7 +414,7 @@ async fn check_skillset_ai_services(
         }
     }
     println!(
-        "  {} {} has a key-based cognitiveServices connection without a usable key — \
+        "  {} {} has a key-based cognitiveServices connection without a usable key: \
          push will offer the identity-based rewrite, or edit the file manually",
         "!".yellow(),
         r
@@ -422,7 +422,7 @@ async fn check_skillset_ai_services(
     Ok(())
 }
 
-/// The generated data source's credentials never leave Azure (write-only) —
+/// The generated data source's credentials never leave Azure (write-only):
 /// the copied file has none. Discover the storage account by container via
 /// ARM and set an identity-based connection; otherwise warn.
 async fn check_datasource_credentials(
@@ -479,7 +479,7 @@ async fn check_datasource_credentials_named(
         }
     }
     println!(
-        "  {} {} has no usable credentials — set credentials.connectionString \
+        "  {} {} has no usable credentials: set credentials.connectionString \
          (identity-based `ResourceId=...`) before pushing, or run `rigg push` \
          interactively to auto-discover",
         "!".yellow(),

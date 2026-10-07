@@ -1,5 +1,5 @@
 //! `ArmClient` / `GraphClient` / Key Vault client behaviour against the
-//! wiremock fakes — the identity-and-auth reads, the RBAC helpers, the Easy
+//! wiremock fakes: the identity-and-auth reads, the RBAC helpers, the Easy
 //! Auth Graph flow, and secret retrieval.
 //!
 //! Every client is constructed with an explicit token and base URL, so no
@@ -590,7 +590,7 @@ async fn create_user_assigned_identity_puts_the_location_and_returns_principal()
     assert_eq!(body["location"], "swedencentral");
 }
 
-/// base64url (no padding) — building a token payload for the decoder test.
+/// base64url (no padding): building a token payload for the decoder test.
 fn b64url(bytes: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
@@ -759,7 +759,7 @@ async fn set_identifier_uri_and_role_keeps_the_identifier_uris_the_app_already_h
     let server = MockServer::start().await;
     mount_graph(&server).await;
     // An application that already publishes an audience of its own, and
-    // rigg's — the second run must add nothing and drop nothing.
+    // rigg's: the second run must add nothing and drop nothing.
     let existing = "api://contoso-search";
     let uri = format!("api://{FAKE_APP_ID}");
     mount_graph_application(&server, json!([]), json!([existing, uri])).await;

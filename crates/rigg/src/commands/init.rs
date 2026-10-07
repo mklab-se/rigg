@@ -1,4 +1,4 @@
-//! `rigg init` — create a new workspace.
+//! `rigg init`: create a new workspace.
 
 use std::path::Path;
 
@@ -12,7 +12,7 @@ use crate::commands::discovery;
 use crate::commands::{CommandError, GlobalContext};
 
 pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
-    // The workspace root is always the current directory — that is where
+    // The workspace root is always the current directory: that is where
     // rigg.yaml lands and where rigg commands work from. The optional path
     // argument names the folder that stores rigg's file trees
     // (projects/, apis/, .rigg/), recorded as `root:` in rigg.yaml.
@@ -30,7 +30,7 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     let ws_file = root.join(WORKSPACE_FILE);
     if ws_file.exists() {
         bail!(
-            "{} already exists — this is already a rigg workspace",
+            "{} already exists: this is already a rigg workspace",
             ws_file.display()
         );
     }
@@ -78,12 +78,12 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
     yaml.push_str("# Rigg workspace configuration.\n");
     if let Some(sub) = &files_sub {
         yaml.push_str(&format!(
-            "# Resource definitions live in {sub}/projects/<name>/ — see `rigg new project`.\n"
+            "# Resource definitions live in {sub}/projects/<name>/ (see `rigg new project`).\n"
         ));
         yaml.push_str(&format!("root: {sub}\n"));
     } else {
         yaml.push_str(
-            "# Resource definitions live in projects/<name>/ — see `rigg new project`.\n",
+            "# Resource definitions live in projects/<name>/ (see `rigg new project`).\n",
         );
     }
     yaml.push_str("environments:\n");
@@ -159,7 +159,7 @@ pub async fn run(ctx: &GlobalContext, args: InitArgs) -> Result<()> {
         println!("  foundry:  {a}/{p}");
     }
     println!(
-        "  environment: {} (default) — rigg commands target it unless -e/RIGG_ENV say otherwise; \
+        "  environment: {} (default): rigg commands target it unless -e/RIGG_ENV say otherwise; \
          add more with `rigg env add`",
         args.env_name
     );

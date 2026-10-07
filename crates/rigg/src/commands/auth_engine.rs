@@ -3,7 +3,7 @@
 //! render it as text or JSON.
 //!
 //! `rigg auth doctor` and `rigg push`'s auth preflight are both thin over
-//! [`verify`] — the difference is only which documents go in
+//! [`verify`]: the difference is only which documents go in
 //! ([`VerifyScope`]) and what the caller does with the result. `rigg status
 //! --auth` uses the same call and prints nothing but the summary.
 
@@ -58,7 +58,7 @@ pub enum Status {
     Ok,
     /// The role/setting is not in place (`✗` for an edge, `!` for a check).
     Missing,
-    /// rigg could not determine the answer — an unbound scope, an identity
+    /// rigg could not determine the answer: an unbound scope, an identity
     /// that does not exist yet, an ARM read that was denied.
     Unresolved,
     /// Deliberately not checked here, with the reason.
@@ -116,7 +116,7 @@ impl What {
         }
     }
 
-    /// The ARM id this item is about, when it has one — what `--live`
+    /// The ARM id this item is about, when it has one: what `--live`
     /// attribution and `auth roles` match on.
     fn scope_id(&self) -> Option<&str> {
         match self {
@@ -179,7 +179,7 @@ impl ReportItem {
     }
 }
 
-/// How many of each verdict — what the exit code and `status --auth` read.
+/// How many of each verdict: what the exit code and `status --auth` read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Summary {
     pub ok: usize,
@@ -187,14 +187,14 @@ pub struct Summary {
     pub unresolved: usize,
     /// `--live` findings: auth-shaped failures observed in Azure that the
     /// verified graph does not explain. Counted separately because they are
-    /// *evidence*, not a verdict on any one requirement — a live failure
+    /// *evidence*, not a verdict on any one requirement: a live failure
     /// annotates an item, it never rewrites what rigg verified.
     pub live: usize,
 }
 
 impl Summary {
     /// Is anything wrong? (`missing`, `unresolved`, or an unexplained live
-    /// failure — each means rigg cannot promise a push will work.)
+    /// failure, each means rigg cannot promise a push will work.)
     pub fn clean(&self) -> bool {
         self.missing == 0 && self.unresolved == 0 && self.live == 0
     }
@@ -225,7 +225,7 @@ impl Report {
     ///
     /// Only the service-identity items: the operator's own rights are never
     /// granted by rigg (see [`ReportItem::is_operator_edge`]), so `--fix`
-    /// cannot be used to escalate the caller's — or `--principal`'s — access.
+    /// cannot be used to escalate the caller's, or `--principal`'s, access.
     pub fn fixes(&self) -> Vec<Fix> {
         let mut seen = BTreeSet::new();
         self.items
@@ -236,7 +236,7 @@ impl Report {
             .collect()
     }
 
-    /// Missing items [`Report::fixes`] does not cover — no fix at all, or a
+    /// Missing items [`Report::fixes`] does not cover: no fix at all, or a
     /// right only a human may grant. These keep the exit code at 4 even
     /// after `--fix`.
     pub fn unfixable(&self) -> Vec<&ReportItem> {
@@ -247,9 +247,9 @@ impl Report {
             .collect()
     }
 
-    /// Items rigg could not judge. Applying a fix does not resolve them —
+    /// Items rigg could not judge. Applying a fix does not resolve them:
     /// an edge that could not be checked because the identity did not exist
-    /// still has not been checked once the identity is created — so they
+    /// still has not been checked once the identity is created, so they
     /// keep the exit code at 4 and earn a "re-run" line.
     pub fn unresolved(&self) -> Vec<&ReportItem> {
         self.all()
@@ -273,7 +273,7 @@ pub enum Fix {
         provider: Provider,
     },
     /// Attach a user-assigned identity a file names to the resource that
-    /// must act as it — the other half of spec §3.3's "a system-assigned
+    /// must act as it: the other half of spec §3.3's "a system-assigned
     /// identity **or the UAMI attached**".
     AttachUserAssignedIdentity {
         resource_id: String,
@@ -382,7 +382,7 @@ impl Fix {
     /// Role assignments name the role by its **definition GUID**, with the
     /// display name as a trailing comment: `--role "<name>"` resolves the
     /// name against the tenant's role definitions, and Microsoft is renaming
-    /// the Foundry roles (Azure AI User → Foundry User, …) — their guidance
+    /// the Foundry roles (Azure AI User → Foundry User, …): their guidance
     /// during the rollout is to use the id in code. rigg's own PUTs have
     /// always used GUIDs; this makes the printed command match.
     pub fn command(&self) -> String {
@@ -473,7 +473,7 @@ impl Fix {
 }
 
 /// Apply `fixes` in order, one result per fix. A failure never aborts the
-/// rest — a caller wants to know everything that could and could not be
+/// rest: a caller wants to know everything that could and could not be
 /// repaired in one pass.
 pub async fn apply(
     ctx: &GlobalContext,
@@ -554,7 +554,7 @@ pub async fn apply(
 #[derive(Debug, Clone)]
 struct Resolved {
     id: String,
-    /// `ServicePrincipal` or `User` — what a role assignment must carry.
+    /// `ServicePrincipal` or `User`: what a role assignment must carry.
     principal_type: String,
     label: String,
 }
@@ -567,19 +567,19 @@ pub struct Verifier {
     tenant: Option<String>,
     subscription: Option<String>,
     bindings: EnvBindings,
-    /// `rigg:<workspace>:<env>` — the description prefix rigg stamps on the
+    /// `rigg:<workspace>:<env>`: the description prefix rigg stamps on the
     /// role assignments it creates, and matches on when removing them.
     description_prefix: String,
     search_id: Option<String>,
     search: Option<rigg_client::arm_reads::SearchServiceInfo>,
-    /// Whether the documents under verification include a knowledge base —
+    /// Whether the documents under verification include a knowledge base:
     /// the one resource kind with a SKU/hosting-mode floor of its own.
     has_knowledge_base: bool,
     foundry_project_id: Option<String>,
     principals: BTreeMap<String, std::result::Result<Resolved, String>>,
     storage: BTreeMap<String, std::result::Result<StorageAccountInfo, String>>,
     /// The caller's effective permission sets per scope, for the operator
-    /// edges' second satisfaction path. `None` is a read that failed —
+    /// edges' second satisfaction path. `None` is a read that failed:
     /// cached so a scope rigg cannot read is not asked about once per edge.
     permissions: BTreeMap<String, Option<Vec<Value>>>,
     /// Role definitions by `(subscription, guid)`, for the same path: one
@@ -619,7 +619,7 @@ pub fn role_description(prefix: &str, reason: &str) -> String {
     format!("{prefix}:{reason}")
 }
 
-/// `rigg:<workspace>:<env>` — the prefix `rigg auth roles` filters on.
+/// `rigg:<workspace>:<env>`: the prefix `rigg auth roles` filters on.
 pub fn description_prefix(ws: &Workspace, env: &str) -> String {
     let name = ws
         .config
@@ -690,7 +690,7 @@ pub async fn bindings_for(
     EnvBindings::of_env(&env.name, &env.env, Some(&cache))
 }
 
-/// The Foundry project's ARM id, `<account>/projects/<project>` — the scope
+/// The Foundry project's ARM id, `<account>/projects/<project>`: the scope
 /// the operator's Foundry User edge lives at, and therefore a scope
 /// `auth roles` must look in. The binding table carries the account; only
 /// the connection knows the project segment.
@@ -731,7 +731,7 @@ pub fn env_documents(ws: &Workspace, env: &str) -> Vec<(ResourceKind, String, Va
     docs
 }
 
-/// The documents a push would create or update — the same classification
+/// The documents a push would create or update: the same classification
 /// push itself uses, so `--plan` and the push preflight see one plan.
 pub async fn plan_documents(
     ws: &Workspace,
@@ -752,7 +752,7 @@ pub async fn plan_documents(
                     SyncClass::LocalAhead | SyncClass::LocalOnly | SyncClass::Untracked
                 )
             } else {
-                // Nothing to compare against — assume a push would send it.
+                // Nothing to compare against: assume a push would send it.
                 true
             };
             if planned {
@@ -906,7 +906,7 @@ impl Verifier {
     }
 
     /// Resolve `principal` to a directory object id, caching the answer (and
-    /// the failure — a search service with no identity must not be looked up
+    /// the failure: a search service with no identity must not be looked up
     /// once per edge).
     async fn principal(&mut self, principal: &Principal) -> std::result::Result<Resolved, String> {
         let key = principal.to_string();
@@ -997,7 +997,7 @@ impl Verifier {
 
     /// The principal id of a user-assigned identity, resolved on demand.
     ///
-    /// `binding` is the environment binding that owns the identity — or,
+    /// `binding` is the environment binding that owns the identity, or,
     /// when nothing binds it, the bare name the file's ARM id ends in
     /// (see `identity::principal_for`). A cached resolution already carries
     /// the principal id; otherwise the binding's declared value (or that
@@ -1049,7 +1049,7 @@ impl Verifier {
         if edge.kind != EdgeKind::Rbac {
             let detail = match edge.kind {
                 EdgeKind::AppAuthorization => {
-                    "authorization lives in the function app's Entra registration — see the \
+                    "authorization lives in the function app's Entra registration: see the \
                      easy-auth check"
                         .to_string()
                 }
@@ -1063,7 +1063,7 @@ impl Verifier {
                 what,
                 Status::Unresolved,
                 format!(
-                    "{} — bind it in rigg.yaml, then `rigg env show {} --refresh`",
+                    "{}: bind it in rigg.yaml, then `rigg env show {} --refresh`",
                     edge.scope.describe(),
                     self.env_name
                 ),
@@ -1106,7 +1106,7 @@ impl Verifier {
         // cover everything the role definition grants. A subscription Owner
         // or Contributor genuinely can do what Search Service Contributor
         // allows; reporting that as missing sends the person who owns the
-        // subscription off to grant themselves a role they do not need — and
+        // subscription off to grant themselves a role they do not need, and
         // makes push's preflight refuse them.
         if self
             .edge_is_the_callers_own(&edge.principal, &principal.id)
@@ -1171,7 +1171,7 @@ impl Verifier {
     }
 
     /// Whether the caller's effective permissions at `scope` already cover
-    /// `edge`'s role — or any of its alternatives.
+    /// `edge`'s role, or any of its alternatives.
     ///
     /// Every read here is best-effort: a scope whose permissions rigg may
     /// not list, or a role definition it cannot fetch, simply does not
@@ -1218,7 +1218,7 @@ impl Verifier {
         };
         // Keyed by (subscription, guid), not the GUID alone: the fetch is
         // subscription-scoped, and a *custom* role definition with the same
-        // GUID does not exist in two subscriptions — but a run that touches
+        // GUID does not exist in two subscriptions, but a run that touches
         // two subscriptions must not answer for one with the other's read.
         let subscription = under
             .split('/')
@@ -1249,7 +1249,7 @@ impl Verifier {
                 Some(info) if info.sku.eq_ignore_ascii_case("free") => ReportItem::new(
                     what,
                     Status::Missing,
-                    "the Free SKU has no managed identity and cannot host knowledge bases — \
+                    "the Free SKU has no managed identity and cannot host knowledge bases: \
                      recreate the service at Basic or higher",
                 ),
                 // Standard3 in high-density mode partitions the service into
@@ -1264,8 +1264,8 @@ impl Verifier {
                         what,
                         Status::Missing,
                         format!(
-                            "SKU '{}' in high-density hosting mode does not host knowledge bases \
-                             — recreate the service in the default hosting mode (or at Basic/\
+                            "SKU '{}' in high-density hosting mode does not host knowledge bases: \
+                            recreate the service in the default hosting mode (or at Basic/\
                              Standard)",
                             info.sku
                         ),
@@ -1283,7 +1283,7 @@ impl Verifier {
                         ReportItem::new(
                             what,
                             Status::Missing,
-                            "the service accepts API keys only — rigg authenticates with bearer \
+                            "the service accepts API keys only: rigg authenticates with bearer \
                              tokens",
                         )
                         .with_fix(Fix::EnableRbac { search_id: id })
@@ -1306,7 +1306,7 @@ impl Verifier {
                         what,
                         Status::Ok,
                         match info.allow_shared_key_access {
-                            Some(false) => "shared-key access is disabled — identity-based access \
+                            Some(false) => "shared-key access is disabled: identity-based access \
                                             is unaffected"
                                 .to_string(),
                             _ => "shared-key access is allowed; rigg uses identity-based access \
@@ -1335,7 +1335,7 @@ impl Verifier {
                                 what,
                                 Status::Missing,
                                 format!(
-                                    "account kind is '{kind}' — AIServicesByIdentity requires an \
+                                    "account kind is '{kind}': AIServicesByIdentity requires an \
                                      AIServices account; point the skillset at one"
                                 ),
                             )
@@ -1366,7 +1366,7 @@ impl Verifier {
                     Ok(false) => ReportItem::new(
                         what,
                         Status::Missing,
-                        "you cannot create role assignments here — ask for Owner or User Access \
+                        "you cannot create role assignments here: ask for Owner or User Access \
                          Administrator at this scope, or have someone run the az command above",
                     ),
                     Err(e) => ReportItem::new(what, Status::Unresolved, format!("{e}")),
@@ -1375,14 +1375,14 @@ impl Verifier {
         }
     }
 
-    /// Spec §3.3 "a system-assigned identity exists — **or the UAMI the
+    /// Spec §3.3 "a system-assigned identity exists: **or the UAMI the
     /// files name is attached**".
     ///
     /// The verdict is about the identities *this environment's documents
     /// actually use*, not about whether the service has any identity at all:
     /// a service carrying only a user-assigned identity while every file
     /// asks for the system one is broken, and a file naming a UAMI that is
-    /// not attached to the service is broken too — both used to read green.
+    /// not attached to the service is broken too. Both used to read green.
     async fn search_identity(&mut self, what: What, graph: &Graph) -> ReportItem {
         let (Some(info), Some(id)) = (self.search.clone(), self.search_id.clone()) else {
             return ReportItem::new(what, Status::Unresolved, self.no_search());
@@ -1419,7 +1419,7 @@ impl Verifier {
             );
         }
 
-        // Every UAMI a file names must be attached to the service — holding
+        // Every UAMI a file names must be attached to the service: holding
         // the role is not enough if the service cannot act as it.
         for binding in &wanted_uamis {
             let uami_id = match self.uami_arm_id(binding).await {
@@ -1456,7 +1456,7 @@ impl Verifier {
             return ReportItem::new(
                 what,
                 Status::Ok,
-                "user-assigned identities attached (no system-assigned identity — the storage \
+                "user-assigned identities attached (no system-assigned identity: the storage \
                  trusted-services exception needs one)",
             );
         }
@@ -1472,7 +1472,7 @@ impl Verifier {
     }
 
     /// The ARM id of the user-assigned identity a `search-user:<binding>`
-    /// principal names — the cache's resolution when it has one, else a
+    /// principal names: the cache's resolution when it has one, else a
     /// fresh ARM lookup of the binding's declared value (or the bare name
     /// the file's ARM id ends in, exactly as `uami_principal` does).
     async fn uami_arm_id(&mut self, binding: &str) -> std::result::Result<String, String> {
@@ -1532,7 +1532,7 @@ impl Verifier {
             return ReportItem::new(
                 what,
                 Status::Missing,
-                "public network access is disabled — only a shared private link from the search \
+                "public network access is disabled: only a shared private link from the search \
                  service reaches this account (Basic+ SKU, indexer executionEnvironment: private)",
             );
         }
@@ -1544,7 +1544,7 @@ impl Verifier {
             );
         }
         // Firewalled. The trusted-services exception works only with the
-        // search service's *system* identity (spec §3.3, §7) — a UAMI needs
+        // search service's *system* identity (spec §3.3, §7): a UAMI needs
         // a resource-instance rule instead.
         let uami = graph.edges.iter().any(|e| {
             e.scope.arm_id() == Some(id.as_str())
@@ -1593,7 +1593,7 @@ impl Verifier {
                 what,
                 Status::Missing,
                 format!(
-                    "the firewall denies by default and its bypass is '{}' — the search service \
+                    "the firewall denies by default and its bypass is '{}': the search service \
                      cannot reach the account",
                     info.bypass
                 ),
@@ -1618,7 +1618,7 @@ impl Verifier {
             return ReportItem::new(
                 what,
                 Status::Missing,
-                "blob versioning is on — native soft-delete deletion detection requires it off",
+                "blob versioning is on: native soft-delete deletion detection requires it off",
             );
         }
         if blob.soft_delete_enabled {
@@ -1634,7 +1634,7 @@ impl Verifier {
             ReportItem::new(
                 what,
                 Status::Missing,
-                "blob soft delete is off — the data source's deletion detection policy needs it",
+                "blob soft delete is off: the data source's deletion detection policy needs it",
             )
             .with_fix(Fix::BlobSoftDelete {
                 account_id: id,
@@ -1688,7 +1688,7 @@ impl Verifier {
                 what,
                 Status::Missing,
                 format!(
-                    "the app's access restrictions do not admit the search service — add the \
+                    "the app's access restrictions do not admit the search service: add the \
                      AzureCognitiveSearch service tag:\n      az webapp config access-restriction \
                      add --ids \"{id}\" --rule-name rigg-search --action Allow --priority 100 \
                      --service-tag AzureCognitiveSearch"
@@ -1740,7 +1740,7 @@ impl Verifier {
             return ReportItem::new(
                 what,
                 Status::Missing,
-                "Microsoft Entra authentication is not enabled on the function app — run `rigg \
+                "Microsoft Entra authentication is not enabled on the function app: run `rigg \
                  auth easy-auth <binding>`",
             );
         }
@@ -1750,7 +1750,7 @@ impl Verifier {
                 Status::Missing,
                 format!(
                     "the app's allowed audiences ({}) do not include '{audience}', and its \
-                     registration is for a different client id — run `rigg auth easy-auth \
+                     registration is for a different client id: run `rigg auth easy-auth \
                      <binding>`",
                     if audiences.is_empty() {
                         "none".to_string()
@@ -1778,7 +1778,7 @@ impl Verifier {
                 format!(
                     "the app accepts the audience '{audience}', but unauthenticated callers are \
                      not rejected (requireAuthentication: {require_auth}, \
-                     unauthenticatedClientAction: '{}') — run `rigg auth easy-auth <binding>`",
+                     unauthenticatedClientAction: '{}'). Run `rigg auth easy-auth <binding>`",
                     if action.is_empty() { "unset" } else { action }
                 ),
             );
@@ -1851,7 +1851,7 @@ pub fn contains_word(haystack: &str, needle: &str) -> bool {
     }
     // A neighbour breaks the match only when it belongs to the same class as
     // the edge character it touches (digit next to digit, letter next to
-    // letter). Anything else — punctuation, whitespace, a class change — is
+    // letter). Anything else (punctuation, whitespace, a class change) is
     // a boundary.
     let same_class = |a: char, b: char| {
         (a.is_ascii_digit() && b.is_ascii_digit()) || (a.is_alphabetic() && b.is_alphabetic())
@@ -1905,13 +1905,13 @@ async fn live_findings(
             Some(item) => {
                 // A live finding annotates; it never overrules a verified
                 // verdict. An item rigg checked and found `Ok` (the role IS
-                // assigned) stays `Ok` — the failure is attached as evidence
+                // assigned) stays `Ok`: the failure is attached as evidence
                 // and repeated in the unattributed list, rather than
                 // flipping the exit code on a resource-name match.
                 item.detail = format!("{}\n      live: {finding}", item.detail);
                 if item.status == Status::Ok {
                     unattributed.push(format!(
-                        "{finding} — the requirement rigg checked here is in place; role \
+                        "{finding}: the requirement rigg checked here is in place; role \
                          assignments can take minutes to propagate, so re-run the indexer"
                     ));
                 }
@@ -2037,7 +2037,7 @@ fn render_item(item: &ReportItem, fix_mode: bool) {
 }
 
 /// The text report (spec §4.1 step 4). `fix_mode` suppresses the `fix:`
-/// lines — `--fix` is about to apply them.
+/// lines: `--fix` is about to apply them.
 pub fn render_text(report: &Report, fix_mode: bool) {
     println!(
         "{} {}",
@@ -2153,7 +2153,7 @@ mod tests {
 
     /// M-5: the markers match on class boundaries, so a document count that
     /// happens to start with `403` is not diagnosed as an authorization
-    /// failure — while `AADSTS<digits>` still is, because a digit does not
+    /// failure, while `AADSTS<digits>` still is, because a digit does not
     /// continue a run of letters.
     #[test]
     fn auth_markers_match_on_word_boundaries() {
@@ -2188,7 +2188,7 @@ mod tests {
         };
         let cmd = fix.command();
         assert!(cmd.contains("--assignee pid"));
-        // I-2: the GUID, never the display name — a name resolves against
+        // I-2: the GUID, never the display name. A name resolves against
         // the tenant's role definitions, and Microsoft is renaming roles.
         assert!(
             cmd.contains(&format!("--role {}", roles::STORAGE_BLOB_DATA_READER.id)),

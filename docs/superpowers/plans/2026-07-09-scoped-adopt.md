@@ -34,7 +34,7 @@
 - [ ] **Step 1: Create `crates/rigg/src/commands/adopt.rs`** with the parser and its tests:
 
 ```rust
-//! `rigg adopt` — bring selected unmanaged remote resources into a project.
+//! `rigg adopt`: bring selected unmanaged remote resources into a project.
 
 use anyhow::{Result, anyhow};
 
@@ -224,7 +224,7 @@ fn adopt_rejects_unknown_kind() {
 }
 ```
 
-(The `pull --adopt` removal is tested in Task 4, where the flag is actually removed — keeping this task's suite green.)
+(The `pull --adopt` removal is tested in Task 4, where the flag is actually removed: keeping this task's suite green.)
 
 - [ ] **Step 3: Write the failing sync tests** in `crates/rigg/tests/sync.rs` (append). These need multiple unmanaged remote resources. Add:
 
@@ -291,7 +291,7 @@ async fn adopt_dry_run_writes_nothing() {
 - [ ] **Step 4: Run the new tests to confirm they fail**
 
 Run: `cargo test -p rigg --test sync adopt_ 2>&1 | tail -20` and `cargo test -p rigg --test cli_surface adopt_ 2>&1 | tail -20`
-Expected: FAIL — `adopt` is not yet a real command (arg parses but `run` unimplemented / not compiling until Step 5).
+Expected: FAIL, `adopt` is not yet a real command (arg parses but `run` unimplemented / not compiling until Step 5).
 
 - [ ] **Step 5: Implement `run` in `crates/rigg/src/commands/adopt.rs`.** Add these imports at the top (below the existing `use` lines):
 
@@ -411,7 +411,7 @@ pub async fn run(ctx: &GlobalContext, args: AdoptArgs) -> Result<()> {
                 Some(owner) => {
                     if explicit.contains(key) {
                         return Err(anyhow!(
-                            "{r} is owned by project '{owner}' — a resource belongs to exactly one project"
+                            "{r} is owned by project '{owner}': a resource belongs to exactly one project"
                         ));
                     }
                     // swept in by a kind/all selector → silently skip another project's resource
@@ -492,7 +492,7 @@ fn report(
 }
 ```
 
-NOTE: confirm `ResourceRef` implements `Display` (used as `{r}`). `pull.rs` prints refs the same way (`println!("  {} adopted {}", ..., r)`), so it does. Confirm the exact `resolve_env` / `ws.project` / `Remote::for_project` signatures against `pull.rs:34-72` — they are used identically there.
+NOTE: confirm `ResourceRef` implements `Display` (used as `{r}`). `pull.rs` prints refs the same way (`println!("  {} adopted {}", ..., r)`), so it does. Confirm the exact `resolve_env` / `ws.project` / `Remote::for_project` signatures against `pull.rs:34-72`: they are used identically there.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -585,7 +585,7 @@ NOTE: verify the data-source scaffold's required fields against `crates/rigg-cor
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `cargo test -p rigg --test sync adopt_with_deps 2>&1 | tail -20`
-Expected: FAIL — only `docs-indexer.json` written; dependencies missing.
+Expected: FAIL, only `docs-indexer.json` written; dependencies missing.
 
 - [ ] **Step 4: Implement expansion.** In `crates/rigg/src/commands/adopt.rs`, immediately AFTER the candidate-classification loop that builds `to_adopt` (before the confirmation block), insert:
 
@@ -653,7 +653,7 @@ git commit -m "feat: rigg adopt --with-deps upstream dependency expansion"
 
 **Interfaces:** none new. `pull` no longer adopts.
 
-- [ ] **Step 1: Remove the flag** from `PullArgs` in `crates/rigg/src/cli.rs` — delete the `adopt` field:
+- [ ] **Step 1: Remove the flag** from `PullArgs` in `crates/rigg/src/cli.rs` (delete the `adopt` field):
 
 ```rust
     /// Adopt unmanaged remote resources into the given project
@@ -675,7 +675,7 @@ git commit -m "feat: rigg adopt --with-deps upstream dependency expansion"
 ```rust
     if unmanaged > 0 {
         println!(
-            "  {} {unmanaged} unmanaged remote resource(s) — adopt with `rigg adopt {} <selector>` (e.g. `all`, `indexes`, `agents/name`)",
+            "  {} {unmanaged} unmanaged remote resource(s): adopt with `rigg adopt {} <selector>` (e.g. `all`, `indexes`, `agents/name`)",
             "i".blue(),
             project.name,
         );
@@ -737,7 +737,7 @@ git commit -m "feat!: remove pull --adopt in favor of rigg adopt; update hints"
 
 ---
 
-### Task 5: Docs — README & GETTING_STARTED
+### Task 5: Docs: README & GETTING_STARTED
 
 **Files:**
 - Modify: `README.md`
@@ -747,7 +747,7 @@ git commit -m "feat!: remove pull --adopt in favor of rigg adopt; update hints"
 
 - [ ] **Step 1: Update README adopt references.** In `README.md`, replace the two adopt mentions.
 
-Quick Start (`README.md` around line 82) — replace:
+Quick Start (`README.md` around line 82) (replace):
 
 ```markdown
 # Adopt existing Azure resources into it…
@@ -757,7 +757,7 @@ rigg pull my-rag --adopt my-rag
 with:
 
 ```markdown
-# Adopt existing Azure resources into it — à la carte…
+# Adopt existing Azure resources into it: à la carte…
 rigg adopt my-rag all                 # everything unmanaged
 rigg adopt my-rag agents/my-agent     # just one resource
 rigg adopt my-rag indexes --with-deps # a whole kind + its dependencies
@@ -778,13 +778,13 @@ rigg adopt my-rag <selector>    # adopt selected unmanaged resources (all | <kin
 - [ ] **Step 2: Update GETTING_STARTED.** In `GETTING_STARTED.md`, find the line:
 
 ```markdown
-- **Existing resources?** — `rigg pull --adopt <project>` brings unmanaged Azure resources into a project
+- **Existing resources?**: `rigg pull --adopt <project>` brings unmanaged Azure resources into a project
 ```
 
 Replace with:
 
 ```markdown
-- **Existing resources?** — `rigg adopt <project> <selector>` brings selected unmanaged Azure resources into a project (a single `<kind>/<name>`, a whole `<kind>`, or `all`; add `--with-deps` to also pull a resource's dependencies)
+- **Existing resources?**: `rigg adopt <project> <selector>` brings selected unmanaged Azure resources into a project (a single `<kind>/<name>`, a whole `<kind>`, or `all`; add `--with-deps` to also pull a resource's dependencies)
 ```
 
 - [ ] **Step 3: Verify no stale references remain**
@@ -815,5 +815,5 @@ Expected: all green; `pull.rs` has no `adopt` logic left (only the hint text men
 ## Self-Review notes
 
 - **Spec coverage:** selectors → Task 1 + Task 2 Step 5; `all`/kind/named + ownership + confirm + dry-run + JSON → Task 2; `--with-deps` upstream-only → Task 3; remove `pull --adopt` + hints → Task 4; docs → Task 5. Tests 1-11 from the spec map to Task 2 (2,3,5,6,7,8,10,11), Task 3 (4), Task 4 (9 via `pull_adopt_flag_is_gone`).
-- **Type consistency:** `Selector`/`Selector::parse`/`is_broad` defined Task 1, used Task 2; `run(ctx, AdoptArgs)` signature stable; `report` signature changes in Task 3 (adds `dep_keys`) — both call sites updated in the same task.
+- **Type consistency:** `Selector`/`Selector::parse`/`is_broad` defined Task 1, used Task 2; `run(ctx, AdoptArgs)` signature stable; `report` signature changes in Task 3 (adds `dep_keys`), both call sites updated in the same task.
 - **Ordering safety:** every task leaves `cargo test --workspace` green. The `pull_adopt_flag_is_gone` test is added in Task 4, the same task that removes the flag, so no task ever ships a red suite.

@@ -1,4 +1,4 @@
-//! `rigg auth easy-auth <function-app binding>` — enable Microsoft Entra
+//! `rigg auth easy-auth <function-app binding>`: enable Microsoft Entra
 //! authentication on a bound function app so Web API skills can be keyless
 //! (spec `2026-09-09-identity-and-auth-design.md` §5).
 //!
@@ -38,7 +38,7 @@ pub struct Wiring {
     pub audience: String,
     /// Workspace-relative paths of the skillset files that were rewritten.
     pub touched: Vec<String>,
-    /// False when the user declined the confirmation — nothing was changed.
+    /// False when the user declined the confirmation, nothing was changed.
     pub applied: bool,
 }
 
@@ -59,7 +59,7 @@ pub async fn run(
     say!(ctx);
     say!(
         ctx,
-        "{} Entra authentication is on for '{}' — audience {}",
+        "{} Entra authentication is on for '{}': audience {}",
         "✓".green().bold(),
         wiring.site,
         wiring.audience
@@ -87,7 +87,7 @@ pub async fn run(
 /// Do the wiring: Graph application + service principal, the merged
 /// `authsettingsV2` PUT, the optional app-role assignment, and the local
 /// skillset rewrite. Shared with push's Web API auth resolution
-/// ("identity-based — set it up now").
+/// ("identity-based: set it up now").
 pub async fn wire(
     ctx: &GlobalContext,
     ws: &Workspace,
@@ -100,14 +100,14 @@ pub async fn wire(
     //    resolved scopes, never on a name typed at the command line.
     let declared = env.env.dependencies.get(binding).ok_or_else(|| {
         anyhow!(CommandError::Validation(format!(
-            "environment '{}' has no dependency named '{binding}' — declare the function app \
+            "environment '{}' has no dependency named '{binding}': declare the function app \
              first: `rigg env bind {} {binding} function-app:<app-name>`",
             env.name, env.name
         )))
     })?;
     if declared.kind != BindingType::FunctionApp {
         return Err(anyhow!(CommandError::Validation(format!(
-            "'{binding}' is a {} binding, not a function-app binding — easy-auth wires Entra \
+            "'{binding}' is a {} binding, not a function-app binding: easy-auth wires Entra \
              authentication onto a function app",
             declared.kind
         ))));
@@ -115,7 +115,7 @@ pub async fn wire(
 
     let tenant = env.env.tenant.clone().ok_or_else(|| {
         anyhow!(CommandError::Validation(format!(
-            "environment '{}' declares no `tenant:` — Easy Auth's OpenID issuer \
+            "environment '{}' declares no `tenant:`: Easy Auth's OpenID issuer \
              (https://login.microsoftonline.com/<tenant>/v2.0) needs it; add it to rigg.yaml",
             env.name
         )))
@@ -126,7 +126,7 @@ pub async fn wire(
     let bindings = auth_engine::bindings_for(ws, env, Some(&arm)).await;
     let site_id = resolved_arm_id(&bindings, binding).ok_or_else(|| {
         anyhow!(CommandError::AuthDenied(format!(
-            "binding '{binding}' does not resolve to a function app in Azure — check the value \
+            "binding '{binding}' does not resolve to a function app in Azure: check the value \
              in rigg.yaml, then `rigg env show {} --refresh` (or `rigg env bind {} --learn`)",
             env.name, env.name
         )))
@@ -164,7 +164,7 @@ pub async fn wire(
     say!(ctx);
     say!(
         ctx,
-        "Easy Auth on '{site}' ({}) — planned authsettingsV2:",
+        "Easy Auth on '{site}' ({}), planned authsettingsV2:",
         env.name
     );
     let diff = rigg_diff::semantic::diff(&planned, &current, "name");
@@ -221,7 +221,7 @@ pub async fn wire(
         .await?;
     let sp = graph.ensure_service_principal(&app.app_id).await?;
 
-    // 6. The function app itself — merged over the document read above, so
+    // 6. The function app itself: merged over the document read above, so
     //    every other identity provider and unrelated setting survives.
     let settings = merge_auth_settings(&current, &app.app_id, &tenant, &audience, &allowed);
     arm.put_site_auth_settings(&site_id, &settings).await?;
@@ -277,7 +277,7 @@ pub async fn wire(
 }
 
 /// The `registration.clientId` shown in the plan when rigg has not created
-/// the application yet — the one field the diff cannot know in advance.
+/// the application yet: the one field the diff cannot know in advance.
 const NEW_APP_PLACEHOLDER: &str = "<app registration rigg will create>";
 
 fn confirm(
@@ -323,16 +323,16 @@ fn resolved_arm_id(bindings: &EnvBindings, name: &str) -> Option<String> {
 
 /// The managed identity Easy Auth must admit.
 struct Caller {
-    /// Directory object id — what an app-role assignment is made for.
+    /// Directory object id: what an app-role assignment is made for.
     object_id: String,
-    /// Application (client) id — what `allowedApplications` names.
+    /// Application (client) id: what `allowedApplications` names.
     client_id: String,
     label: String,
 }
 
 /// Every identity the matching skills call through: one per distinct
 /// user-assigned identity they declare (a skillset that declares one calls
-/// through THAT identity — admitting the system one would authorize
+/// through THAT identity: admitting the system one would authorize
 /// nothing, spec §7), plus the search service's system-assigned identity
 /// when at least one matching skill declares none.
 ///
@@ -374,7 +374,7 @@ async fn caller_identities(
         Ok(caller) => callers.push(caller),
         Err(e) if !callers.is_empty() => say!(
             ctx,
-            "  {} the system-assigned identity could not be admitted ({e}) — skills without an \
+            "  {} the system-assigned identity could not be admitted ({e}): skills without an \
              `authIdentity` will still be refused",
             "!".yellow()
         ),
@@ -387,7 +387,7 @@ async fn caller_identities(
 async fn system_identity(arm: &ArmClient, tenant: &str, bindings: &EnvBindings) -> Result<Caller> {
     let search_id = resolved_arm_id(bindings, "search").ok_or_else(|| {
         anyhow!(CommandError::AuthDenied(
-            "the environment's search service does not resolve in Azure — `rigg env show \
+            "the environment's search service does not resolve in Azure: `rigg env show \
              --refresh`"
                 .to_string()
         ))
@@ -395,7 +395,7 @@ async fn system_identity(arm: &ArmClient, tenant: &str, bindings: &EnvBindings) 
     let info = arm.get_search_service(&search_id).await?;
     let object_id = info.identity.principal_id.clone().ok_or_else(|| {
         anyhow!(CommandError::Validation(format!(
-            "search service '{}' has no system-assigned identity — enable it first \
+            "search service '{}' has no system-assigned identity: enable it first \
              (`rigg auth doctor --fix`)",
             info.name
         )))
@@ -492,7 +492,7 @@ fn webapi_targets(ws: &Workspace, env: &str, hostname: &str) -> Result<Vec<Skill
 }
 
 /// The host of an `http(s)://host[:port]/…` URI, without an explicit port
-/// or a trailing root dot — `https://fn.azurewebsites.net:443/api/x` names
+/// or a trailing root dot: `https://fn.azurewebsites.net:443/api/x` names
 /// the same site as `https://fn.azurewebsites.net/api/x`, and comparing the
 /// raw authority would skip the skillset and call it a success.
 fn uri_host(uri: &str) -> Option<&str> {
@@ -513,7 +513,7 @@ fn uri_host(uri: &str) -> Option<&str> {
 /// The PUT replaces the document, so everything the app already has is
 /// carried over verbatim: other identity providers, login settings, HTTP
 /// settings. Only the fields below are set, and the two list fields are
-/// UNIONED — an app that already accepts another audience or admits another
+/// UNIONED: an app that already accepts another audience or admits another
 /// caller keeps doing so.
 pub fn merge_auth_settings(
     current: &Value,
@@ -581,7 +581,7 @@ fn ensure_object(value: &mut Value, key: &str) {
     }
 }
 
-/// `existing ∪ entries`, order-preserving — never a replacement.
+/// `existing ∪ entries`, order-preserving, never a replacement.
 fn union_with(existing: Option<&Value>, entries: &[String]) -> Value {
     let mut items: Vec<String> = existing
         .and_then(Value::as_array)
@@ -743,7 +743,7 @@ mod tests {
             registration.get("clientSecretSettingName").is_none(),
             "{registration}"
         );
-        // The SAME app keeps its setting — rigg is not rewriting a working
+        // The SAME app keeps its setting: rigg is not rewriting a working
         // confidential-client configuration.
         let same = merge_auth_settings(&current, "old-app", tenant(), "api://old-app", &mi(["m"]));
         assert_eq!(

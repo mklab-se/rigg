@@ -1,4 +1,4 @@
-//! CLI definition for rigg — project-scoped command surface (0.18+).
+//! CLI definition for rigg: project-scoped command surface (0.18+).
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use clap_complete::engine::ArgValueCandidates;
@@ -95,7 +95,7 @@ pub enum Commands {
     ///
     /// Selectors: `all`, a kind (e.g. `indexes`), or `<kind>/<name>`
     /// (e.g. `agents/regulus`). Naming a resource the project already manages
-    /// together with --with-deps adopts its missing dependencies — useful
+    /// together with --with-deps adopts its missing dependencies: useful
     /// after new references appear (e.g. added via the portal).
     /// See `rigg concepts` for the project model.
     Adopt(AdoptArgs),
@@ -111,7 +111,7 @@ pub enum Commands {
 
     /// Translate one environment's project tree into another
     ///
-    /// A→B and B→A are the same operation — the A/B sync + hot-swap
+    /// A→B and B→A are the same operation: the A/B sync + hot-swap
     /// workflow. Correlates resources by their file stem (logical id), not
     /// their physical (Azure) name, and TRANSLATES rather than copies: every
     /// infrastructure reference (storage, identity, model host, function
@@ -119,7 +119,7 @@ pub enum Commands {
     /// binding of the same name, and every reference to a sibling that is
     /// physically named differently in the target follows that name. The
     /// target keeps its own `name`, the paths its own `x-rigg-pin`
-    /// annotation lists, and its Web API auth carriers — the source's never
+    /// annotation lists, and its Web API auth carriers: the source's never
     /// cross. Anything rigg cannot decide (an unbound reference, a binding
     /// the target lacks) becomes a question instead of a guess. Resources
     /// that only exist in the target are left untouched. Always previews the
@@ -139,7 +139,7 @@ pub enum Commands {
     /// prompt knowledge bases and agents
     ///
     /// Unlike the config commands (push/pull/diff), these act on the cloud
-    /// resources directly, addressed by physical name — no project
+    /// resources directly, addressed by physical name: no project
     /// ownership required.
     Az {
         #[command(subcommand)]
@@ -484,7 +484,7 @@ pub enum MigrateCommands {
     /// (data source, index, skillset, indexer) as project files
     ///
     /// Local-only: writes/rewrites project files; the next `rigg push`
-    /// applies the change. In-place migration keeps every name — push then
+    /// applies the change. In-place migration keeps every name: push then
     /// REPLACES the knowledge source (delete + recreate), which rebuilds the
     /// index from source data (time, ingestion/embedding cost, and the
     /// source is unavailable until repopulated). Side-by-side (--rename)
@@ -544,7 +544,7 @@ pub enum AzCommands {
 pub enum AzIndexerCommands {
     /// Trigger a run now
     Run(AzIndexerRunArgs),
-    /// Clear change-tracking state — the NEXT run reprocesses every document
+    /// Clear change-tracking state: the NEXT run reprocesses every document
     Reset(AzIndexerResetArgs),
     /// Execution state, last run result, per-document errors
     Status {
@@ -732,7 +732,7 @@ pub enum EnvCommands {
     Remove {
         name: String,
         /// Also remove the role assignments rigg created for it (the flag
-        /// is the confirmation — they are deleted without a further prompt)
+        /// is the confirmation: they are deleted without a further prompt)
         #[arg(long)]
         clean_roles: bool,
     },
@@ -782,7 +782,7 @@ pub enum AuthCommands {
     /// Verify service-to-service identities, settings and RBAC for an environment
     ///
     /// Reports every role, setting and network condition this environment's
-    /// files require — for the service identities and for you — with the
+    /// files require, for the service identities and for you, with the
     /// exact `az` command for each gap. `--fix` applies the ones rigg owns.
     Doctor {
         /// Apply the fixes rigg can make (role assignments, identities,
@@ -800,7 +800,7 @@ pub enum AuthCommands {
         #[arg(long)]
         live: bool,
         /// Typed confirmation for protected environments (must equal the env
-        /// name) — required by `--fix`
+        /// name): required by `--fix`
         #[arg(long, value_name = "ENV")]
         confirm_env: Option<String>,
     },
@@ -809,7 +809,7 @@ pub enum AuthCommands {
     /// Registers (or reuses) an Entra application for the app, merges Easy
     /// Auth into its authsettingsV2 so it accepts `api://<app-id>` from this
     /// environment's search identity, and rewrites the Web API skills that
-    /// call it to be keyless. Nothing is pushed — run `rigg push` after.
+    /// call it to be keyless. Nothing is pushed: run `rigg push` after.
     ///
     ///   rigg auth easy-auth enrich-fn -e dev
     #[command(verbatim_doc_comment)]
@@ -933,7 +933,7 @@ pub enum DevCommands {
     },
     /// Regenerate the pinned schema fixtures under crates/rigg-core/fixtures/schema
     ApiFixture { provider: String },
-    /// Print docs/reference/cli.md — the generated command reference
+    /// Print docs/reference/cli.md: the generated command reference
     CliReference,
     /// Print the infrastructure-reference table for docs/reference/resource-files.md
     InfraTable,

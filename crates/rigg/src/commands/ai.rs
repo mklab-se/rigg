@@ -1,10 +1,10 @@
 //! AI feature management
 //!
-//! `rigg ai`         — show status
-//! `rigg ai test`    — test AI connection
-//! `rigg ai enable`  — enable AI for rigg
-//! `rigg ai disable` — disable AI for rigg
-//! `rigg ai config`  — interactive AI node configuration
+//! `rigg ai`: show status
+//! `rigg ai test`: test AI connection
+//! `rigg ai enable`: enable AI for rigg
+//! `rigg ai disable`: disable AI for rigg
+//! `rigg ai config`: interactive AI node configuration
 
 use anyhow::Result;
 

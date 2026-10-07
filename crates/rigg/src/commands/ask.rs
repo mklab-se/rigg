@@ -6,7 +6,7 @@
 //! A command that needs input builds one or more [`Question`]s and asks an
 //! [`Asker`] for answers. In a script/agent context, [`ScriptedAsker`]
 //! answers from a pre-supplied map and, when something is missing, returns
-//! [`NeedsInput`] — a structured error the CLI turns into a `needs-input`
+//! [`NeedsInput`]: a structured error the CLI turns into a `needs-input`
 //! JSON document on stdout and exit code 6, so a caller can answer the
 //! missing questions and re-run. Interactively, [`InteractiveAsker`] prefers
 //! the same pre-supplied answers and only prompts for what's left.
@@ -194,7 +194,7 @@ pub trait Asker {
 /// into a single [`NeedsInput`] error rather than failing on the first gap,
 /// so a caller sees every outstanding question in one round-trip. A
 /// malformed *supplied* answer is collected the same way and reported
-/// together with the rest — see [`ScriptedAsker::ask_all`] for the
+/// together with the rest: see [`ScriptedAsker::ask_all`] for the
 /// precedence between the two.
 pub struct ScriptedAsker {
     answers: BTreeMap<String, String>,
@@ -239,7 +239,7 @@ impl Asker for ScriptedAsker {
     ///
     /// Precedence when both happen: the **bad answers win**. A caller that
     /// supplied a wrong value gets `CommandError::Usage` (exit 2) naming
-    /// every invalid answer — re-running with the missing answers alone
+    /// every invalid answer: re-running with the missing answers alone
     /// would fail again on the same bad value, so the usage error is the
     /// actionable one. Only when every supplied answer coerces cleanly and
     /// something is still missing does this return `NeedsInput` (exit 6).

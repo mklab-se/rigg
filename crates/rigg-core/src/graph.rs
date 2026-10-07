@@ -2,7 +2,7 @@
 //!
 //! Order is computed from actual references extracted via the registry
 //! (`registry::extract_references`), never declared. References to resources
-//! outside the given set are ignored — they may already exist in Azure or in
+//! outside the given set are ignored: they may already exist in Azure or in
 //! another project.
 
 use std::collections::{BTreeMap, BTreeSet};

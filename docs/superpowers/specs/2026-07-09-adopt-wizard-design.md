@@ -1,7 +1,7 @@
-# rigg — Interactive adopt wizard + adopt-path discoverability
+# rigg: Interactive adopt wizard + adopt-path discoverability
 
 **Date:** 2026-07-09
-**Status:** Design — approved
+**Status:** Design: approved
 **Workstream:** C (A = concept clarity, merged; B = scoped adopt, merged).
 
 ## Problem
@@ -11,22 +11,22 @@ walking the real user journey:
 
 1. **You must already know your resource names.** `rigg adopt regulus
    agents/regulus` requires knowing that Regulus is an *agent* and what it is
-   called in Azure — knowledge that today requires opening the Azure or Foundry
+   called in Azure: knowledge that today requires opening the Azure or Foundry
    portal. The tool has this information (the remote snapshot) but never offers
    it.
 2. **Nothing routes you to `adopt`.** After `rigg new project`, the success
    output only mentions scaffolding new resources (`rigg new <kind> …`); the
    adopt path is invisible. And nothing explains how to *name* a project.
 
-(A third gap — `init` suggesting the removed `pull --adopt` — was a regression,
+(A third gap, `init` suggesting the removed `pull --adopt`, was a regression,
 already fixed with a guard test in this workstream: commit 1e466ff.)
 
 ## Goals
 
 - `rigg adopt` (with missing arguments) becomes a **wizard**: it asks for
-  whatever you didn't type — project, then resources (queried live from Azure),
-  then dependencies — so the portal is never needed to discover what exists.
-- Both services — Azure AI Search and Microsoft Foundry — supported **each
+  whatever you didn't type: project, then resources (queried live from Azure),
+  then dependencies, so the portal is never needed to discover what exists.
+- Both services: Azure AI Search and Microsoft Foundry, supported **each
   alone and both at once**, in one wizard run.
 - Signpost the adopt path from `rigg new project`; add project-naming guidance.
 - Scriptable/CI behavior is completely unchanged.
@@ -36,7 +36,7 @@ already fixed with a guard test in this workstream: commit 1e466ff.)
 - Wizards for other commands (`new`, `delete`, …). The prompt layer is built to
   be reusable, but only `adopt` gets a wizard now (YAGNI).
 - No change to adopt's core semantics (selectors, ownership rules, `--with-deps`
-  expansion, JSON output) — the wizard is a front-end that produces the same
+  expansion, JSON output): the wizard is a front-end that produces the same
   resolved set and runs the same write path.
 
 ## Design
@@ -45,7 +45,7 @@ already fixed with a guard test in this workstream: commit 1e466ff.)
 
 The wizard fires only when ALL hold:
 
-- `ctx.interactive()` is true (TTY stdout, no `--non-interactive`, no `--yes` —
+- `ctx.interactive()` is true (TTY stdout, no `--non-interactive`, no `--yes`:
   `-y` means "ask me nothing", so it disables the wizard along with every other
   prompt; a selector-less `-y` invocation stays a usage error) and NOT
   `--output json`;
@@ -74,12 +74,12 @@ usage error (exit 2). CI is unaffected.
    - One run may tick resources from both services (mixed adoption is already
      supported by the resolved-set machinery).
    - If the environment configures only one service, only that service is
-     queried and shown — no empty section, no error.
+     queried and shown: no empty section, no error.
    - If a configured service is unreachable (auth/network), FAIL with an error
-     naming that service. Never show a silently partial list — an incomplete
+     naming that service. Never show a silently partial list: an incomplete
      menu would read as "the resource doesn't exist" when the truth is "auth is
      broken".
-   - If nothing is unmanaged: print "Nothing to adopt — everything visible is
+   - If nothing is unmanaged: print "Nothing to adopt, everything visible is
      already managed." and exit 0.
 3. **Dependencies** (skipped if `--with-deps` given): compute the upstream
    expansion for the ticked set first; only if it would add ≥1 resource, ask
@@ -105,7 +105,7 @@ New `crates/rigg/src/commands/interactive.rs` wrapping `inquire` (`Select`,
   (Esc/Ctrl-C) into a clean "aborted" error → exit 1, nothing written.
 
 `inquire` is already in the dependency tree at 0.7.5 via ailloy's `config-tui`
-feature — adding it as a direct dependency compiles no new code.
+feature: adding it as a direct dependency compiles no new code.
 
 The existing hand-rolled helpers in `confirm.rs` stay for the plain yes/no
 paths used elsewhere; the wizard uses inquire throughout for consistency of
@@ -119,7 +119,7 @@ look and feel within a single flow.
   Or scaffold new ones:            rigg new <kind> <name> -p <name>
   ```
 - CONCEPTS.md "Choosing boundaries" gains one sentence: *Name a project after
-  the thing it owns — e.g. a project holding the `regulus` agent and its
+  the thing it owns, e.g. a project holding the `regulus` agent and its
   retrieval stack is naturally called `regulus`.*
 - `rigg new --help` `name` argument doc gains the naming rules hint (letters/
   digits/dashes typical; no `/`, `\`; ≤260 chars) and the "name it after what
@@ -140,7 +140,7 @@ is:
 - **cli_surface additions**: `new project` output mentions `rigg adopt`;
   CONCEPTS.md contains the naming sentence.
 - **Live acceptance**: the wizard itself is verified against real Azure in the
-  e2e-test workspace (the Regulus adoption scenario) — the deliberate purpose
+  e2e-test workspace (the Regulus adoption scenario): the deliberate purpose
   of this session's e2e exercise.
 
 ## Files touched

@@ -20,7 +20,7 @@ fn no_api_version_literals_outside_registry() {
     let mut files = Vec::new();
     walk(&root, &mut files);
     // Bare date strings (e.g. `"2026-04-01"`) are pinned by the registry's
-    // own `provider_table_is_complete_and_current` test instead — this guard
+    // own `provider_table_is_complete_and_current` test instead: this guard
     // only catches the URL form, which is the shape that actually drifts.
     let re = regex_lite::Regex::new(r#"api-version=20\d\d-\d\d-\d\d"#).unwrap();
     let mut offenders = Vec::new();

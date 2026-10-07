@@ -8,7 +8,7 @@
 
 <p align="center">
   Configuration-as-code for <a href="https://learn.microsoft.com/en-us/azure/search/">Azure AI Search</a> and <a href="https://learn.microsoft.com/en-us/azure/ai-services/agents/">Microsoft Foundry</a>.<br>
-  Version control your entire Agentic RAG stack — and give AI tools like Claude Code and Copilot the context to help you build it.
+  Version control your entire Agentic RAG stack, and give AI tools like Claude Code and Copilot the context to help you build it.
 </p>
 
 <p align="center">
@@ -28,14 +28,14 @@
 ## The Problem
 
 An Agentic RAG system in Azure spans two services. **Azure AI Search** does
-retrieval — indexes, skillsets, indexers, knowledge bases. **Microsoft
-Foundry** holds the agent layer — agent definitions, instructions, tools,
+retrieval: indexes, skillsets, indexers, knowledge bases. **Microsoft
+Foundry** holds the agent layer: agent definitions, instructions, tools,
 model deployments. Agents query knowledge bases, which route to knowledge
 sources, which search indexes built from your data.
 
 None of that configuration is managed by traditional IaC. ARM, Bicep and
-Terraform provision the *services*. The configuration *inside* them — index
-schemas, skillset pipelines, agent instructions, retrieval rules — lives in
+Terraform provision the *services*. The configuration *inside* them (index
+schemas, skillset pipelines, agent instructions, retrieval rules) lives in
 REST APIs and portal blades. Which means:
 
 - **No change history.** Azure does not record who changed an index schema
@@ -117,8 +117,8 @@ See [INSTALL.md](INSTALL.md) for pre-built binaries and shell completions.
    rigg push docs-rag --dry-run
    ```
 
-**Then apply it.** `validate` checks the files on their own — structure,
-ownership, references, no secrets — before the push writes anything.
+**Then apply it.** `validate` checks the files on their own (structure,
+ownership, references, no secrets) before the push writes anything.
 
 ```bash
 rigg validate docs-rag
@@ -131,7 +131,7 @@ rigg push docs-rag
 rigg new pipeline docs -p docs-rag --type azureblob
 ```
 
-**Connect your AI tool** — optional, but recommended.
+**Connect your AI tool**: optional, but recommended.
 
 ```bash
 rigg mcp install claude-code    # or vs-code
@@ -144,10 +144,10 @@ tutorial 1.
 
 | Tutorial | What it covers |
 |---|---|
-| [1 — Put an existing Azure solution under version control](docs/tutorials/01-pull-an-existing-solution.md) | `init`, `adopt`, bindings, the first commit, a delete/push round trip |
-| [2 — Build from scratch](docs/tutorials/02-build-from-scratch.md) | blob → index → indexer → knowledge base → Foundry agent, with `auth doctor --fix` |
-| [3 — Add an environment and promote](docs/tutorials/03-add-an-environment-and-promote.md) | `env add --like`, `promote` as translation, the binding questions |
-| [4 — Push to protected production](docs/tutorials/04-push-to-protected-production.md) | `protected`/`strict-bindings`, `--confirm-env`, `ci init`, the agent gate |
+| [1: Put an existing Azure solution under version control](docs/tutorials/01-pull-an-existing-solution.md) | `init`, `adopt`, bindings, the first commit, a delete/push round trip |
+| [2: Build from scratch](docs/tutorials/02-build-from-scratch.md) | blob → index → indexer → knowledge base → Foundry agent, with `auth doctor --fix` |
+| [3: Add an environment and promote](docs/tutorials/03-add-an-environment-and-promote.md) | `env add --like`, `promote` as translation, the binding questions |
+| [4: Push to protected production](docs/tutorials/04-push-to-protected-production.md) | `protected`/`strict-bindings`, `--confirm-env`, `ci init`, the agent gate |
 
 | Reference | What it answers |
 |---|---|
@@ -160,13 +160,13 @@ tutorial 1.
 
 Also worth reading:
 
-- [CONCEPTS.md](CONCEPTS.md) — the model, including
+- [CONCEPTS.md](CONCEPTS.md): the model, including
   [how rigg handles authentication](CONCEPTS.md#how-rigg-handles-authentication).
-- [how-rigg-works.md](docs/how-rigg-works.md) — sync classes, bindings, the
+- [how-rigg-works.md](docs/how-rigg-works.md): sync classes, bindings, the
   identity graph, promotion and the question protocol.
-- [MCP.md](MCP.md) — the MCP server and its 14 tools.
-- [SKILLS.md](SKILLS.md) — agent skills.
-- [samples/](samples/) — a runnable workspace with two projects.
+- [MCP.md](MCP.md): the MCP server and its 14 tools.
+- [SKILLS.md](SKILLS.md): agent skills.
+- [samples/](samples/): a runnable workspace with two projects.
 
 ## Exit Codes
 
@@ -206,4 +206,4 @@ version, dates the changelog, then commits, pushes, and tags `vX.Y.Z`. Pushing t
 
 ## License
 
-MIT — see [LICENSE.md](LICENSE.md).
+MIT: see [LICENSE.md](LICENSE.md).

@@ -10,8 +10,8 @@ projects/<project>/envs/<env>/search/<kind-dir>/<name>.json
 projects/<project>/envs/<env>/foundry/<kind-dir>/<name>.json
 ```
 
-The contents are Azure's own document for that resource — the body of the
-REST API's `PUT`, near enough — so Microsoft's reference for each kind is the
+The contents are Azure's own document for that resource (the body of the
+REST API's `PUT`, near enough) so Microsoft's reference for each kind is the
 reference for what may go in the file. What this page documents is everything
 rigg adds around that: where each kind lives, which fields rigg strips in
 which direction, what it refuses to store, and which fields it rewrites when
@@ -21,12 +21,12 @@ you promote between environments.
 
 - [The twelve kinds](#the-twelve-kinds)
 - [Naming: stem vs. `name`](#naming-stem-vs-name)
-- [What rigg strips, and when](#what-rigg-strips-and-when) —
+- [What rigg strips, and when](#what-rigg-strips-and-when):
   [immutable fields](#immutable-fields)
 - [Secrets are never stored locally](#secrets-are-never-stored-locally)
 - [`$file` sidecars](#file-sidecars)
 - [References between resources](#references-between-resources)
-- [Infrastructure reference fields](#infrastructure-reference-fields) —
+- [Infrastructure reference fields](#infrastructure-reference-fields):
   [how a binding gets used](#how-a-binding-gets-used)
 - [Common mistakes](#common-mistakes)
 
@@ -49,7 +49,7 @@ you promote between environments.
 
 **"Channel"** is the Azure AI Search api-version a kind requires. Knowledge
 bases need the preview channel because their retrieval and output
-configuration does not exist in the stable api-version — a stable `GET`
+configuration does not exist in the stable api-version: a stable `GET`
 silently omits it and a stable `PUT` cannot set it.
 
 The api-versions themselves are pinned in rigg's registry and overridable per
@@ -90,7 +90,7 @@ Every file needs a `name`:
 And no two files in one kind directory may claim the same physical name:
 
 ```text
-Error: duplicate physical name 'contoso-docs': both projects/contoso-docs/envs/dev/search/indexes/a.json and projects/contoso-docs/envs/dev/search/indexes/b.json define a resource named 'contoso-docs' — physical (Azure) names must be unique within a kind
+Error: duplicate physical name 'contoso-docs': both projects/contoso-docs/envs/dev/search/indexes/a.json and projects/contoso-docs/envs/dev/search/indexes/b.json define a resource named 'contoso-docs'. Physical (Azure) names must be unique within a kind
 ```
 
 ## What rigg strips, and when
@@ -103,8 +103,8 @@ registry:
 |---|---|---|---|---|
 | **Volatile** | yes | yes | yes | Azure rewrites them on every read |
 | **Read-only** | yes | yes | yes | Returned by `GET`, rejected by `PUT` |
-| **`x-rigg-*`** | no — kept | **yes** | yes | Yours, never Azure's |
-| **Write-only** | no — kept | no — sent | **against Azure: yes; against the baseline: no** | Redacted by `GET` |
+| **`x-rigg-*`** | no (kept) | **yes** | yes | Yours, never Azure's |
+| **Write-only** | no (kept) | no (sent) | **against Azure: yes; against the baseline: no** | Redacted by `GET` |
 
 **Volatile** fields are `@odata.etag`, `@odata.context`, `etag`, and per-kind
 equivalents. Keeping them would make every `rigg status` show drift.
@@ -117,27 +117,27 @@ them to disk would guarantee a failed push.
 **Write-only** fields are accepted by `PUT` but redacted on `GET` (a data
 source's `credentials.connectionString`). Comparing them with Azure would
 show permanent phantom drift, so they are compared with the
-[baseline](state.md) instead — a local change to only that field is still
+[baseline](state.md) instead: a local change to only that field is still
 local-ahead.
 
 Concretely, per kind:
 
 | Kind | Volatile | Read-only | Write-only |
 |---|---|---|---|
-| Data source | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | — | `credentials.connectionString` |
-| Index, skillset, indexer, synonym map, alias, knowledge base | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | — | — |
-| Knowledge source | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | `azureBlobParameters.createdResources`, `indexedOneLakeParameters.createdResources` | — |
-| Agent | `@odata.etag`, `@odata.context`, `id`, `object`, `created_at`, `updated_at`, `version`, `metadata.modified_at` | — | — |
-| Model deployment | `id`, `type`, `systemData`, `etag`, `properties.provisioningState`, `properties.capabilities`, `properties.rateLimits`, `properties.model.callRateLimit`, `properties.currentCapacity`, `properties.deploymentState` | — | — |
-| Connection | `id`, `type`, `systemData`, `etag`, `properties.provisioningState` | — | — |
-| Guardrail | `id`, `type`, `systemData`, `etag` | — | — |
+| Data source | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | n/a | `credentials.connectionString` |
+| Index, skillset, indexer, synonym map, alias, knowledge base | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | n/a | n/a |
+| Knowledge source | `@odata.etag`, `@odata.context`, `e_tag`, `etag` | `azureBlobParameters.createdResources`, `indexedOneLakeParameters.createdResources` | n/a |
+| Agent | `@odata.etag`, `@odata.context`, `id`, `object`, `created_at`, `updated_at`, `version`, `metadata.modified_at` | n/a | n/a |
+| Model deployment | `id`, `type`, `systemData`, `etag`, `properties.provisioningState`, `properties.capabilities`, `properties.rateLimits`, `properties.model.callRateLimit`, `properties.currentCapacity`, `properties.deploymentState` | n/a | n/a |
+| Connection | `id`, `type`, `systemData`, `etag`, `properties.provisioningState` | n/a | n/a |
+| Guardrail | `id`, `type`, `systemData`, `etag` | n/a | n/a |
 
 **A knowledge source's `createdResources` is read-only** because rigg's model
 is explicit-only: resources Azure creates for you are Azure's to manage, and
 rigg never adopts them into your files.
 
 **An indexer's execution history is not in this table** because it is not part
-of the indexer document at all — it lives on the separate `/status` resource,
+of the indexer document at all: it lives on the separate `/status` resource,
 which `rigg az indexer status` fetches and rigg never merges into the file.
 
 ### Immutable fields
@@ -181,11 +181,11 @@ the paths that could carry a credential:
 | Connection | `properties.credentials.key`, `.keys`, `.secret`, `.clientSecret`, `.pat`, `.sas` |
 
 A value in one of these is accepted only when it is an identity-based
-placeholder — a `ResourceId=` connection string, or a `<…>` scaffold
+placeholder: a `ResourceId=` connection string, or a `<…>` scaffold
 placeholder you have not filled in yet. Anything else:
 
 ```text
-✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] field 'credentials.connectionString' contains a credential — rigg never stores secrets locally. Use a managed identity (connection string 'ResourceId=/subscriptions/...') and grant the identity RBAC access instead; secrets belong in Azure Key Vault, never in files
+✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] field 'credentials.connectionString' contains a credential: rigg never stores secrets locally. Use a managed identity (connection string 'ResourceId=/subscriptions/...') and grant the identity RBAC access instead; secrets belong in Azure Key Vault, never in files
 ```
 
 Two further checks are not path-based, because they cannot be: any document
@@ -193,7 +193,7 @@ containing `AccountKey=` anywhere is rejected outright, and an
 `x-functions-key` header on a Web API skill is matched case-insensitively.
 
 ```text
-✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] contains an 'AccountKey=' connection string — replace it with an identity-based 'ResourceId=...' connection and delete/rotate the leaked key
+✗ [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] contains an 'AccountKey=' connection string: replace it with an identity-based 'ResourceId=...' connection and delete/rotate the leaked key
 ```
 
 The identity-based form for a blob data source looks like this. There is no
@@ -220,8 +220,8 @@ user-assigned form; `rigg auth doctor` reports whichever principal a resource
 ends up using and whether it has the roles it needs.
 
 > [!TIP]
-> When a key genuinely cannot be avoided — an Azure Function that will not
-> take a token — name its *source* rather than its value with
+> When a key genuinely cannot be avoided, an Azure Function that will not
+> take a token, name its *source* rather than its value with
 > [`x-rigg-auth`](annotations.md#x-rigg-auth), and rigg fetches it at push
 > time.
 
@@ -248,14 +248,14 @@ foundry/agents/contoso-assistant.json
 foundry/agents/contoso-assistant.instructions.md
 ```
 
-The path is relative to the JSON file's own directory. On load — for
-validate, diff, push, everything — the file's content is inlined as the
+The path is relative to the JSON file's own directory. On load (for
+validate, diff, push, everything) the file's content is inlined as the
 string value; on pull the value is extracted back out to the sidecar and
 replaced with the `$file` reference. Azure only ever sees the string.
 
 Extraction on pull happens for a field when either of two things is true:
 
-- the kind declares it as a sidecar field by default — today that is exactly
+- the kind declares it as a sidecar field by default: today that is exactly
   **`instructions` on an agent**; or
 - a sidecar file for that field already exists on disk **at the name rigg
   looks for**, in which case rigg keeps using it.
@@ -266,14 +266,14 @@ that are easy to miss:
 - **The filename must be `<json-stem>.<field>.md`, exactly.** For
   `search/skillsets/contoso-enrich.json` and a field `description`, that is
   `contoso-enrich.description.md` in the same directory. rigg does not follow
-  the name inside the `$file` object when it decides whether to extract — it
+  the name inside the `$file` object when it decides whether to extract: it
   builds the expected name and checks whether that file exists. A `$file`
   pointing at `notes.md` is read fine on load, but the next `rigg pull`
   extracts nothing, inlines the prose back into the JSON, and leaves
   `notes.md` orphaned.
 - **The field must be top-level.** Extraction looks at the document's own
-  keys only; a long string nested inside an object or array — a skill's
-  `description`, a scoring function's text — cannot be a sidecar, and a
+  keys only; a long string nested inside an object or array (a skill's
+  `description`, a scoring function's text) cannot be a sidecar, and a
   `$file` there survives only until the next pull rewrites the document.
 
 Get both right and every future pull writes the prose back to the Markdown
@@ -306,8 +306,8 @@ the opposite order. `rigg describe` draws the same graph.
 | Agent | `tools[].project_connection_id` | connection |
 | Model deployment | `properties.raiPolicyName` | guardrail |
 
-References that have no such field — above all a Foundry agent grounded on a
-Search knowledge base — are declared with
+References that have no such field, above all a Foundry agent grounded on a
+Search knowledge base, are declared with
 [`x-rigg-ref`](annotations.md#x-rigg-ref), and count for ordering in exactly
 the same way.
 
@@ -316,19 +316,19 @@ default (it may legitimately be a pre-existing Azure resource);
 `rigg validate --strict` makes it an error:
 
 ```text
-warning: [projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json] references deployments/text-embedding-3-large — not in this workspace (must already exist in Azure)
+warning: [projects/contoso-assistant/envs/dev/foundry/agents/contoso-assistant.json] references deployments/text-embedding-3-large, not in this workspace (must already exist in Azure)
 ```
 
 A scaffold placeholder left unfilled is always an error:
 
 ```text
-✗ [projects/contoso-docs/envs/dev/search/indexers/contoso-docs.json] placeholder reference '<index-name>' — replace the scaffold placeholder
+✗ [projects/contoso-docs/envs/dev/search/indexers/contoso-docs.json] placeholder reference '<index-name>': replace the scaffold placeholder
 ```
 
 ## Infrastructure reference fields
 
 Some fields inside a resource file do not name another rigg-managed
-resource: they name supporting Azure infrastructure — a storage account, a
+resource: they name supporting Azure infrastructure, a storage account, a
 user-assigned identity, a model host, a function app, a key vault, an
 external API, or the search service itself. rigg knows exactly which fields
 those are, which is how `rigg promote` can re-point each one at the target
@@ -341,7 +341,7 @@ restricts a rule to array elements of one Azure type (for example, only
 `WebApiSkill` entries inside `skills[]`).
 
 > [!NOTE]
-> The tables are generated from rigg's registry — run
+> The tables are generated from rigg's registry: run
 > `rigg dev infra-table` and replace the text between the markers to refresh
 > them.
 
@@ -350,83 +350,83 @@ restricts a rule to array elements of one Azure type (for example, only
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `credentials.connectionString` | storage | `StorageResourceId` | — |
-| `identity` | identity | `UserAssignedIdentity` | — |
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `credentials.connectionString` | storage | `StorageResourceId` | n/a |
+| `identity` | identity | `UserAssignedIdentity` | n/a |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### indexes
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
-| `vectorSearch.vectorizers[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `vectorSearch.vectorizers[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | n/a |
+| `vectorSearch.vectorizers[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | n/a |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### skillsets
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
 | `skills[].resourceUri` | ai-services | `OpenAiEndpoint` | `#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill` |
-| `skills[].authIdentity` | identity | `UserAssignedIdentity` | — |
+| `skills[].authIdentity` | identity | `UserAssignedIdentity` | n/a |
 | `skills[].uri` | function-app or api | `ApiUri` | `#Microsoft.Skills.Custom.WebApiSkill` |
-| `cognitiveServices.subdomainUrl` | ai-services | `AiServicesSubdomain` | — |
-| `cognitiveServices.identity` | identity | `UserAssignedIdentity` | — |
-| `knowledgeStore.storageConnectionString` | storage | `StorageResourceId` | — |
-| `knowledgeStore.identity` | identity | `UserAssignedIdentity` | — |
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `cognitiveServices.subdomainUrl` | ai-services | `AiServicesSubdomain` | n/a |
+| `cognitiveServices.identity` | identity | `UserAssignedIdentity` | n/a |
+| `knowledgeStore.storageConnectionString` | storage | `StorageResourceId` | n/a |
+| `knowledgeStore.identity` | identity | `UserAssignedIdentity` | n/a |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### indexers
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### knowledge-sources
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `azureBlobParameters.connectionString` | storage | `StorageResourceId` | — |
-| `azureBlobParameters.ingestionParameters.identity` | identity | `UserAssignedIdentity` | — |
-| `azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
-| `azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
-| `azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
-| `azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
-| `azureBlobParameters.ingestionParameters.aiServices.uri` | ai-services | `AiServicesSubdomain` | — |
-| `azureBlobParameters.ingestionParameters.assetStore.connectionString` | storage | `StorageResourceId` | — |
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `azureBlobParameters.connectionString` | storage | `StorageResourceId` | n/a |
+| `azureBlobParameters.ingestionParameters.identity` | identity | `UserAssignedIdentity` | n/a |
+| `azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | n/a |
+| `azureBlobParameters.ingestionParameters.embeddingModel.azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | n/a |
+| `azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | n/a |
+| `azureBlobParameters.ingestionParameters.chatCompletionModel.azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | n/a |
+| `azureBlobParameters.ingestionParameters.aiServices.uri` | ai-services | `AiServicesSubdomain` | n/a |
+| `azureBlobParameters.ingestionParameters.assetStore.connectionString` | storage | `StorageResourceId` | n/a |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### knowledge-bases
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `models[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | — |
-| `models[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | — |
-| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | — |
-| `encryptionKey.identity` | identity | `UserAssignedIdentity` | — |
+| `models[].azureOpenAIParameters.resourceUri` | ai-services | `OpenAiEndpoint` | n/a |
+| `models[].azureOpenAIParameters.authIdentity` | identity | `UserAssignedIdentity` | n/a |
+| `encryptionKey.keyVaultUri` | key-vault | `KeyVaultUri` | n/a |
+| `encryptionKey.identity` | identity | `UserAssignedIdentity` | n/a |
 
 ### agents
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `tools[].server_url` | search, ai-services, function-app or api | `Endpoint` | — |
+| `tools[].server_url` | search, ai-services, function-app or api | `Endpoint` | n/a |
 
 ### connections
 
 | Path | Binding type | Form | Only for `@odata.type` |
 |---|---|---|---|
-| `properties.target` | search, ai-services, function-app or api | `Endpoint` | — |
+| `properties.target` | search, ai-services, function-app or api | `Endpoint` | n/a |
 <!-- generated:infra-table:end -->
 
 ### How a binding gets used
 
 When rigg sees one of the fields above, it parses the value into the "form"
-named in the table — a storage `ResourceId=` connection string, an Azure
-OpenAI endpoint, a key vault URI, a plain endpoint — and looks for a binding
+named in the table (a storage `ResourceId=` connection string, an Azure
+OpenAI endpoint, a key vault URI, a plain endpoint) and looks for a binding
 of the matching type whose resolved resource is the one named. What it finds
 decides what happens:
 
@@ -441,7 +441,7 @@ decides what happens:
 the same messages:
 
 ```text
-! [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] credentials.connectionString references storage 'contosostorage', which no environment binds — run `rigg env bind dev --learn` to record it
+! [projects/contoso-docs/envs/dev/search/data-sources/contoso-docs.json] credentials.connectionString references storage 'contosostorage', which no environment binds: run `rigg env bind dev --learn` to record it
 ```
 
 > [!TIP]
@@ -452,7 +452,7 @@ the same messages:
 **`rigg promote --from dev --to prod` uses the same table in the other
 direction.** For each field it finds the source environment's binding, looks
 up the *target's* binding of the same name, and rewrites the value into the
-target's world — a different storage account, a different function app, a
+target's world: a different storage account, a different function app, a
 different vault. That is why an unbound infrastructure reference blocks a
 promote into a strict environment: rigg has no name to translate through.
 
@@ -460,7 +460,7 @@ promote into a strict environment: rigg has no name to translate through.
 
 **Keeping `@odata.etag` (or any volatile field) in the file.** They are
 stripped on pull, so a hand-added one only ever causes a diff. If a file has
-them, it was hand-written or copied from a portal export — one `rigg pull`
+them, it was hand-written or copied from a portal export: one `rigg pull`
 cleans it up.
 
 **A resource file in the wrong directory.** `search/` vs. `foundry/` and the
@@ -479,7 +479,7 @@ resource in Azure (which, for most kinds, means create-new and prune-old).
 Decide which one you meant.
 
 **Pasting a portal connection string.** It carries `AccountKey=` and is
-rejected. Use the `ResourceId=` form and grant the identity a role —
+rejected. Use the `ResourceId=` form and grant the identity a role:
 `rigg auth doctor --fix` will offer to grant it.
 
 **Expecting an indexer file to show run history.** It never does; that is
@@ -487,9 +487,9 @@ rejected. Use the `ResourceId=` form and grant the identity a role —
 
 ## See also
 
-- [project.yaml](project-yaml.md) — the tree these files live in, and exclusive ownership.
-- [Annotations](annotations.md) — `x-rigg-api`, `x-rigg-auth`, `x-rigg-pin`, `x-rigg-ref`.
-- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies) — the bindings the infrastructure fields resolve through.
-- [State](state.md) — baselines, and why a stripped field never shows as drift.
-- [`CONCEPTS.md`](../../CONCEPTS.md) — logical identity vs. physical name, validation classes.
-- [CLI reference](cli.md#rigg-new) — `rigg new`, `rigg validate`, `rigg az indexer status`.
+- [project.yaml](project-yaml.md): the tree these files live in, and exclusive ownership.
+- [Annotations](annotations.md): `x-rigg-api`, `x-rigg-auth`, `x-rigg-pin`, `x-rigg-ref`.
+- [rigg.yaml § Dependencies](rigg-yaml.md#dependencies): the bindings the infrastructure fields resolve through.
+- [State](state.md): baselines, and why a stripped field never shows as drift.
+- [`CONCEPTS.md`](../../CONCEPTS.md): logical identity vs. physical name, validation classes.
+- [CLI reference](cli.md#rigg-new): `rigg new`, `rigg validate`, `rigg az indexer status`.
