@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`rigg` is a configuration-as-code CLI for Azure AI Search and Microsoft Foundry. A **workspace** (`rigg.yaml`) holds environments — each with its targets, dependencies and policy; **projects** (`projects/<name>/`) own resource definitions as JSON files — indexes, indexers, data sources, skillsets, synonym maps, aliases, knowledge sources, knowledge bases (Search), agents, model deployments, connections, guardrails (Foundry). Pull/push/diff operate on whole projects, enabling Git-based versioning of the entire Agentic RAG stack.
+`rigg` is a configuration-as-code CLI for Azure AI Search and Microsoft Foundry. A **workspace** (`rigg.yaml`) holds environments, each with its targets, dependencies and policy; **projects** (`projects/<name>/`) own resource definitions as JSON files: indexes, indexers, data sources, skillsets, synonym maps, aliases, knowledge sources, knowledge bases (Search), agents, model deployments, connections, guardrails (Foundry). Pull/push/diff operate on whole projects, enabling Git-based versioning of the entire Agentic RAG stack.
 
-The current line is **2.0** — a breaking release: environments are targets + `dependencies` + `policy`, infrastructure references resolve through bindings, `promote` translates a whole project tree between environments, `auth doctor` verifies and repairs the identity graph, `verify` proves a pushed stack works, and the question protocol (exit 6 + `--answer`) makes every guided flow scriptable. Scope and principles: `docs/superpowers/specs/2026-09-09-rigg-2.0-scope-and-principles-design.md`; the per-workstream specs and plans sit beside it under `docs/superpowers/`.
+The current line is **2.0**, a breaking release: environments are targets + `dependencies` + `policy`, infrastructure references resolve through bindings, `promote` translates a whole project tree between environments, `auth doctor` verifies and repairs the identity graph, `verify` proves a pushed stack works, and the question protocol (exit 6 + `--answer`) makes every guided flow scriptable. Scope and principles: `docs/superpowers/specs/2026-09-09-rigg-2.0-scope-and-principles-design.md`; the per-workstream specs and plans sit beside it under `docs/superpowers/`.
 
 ## Session start
 
@@ -31,7 +31,12 @@ Before pushing code or declaring a task complete, you MUST run all CI checks loc
 cargo fmt --all -- --check                             # Formatting
 cargo clippy --workspace --all-targets -- -D warnings  # Lints (warnings are errors)
 cargo test --workspace                                 # All tests
+git grep -nIP '\x{2014}'                               # Em-dash guard: must print nothing
 ```
+
+## Writing style
+
+No em-dashes (U+2014) anywhere: docs, CHANGELOG, code comments, doc comments, CLI help, error messages, test strings and commit messages. Use a comma where it works; otherwise a colon, parentheses or a new sentence. In a table, write `n/a` (or leave the cell empty) for "none". Rust code that genuinely needs the character at runtime writes the escape `\u{2014}`, never the literal. CI enforces this (the `No em-dashes` step in `ci.yml`).
 
 ## Architecture
 
@@ -44,40 +49,40 @@ rigg-client ───┘
 rigg-diff  (used by rigg-core & rigg)
 ```
 
-**rigg-core** — the model:
-- `registry.rs` — THE central declarative table: per-kind API paths, api-version channel, volatile/read-only/secret fields, reference extractors, data-source type validity. Updating rigg for a new Azure API version mostly means editing this file.
-- `workspace.rs` — `rigg.yaml` + `project.yaml` model, environment resolution (flag > `RIGG_ENV` > `default: true`).
-- `store.rs` — project file store (read/write/list with sidecar handling), exclusive-ownership check, `ProjectState` baselines (`.rigg/<env>/<project>/state.json`), `SyncClass` classification (InSync/LocalAhead/RemoteAhead/Conflict/…). Checksums are order-canonical and null-insensitive.
-- `normalize.rs` — `normalize_for_disk` (strip volatile+read-only), `normalize_for_push` (also strip `x-rigg-*`), `normalize_for_compare` (also strip write-only fields Azure redacts on read — what `status` and `diff` compare with), `semantic_eq`.
-- `graph.rs` — reference-graph push/delete ordering (Kahn's algorithm over registry-extracted references).
-- `sidecar.rs` — `{"$file": "x.md"}` inline/extract for long text fields.
-- `scaffold.rs` — identity-first starter definitions for all 12 kinds, `scaffold_pipeline`, `scaffold_api_spec` (WebApiSkill contract).
-- `schema.rs` — pinned-version OpenAPI schema fixtures; `unknown_top_level_fields` is the pull/adopt API-drift canary.
-- `binding.rs` — `Binding`/`BindingType` (a `dependencies` entry), the implicit `search`/`foundry` bindings, and `EnvBindings` (per-environment resolution + ARM cache).
-- `infra.rs` — infrastructure references: `parse` a registry `InfraRef` value into a `PhysicalRef`, `render` it for a different physical resource.
-- `identity.rs` — the identity graph: which role assignments and settings a configuration requires, on which scopes, derived from the documents and scoped through the bindings.
-- `promote.rs` — `translate`, the pure engine behind `rigg promote`: two environments' bindings + documents in, the target's documents out (correlated by logical id).
+**rigg-core** (the model):
+- `registry.rs`: THE central declarative table: per-kind API paths, api-version channel, volatile/read-only/secret fields, reference extractors, data-source type validity. Updating rigg for a new Azure API version mostly means editing this file.
+- `workspace.rs`: `rigg.yaml` + `project.yaml` model, environment resolution (flag > `RIGG_ENV` > `default: true`).
+- `store.rs`: project file store (read/write/list with sidecar handling), exclusive-ownership check, `ProjectState` baselines (`.rigg/<env>/<project>/state.json`), `SyncClass` classification (InSync/LocalAhead/RemoteAhead/Conflict/…). Checksums are order-canonical and null-insensitive.
+- `normalize.rs`: `normalize_for_disk` (strip volatile+read-only), `normalize_for_push` (also strip `x-rigg-*`), `normalize_for_compare` (also strip write-only fields Azure redacts on read, what `status` and `diff` compare with), `semantic_eq`.
+- `graph.rs`: reference-graph push/delete ordering (Kahn's algorithm over registry-extracted references).
+- `sidecar.rs`: `{"$file": "x.md"}` inline/extract for long text fields.
+- `scaffold.rs`: identity-first starter definitions for all 12 kinds, `scaffold_pipeline`, `scaffold_api_spec` (WebApiSkill contract).
+- `schema.rs`: pinned-version OpenAPI schema fixtures; `unknown_top_level_fields` is the pull/adopt API-drift canary.
+- `binding.rs`: `Binding`/`BindingType` (a `dependencies` entry), the implicit `search`/`foundry` bindings, and `EnvBindings` (per-environment resolution + ARM cache).
+- `infra.rs`: infrastructure references: `parse` a registry `InfraRef` value into a `PhysicalRef`, `render` it for a different physical resource.
+- `identity.rs`: the identity graph: which role assignments and settings a configuration requires, on which scopes, derived from the documents and scoped through the bindings.
+- `promote.rs`: `translate`, the pure engine behind `rigg promote`: two environments' bindings + documents in, the target's documents out (correlated by logical id).
 
-**rigg-client** — Azure REST:
-- `client.rs` — Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-08-01-preview`).
-- `foundry.rs` — Foundry v1 data plane (`https://{account}.services.ai.azure.com/api/projects/{project}?api-version=v1`), agents + versions, `Foundry-Features` header support.
-- `arm_resources.rs` — generic ARM CRUD for deployments/connections/RAI policies (api-version `2026-05-01`) with LRO polling; `arm.rs` — typed ARM discovery.
-- `auth.rs` — chain: `RIGG_ACCESS_TOKEN` static > service-principal env vars > Azure CLI; per-domain token scoping.
+**rigg-client** (Azure REST):
+- `client.rs`: Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-08-01-preview`).
+- `foundry.rs`: Foundry v1 data plane (`https://{account}.services.ai.azure.com/api/projects/{project}?api-version=v1`), agents + versions, `Foundry-Features` header support.
+- `arm_resources.rs`: generic ARM CRUD for deployments/connections/RAI policies (api-version `2026-05-01`) with LRO polling; `arm.rs`: typed ARM discovery.
+- `auth.rs`: chain: `RIGG_ACCESS_TOKEN` static > service-principal env vars > Azure CLI; per-domain token scoping.
 
-**rigg** — clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0 success, 1 error, 2 usage, 3 validation, 4 auth, 5 drift/conflict, 6 needs input), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands. `commands/dev.rs` — `rigg dev api-check`, the watchdog that verifies pinned Azure API versions are current; `commands/dev_spec.rs` — `rigg dev api-diff` / `api-fixture`, fetching and diffing OpenAPI documents from azure-rest-api-specs. Also:
-- `commands/auth_engine.rs` — the auth verification engine (identity graph → verified report → fixes → text/JSON); `commands/doctor.rs` (`rigg auth doctor`) and `push`'s auth preflight are both thin over it.
-- `commands/easy_auth.rs` — `rigg auth easy-auth <function-app binding>`: Entra authentication on a bound function app so Web API skills can be keyless.
-- `commands/promote.rs` — `rigg promote`, the CLI around `rigg_core::promote::translate`.
-- `commands/verify.rs` — `rigg verify` / `push --verify`: run every indexer to completion, retrieve from every knowledge base, ask every agent.
-- `commands/docgen.rs` — the generated `docs/reference/cli.md` and InfraRef table; `commands/docs_check.rs` — `rigg dev docs-check`.
+**rigg**: clap CLI. `commands/mod.rs` holds `GlobalContext`, exit codes (0 success, 1 error, 2 usage, 3 validation, 4 auth, 5 drift/conflict, 6 needs input), workspace loading, project selection. `commands/remote.rs` is the façade over the three clients used by all sync commands. `commands/dev.rs`: `rigg dev api-check`, the watchdog that verifies pinned Azure API versions are current; `commands/dev_spec.rs`: `rigg dev api-diff` / `api-fixture`, fetching and diffing OpenAPI documents from azure-rest-api-specs. Also:
+- `commands/auth_engine.rs`: the auth verification engine (identity graph → verified report → fixes → text/JSON); `commands/doctor.rs` (`rigg auth doctor`) and `push`'s auth preflight are both thin over it.
+- `commands/easy_auth.rs`: `rigg auth easy-auth <function-app binding>`: Entra authentication on a bound function app so Web API skills can be keyless.
+- `commands/promote.rs`: `rigg promote`, the CLI around `rigg_core::promote::translate`.
+- `commands/verify.rs`: `rigg verify` / `push --verify`: run every indexer to completion, retrieve from every knowledge base, ask every agent.
+- `commands/docgen.rs`: the generated `docs/reference/cli.md` and InfraRef table; `commands/docs_check.rs`: `rigg dev docs-check`.
 
 ## Key invariants
 
-- **A resource belongs to exactly one project** — validated everywhere.
-- **Local files never contain secrets** — `validate` rejects key material; scaffolds use `ResourceId=` / `ProjectManagedIdentity`.
-- **Push canonicalization** — after every successful push, the server document is GET'd back, normalized, and written to disk + baseline. Never skip this; it is what kills false-positive drift.
-- **`x-rigg-*` keys are rigg-local** — kept on disk, stripped before any PUT/POST.
-- **Deletes are explicit** — remote deletion requires `--prune` (orphans) or `rigg delete <project> --remote`.
+- **A resource belongs to exactly one project**: validated everywhere.
+- **Local files never contain secrets**: `validate` rejects key material; scaffolds use `ResourceId=` / `ProjectManagedIdentity`.
+- **Push canonicalization**: after every successful push, the server document is GET'd back, normalized, and written to disk + baseline. Never skip this; it is what kills false-positive drift.
+- **`x-rigg-*` keys are rigg-local**: kept on disk, stripped before any PUT/POST.
+- **Deletes are explicit**: remote deletion requires `--prune` (orphans) or `rigg delete <project> --remote`.
 
 ## Workspace layout on disk
 
@@ -97,12 +102,12 @@ projects/<name>/
 ## Testing patterns
 
 - Unit tests inline per module (registry, graph, store, normalize, sidecar, workspace).
-- `crates/rigg/tests/cli_surface.rs` — assert_cmd against temp workspaces, no network.
-- `crates/rigg/tests/sync.rs` — wiremock fake Azure via `endpoint:` override + `RIGG_ACCESS_TOKEN`; covers pull normalization, push ordering/canonicalization, prune, conflicts (exit 5), diff formats, status classification.
-- `crates/rigg/tests/docs_guards.rs` — the generated pages match the binary, and `rigg dev docs-check` reports ok for the repository.
-- `crates/rigg/tests/auth_fake.rs` — `rigg auth doctor` / `auth roles` / `status --auth` against the wiremock ARM fake (`arm_fake.rs`).
-- `crates/rigg/tests/env_arm.rs` — `rigg env show --refresh` resolution and the binding cache it writes, against the same fake.
-- Live testing uses `mklabsrch` (Search) and `mklabaifndr`/`proj-default` (Foundry) — create resources inside them freely, always delete afterwards, keep SKUs/capacity minimal.
+- `crates/rigg/tests/cli_surface.rs`: assert_cmd against temp workspaces, no network.
+- `crates/rigg/tests/sync.rs`: wiremock fake Azure via `endpoint:` override + `RIGG_ACCESS_TOKEN`; covers pull normalization, push ordering/canonicalization, prune, conflicts (exit 5), diff formats, status classification.
+- `crates/rigg/tests/docs_guards.rs`: the generated pages match the binary, and `rigg dev docs-check` reports ok for the repository.
+- `crates/rigg/tests/auth_fake.rs`: `rigg auth doctor` / `auth roles` / `status --auth` against the wiremock ARM fake (`arm_fake.rs`).
+- `crates/rigg/tests/env_arm.rs`: `rigg env show --refresh` resolution and the binding cache it writes, against the same fake.
+- Live testing uses `mklabsrch` (Search) and `mklabaifndr`/`proj-default` (Foundry): create resources inside them freely, always delete afterwards, keep SKUs/capacity minimal.
 
 ## Keeping docs current
 
@@ -122,7 +127,7 @@ The last two replace the text between `<!-- generated:<name>:start -->` / `<!-- 
 cargo run -q --bin rigg -- dev docs-check           # defaults to the current directory
 ```
 
-`rigg dev docs-check` walks `README.md`, `GETTING_STARTED.md`, `CONCEPTS.md`, `MCP.md`, `docs/**` (minus `docs/superpowers/`, which is plans and specs), `samples/**` and `.claude/skills/*/SKILL.md`, then: parses every `rigg …` line in a `bash`/`sh`/`shell`/untagged fence through clap, resolves every relative link and `#anchor`, and — once those pages exist — checks that every `RIGG_*`/`AZURE_*` variable the code reads appears in `docs/reference/environment-variables.md` and every `ask::KNOWN_ID_PREFIXES` entry in `docs/reference/exit-codes-and-questions.md`. A block that shows command *output* rather than input must be tagged (```` ```text ````) so it is not read as a command. Fix the docs, never the parser.
+`rigg dev docs-check` walks `README.md`, `GETTING_STARTED.md`, `CONCEPTS.md`, `MCP.md`, `docs/**` (minus `docs/superpowers/`, which is plans and specs), `samples/**` and `.claude/skills/*/SKILL.md`, then: parses every `rigg …` line in a `bash`/`sh`/`shell`/untagged fence through clap, resolves every relative link and `#anchor`, and, once those pages exist, checks that every `RIGG_*`/`AZURE_*` variable the code reads appears in `docs/reference/environment-variables.md` and every `ask::KNOWN_ID_PREFIXES` entry in `docs/reference/exit-codes-and-questions.md`. A block that shows command *output* rather than input must be tagged (```` ```text ````) so it is not read as a command. Fix the docs, never the parser.
 
 ## Releasing
 
@@ -134,7 +139,7 @@ Required secrets: `CARGO_REGISTRY_TOKEN` (crates.io env), `HOMEBREW_TAP_TOKEN`.
 
 MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (the highest `rust-version` among direct deps: `ailloy` 3.x and `rmcp` 3.x both declare 1.88); CI runs latest stable.
 
-Building from source on Windows needs NASM and CMake on `PATH` — `aws-lc-rs` (reqwest's TLS crypto
+Building from source on Windows needs NASM and CMake on `PATH`: `aws-lc-rs` (reqwest's TLS crypto
 backend) compiles optimized assembly routines at build time. macOS and Linux need nothing extra.
 The release workflow's Windows leg installs NASM via `ilammy/setup-nasm@v1`; CMake and MSVC are
 already on the `windows-latest` image.
@@ -142,7 +147,7 @@ already on the `windows-latest` image.
 ## Dependency Policy
 
 We keep this tool's dependencies at their latest compatible versions, not just the versions that
-happen to still compile. Staying current is the default, not something we get to eventually —
+happen to still compile. Staying current is the default, not something we get to eventually:
 letting dependencies drift is how technical debt accumulates unnoticed until a security advisory or
 a forced breaking upgrade makes it urgent. When a newer major is available and there's no concrete,
 documented reason not to take it (see any `# Stays on ...` comments in `Cargo.toml` for the current
@@ -152,7 +157,7 @@ mdeck + pidge + rigg + rusty-tmpl).
 
 ## AI Agent Integration
 
-- MCP server: `rigg mcp serve` — 14 stdio tools: 9 config-plane (`rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_diff`, `rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) + 5 runtime (`rigg_indexer_run`, `rigg_indexer_status`, `rigg_query`, `rigg_ask`, `rigg_verify`). Mutating tools use the preview/`force: true` pattern. Tools shell out to `rigg --output json` subprocesses (stdout stays JSON-RPC clean).
+- MCP server: `rigg mcp serve`: 14 stdio tools: 9 config-plane (`rigg_status`, `rigg_describe`, `rigg_env_list`, `rigg_validate`, `rigg_diff`, `rigg_pull`, `rigg_push`, `rigg_promote`, `rigg_delete`) + 5 runtime (`rigg_indexer_run`, `rigg_indexer_status`, `rigg_query`, `rigg_ask`, `rigg_verify`). Mutating tools use the preview/`force: true` pattern. Tools shell out to `rigg --output json` subprocesses (stdout stays JSON-RPC clean).
 - Skills in `.claude/skills/` (`rigg-guide`, `rigg-status`/`rigg-pull`/`rigg-push`, `api-watchdog`, `release`, `test-complete-enduser-experience`); `docs-check` parses each `SKILL.md`, so they cannot name a command that does not exist.
-- `rigg ai skill --emit` writes a portable skill file; `rigg ai skill --reference` prints the CLI tree and MCP tool table generated from the binary itself (`commands/skill.rs`) — never a hand-written copy.
+- `rigg ai skill --emit` writes a portable skill file; `rigg ai skill --reference` prints the CLI tree and MCP tool table generated from the binary itself (`commands/skill.rs`), never a hand-written copy.
 - `rigg ai …` manages ailloy-powered features (explanations, `rigg new <kind> <name> --describe "…"` drafting) when ailloy is enabled; `--no-ai` disables them per invocation.
