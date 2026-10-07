@@ -1926,7 +1926,7 @@ mod tests {
 
     #[test]
     fn missing_env_message_names_the_source_environments_targets() {
-        let ws: rigg_core::workspace::WorkspaceConfig = serde_yaml::from_str(
+        let ws: rigg_core::workspace::WorkspaceConfig = serde_norway::from_str(
             "environments:\n  dev:\n    search: { service: s-dev }\n    foundry: { account: a, project: p }\n",
         )
         .unwrap();
@@ -2053,7 +2053,7 @@ mod tests {
         // They are visible to the next round's translation without touching
         // `rigg.yaml`.
         let mut config: rigg_core::workspace::WorkspaceConfig =
-            serde_yaml::from_str("environments:\n  dev: {}\n  prod: {}\n").unwrap();
+            serde_norway::from_str("environments:\n  dev: {}\n  prod: {}\n").unwrap();
         answered.apply_to(&mut config);
         assert_eq!(
             config.environments["dev"].dependencies["blobs"].value,

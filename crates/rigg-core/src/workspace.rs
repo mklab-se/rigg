@@ -34,7 +34,7 @@ pub enum WorkspaceError {
     #[error("failed to parse {path}: {source}")]
     Parse {
         path: PathBuf,
-        source: serde_yaml::Error,
+        source: serde_norway::Error,
     },
     #[error("unknown project '{0}' (available: {1})")]
     UnknownProject(String, String),
@@ -255,7 +255,7 @@ impl Workspace {
             source,
         })?;
         let config: WorkspaceConfig =
-            serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse {
+            serde_norway::from_str(&text).map_err(|source| WorkspaceError::Parse {
                 path: path.clone(),
                 source,
             })?;
@@ -299,7 +299,7 @@ impl Workspace {
                     }
                 })?;
                 let manifest: ProjectManifest =
-                    serde_yaml::from_str(&text).map_err(|source| WorkspaceError::Parse {
+                    serde_norway::from_str(&text).map_err(|source| WorkspaceError::Parse {
                         path: manifest_path,
                         source,
                     })?;
@@ -501,18 +501,18 @@ environments:
 
     #[test]
     fn binding_round_trips_as_a_one_key_map() {
-        let b: Binding = serde_yaml::from_str("key-vault: mklabkv").unwrap();
+        let b: Binding = serde_norway::from_str("key-vault: mklabkv").unwrap();
         assert_eq!(b.kind, BindingType::KeyVault);
         assert_eq!(
-            serde_yaml::to_string(&b).unwrap().trim(),
+            serde_norway::to_string(&b).unwrap().trim(),
             "key-vault: mklabkv"
         );
         assert!(
-            serde_yaml::from_str::<Binding>("cosmos: x").is_err(),
+            serde_norway::from_str::<Binding>("cosmos: x").is_err(),
             "unknown type rejected"
         );
         assert!(
-            serde_yaml::from_str::<Binding>("storage: a\nidentity: b").is_err(),
+            serde_norway::from_str::<Binding>("storage: a\nidentity: b").is_err(),
             "exactly one key"
         );
     }

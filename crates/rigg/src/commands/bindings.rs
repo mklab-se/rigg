@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, anyhow, bail};
-use serde_yaml::Value as Yaml;
+use serde_norway::Value as Yaml;
 
 use rigg_core::binding::{
     Binding, BindingCache, BindingType, EnvBindings, Wanted, validate_binding_name,
@@ -44,9 +44,9 @@ pub fn edit_workspace_yaml(edit: impl FnOnce(&mut Yaml) -> Result<()>) -> Result
     let ws = load_workspace()?;
     let path = ws.root.join(WORKSPACE_FILE);
     let text = std::fs::read_to_string(&path)?;
-    let mut doc: Yaml = serde_yaml::from_str(&text)?;
+    let mut doc: Yaml = serde_norway::from_str(&text)?;
     edit(&mut doc)?;
-    let body = serde_yaml::to_string(&doc)?;
+    let body = serde_norway::to_string(&doc)?;
     let root = doc.get("root").and_then(Yaml::as_str);
     std::fs::write(&path, format!("{}{body}", workspace_yaml_header(root)))?;
     Ok(())
@@ -66,7 +66,7 @@ fn workspace_yaml_header(root: Option<&str>) -> String {
 }
 
 /// The `environments:` mapping, created when missing.
-pub fn envs_mut(doc: &mut Yaml) -> Result<&mut serde_yaml::Mapping> {
+pub fn envs_mut(doc: &mut Yaml) -> Result<&mut serde_norway::Mapping> {
     let map = doc
         .as_mapping_mut()
         .ok_or_else(|| anyhow!("invalid rigg.yaml"))?;
@@ -79,7 +79,7 @@ pub fn envs_mut(doc: &mut Yaml) -> Result<&mut serde_yaml::Mapping> {
 
 /// The YAML shape of one binding: `{ "<type>": "<value>" }`.
 pub fn binding_yaml(binding: &Binding) -> Yaml {
-    let mut map = serde_yaml::Mapping::new();
+    let mut map = serde_norway::Mapping::new();
     map.insert(
         Yaml::String(binding.kind.to_string()),
         Yaml::String(binding.value.clone()),
@@ -699,12 +699,12 @@ environments:
     unicode: "caf\u00e9 \u2014 \U0001F600"
     long: "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"
 "#;
-        let mut doc: Yaml = serde_yaml::from_str(input).unwrap();
+        let mut doc: Yaml = serde_norway::from_str(input).unwrap();
         {
             let envs = envs_mut(&mut doc).unwrap();
-            let mut env = serde_yaml::Mapping::new();
+            let mut env = serde_norway::Mapping::new();
             env.insert("search".into(), Yaml::String("svc".into()));
-            let mut d = serde_yaml::Mapping::new();
+            let mut d = serde_norway::Mapping::new();
             d.insert(
                 Yaml::String("id-1".into()),
                 binding_yaml(&Binding {
@@ -715,7 +715,7 @@ environments:
             env.insert("dependencies".into(), Yaml::Mapping(d));
             envs.insert("test".into(), Yaml::Mapping(env));
         }
-        let out = serde_yaml::to_string(&doc).unwrap();
+        let out = serde_norway::to_string(&doc).unwrap();
         assert_eq!(out, EXPECTED_WORKSPACE_YAML);
     }
 

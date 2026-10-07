@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, anyhow, bail};
 use colored::Colorize;
 use serde_json::json;
-use serde_yaml::Value as Yaml;
+use serde_norway::Value as Yaml;
 
 use rigg_client::arm::ArmClient;
 use rigg_core::binding::{Binding, BindingCache, EnvBindings, TargetKind, validate_binding_name};
@@ -610,7 +610,7 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
         if envs.contains_key(&name) {
             bail!("environment '{name}' already exists");
         }
-        let mut env = serde_yaml::Mapping::new();
+        let mut env = serde_norway::Mapping::new();
         if envs.is_empty() {
             env.insert("default".into(), Yaml::Bool(true));
         }
@@ -621,23 +621,23 @@ async fn add(ctx: &GlobalContext, opts: AddOptions) -> Result<()> {
             env.insert("subscription".into(), Yaml::String(subscription.clone()));
         }
         if let Some(service) = &search {
-            let mut s = serde_yaml::Mapping::new();
+            let mut s = serde_norway::Mapping::new();
             s.insert("service".into(), Yaml::String(service.clone()));
             env.insert("search".into(), Yaml::Mapping(s));
         }
         if let Some((account, project)) = &foundry {
-            let mut f = serde_yaml::Mapping::new();
+            let mut f = serde_norway::Mapping::new();
             f.insert("account".into(), Yaml::String(account.clone()));
             f.insert("project".into(), Yaml::String(project.clone()));
             env.insert("foundry".into(), Yaml::Mapping(f));
         }
         if protected {
-            let mut p = serde_yaml::Mapping::new();
+            let mut p = serde_norway::Mapping::new();
             p.insert("protected".into(), Yaml::Bool(true));
             env.insert("policy".into(), Yaml::Mapping(p));
         }
         if !deps.is_empty() {
-            let mut d = serde_yaml::Mapping::new();
+            let mut d = serde_norway::Mapping::new();
             for (bname, binding) in &deps {
                 d.insert(Yaml::String(bname.clone()), bindings::binding_yaml(binding));
             }

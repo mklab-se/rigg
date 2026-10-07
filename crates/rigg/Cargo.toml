@@ -20,7 +20,7 @@ clap.workspace = true
 clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+serde_norway.workspace = true
 tokio.workspace = true
 futures.workspace = true
 anyhow.workspace = true

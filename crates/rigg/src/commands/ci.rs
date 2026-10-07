@@ -281,7 +281,8 @@ mod tests {
         ] {
             assert!(t.contains("{{RIGG_ENV}}"), "{name} missing env placeholder");
             let replaced = t.replace("{{RIGG_ENV}}", "prod");
-            let parsed: std::result::Result<serde_yaml::Value, _> = serde_yaml::from_str(&replaced);
+            let parsed: std::result::Result<serde_norway::Value, _> =
+                serde_norway::from_str(&replaced);
             assert!(parsed.is_ok(), "{name} is not valid YAML: {parsed:?}");
         }
     }
