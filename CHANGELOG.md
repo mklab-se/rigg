@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.1] - 2026-10-07
+
+### Changed
+
+- **YAML library:** `serde_yaml_ng` replaced by `serde_norway` 0.9, the maintained drop-in fork of
+  the deprecated `serde_yaml`, now used across all MKLab tools. No format change and no migration:
+  a new golden test pins the exact bytes rigg writes for `rigg.yaml`, captured on the old library
+  and passing unchanged on the new one.
+- `ailloy` 3.0.1 (it moved to `serde_norway` too), so a single YAML stack is left in the build:
+  the deprecated `serde_yaml` and `unsafe-libyaml` are gone from the dependency tree.
+- **No more em-dashes:** the docs, CHANGELOG, CLI help, error and status messages, code comments
+  and tests are free of em-dashes. Wording in a few messages changed accordingly (for example
+  `Access denied (403 Forbidden): <service>. <Azure's message>`), and "none" cells in the generated
+  reference tables now read `n/a`. The header comment `rigg init` writes into `rigg.yaml` (and
+  that `rigg env` edits regenerate) now ends ``(see `rigg new project`).``; nothing else in the
+  file changes.
+
+### CI
+
+- The Check job fails on any em-dash in the repository (`git grep -nIP '\x{2014}'`).
+- All workflows already run on `ubuntu-latest`; no runner pins to remove.
+
 ## [2.3.0] - 2026-10-07
 
 ### Changed
