@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- `ailloy` upgraded 2.2 to 3.0 (the AI hub's new major, which adds the `eval` capability and the
+  `typesafe` provider). rigg only uses chat, so its AI features behave as before; `rigg ai config`
+  and `rigg ai status` still list only the chat capability, not `eval`. No source changes were
+  needed: rigg has no exhaustive matches on ailloy's enums.
+- **Shared AI config:** once any ailloy 3 tool writes a `typesafe` node, the `eval` capability or a
+  `defaults.eval` entry to `~/.config/ailloy/config.yaml`, tools built on ailloy 2.x (including
+  rigg 2.2 and earlier) can no longer read that file. Upgrade every tool sharing the config together.
+- `rmcp` requirement bumped 3.4 to 3.5 (3.5.1), plus a `cargo update` refresh of transitive
+  dependencies (tokio 1.53.2, termimad 0.35.5, thiserror 2.0.21 and others). No behaviour changes.
+- `rigg-client` keeps lockstep versioning: its public API (`ai::generate_text`,
+  `generate_text_with_limit`, `is_configured`) exposes no ailloy types, so the ailloy major is not
+  a breaking change for it.
+- MSRV stays at Rust 1.88 (the highest `rust-version` among direct dependencies, `ailloy` 3.0 and
+  `rmcp` 3.5).
+
+### CI
+
+- `ci.yml` and `release.yml` already match the template (auditable binaries, per-target CycloneDX
+  SBOMs, Node 24 action majors); no workflow changes were needed.
+
 ## [2.2.0] - 2026-09-22
 
 ### Changed

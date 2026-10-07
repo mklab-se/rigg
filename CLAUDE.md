@@ -132,7 +132,7 @@ Pushing the tag triggers `.github/workflows/release.yml`: it re-runs CI, builds 
 
 Required secrets: `CARGO_REGISTRY_TOKEN` (crates.io env), `HOMEBREW_TAP_TOKEN`.
 
-MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (set by Ailloy 2.x / `rmcp` 3.x); CI runs latest stable.
+MSRV is `rust-version = "1.88"` in the workspace `Cargo.toml` (the highest `rust-version` among direct deps: `ailloy` 3.x and `rmcp` 3.x both declare 1.88); CI runs latest stable.
 
 Building from source on Windows needs NASM and CMake on `PATH` — `aws-lc-rs` (reqwest's TLS crypto
 backend) compiles optimized assembly routines at build time. macOS and Linux need nothing extra.
