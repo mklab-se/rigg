@@ -19,6 +19,12 @@
   <a href="https://github.com/mklab-se/rigg/blob/main/LICENSE.md"><img src="https://img.shields.io/crates/l/rigg.svg" alt="License"></a>
 </p>
 
+<p align="center">
+  <strong>rigg 2.3</strong> is here: built on ailloy 3.0, so it shares one AI config with the rest of
+  your ailloy 3 tools, plus refreshed dependencies.<br>
+  <a href="CHANGELOG.md"><strong>What's new</strong></a>
+</p>
+
 ## The Problem
 
 An Agentic RAG system in Azure spans two services. **Azure AI Search** does
