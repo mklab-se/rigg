@@ -20,8 +20,8 @@
 </p>
 
 <p align="center">
-  <strong>rigg 2.3</strong> is here: built on ailloy 3.0, so it shares one AI config with the rest of
-  your ailloy 3 tools, plus refreshed dependencies.<br>
+  <strong>rigg 2.4</strong> is here: on macOS too, rigg keeps its per-user files in the same XDG
+  layout as every MKLab tool (<code>~/.cache/rigg</code>), built on ailloy 3.0.<br>
   <a href="CHANGELOG.md"><strong>What's new</strong></a>
 </p>
 
