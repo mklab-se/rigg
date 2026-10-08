@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **XDG paths on macOS too:** the update-check cache now lives in `$XDG_CACHE_HOME/rigg` (default
+  `~/.cache/rigg`) on macOS as well as Linux, the same layout as Ailloy and every MKLab tool;
+  `$XDG_*` variables count only when they are absolute paths. Windows keeps `%LOCALAPPDATA%`.
+  The new `rigg_core::paths` module is the single place that decides (config and cache). No
+  migration: the old `~/Library/Caches/rigg` file is simply no longer read (it only held the
+  last update check) and can be deleted.
+
 ## [2.3.1] - 2026-10-07
 
 ### Changed

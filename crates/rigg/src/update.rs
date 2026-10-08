@@ -21,9 +21,10 @@ struct UpdateCache {
     latest_version: String,
 }
 
-/// Returns the path to the cache file: `<cache_dir>/rigg/update-check.json`.
+/// Returns the path to the cache file: `<rigg cache dir>/update-check.json`
+/// (see [`rigg_core::paths::cache_dir`]).
 fn cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("rigg").join("update-check.json"))
+    rigg_core::paths::cache_dir().map(|d| d.join("update-check.json"))
 }
 
 /// Loads and deserializes the cache file. Returns `None` on any error.

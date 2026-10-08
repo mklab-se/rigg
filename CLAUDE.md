@@ -62,6 +62,7 @@ rigg-diff  (used by rigg-core & rigg)
 - `infra.rs`: infrastructure references: `parse` a registry `InfraRef` value into a `PhysicalRef`, `render` it for a different physical resource.
 - `identity.rs`: the identity graph: which role assignments and settings a configuration requires, on which scopes, derived from the documents and scoped through the bindings.
 - `promote.rs`: `translate`, the pure engine behind `rigg promote`: two environments' bindings + documents in, the target's documents out (correlated by logical id).
+- `paths.rs`: where rigg keeps per-user files (today only the update-check cache). Linux and macOS share the XDG layout, same as Ailloy: `$XDG_CONFIG_HOME/rigg` or `~/.config/rigg`, `$XDG_CACHE_HOME/rigg` or `~/.cache/rigg` (XDG variables only when absolute). Windows uses its native `%APPDATA%` / `%LOCALAPPDATA%`. Every MKLab tool follows this; never call `dirs::config_dir()`/`dirs::cache_dir()` directly (on macOS those are `~/Library/...`). Workspace files (`rigg.yaml`, `.rigg/`) are project-local and unaffected.
 
 **rigg-client** (Azure REST):
 - `client.rs`: Search data plane; api-version per registry channel (stable `2026-04-01`, preview `2026-08-01-preview`).
